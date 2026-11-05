@@ -75,7 +75,7 @@ good modern engine on its own. Every structural choice is checked against both.
   code, so the editor can't see a game's Classes. A component is a Class Load can make from nothing;
   `Components.Add<T>(name)` describes it by reflection; a game's components/main.fb ends with
   `Components.Describe()`, which the editor builds by fb and runs, once the person's said that folder's
-  code may run, once per folder, as play will; the editor edits plain Values, which a scene keeps; and
+  code may run, once per folder, as Play does; the editor edits plain Values, which a scene keeps; and
   `Components.Attach(entity, name, values)` makes one as a scene loads, checking `@Limits`, which
   `entity.Data<T>()` gives back, one of each type. fbengine_physics's bodies are one of these, so
   fbengine never names it.
@@ -154,9 +154,22 @@ good modern engine on its own. Every structural choice is checked against both.
   1 at the near plane, compared GREATER_OR_EQUAL, and Vulkan's clip space, y down. Cameras build
   their own projections for it; std.math's `Perspective` and `Frustum` are the general ones,
   near 0 and far 1, y up, and the engine doesn't use them for drawing.
-- **A small frame graph**: each frame's passes (shadows, depth prepass, opaque, sky,
+- **A small frame graph**: each frame's passes (shadows, a prepass where one's asked for, opaque, sky,
   transparent, post, 2D overlay) declare what they read and write; the graph orders them, places
   barriers, and reuses transient targets.
+- **Prepass**: only for a camera with ambient occlusion or antialiasing over frames: its main
+  view's opaque draws in order 0 again, one sample, its own depth, into a half-float target: view
+  depth and what 16 bits lose of it, and motion. It doesn't share depth with the scene pass: two
+  shaders don't promise one position on every driver, and a test on AMD's shows they don't.
+- **Ambient occlusion**: full resolution, 16 spiral samples, depth-aware blur both ways, normals
+  from depth. It scales ambient and environment light only, of what's in the prepass; a tenth of
+  the view's height is the most its samples reach. At 1080p, +0.26 ms on an RTX 4080, +9.2 ms on an
+  AMD integrated GPU.
+- **Antialiasing over frames**: on an HDR camera, Halton 2,3 of 8 in the scene pass's projection
+  only; resolved before bloom, by motion at the nearest depth of 3 by 3, Catmull-Rom, clamped to 3
+  by 3 in YCoCg, 0.1 of what's now once settled. What has no motion of its own: particles, what
+  blends, other orders, morphs, an Instances' own instances, reflections. +0.14 ms and +6.7 ms.
+- **FXAA**: after the tonemap, from the picture alone, +0.02 ms and +0.94 ms.
 - **Extract, then draw**: after UpdateWorld, the scene is read into render lists (visible
   objects, sorted), so drawing never reads the live scene; a render thread can take drawing over
   later without changing the API.

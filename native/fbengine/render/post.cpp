@@ -312,24 +312,14 @@ std::vector<game_pass_t> game_passes(const scene::camera_t& camera, VkFormat for
 }
 
 bool add_game_passes(const scene::camera_t& camera, std::span<const game_pass_t> passes,
-                     gpu::resource_t source, gpu::resource_t into, std::uint64_t target,
-                     const scene::view_t& view, VkRect2D scissor) {
+                     gpu::resource_t source, gpu::resource_t into, VkFormat format,
+                     VkSampleCountFlagBits samples, const picture_t& picture, std::uint64_t target,
+                     const scene::view_t& view, VkRect2D scissor, bool into_nothing) {
     const std::uint64_t depth_read = texture::depth_read_of(target);
     if (depth_read == 0) {
         return false;
     }
-    const texture::texture_t* found = texture::find(target);
-    if (found == nullptr) {
-        return false;
-    }
-    const VkFormat target_format = found->vk_format;
-    const VkSampleCountFlagBits target_samples = found->samples;
-    const gpu::transient_t between{
-        .width = found->width,
-        .height = found->height,
-        .format = found->format,
-    };
-    const VkExtent2D size{ .width = found->width, .height = found->height };
+    const VkExtent2D size{ .width = picture.target.width, .height = picture.target.height };
     if (!gpu::add_pass({
             .name = "pass depth",
             .record =
@@ -342,22 +332,19 @@ bool add_game_passes(const scene::camera_t& camera, std::span<const game_pass_t>
         })) {
         return false;
     }
-    if (passes.size() > 1 && !gpu::reserve_transient(between)) {
-        return false;
-    }
     const scene::mat4_t projection = scene::draw_projection(camera, view);
     const bool perspective = camera.projection == FBE_PROJECTION_PERSPECTIVE;
     const std::uint32_t depth_index = texture::index_of(depth_read);
     gpu::resource_t from = source;
     for (std::size_t at = 0; at < passes.size(); ++at) {
         const bool last = at + 1 == passes.size();
-        const gpu::resource_t next = last ? into : gpu::transient_resource(between);
+        const gpu::resource_t next = last ? into : gpu::transient_resource(picture.target);
         if (next == gpu::no_resource) {
             return false;
         }
-        const VkPipeline pipeline =
-            pass_pipeline(*passes[at].shader, target_format,
-                          last ? target_samples : VK_SAMPLE_COUNT_1_BIT, camera, !last);
+        VkPipeline pipeline =
+            pass_pipeline(*passes[at].shader, last ? format : picture.format,
+                          last ? samples : VK_SAMPLE_COUNT_1_BIT, camera, !last || into_nothing);
         if (pipeline == VK_NULL_HANDLE) {
             return false;
         }
@@ -407,7 +394,7 @@ bool add_game_passes(const scene::camera_t& camera, std::span<const game_pass_t>
                 .name = "game pass",
                 .colors = { {
                     .target = next,
-                    .clear = !last,
+                    .clear = !last || into_nothing,
                 }, },
                 .uses = std::move(uses),
                 .record =
@@ -430,7 +417,7 @@ bool add_game_passes(const scene::camera_t& camera, std::span<const game_pass_t>
 
 bool add_post_passes(const scene::camera_t& camera, gpu::resource_t image, gpu::resource_t into,
                      VkExtent2D size, VkFormat format, VkSampleCountFlagBits samples,
-                     VkRect2D scissor) {
+                     VkRect2D scissor, bool into_nothing) {
     const bool blooms =
         camera.bloom_intensity > 0.0F &&
         !bloom_levels({ .width = scissor.extent.width, .height = scissor.extent.height }).empty();
@@ -444,7 +431,8 @@ bool add_post_passes(const scene::camera_t& camera, gpu::resource_t image, gpu::
         .shader = &shaders::tonemap,
         .color = format,
         .samples = samples,
-        .blend = camera.clears_color ? gpu::blend_t::NONE : gpu::blend_t::PREMULTIPLIED,
+        .blend =
+            camera.clears_color || into_nothing ? gpu::blend_t::NONE : gpu::blend_t::PREMULTIPLIED,
     });
     if (pipeline == VK_NULL_HANDLE) {
         return false;
@@ -474,6 +462,7 @@ bool add_post_passes(const scene::camera_t& camera, gpu::resource_t image, gpu::
         .name = "tonemap",
         .colors = { {
             .target = into,
+            .clear = into_nothing,
         }, },
         .uses = std::move(uses),
         .record =

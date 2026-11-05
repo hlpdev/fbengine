@@ -505,6 +505,33 @@ FBE_API bool fbe_world_ambient(uint64_t world, fbe_color_t* color);
 // black.
 FBE_API bool fbe_camera_set_hdr(uint64_t camera, bool hdr);
 FBE_API bool fbe_camera_hdr(uint64_t camera);
+// A camera's ambient occlusion: how open the sky of what's opaque in its view is, by the depth of
+// what's around it within a radius, in the world, 1 at first, darkening the ambient and environment
+// light of PBR materials only, raised to `strength`, 0 or more; 0, at first, for none, which costs
+// nothing. Direct light, what blends, other orders, UNLIT and VERTEX materials, and reflections in
+// mirrors take none, and a normal map's bumps give none. A radius is 0.0001 or more, and its
+// samples reach no more than a tenth of a view's height, so close up they cover less than it says.
+// False for what's not finite or out of range.
+FBE_API bool fbe_camera_set_ambient_occlusion(uint64_t camera, float strength);
+FBE_API float fbe_camera_ambient_occlusion(uint64_t camera);
+FBE_API bool fbe_camera_set_ambient_occlusion_radius(uint64_t camera, float radius);
+FBE_API float fbe_camera_ambient_occlusion_radius(uint64_t camera);
+// Whether an HDR camera antialiases over frames, as it doesn't at first: its projection a part of a
+// pixel off each frame, and what's drawn blended over what the frames before had there, moved as
+// its entities and skins have moved since. Particles, what blends, other orders, morphs, an
+// Instances' own instances, and reflections have no motion of their own, so they go by their
+// surroundings': a HUD in another order softens as its camera pans. Its history's dropped as its
+// size, viewport, or target changes, when it's gone more than 2 frames undrawn, and by
+// fbe_camera_reset_history, for a cut.
+// Whether a camera's picture is antialiased from itself, as it isn't at first, after all else it
+// does: a triangle over its target, with no prepass or history, so what a low GPU can spend; its
+// picture goes to its target through an image of its own, and what multiplies what's behind it, in
+// a camera that doesn't clear, draws nothing. It softens what's sharp in the picture, text too.
+FBE_API bool fbe_camera_set_fxaa(uint64_t camera, bool on);
+FBE_API bool fbe_camera_fxaa(uint64_t camera);
+FBE_API bool fbe_camera_set_temporal_aa(uint64_t camera, bool on);
+FBE_API bool fbe_camera_temporal_aa(uint64_t camera);
+FBE_API bool fbe_camera_reset_history(uint64_t camera);
 FBE_API bool fbe_camera_set_exposure(uint64_t camera, float exposure);
 FBE_API float fbe_camera_exposure(uint64_t camera);
 FBE_API bool fbe_camera_set_tonemap(uint64_t camera, int32_t tonemap);
@@ -845,11 +872,13 @@ FBE_API bool fbe_terrain_tint(uint64_t terrain, fbe_color_t* tint);
 
 // Instances: an entity that draws a geometry many times over, each with its own matrix and color,
 // in bulk, those out of view going a cluster at a time. It holds its geometry and material, 0 for
-// none, when it draws its geometry's surfaces' materials. A matrix mustn't mirror: it'd show its
-// back. A skin or a morph isn't drawn, and what blends isn't sorted among itself. Its geometry's
-// levels of detail go by each cluster, as big as the biggest of it where it's nearest. It draws and
-// casts, but it's one thing to the rest of the world: FBE_COLLISION's automatic shape is an
-// ellipsoid at the entity's place, a mesh pick finds none of it, and only its entity's picked.
+// none, when it draws its geometry's surfaces' materials. A matrix that mirrors draws as a mesh's
+// does, with those like it; one set to mirror where it didn't, or not where it did, puts them all
+// in order again. A skin or a morph isn't drawn, and what blends isn't sorted among itself. Its
+// geometry's levels of detail go by each cluster, as big as the biggest of it where it's nearest.
+// It draws and casts, but it's one thing to the rest of the world: FBE_COLLISION's automatic shape
+// is an ellipsoid at the entity's place, a mesh pick finds none of it, and only its entity's
+// picked.
 FBE_API bool fbe_instances_set_geometry(uint64_t instances, uint64_t geometry);
 FBE_API uint64_t fbe_instances_geometry(uint64_t instances);
 FBE_API bool fbe_instances_set_material(uint64_t instances, uint64_t material);

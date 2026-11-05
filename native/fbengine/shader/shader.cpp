@@ -236,8 +236,6 @@ std::uint32_t keep(std::vector<std::uint32_t> words, const char* name) {
     return static_cast<std::uint32_t>(shaders.codes.size());
 }
 
-} // namespace
-
 std::uint32_t any_code_of(std::uint64_t shader) {
     if (shader == 0) {
         return 0;
@@ -245,6 +243,8 @@ std::uint32_t any_code_of(std::uint64_t shader) {
     const auto slot = all().slots.find(shader);
     return slot ? all().kept[*slot].code : 0;
 }
+
+} // namespace
 
 std::uint32_t code_of(std::uint64_t shader) {
     const std::uint32_t code = any_code_of(shader);

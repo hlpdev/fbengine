@@ -771,4 +771,77 @@ FBE_API int32_t fbe_camera_unproject(uint64_t camera, float target_width, float 
     return 1;
 }
 
+FBE_API bool fbe_camera_set_ambient_occlusion(uint64_t camera, float strength) {
+    camera_t* found = camera_of(camera);
+    if (found == nullptr) {
+        return false;
+    }
+    if (!std::isfinite(strength) || strength < 0.0F) {
+        return fbe::fail(
+            std::format("ambient occlusion's strength is 0 or more, not {}", strength));
+    }
+    found->ambient_occlusion = strength;
+    return true;
+}
+
+FBE_API float fbe_camera_ambient_occlusion(uint64_t camera) {
+    const camera_t* found = camera_of(camera);
+    return found != nullptr ? found->ambient_occlusion : 0.0F;
+}
+
+FBE_API bool fbe_camera_set_ambient_occlusion_radius(uint64_t camera, float radius) {
+    camera_t* found = camera_of(camera);
+    if (found == nullptr) {
+        return false;
+    }
+    if (!std::isfinite(radius) || radius < 0.0001F) {
+        return fbe::fail(
+            std::format("ambient occlusion's radius is 0.0001 or more, not {}", radius));
+    }
+    found->ambient_occlusion_radius = radius;
+    return true;
+}
+
+FBE_API float fbe_camera_ambient_occlusion_radius(uint64_t camera) {
+    const camera_t* found = camera_of(camera);
+    return found != nullptr ? found->ambient_occlusion_radius : 0.0F;
+}
+
+FBE_API bool fbe_camera_set_fxaa(uint64_t camera, bool on) {
+    camera_t* found = camera_of(camera);
+    if (found == nullptr) {
+        return false;
+    }
+    found->fxaa = on;
+    return true;
+}
+
+FBE_API bool fbe_camera_fxaa(uint64_t camera) {
+    const camera_t* found = camera_of(camera);
+    return found != nullptr && found->fxaa;
+}
+
+FBE_API bool fbe_camera_set_temporal_aa(uint64_t camera, bool on) {
+    camera_t* found = camera_of(camera);
+    if (found == nullptr) {
+        return false;
+    }
+    found->temporal_aa = on;
+    return true;
+}
+
+FBE_API bool fbe_camera_temporal_aa(uint64_t camera) {
+    const camera_t* found = camera_of(camera);
+    return found != nullptr && found->temporal_aa;
+}
+
+FBE_API bool fbe_camera_reset_history(uint64_t camera) {
+    camera_t* found = camera_of(camera);
+    if (found == nullptr) {
+        return false;
+    }
+    ++found->history_resets;
+    return true;
+}
+
 } // extern "C"

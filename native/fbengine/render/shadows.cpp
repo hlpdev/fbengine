@@ -392,8 +392,9 @@ bool gather_casters(const scene::camera_t& camera, const scene::view_t& view, st
         any_lods = any_lods || !s.geometries[found_instances.geometry].lods.empty();
         // Any of them with an alpha has them all blend, as it draws them, which doesn't cast.
         const float alpha = found_instances.faded != 0 ? 0.5F : 1.0F;
-        for (const std::uint32_t level :
+        for (const scene::instance_level_t& range :
              scene::instances_levels(found_instances, matrix, camera, view.position, half_height)) {
+            const std::uint32_t level = range.level;
             const scene::geometry_t& geometry = s.geometries[level];
             for (std::size_t surface = 0; surface < geometry.surfaces.size(); ++surface) {
                 const std::uint32_t slot = found_instances.material != none
@@ -412,7 +413,8 @@ bool gather_casters(const scene::camera_t& camera, const scene::view_t& view, st
                     continue;
                 }
                 for (const scene::instance_cluster_t& cluster : clusters) {
-                    if (scene::cluster_lod(found_instances, cluster, matrix, camera, view.position,
+                    if (cluster.mirrored != range.mirrored ||
+                        scene::cluster_lod(found_instances, cluster, matrix, camera, view.position,
                                            half_height) != level) {
                         continue;
                     }

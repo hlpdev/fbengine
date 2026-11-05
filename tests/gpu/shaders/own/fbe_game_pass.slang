@@ -29,5 +29,10 @@ float4 pass(float2 uv, float4 color, float depth)
     {
         return colorAt(uv + float2(pixelSize().x * 8.0, 0.0));
     }
+    if (which == 7.0)
+    {
+        // A hard edge down its middle, whatever's drawn, for what softens one after it.
+        return uv.x < 0.5 ? float4(0.0, 0.0, 0.0, 1.0) : float4(1.0, 1.0, 1.0, 1.0);
+    }
     return float4(1.0 - color.rgb, color.a);
 }

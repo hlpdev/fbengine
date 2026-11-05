@@ -1100,7 +1100,7 @@ void record_depth_read(VkCommandBuffer commands, const texture_t& target) {
     const auto all = flag<VkAccessFlags2>(VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT) | written;
     const auto shaders = flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
     const auto sampled = flag<VkAccessFlags2>(VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-    const VkImageAspectFlags aspect = flag<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT);
+    const auto aspect = flag<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT);
     const auto moved = [&](VkImage image, VkImageLayout from, VkImageLayout to,
                            VkPipelineStageFlags2 before_stages, VkAccessFlags2 before,
                            VkPipelineStageFlags2 after_stages, VkAccessFlags2 after) {

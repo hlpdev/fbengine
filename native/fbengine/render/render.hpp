@@ -24,6 +24,8 @@ struct item_t {
     std::int32_t order = 0;
     bool blended = false;
     bool mirrored = false;
+    /// Of an Instances: whether this item's of its instances that mirror, by their own matrices.
+    bool instances_mirrored = false;
     bool vertex_lit = false;
     std::uint32_t material = scene::none;
     std::uint32_t entity = scene::none;
@@ -60,29 +62,47 @@ bool read_lists(std::uint64_t camera, float target_width, float target_height, f
 void read_view(const scene::camera_t& camera, const scene::view_t& view,
                const scene::tweened_t& tweened, lists_t& lists);
 
-/// Adds the passes that bring a camera's HDR image to `into`, a target of `size`, `format`, and
-/// `samples`, in `scissor`, blending it by its alpha if the camera doesn't clear what's there;
-/// false, with fbe_error's why, if they can't be added.
+/// Lets go of the histories of cameras that have gone or no longer antialias by them; and, for
+/// tests, how many there are.
+void forget_unused_histories();
+std::size_t history_count();
+/// A camera's history's textures' width, 0 for none, for tests.
+std::uint32_t history_width(std::uint64_t camera);
+
 /// A camera's full-screen pass, ready to run: the material it reads, and its code.
 struct game_pass_t {
     std::uint64_t material = 0;
     const gpu::shader_t* shader = nullptr;
 };
 
-/// The camera's full-screen passes that can be made, for a target of `format` of `samples`, each of
+/// The camera's full-screen passes that can be made, the last into `format` of `samples`, each of
 /// the others saying so once.
 std::vector<game_pass_t> game_passes(const scene::camera_t& camera, VkFormat format,
                                      VkSampleCountFlagBits samples);
 
-/// What's in `source`, what the camera drew, through its full-screen passes in turn, into `into`,
-/// its `target`, whose depth they read: false, with fbe_error's why, if it can't.
-bool add_game_passes(const scene::camera_t& camera, std::span<const game_pass_t> passes,
-                     gpu::resource_t source, gpu::resource_t into, std::uint64_t target,
-                     const scene::view_t& view, VkRect2D scissor);
+/// An image a camera's picture goes through on its way to its target: what it's made as, and its
+/// format, which a transient's isn't known as until it's recorded.
+struct picture_t {
+    gpu::transient_t target;
+    VkFormat format = VK_FORMAT_UNDEFINED;
+};
 
+/// What's in `source`, what the camera drew, through its full-screen passes in turn, into `into`,
+/// of `format` and `samples`, each between in a `picture`. They read the depth of `target`, the
+/// camera's. `into_nothing`, for one of its own that a later pass reads, clears that first and
+/// blends nothing. False, with fbe_error's why, if it can't.
+bool add_game_passes(const scene::camera_t& camera, std::span<const game_pass_t> passes,
+                     gpu::resource_t source, gpu::resource_t into, VkFormat format,
+                     VkSampleCountFlagBits samples, const picture_t& picture, std::uint64_t target,
+                     const scene::view_t& view, VkRect2D scissor, bool into_nothing);
+
+/// Adds the passes that bring a camera's HDR image to `into`, a target of `size`, `format`, and
+/// `samples`, in `scissor`, blending it by its alpha if the camera doesn't clear what's there;
+/// false, with fbe_error's why, if they can't be added. `into_nothing`, for one of its own that a
+/// later pass reads, clears that first and blends nothing.
 bool add_post_passes(const scene::camera_t& camera, gpu::resource_t image, gpu::resource_t into,
                      VkExtent2D size, VkFormat format, VkSampleCountFlagBits samples,
-                     VkRect2D scissor);
+                     VkRect2D scissor, bool into_nothing = false);
 
 /// Draws a camera that's showing, in the frame's graph, as fbe_render_camera says.
 bool draw_camera(std::uint32_t slot, float tween);

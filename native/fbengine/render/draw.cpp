@@ -60,7 +60,7 @@ gpu::blend_t blend_of(std::uint64_t key) {
 
 /// The scene shader's pipeline for a key, as fbe_render.h lays its bits out, into a target.
 gpu::pipeline_desc_t desc_of(std::uint64_t key, VkFormat format, VkSampleCountFlagBits samples,
-                             bool flipped, bool shadows) {
+                             bool flipped, bool shadows, bool prepass) {
     const auto depth_mode = static_cast<std::int32_t>((key >> 10U) & 3U);
     const bool two_sided = ((key >> 7U) & 1U) != 0;
     const bool mirrored = ((key >> 12U) & 1U) != 0;
@@ -78,10 +78,14 @@ gpu::pipeline_desc_t desc_of(std::uint64_t key, VkFormat format, VkSampleCountFl
     const std::string_view cast_vertex = instances ? "shadowInstanceVertex" : "shadowVertex";
     const std::string_view plain_vertex = instances ? "instanceVertex" : "vertexMain";
     const std::string_view lit_vertex = particles ? "particleVertex" : plain_vertex;
+    const std::string_view prepass_vertex = instances ? "prepassInstanceVertex" : "prepassVertex";
+    const std::string_view scene_vertex = prepass ? prepass_vertex : lit_vertex;
+    const std::string_view scene_fragment = prepass ? "prepassFragment" : "fragmentMain";
     gpu::pipeline_desc_t desc{
-        .shader = own != nullptr ? own : &shaders::scene,
-        .vertex = shadows ? cast_vertex : lit_vertex,
-        .fragment = shadows ? "shadowFragment" : "fragmentMain",
+        // A shader of its own isn't in the prepass, which has no way to its vertices or its alpha.
+        .shader = own != nullptr && !prepass ? own : &shaders::scene,
+        .vertex = shadows ? cast_vertex : scene_vertex,
+        .fragment = shadows ? "shadowFragment" : scene_fragment,
         .color = format,
         .depth = texture::depth_format,
         .samples = samples,
@@ -91,7 +95,7 @@ gpu::pipeline_desc_t desc_of(std::uint64_t key, VkFormat format, VkSampleCountFl
         .cull = two_sided || shadows ? flag<VkCullModeFlags>(VK_CULL_MODE_NONE)
                                      : flag<VkCullModeFlags>(VK_CULL_MODE_BACK_BIT),
         .front = mirrored != flipped ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE,
-        .blend = blend_of(key),
+        .blend = prepass ? gpu::blend_t::NONE : blend_of(key),
         .depth_test = depth_mode != FBE_DEPTH_NONE,
         .depth_write = depth_mode == FBE_DEPTH_TEST_AND_WRITE,
         .depth_clamp = shadows && gpu::device()->depth_clamp,
@@ -105,8 +109,10 @@ gpu::pipeline_desc_t desc_of(std::uint64_t key, VkFormat format, VkSampleCountFl
             static_cast<std::uint32_t>((key >> 13U) & 15U),
             blends,
             sets,
+            // What's in the prepass, as its ambient occlusion is of.
+            depth_mode == FBE_DEPTH_TEST_AND_WRITE && !particles ? 1U : 0U,
         },
-        .constant_count = 9,
+        .constant_count = 10,
     };
     return desc;
 }
@@ -150,6 +156,12 @@ void record_pass(VkCommandBuffer commands, const recorded_pass_t& pass) {
         vkCmdSetViewport(commands, 0, 1, &pass.viewport);
         vkCmdSetScissor(commands, 0, 1, &pass.scissor);
     }
+    if (pass.occlusion != gpu::no_resource) {
+        const std::uint32_t occlusion = gpu::resource_index(pass.occlusion);
+        vkCmdPushConstants(commands, layout, flag<VkShaderStageFlags>(VK_SHADER_STAGE_ALL),
+                           sizeof(VkDeviceAddress) + sizeof(std::uint32_t), sizeof(std::uint32_t),
+                           &occlusion);
+    }
     for (const view_batches_t& view : pass.views) {
         if (view.has_viewport) {
             vkCmdSetViewport(commands, 0, 1, &view.viewport);
@@ -164,18 +176,18 @@ void record_pass(VkCommandBuffer commands, const recorded_pass_t& pass) {
         for (const batch_t& batch : view.batches) {
             if (bound != batch.key) {
                 bound = batch.key;
-                VkPipeline made =
-                    gpu::pipeline(batch.sky != 0 ? sky_desc(pass.format, pass.samples)
-                                                 : desc_of(batch.key, pass.format, pass.samples,
-                                                           view.flipped, pass.shadows));
+                VkPipeline made = gpu::pipeline(
+                    batch.sky != 0 ? sky_desc(pass.format, pass.samples)
+                                   : desc_of(batch.key, pass.format, pass.samples, view.flipped,
+                                             pass.shadows, pass.prepass));
                 const auto code = static_cast<std::uint32_t>(batch.key >> 52U);
                 // A game's shader no pipeline can be made of isn't tried again: its draws go on as
                 // the scene's own, under the same key.
                 if (made == VK_NULL_HANDLE && batch.sky == 0 &&
                     shaders_own::shader_of(code) != nullptr) {
                     shaders_own::refuse(code);
-                    made = gpu::pipeline(
-                        desc_of(batch.key, pass.format, pass.samples, view.flipped, pass.shadows));
+                    made = gpu::pipeline(desc_of(batch.key, pass.format, pass.samples, view.flipped,
+                                                 pass.shadows, pass.prepass));
                 }
                 usable = made != VK_NULL_HANDLE;
                 if (usable) {
@@ -469,11 +481,21 @@ sky_data_t sky_data(const scene::camera_t& camera, const scene::view_t& view,
 
 /// One view of a camera into the frame's ring: its draws, materials, and lights, the textures its
 /// materials sample added to `sampled`. False, with fbe_error's why, if there's no memory.
+/// What a view of a camera goes by besides what it sees: how far its projection's off, what its
+/// entities were last frame, if it's the main one of a camera that goes by that, and what its
+/// ambient occlusion's raised to, 0 for none.
+struct view_extras_t {
+    std::array<float, 2> jitter{};
+    motion_t* motion = nullptr;
+    float ambient_occlusion = 0.0F;
+};
+
 bool write_view(const scene::camera_t& camera, const scene::view_t& view,
                 const scene::tweened_t& tweened, const lists_t& lists, bool flipped,
                 std::uint64_t target, const shadow_frame_t& shadows, std::size_t shadow_view,
                 std::span<const std::array<float, 4>> mirror_planes,
-                std::vector<std::uint64_t>& sampled, view_batches_t& out) {
+                std::vector<std::uint64_t>& sampled, const view_extras_t& extras,
+                view_batches_t& out) {
     const scene::scene_t& s = scene::scene();
     out.flipped = flipped;
     std::vector<draw_data_t> draws;
@@ -517,6 +539,13 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
             last_index = index->second;
         }
         draw_data_t data = draw_data(item.draw, view_matrix);
+        if (extras.motion != nullptr) {
+            bool no_room = false;
+            data.previous = previous_of(*extras.motion, item, tweened, no_room);
+            if (no_room) {
+                return false;
+            }
+        }
         data.material = last_index;
         batch_t batch;
         batch.key = item.draw.pipeline;
@@ -614,6 +643,10 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
                 data.has_tangents = 1U;
             }
             data.instances = records;
+            if (surface->tangents.buffer != VK_NULL_HANDLE) {
+                data.tangents = surface->tangents.address;
+                data.has_tangents = 1U;
+            }
             batch.indices = surface->indices.buffer;
             batch.index_count = surface->index_count;
             draws.push_back(data);
@@ -627,7 +660,8 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
             scene::half_extents(camera, view, half_width, half_height);
             for (const scene::instance_cluster_t& cluster : scene::instance_clusters(found)) {
                 const std::array<vec3_t, 8> corners = cluster_corners(world, cluster);
-                if (!scene::in_frustum(frustum, corners.data(), corners.size()) ||
+                if (cluster.mirrored != item.instances_mirrored ||
+                    !scene::in_frustum(frustum, corners.data(), corners.size()) ||
                     !level.has_value() ||
                     scene::cluster_lod(found, cluster, world, camera, frustum.eye, half_height) !=
                         *level) {
@@ -728,6 +762,13 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
         data.projection[8] = -data.projection[8];
         data.projection[12] = -data.projection[12];
     }
+    // A part of a pixel off, whatever its depth: as much of w as it's to go.
+    for (std::size_t column = 0; column < 4; ++column) {
+        data.projection[column * 4] += extras.jitter[0] * data.projection[(column * 4) + 3];
+        data.projection[(column * 4) + 1] += extras.jitter[1] * data.projection[(column * 4) + 3];
+    }
+    data.jitter = extras.jitter;
+    data.ambient_occlusion = extras.ambient_occlusion;
     data.viewport = { view.x, view.y, view.width, view.height };
     data.fog_color = { camera.fog_color[0], camera.fog_color[1], camera.fog_color[2], 1.0F };
     data.fog_start = camera.fog_start;
@@ -790,6 +831,14 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
         data.shadow_atlas = texture::index_of(shadows.atlas);
         sampled.push_back(shadows.atlas);
     }
+    if (extras.motion != nullptr) {
+        data.previous = in_ring<previous_data_t>(extras.motion->records, failed).address;
+        data.moving = 1U;
+        finish_motion(*extras.motion, projection * view_matrix);
+    } else {
+        const std::array<previous_data_t, 0> none_then{};
+        data.previous = in_ring<previous_data_t>(none_then, failed).address;
+    }
     const std::array one{ data };
     out.camera = in_ring<camera_data_t>(one, failed).address;
     return !failed;
@@ -839,32 +888,37 @@ bool draw_camera(std::uint32_t slot, float tween) {
     const auto height = static_cast<float>(found->height);
     const VkFormat target_format = found->vk_format;
     const VkSampleCountFlagBits samples = found->samples;
-    const std::int32_t target_kind = found->format;
-    const std::vector<game_pass_t> passes = camera.passes.empty()
-                                                ? std::vector<game_pass_t>{}
-                                                : game_passes(camera, target_format, samples);
-    // What it's all drawn into first, if there's more to it than what it draws.
-    const bool apart = camera.hdr || !passes.empty();
     const std::uint32_t target_width = found->width;
     const std::uint32_t target_height = found->height;
-    // Before what it draws, whose first pass names its target; a game's passes read what's in it.
-    const gpu::transient_t chain_target{
-        .width = target_width,
-        .height = target_height,
-        .format = target_kind,
-        .samples = static_cast<std::uint32_t>(camera.hdr ? VK_SAMPLE_COUNT_1_BIT : samples),
+    // A game's passes and FXAA read what's done, so it goes through images of their own, as near
+    // the target as there are.
+    const bool srgb_target =
+        target_format == VK_FORMAT_R8G8B8A8_SRGB || target_format == VK_FORMAT_B8G8R8A8_SRGB;
+    const bool float_target = target_format == VK_FORMAT_R16G16B16A16_SFLOAT;
+    picture_t picture{
+        .target = {
+            .width = target_width,
+            .height = target_height,
+            .format = srgb_target ? FBE_TEXTURE_RGBA8 : FBE_TEXTURE_RGBA8_LINEAR,
+        },
+        .format = srgb_target ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM,
     };
-    if (!passes.empty() && !gpu::reserve_transient(chain_target)) {
-        return false;
+    if (float_target) {
+        picture.target.format = FBE_TEXTURE_RGBA16F;
+        picture.format = VK_FORMAT_R16G16B16A16_SFLOAT;
     }
-    const gpu::resource_t chain =
-        passes.empty() ? gpu::no_resource : gpu::transient_resource(chain_target);
-    if (!passes.empty() && chain == gpu::no_resource) {
-        return false;
+    // The last of a game's passes goes into the target, or what FXAA reads.
+    const std::vector<game_pass_t> passes =
+        camera.passes.empty()
+            ? std::vector<game_pass_t>{}
+            : game_passes(camera, camera.fxaa ? picture.format : target_format,
+                          camera.fxaa ? VK_SAMPLE_COUNT_1_BIT : samples);
+    const bool read_after = !passes.empty() || camera.fxaa;
+    const bool aside = camera.hdr || read_after;
+    VkFormat format = target_format;
+    if (aside) {
+        format = camera.hdr ? VK_FORMAT_R16G16B16A16_SFLOAT : picture.format;
     }
-    // What it's drawn into is its target's own format, which a transient's isn't known as until
-    // it's recorded.
-    const VkFormat format = camera.hdr ? VK_FORMAT_R16G16B16A16_SFLOAT : target_format;
     scene::view_t view;
     bool shows = false;
     std::uint32_t own = none;
@@ -942,13 +996,31 @@ bool draw_camera(std::uint32_t slot, float tween) {
     if (!draw_shadows(camera, views, tweened, shadows)) {
         return false;
     }
+    const bool temporal = camera.hdr && camera.temporal_aa;
+    const bool occludes = camera.ambient_occlusion > 0.0F;
+    const VkExtent2D full_size{ .width = target_width, .height = target_height };
+    history_t* history = temporal ? history_of(camera, target, full_size,
+                                               { view.x, view.y, view.width, view.height })
+                                  : nullptr;
+    if (temporal && history == nullptr) {
+        return false;
+    }
+    const std::array<float, 2> jitter =
+        history != nullptr ? history->jitter : std::array<float, 2>{};
     std::vector<std::uint64_t> sampled;
     for (std::size_t at = 0; at < views.size(); ++at) {
         lists_t lists;
         read_view(camera, views[at], tweened, lists);
         view_batches_t batches;
-        if (!write_view(camera, views[at], tweened, lists, at + 1 != views.size(), target, shadows,
-                        at, mirror_planes, sampled, batches)) {
+        const bool main_view = at + 1 == views.size();
+        const view_extras_t extras{
+            .jitter = jitter,
+            .motion = main_view && history != nullptr ? &history->motion : nullptr,
+            // A reflection's seen in what's in the scene, whose own pixels are what this is of.
+            .ambient_occlusion = main_view ? camera.ambient_occlusion : 0.0F,
+        };
+        if (!write_view(camera, views[at], tweened, lists, !main_view, target, shadows, at,
+                        mirror_planes, sampled, extras, batches)) {
             return false;
         }
         pass->views.push_back(std::move(batches));
@@ -959,8 +1031,8 @@ bool draw_camera(std::uint32_t slot, float tween) {
                        pass->scissor.extent.height == target_height;
     const std::array<float, 4> clear_rgba = camera.clear_color;
     // An HDR image is all the camera's, so all of it's cleared: to nothing, if what's in its target
-    // shows through; and what a game's passes read as well.
-    pass->clear_color = camera.clears_color && !whole && !apart;
+    // shows through; and so with what's read after it.
+    pass->clear_color = camera.clears_color && !whole && !aside;
     pass->clear_depth = camera.clears_depth && !whole;
     pass->clear_rgba = clear_rgba;
     std::ranges::sort(sampled);
@@ -978,17 +1050,40 @@ bool draw_camera(std::uint32_t slot, float tween) {
     if (into == gpu::no_resource) {
         return false;
     }
+    const gpu::resource_t prepass = temporal || occludes
+                                        ? add_prepass(pass->views.back(), *pass, uses, full_size)
+                                        : gpu::no_resource;
+    if ((temporal || occludes) && prepass == gpu::no_resource) {
+        return false;
+    }
+    if (occludes) {
+        pass->occlusion =
+            add_ambient_occlusion(camera, view, prepass, *pass, jitter,
+                                  history != nullptr ? history->frames : 0, full_size);
+        if (pass->occlusion == gpu::no_resource) {
+            return false;
+        }
+        uses.emplace_back(pass->occlusion, gpu::use_t::SAMPLED);
+    }
     const gpu::transient_t image_target{
         .width = target_width,
         .height = target_height,
-        .format = FBE_TEXTURE_RGBA16F,
+        .format = camera.hdr ? FBE_TEXTURE_RGBA16F : picture.target.format,
         .samples = static_cast<std::uint32_t>(samples),
     };
-    if (camera.hdr && !gpu::reserve_transient(image_target)) {
+    if (aside && !gpu::reserve_transient(image_target)) {
         return false;
     }
-    const gpu::resource_t image =
-        camera.hdr ? gpu::transient_resource(image_target) : (passes.empty() ? into : chain);
+    // What's read and what's written of them at once: what the camera's done, by the tonemap or
+    // being drawn there, and each that follows it.
+    const std::size_t pictures = (camera.hdr || samples == VK_SAMPLE_COUNT_1_BIT ? 1U : 0U) +
+                                 (passes.empty() ? 0U : passes.size() - 1U) +
+                                 (!passes.empty() && camera.fxaa ? 1U : 0U);
+    if (read_after && pictures > 0 &&
+        !gpu::reserve_transient(picture.target, pictures > 1 ? 2U : 1U)) {
+        return false;
+    }
+    const gpu::resource_t image = aside ? gpu::transient_resource(image_target) : into;
     if (image == gpu::no_resource) {
         return false;
     }
@@ -996,7 +1091,7 @@ bool draw_camera(std::uint32_t slot, float tween) {
         .name = "camera",
         .colors = { {
             .target = image,
-            .clear = apart || (camera.clears_color && whole),
+            .clear = aside || (camera.clears_color && whole),
             .rgba = camera.clears_color ? clear_rgba : std::array<float, 4>{},
         }, },
         .depth = into,
@@ -1004,17 +1099,40 @@ bool draw_camera(std::uint32_t slot, float tween) {
         .uses = std::move(uses),
         .record = [pass](VkCommandBuffer commands) { record_pass(commands, *pass); },
     });
-    if (!drawn) {
-        return false;
+    if (!drawn || !aside) {
+        return drawn;
     }
-    if (camera.hdr &&
-        !add_post_passes(camera, image, passes.empty() ? into : chain,
-                         { .width = target_width, .height = target_height }, target_format,
-                         passes.empty() ? samples : VK_SAMPLE_COUNT_1_BIT, pass->scissor)) {
-        return false;
+    gpu::resource_t done = image;
+    if (camera.hdr) {
+        const gpu::resource_t resolved =
+            temporal ? add_resolve(*history, camera, view, image, prepass, *pass) : image;
+        if (resolved == gpu::no_resource) {
+            return false;
+        }
+        if (!read_after) {
+            return add_post_passes(camera, resolved, into, full_size, target_format, samples,
+                                   pass->scissor);
+        }
+        done = gpu::transient_resource(picture.target);
+        if (done == gpu::no_resource ||
+            !add_post_passes(camera, resolved, done, full_size, picture.format,
+                             VK_SAMPLE_COUNT_1_BIT, pass->scissor, true)) {
+            return false;
+        }
     }
-    return passes.empty() ||
-           add_game_passes(camera, passes, chain, into, target, view, pass->scissor);
+    if (!passes.empty()) {
+        const gpu::resource_t after = camera.fxaa ? gpu::transient_resource(picture.target) : into;
+        if (after == gpu::no_resource ||
+            !add_game_passes(camera, passes, done, after,
+                             camera.fxaa ? picture.format : target_format,
+                             camera.fxaa ? VK_SAMPLE_COUNT_1_BIT : samples, picture, target, view,
+                             pass->scissor, camera.fxaa)) {
+            return false;
+        }
+        done = after;
+    }
+    return !camera.fxaa ||
+           add_fxaa(camera, done, into, full_size, target_format, samples, pass->scissor);
 }
 
 } // namespace fbe::render
@@ -1030,6 +1148,7 @@ FBE_API bool fbe_render_camera(uint64_t camera, float tween) try {
         return false;
     }
     fbe::render::forget_freed_geometries();
+    fbe::render::forget_unused_histories();
     fbe::render::forget_unused_atlas();
     return (fbe_gpu_started() || fbe_gpu_start()) && fbe::render::draw_camera(slot, tween);
 } catch (const std::bad_alloc&) {
