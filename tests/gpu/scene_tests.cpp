@@ -11274,6 +11274,28 @@ TEST_CASE("a pass on a camera in stored values has what's stored, as it is", "[g
     fbe_texture_release(target);
 }
 
+// What's between passes in stored values is the bytes too: through a picture of sRGB's, bright ones
+// would come back a byte or two off.
+TEST_CASE("what's stored goes through a pass's pictures to the byte", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_stored_values(scene.camera, true));
+    const std::uint64_t first = game_pass(pass_reads_beside_it);
+    const std::uint64_t second = game_pass(pass_reads_beside_it);
+    require(fbe_camera_add_pass(scene.camera, first));
+    require(fbe_camera_add_pass(scene.camera, second));
+    for (const std::uint8_t stored : { 1, 128, 251, 254 }) {
+        CAPTURE(int{ stored });
+        const float light = light_of(stored);
+        require(fbe_camera_set_clear_color(scene.camera, light, light, light, 1.0F));
+        const rgba_t drawn = middle(scene.drawn());
+        CAPTURE(int{ drawn[0] });
+        CHECK(drawn[0] == stored);
+    }
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_material_release(first);
+    fbe_material_release(second);
+}
+
 TEST_CASE("a pass no pipeline can be made of says so once, and is left out", "[gpu][scene]") {
     const scene_t scene;
     require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
