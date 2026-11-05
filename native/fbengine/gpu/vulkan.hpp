@@ -213,6 +213,8 @@ std::uint32_t sampler_index(std::int32_t filter, std::int32_t wrap_u, std::int32
 /// What's left of the LOD bias after what the samplers can take, for a shader to add: all of it on
 /// a GPU whose samplers have none, as Metal's through MoltenVK haven't.
 float lod_bias_left();
+/// How much of the LOD bias is in every sampler.
+float lod_bias_in_samplers();
 /// The index of 2D's sampler for a filter, clamped or repeating, which has no LOD bias or
 /// anisotropy.
 std::uint32_t sampler_2d_index(std::int32_t filter, bool repeat);
