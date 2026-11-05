@@ -86,6 +86,12 @@ def check_fb_versions(verify):
         assert verify.cached_fb(folder) == "C:/fb-1.2.2/bin/fb.exe", verify.cached_fb(folder)
     ci = (TOOLS.parent / ".github" / "workflows" / "ci.yml").read_text()
     assert verify.required_fb(ci) is not None, "ci.yml says no FB_VERSION this can find"
+    # A cached fb that's been taken off the disk is said, not run.
+    with tempfile.TemporaryDirectory() as folder:
+        gone = pathlib.Path(folder) / "fb-gone" / "fb.exe"
+        (pathlib.Path(folder) / "CMakeCache.txt").write_text(f"FBENGINE_FB:FILEPATH={gone.as_posix()}\n")
+        said = [problem for problem in verify.fb_problems(folder, "1.2.3") if problem.startswith("the build's")]
+        assert len(said) == 1 and "isn't there" in said[0] and "-DFBENGINE_FB" in said[0], said
 
 
 def main():

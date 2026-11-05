@@ -218,20 +218,31 @@ def fb_problem(name, version, required):
     return None
 
 
-def check_fb(build):
-    """Whether the fb the tests run, and the one on PATH, are CI's; false, with why, if not."""
-    step("fb")
-    required = required_fb((ROOT / ".github" / "workflows" / "ci.yml").read_text())
-    fine = True
+def fb_problems(build, required):
+    """What's wrong with the fb the tests run, and the one on PATH, where CI's is `required`: each
+    with how to put it right."""
+    problems = []
     for name, program in (("the build's fb", cached_fb(build)), ("the fb on PATH", shutil.which("fb"))):
         if program is None:
             continue
+        hint = " (cmake -B <build> -DFBENGINE_FB=<one that is>)" if name == "the build's fb" else ""
+        # One the cache names can have been taken off the disk since.
+        if not pathlib.Path(program).is_file():
+            problems.append(f"{name}, {program}, isn't there{hint}")
+            continue
         problem = fb_problem(f"{name}, {program},", fb_version_of(output([program, "--version"])), required)
         if problem is not None:
-            hint = " (cmake -B <build> -DFBENGINE_FB=<one that is>)" if name == "the build's fb" else ""
-            fail(problem + hint)
-            fine = False
-    return fine
+            problems.append(problem + hint)
+    return problems
+
+
+def check_fb(build):
+    """Whether the fb the tests run, and the one on PATH, are CI's; false, with why, if not."""
+    step("fb")
+    problems = fb_problems(build, required_fb((ROOT / ".github" / "workflows" / "ci.yml").read_text()))
+    for problem in problems:
+        fail(problem)
+    return not problems
 
 
 def check_tests(build, only=None):
