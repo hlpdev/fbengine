@@ -3,8 +3,11 @@
 
 Import std.collections
 Import std.core
+Import std.io
 Import std.math
 Import std.test
+Import std.text
+Import slack_water_tools.pip
 Import slack_water_tools.sounds
 Import slack_water_tools.textures
 
@@ -99,4 +102,62 @@ Function EveryMaterialTiles()
         End For
         Expect(wrap <= inside)
     End For
+End Function
+
+@Test
+Function PipsPartsAreRoundAndItsEyesShutToTheirBottoms()
+    Local shape = Shape()
+    shape.Ellipsoid(1.0, 2.0, 3.0, 0.1, 0.2, 0.3, 4, 0.9)
+    Local count = shape.Joints.Count
+    Expect(count > 0)
+    For at = 0 Until count
+        Local dx = (shape.Positions[at * 3] - 1.0) / 0.1
+        Local dy = (shape.Positions[at * 3 + 1] - 2.0) / 0.2
+        Local dz = (shape.Positions[at * 3 + 2] - 3.0) / 0.3
+        // On its surface, its normal out from its middle, and by its joint.
+        Expect(Abs(dx * dx + dy * dy + dz * dz - 1.0) < 0.001)
+        // Its normal is across the surface there: along its point over its radii, squared.
+        Local gx = dx / 0.1
+        Local gy = dy / 0.2
+        Local gz = dz / 0.3
+        Local length = Sqrt(gx * gx + gy * gy + gz * gz)
+        Expect(Abs(shape.Normals[at * 3] - gx / length) < 0.0001 &&
+               Abs(shape.Normals[at * 3 + 1] - gy / length) < 0.0001 &&
+               Abs(shape.Normals[at * 3 + 2] - gz / length) < 0.0001)
+        Expect(shape.Joints[at] == 4)
+        // Shut, everything's at its bottom, but for a tenth of how far over it it was.
+        Local shut = shape.Positions[at * 3 + 1] + shape.Shut[at]
+        Local over = (dy + 1.0) * 0.2
+        Expect(Abs(shut - (1.8 + over * 0.1)) < 0.0001)
+    End For
+    // Its triangles face out.
+    Local indices = shape.Indices
+    For at = 0 Until indices.Count / 3
+        Local points: Vec3[] = []
+        For corner = 0 To 2
+            Local index = indices[at * 3 + corner]
+            Expect(index < count)
+            points.Add(Vec3(shape.Positions[index * 3] - 1.0, shape.Positions[index * 3 + 1] - 2.0,
+                            shape.Positions[index * 3 + 2] - 3.0))
+        End For
+        Local turning = Cross(points[1] - points[0], points[2] - points[0])
+        If Dot(turning, turning) < 0.0000000001 Then Continue
+        Expect(Dot(turning, points[0] + points[1] + points[2]) > 0.0)
+    End For
+End Function
+
+@Test
+Function PipsEyesAreWhiteWithDarkPupilsAndBothShut() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Expect((Try WritePip(folder.Path)) == 8)
+    Local gltf = Try File.ReadText(folder.Path / "pip.gltf")
+    // Brass, the pupils, and the whites, each a primitive with the blink as its target.
+    For material In [0, 1, 2]
+        Expect(gltf.Contains("\"material\":{material},\"targets\":[{{\"POSITION\""), gltf)
+    End For
+    Expect(gltf.Contains(
+        "{{\"name\":\"white\",\"pbrMetallicRoughness\":{{\"baseColorFactor\":[0.9,0.9,0.86,1]"))
+    Expect(gltf.Contains(
+        "{{\"name\":\"eye\",\"pbrMetallicRoughness\":{{\"baseColorFactor\":[0.02,0.02,0.03,1]"))
 End Function

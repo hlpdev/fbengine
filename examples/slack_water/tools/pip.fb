@@ -1,5 +1,5 @@
-// Pip, as a glTF: a small two-legged brass helper of boxes, each moved by one joint, its eyes with
-// a morph target that shuts them, and its idle, walk, and carry clips, in pip.gltf and pip.bin.
+// Pip, as a glTF: a small two-legged brass helper, rounded, each part moved by one joint, its eyes
+// white with dark pupils, and a morph target that shuts them, and its idle, walk, and carry clips, in pip.gltf and pip.bin.
 
 Import std.collections
 Import std.core
@@ -44,47 +44,58 @@ Final Class Parts
 End Class
 
 // A surface being made: its vertices, each by its joint, and its triangles.
-Final Class Shape
-    Field Positions: Float[] = []
-    Field Normals: Float[] = []
-    Field Uvs: Float[] = []
-    Field Joints: Int[] = []
-    Field Indices: Int[] = []
+Public Final Class Shape
+    Public Field Positions: Float[] = []
+    Public Field Normals: Float[] = []
+    Public Field Uvs: Float[] = []
+    Public Field Joints: Int[] = []
+    Public Field Indices: Int[] = []
     // What a shut eye moves each vertex by, on y, and 0 for what doesn't.
-    Field Shut: Float[] = []
+    Public Field Shut: Float[] = []
 
-    // A box, its middle at (`x`, `y`, `z`), `w`, `h`, and `d` across, moved by `joint`, with `shut`
-    // telling how far down its top vertices move when its eyes shut.
-    Method Box(x: Float, y: Float, z: Float, w: Float, h: Float, d: Float, joint: Int,
-               shut: Float = 0.0)
-        // A face's normal, then its two directions across, as it's seen from outside.
-        Local faces = [[0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-                       [0.0, 0.0, -1.0, -1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-                       [1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0],
-                       [-1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0],
-                       [0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0],
-                       [0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]]
-        For face In faces
-            Local first = Joints.Count
-            For corner = 0 To 3
-                Local su = corner == 1 || corner == 2 ? 1.0 : -1.0
-                Local sv = corner >= 2 ? 1.0 : -1.0
-                Local px = face[0] + face[3] * su + face[6] * sv
-                Local py = face[1] + face[4] * su + face[7] * sv
-                Local pz = face[2] + face[5] * su + face[8] * sv
-                Positions.Add(x + px * w * 0.5)
-                Positions.Add(y + py * h * 0.5)
-                Positions.Add(z + pz * d * 0.5)
-                Normals.Add(face[0])
-                Normals.Add(face[1])
-                Normals.Add(face[2])
-                Uvs.Add((su + 1.0) * 0.5)
-                Uvs.Add((1.0 - sv) * 0.5)
+    // A rounded part: an ellipsoid, its middle at (`x`, `y`, `z`), `rx`, `ry`, and `rz` from it to its
+    // sides, smooth, moved by `joint`. A shut eye's lid, `shut`, flattens what's over its bottom down to
+    // it, by that much of how far over it each vertex is.
+    Public Method Ellipsoid(x: Float, y: Float, z: Float, rx: Float, ry: Float, rz: Float,
+                            joint: Int,
+                            shut: Float = 0.0)
+        Local rings = 10
+        Local around = 16
+        Local first = Joints.Count
+        For ring = 0 To rings
+            // From its top down.
+            Local down = Pi * (ring As Float) / (rings As Float)
+            Local up = Cos(down As Float64) As Float
+            Local out = Sin(down As Float64) As Float
+            For step = 0 To around
+                Local angle = 2.0 * Pi * (step As Float) / (around As Float)
+                Local nx = out * (Sin(angle As Float64) As Float)
+                Local nz = out * (Cos(angle As Float64) As Float)
+                Positions.Add(x + nx * rx)
+                Positions.Add(y + up * ry)
+                Positions.Add(z + nz * rz)
+                // An ellipsoid's normal is its point over its radii, squared.
+                Local gx = nx / rx
+                Local gy = up / ry
+                Local gz = nz / rz
+                Local length = Sqrt(gx * gx + gy * gy + gz * gz)
+                Normals.Add(gx / length)
+                Normals.Add(gy / length)
+                Normals.Add(gz / length)
+                Uvs.Add((step As Float) / (around As Float))
+                Uvs.Add((ring As Float) / (rings As Float))
                 Joints.Add(joint)
-                Shut.Add(py > 0.0 ? shut : 0.0)
+                Shut.Add(-shut * (up + 1.0) * ry)
             End For
-            For index In [0, 1, 2, 0, 2, 3]
-                Indices.Add(first + index)
+        End For
+        Local row = around + 1
+        For ring = 0 Until rings
+            For step = 0 Until around
+                Local a = first + ring * row + step
+                Local b = a + row
+                For index In [a, b, a + 1, a + 1, b, b + 1]
+                    Indices.Add(index)
+                End For
             End For
         End For
     End Method
@@ -236,19 +247,39 @@ Public Function WritePip(folder: Path): Int Throws IOError
     Local armR = 5
     Local legL = 6
     Local legR = 7
+    // Rounded: a round body with a band at its middle, a head wider than it's high, on a neck, an
+    // antenna with a bulb, arms with hands, and legs with feet, all brass.
     Local brass = Shape()
-    brass.Box(0.0, 0.5, 0.0, 0.26, 0.28, 0.2, body)
-    brass.Box(0.0, 0.72, 0.0, 0.22, 0.16, 0.18, head)
-    brass.Box(0.16, 0.46, 0.0, 0.06, 0.26, 0.06, armL)
-    brass.Box(-0.16, 0.46, 0.0, 0.06, 0.26, 0.06, armR)
-    brass.Box(0.08, LEG / 2.0, 0.0, FOOT, LEG, FOOT, legL)
-    brass.Box(-0.08, LEG / 2.0, 0.0, FOOT, LEG, FOOT, legR)
-    Local eyes = Shape()
-    eyes.Box(0.05, 0.74, 0.095, 0.045, 0.05, 0.01, head, -0.045)
-    eyes.Box(-0.05, 0.74, 0.095, 0.045, 0.05, 0.01, head, -0.045)
+    brass.Ellipsoid(0.0, 0.5, 0.0, 0.14, 0.15, 0.115, body)
+    brass.Ellipsoid(0.0, 0.5, 0.0, 0.148, 0.025, 0.122, body)
+    brass.Ellipsoid(0.0, 0.64, 0.0, 0.045, 0.04, 0.045, head)
+    brass.Ellipsoid(0.0, 0.73, 0.0, 0.13, 0.085, 0.105, head)
+    brass.Ellipsoid(0.0, 0.84, 0.0, 0.008, 0.04, 0.008, head)
+    brass.Ellipsoid(0.0, 0.885, 0.0, 0.018, 0.018, 0.018, head)
+    For side In [1.0, -1.0]
+        Local arm = side > 0.0 ? armL : armR
+        brass.Ellipsoid(side * 0.165, 0.58, 0.0, 0.035, 0.035, 0.035, arm)
+        brass.Ellipsoid(side * 0.17, 0.47, 0.0, 0.028, 0.11, 0.028, arm)
+        brass.Ellipsoid(side * 0.17, 0.35, 0.0, 0.035, 0.03, 0.035, arm)
+        Local leg = side > 0.0 ? legL : legR
+        brass.Ellipsoid(side * 0.08, LEG / 2.0 + FOOT / 2.0, 0.0, 0.032, LEG / 2.0 - FOOT / 4.0,
+                        0.032, leg)
+        brass.Ellipsoid(side * 0.08, FOOT / 2.0, 0.018, FOOT / 2.0 + 0.012, FOOT / 2.0,
+                        FOOT / 2.0 + 0.03, leg)
+        // Its ears, as bolts.
+        brass.Ellipsoid(side * 0.13, 0.73, 0.0, 0.012, 0.025, 0.025, head)
+    End For
+    // Its eyes: white bulbs, a dark pupil in each, both shutting.
+    Local whites = Shape()
+    Local pupils = Shape()
+    For side In [1.0, -1.0]
+        whites.Ellipsoid(side * 0.05, 0.745, 0.085, 0.033, 0.036, 0.022, head, 0.9)
+        pupils.Ellipsoid(side * 0.05, 0.742, 0.104, 0.014, 0.016, 0.006, head, 0.9)
+    End For
 
     Local parts = Parts()
-    Local primitives = [brass.Primitive(parts, 0), eyes.Primitive(parts, 1)]
+    Local primitives = [brass.Primitive(parts, 0), pupils.Primitive(parts, 1),
+                        whites.Primitive(parts, 2)]
 
     // Each joint's inverse bind: taking the mesh's space to its own, by where it is in the whole.
     Local start = parts.Bytes.Count
@@ -317,7 +348,9 @@ Public Function WritePip(folder: Path): Int Throws IOError
                  "\"materials\":[{{\"name\":\"brass\",\"pbrMetallicRoughness\":{{\"baseColorFactor\":" +
                  "[0.86,0.66,0.3,1],\"metallicFactor\":1,\"roughnessFactor\":0.38}}}}," +
                  "{{\"name\":\"eye\",\"pbrMetallicRoughness\":{{\"baseColorFactor\":" +
-                 "[0.02,0.02,0.03,1],\"metallicFactor\":0,\"roughnessFactor\":0.2}}}}]," +
+                 "[0.02,0.02,0.03,1],\"metallicFactor\":0,\"roughnessFactor\":0.2}}}}," +
+                 "{{\"name\":\"white\",\"pbrMetallicRoughness\":{{\"baseColorFactor\":" +
+                 "[0.9,0.9,0.86,1],\"metallicFactor\":0,\"roughnessFactor\":0.15}}}}]," +
                  "\"accessors\":[{Joined(parts.Accessors)}],\"bufferViews\":[{Joined(parts.Views)}]," +
                  "\"buffers\":[{{\"uri\":\"pip.bin\",\"byteLength\":{parts.Bytes.Count}}}]}}\n"
     Try File.WriteBytes(folder / "pip.bin", parts.Bytes)
