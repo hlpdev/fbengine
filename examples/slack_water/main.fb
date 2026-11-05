@@ -784,7 +784,9 @@ Function Walked3d(island: Island, walk: String[], lines: String[],
         End For
         Checks("out of the door, after the end, it's not muffled",
                scape.OutsideNow() == OutsideCutoff(False))
-        Checks("nor quieter", IsClose(scape.SeaNow(), SeaLevel(game.Story().Clock(), False), 0.001))
+        Checks("nor quieter",
+               IsClose(scape.SeaNow(), SeaLevel(game.Story().Clock(), False), 0.001) &&
+               IsClose(scape.SurfNow(), SurfLevel(game.Story().Clock(), False), 0.001))
     End If
     Return ended
 End Function
@@ -821,7 +823,11 @@ End Function
 // Whether what a walk heard is what it should be: the wind and sea all along, your feet, and the
 // flood; the wheel by how it ended; and a mix that's not silent, and doesn't clip.
 Function Heard(scape: Soundscape, flow: Flow, loudest: Float)
-    Checks("the wind and sea are streamed, and playing", scape.AroundYou())
+    Checks("the wind, sea, and surf are streamed, and playing", scape.AroundYou())
+    // The storm's in by the end: the wind's whistling, at its pitch.
+    Checks("the wind's pitched by the storm",
+           IsClose(scape.WindPitchNow(), WindPitch(flow.Clock()), 0.001) &&
+           scape.WindPitchNow() > 1.0)
     // On rock, sand, and the mill's boards, each a walk crosses.
     Checks("your steps are heard on rock, sand, and boards",
            scape.Played(Cue.STEP_1) + scape.Played(Cue.STEP_2) + scape.Played(Cue.STEP_3) > 0 &&
@@ -857,6 +863,13 @@ Function Listened() Throws GraphicsError, IOError, AudioError
     Audio.Mix(rate)
     Local bed = RmsOf(Audio.Mix(rate))
     Checks("the wind and sea are heard at slack water", bed > 0.005)
+    // With the storm in and the surf roaring, it's louder, and as loud again once it's slack water.
+    scape.Surroundings(TIDE_IN_AT, False, 1.0)
+    Audio.Mix(rate)
+    Local storm = RmsOf(Audio.Mix(rate))
+    Checks("the storm and its surf are louder than slack water", storm > 1.5 * bed)
+    scape.Surroundings(0.0, False, 1.0)
+    Audio.Mix(rate)
     // A gull, off over the water, over them.
     Local gullOver = 0
     For call = 1 To 6
@@ -912,7 +925,7 @@ Function Listened() Throws GraphicsError, IOError, AudioError
     For second = 1 To 3
         Audio.Mix(rate)
     End For
-    Checks("only the wind and sea play on", Audio.Playing() == 2)
+    Checks("only the wind, sea, and surf play on", Audio.Playing() == 3)
     // The wheel's where it's drawn, and heard outside.
     Local wheel = scape.WheelAt()
     Local drawn = island.WheelAt()
@@ -924,12 +937,13 @@ Function Listened() Throws GraphicsError, IOError, AudioError
         scape.Surroundings(0.0, False, 1.0 / 60.0)
         Audio.Mix(735)
     End For
-    Local outsideMix = Audio.Mix(rate)
+    // Over a whole wave of the surf, which breaks each 4 seconds, so it's each at its average.
+    Local outsideMix = Audio.Mix(rate * 4)
     For step = 1 To 60
         scape.Surroundings(0.0, True, 1.0 / 60.0)
         Audio.Mix(735)
     End For
-    Local insideMix = Audio.Mix(rate)
+    Local insideMix = Audio.Mix(rate * 4)
     Local lower = 20.0 * Log10((RmsOf(outsideMix) / Max(RmsOf(insideMix), 0.00001)) As Float64)
     Print("from inside, it's {lower} dB lower")
     Checks("from inside, it's at least 6 dB lower", lower >= 6.0)

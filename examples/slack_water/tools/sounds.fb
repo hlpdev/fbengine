@@ -138,6 +138,27 @@ Public Function Sea(): Float[]
     Return Leveled(Looped(made, 1.0), 0.7)
 End Function
 
+// Surf: waves breaking on rock, one each 4 seconds, two to a loop, each a bright crash that darkens, and
+// the hiss of it drawing back.
+Public Function Surf(): Float[]
+    Local hiss = Hiss(17)
+    Local low = Smooth()
+    Local body = Smooth()
+    Local made: Float[] = []
+    For at = 0 Until Samples(9.0)
+        Local t = (at As Float) / (RATE As Float)
+        Local into = Fract(t / 4.0) * 4.0
+        // The crash, from nothing to its height in a tenth of a second, then dying away; the draw
+        // back after, softer and darker.
+        Local crash = Min(into / 0.1, 1.0) * Decay(-into * 1.6)
+        Local back = Sine(Clamp((into - 0.8) / 3.2, 0.0, 1.0) * 3.14159) * 0.35
+        Local noise = hiss.Next()
+        Local bright = low.Next(noise, 0.05 + crash * 0.4)
+        made.Add(bright * (crash + back) + body.Next(noise, 0.01) * 2.0 * (crash + 0.3))
+    End For
+    Return Leveled(Looped(made, 1.0), 0.7)
+End Function
+
 // A gull's call: a falling cry, twice.
 Public Function Gull(): Float[]
     Local made: Float[] = []
@@ -270,6 +291,8 @@ Public Function WriteSounds(folder: Path) Throws IOError
     Try File.WriteText(folder / "wind.wav.toml", "streamed = true\n")
     Try WriteWav(folder / "sea.wav", Sea())
     Try File.WriteText(folder / "sea.wav.toml", "streamed = true\n")
+    Try WriteWav(folder / "surf.wav", Surf())
+    Try File.WriteText(folder / "surf.wav.toml", "streamed = true\n")
     Try WriteWav(folder / "gull.wav", Gull())
     Try WriteWav(folder / "creak.wav", Creak())
     Try WriteWav(folder / "wheel.wav", Wheel())

@@ -59,8 +59,14 @@ Const GULL_TRIES: Int = 16
 
 // How much of the mix what's all around you takes, and the wheel, so that with everything at its
 // loudest at once, it doesn't clip.
-Const AMBIENCE: Float = 0.4
-Const WHEEL: Float = 0.25
+Const AMBIENCE: Float = 0.27
+Const WHEEL: Float = 0.2
+// How far a gust takes the wind over its level, in the storm at its height, and how much higher the
+// wind's pitched then.
+Const GUSTS: Float = 0.3
+Const STORM_PITCH: Float = 0.2
+// How long the surf takes to come to its roar, from the flood.
+Const ROAR_SECONDS: Float64 = 20.0
 // How far a low-pass opens when it's as good as none, how low it goes from inside the mill, where the
 // wind's and sea's own are around 200 Hz, and how long it takes between.
 Const OPEN_CUTOFF: Float = 18000.0
@@ -81,9 +87,31 @@ Public Function CueLevel(cue: Cue): Float
     End Select
 End Function
 
-/// How loud the wind is, by the tide's clock: it rises with the storm; and less inside the mill.
+/// How loud the wind is, by the tide's clock: it rises with the storm, and gusts in it; and less inside
+/// the mill.
 Public Function WindLevel(clock: Float64, inside: Bool): Float
-    Return (0.35 + 0.5 * (Min(clock / TIDE_IN_AT, 1.0) As Float)) * (inside ? 0.5 : 1.0) * AMBIENCE
+    Return (0.35 + 0.5 * (Min(clock / TIDE_IN_AT, 1.0) As Float)) * Gust(clock) *
+           (inside ? 0.5 : 1.0) *
+           AMBIENCE
+End Function
+
+/// What the wind's level is multiplied by, `clock` seconds in: 1 until the storm, then swelling and
+/// falling, by up to GUSTS either way at its height, by three slow waves that don't line up.
+Public Function Gust(clock: Float64): Float
+    Local swells = 0.5 * (Sin(clock * 0.9) As Float) + 0.3 * (Sin(clock * 2.3 + 1.0) As Float) +
+                   0.2 * (Sin(clock * 5.1 + 2.0) As Float)
+    Return 1.0 + GUSTS * StormAt(clock) * swells
+End Function
+
+/// How high the wind's pitched, `clock` seconds in: as it was made until the storm, and up to
+/// STORM_PITCH higher at its height, as a harder wind whistles.
+Public Function WindPitch(clock: Float64): Float => 1.0 + STORM_PITCH * StormAt(clock)
+
+/// How loud the surf is, breaking on the rocks: a little at slack water, more as the storm comes, and
+/// its roar once the flood's over the road, over ROAR_SECONDS; and less inside the mill.
+Public Function SurfLevel(clock: Float64, inside: Bool): Float
+    Local roar = Clamp(((clock - FLOOD_AT) / ROAR_SECONDS) As Float, 0.0, 1.0)
+    Return (0.2 + 0.4 * StormAt(clock) + 0.2 * roar) * (inside ? 0.45 : 1.0) * AMBIENCE
 End Function
 
 /// How loud the sea is, by the tide's clock, as it comes in, and less inside the mill.

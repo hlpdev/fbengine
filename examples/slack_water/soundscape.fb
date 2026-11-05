@@ -1,5 +1,5 @@
-// The game's sounds in its world: streamed wind and sea all around, rising with the tide, muffled from
-// inside the mill; gulls over the water, creaks at the mill, the wheel at the wheel, the flood's splash
+// The game's sounds in its world: streamed wind, sea, and surf all around, by the storm and tide, the wind
+// gusting and the surf roaring from the flood, muffled from inside the mill; gulls over the water, creaks at the mill, the wheel at the wheel, the flood's splash
 // on the road, and your own steps, on sand, rock, turf, the road, the mill's boards, or the shallows,
 // as its Cues say.
 
@@ -31,9 +31,11 @@ Public Final Class Soundscape
     Field sounds: Sound[]
     Field wind: Sound
     Field sea: Sound
+    Field surf: Sound
     Field wheel: Sound
     Field windPlays: Channel
     Field seaPlays: Channel
+    Field surfPlays: Channel
     Field wheelPlays: Channel?
     // What's outside the mill: the wind, the sea, gulls, the wheel, and the splash.
     Field outside: Bus
@@ -50,10 +52,12 @@ Public Final Class Soundscape
     // How far through the door the wind's and sea's levels are, from 0, outside, to 1, inside.
     Field indoors: Float = 0.0
 
-    New(sounds: Sound[], wind: Sound, sea: Sound, wheel: Sound, game: Game, island: Island)
+    New(sounds: Sound[], wind: Sound, sea: Sound, surf: Sound, wheel: Sound, game: Game,
+        island: Island)
         Self.sounds = sounds
         Self.wind = wind
         Self.sea = sea
+        Self.surf = surf
         Self.wheel = wheel
         cues = Cues()
         played = []
@@ -68,17 +72,21 @@ Public Final Class Soundscape
         outside.SetLowPass(cutoff)
         wind.SetBus(outside)
         sea.SetBus(outside)
+        surf.SetBus(outside)
         wheel.SetBus(outside)
         sounds[Cue.GULL As Int].SetBus(outside)
         sounds[Cue.SPLASH As Int].SetBus(outside)
         wind.SetLoop(True)
         sea.SetLoop(True)
+        surf.SetLoop(True)
         wheel.SetLoop(True)
         // They start at their levels, not at 1.
         wind.SetVolume(WindLevel(0.0, True))
         sea.SetVolume(SeaLevel(0.0, True))
+        surf.SetVolume(SurfLevel(0.0, True))
         windPlays = wind.Play()
         seaPlays = sea.Play()
+        surfPlays = surf.Play()
         Local works = island.PlaceOf(Spot.WORKS)
         atMill = MadeEmitter(Vec3(works.x, GroundHeight(works.x, works.y) + 2.0, works.y))
         atWheel = MadeEmitter(island.WheelAt())
@@ -116,16 +124,18 @@ Public Final Class Soundscape
                         Try Assets.Load<Sound>(Res.Sand1), Try Assets.Load<Sound>(Res.Sand2),
                         Try Assets.Load<Sound>(Res.Turf1), Try Assets.Load<Sound>(Res.Turf2)]
         Return Soundscape(sounds, Try Assets.Load<Sound>(Res.Wind), Try Assets.Load<Sound>(Res.Sea),
-                          Try Assets.Load<Sound>(Res.Wheel), game, island)
+                          Try Assets.Load<Sound>(Res.Surf), Try Assets.Load<Sound>(Res.Wheel), game,
+                          island)
     End Method
 
     /// How many times `cue` has played.
     @MainThread Public Method Played(cue: Cue): Int => played[cue As Int]
 
-    /// Whether the wind and sea are streamed, and playing.
+    /// Whether the wind, sea, and surf are streamed, and playing.
     @MainThread
     Public Method AroundYou(): Bool
-        Return wind.Streamed() && sea.Streamed() && windPlays.Playing() && seaPlays.Playing()
+        Return wind.Streamed() && sea.Streamed() && surf.Streamed() && windPlays.Playing() &&
+               seaPlays.Playing() && surfPlays.Playing()
     End Method
 
     /// The low-pass on what's outside, now.
@@ -136,6 +146,12 @@ Public Final Class Soundscape
 
     /// The sea's level now.
     @MainThread Public Method SeaNow(): Float => seaPlays.Volume()
+
+    /// The surf's level now.
+    @MainThread Public Method SurfNow(): Float => surfPlays.Volume()
+
+    /// The wind's pitch now.
+    @MainThread Public Method WindPitchNow(): Float => windPlays.Pitch()
 
     /// The wheel's pitch now, or 0 while it isn't turning.
     @MainThread
@@ -154,7 +170,7 @@ Public Final Class Soundscape
     /// Whether what's outside the mill goes through the bus that muffles it.
     @MainThread
     Public Method OutsideOnItsBus(): Bool
-        Local all = [wind, sea, wheel, sounds[Cue.GULL As Int], sounds[Cue.SPLASH As Int]]
+        Local all = [wind, sea, surf, wheel, sounds[Cue.GULL As Int], sounds[Cue.SPLASH As Int]]
         For sound In all
             If sound.Bus() != outside Then Return False
         End For
@@ -167,6 +183,7 @@ Public Final Class Soundscape
         beds = level
         windPlays.SetVolume(WindLevel(0.0, False) * beds)
         seaPlays.SetVolume(SeaLevel(0.0, False) * beds)
+        surfPlays.SetVolume(SurfLevel(0.0, False) * beds)
     End Method
 
     /// Moves it on `seconds`, as `game` has.
@@ -195,8 +212,8 @@ Public Final Class Soundscape
         End If
     End Method
 
-    /// Sets the wind and sea for `clock`, heard from `inside` the mill or not, the low-pass moving
-    /// toward what suits, `seconds` on.
+    /// Sets the wind, sea, and surf for `clock`, heard from `inside` the mill or not, the low-pass
+    /// moving toward what suits, `seconds` on, and the wind's pitch by the storm.
     @MainThread
     Public Method Surroundings(clock: Float64, inside: Bool, seconds: Float)
         // Their levels move as the low-pass does, so going through the door doesn't click.
@@ -207,8 +224,12 @@ Public Final Class Soundscape
                        (WindLevel(clock, True) - WindLevel(clock, False)) * indoors
         Local seaAt = SeaLevel(clock, False) +
                       (SeaLevel(clock, True) - SeaLevel(clock, False)) * indoors
+        Local surfAt = SurfLevel(clock, False) +
+                       (SurfLevel(clock, True) - SurfLevel(clock, False)) * indoors
         windPlays.SetVolume(windAt * beds)
         seaPlays.SetVolume(seaAt * beds)
+        surfPlays.SetVolume(surfAt * beds)
+        windPlays.SetPitch(WindPitch(clock))
         cutoff = CutoffToward(cutoff, OutsideCutoff(inside), seconds)
         outside.SetLowPass(cutoff)
     End Method
@@ -239,6 +260,7 @@ Public Final Class Soundscape
         Listener.Unfollow()
         windPlays.Stop()
         seaPlays.Stop()
+        surfPlays.Stop()
         Local plays = wheelPlays
         If plays != Null Then plays.Stop()
         atMill.Free()
@@ -250,6 +272,7 @@ Public Final Class Soundscape
         End For
         wind.Free()
         sea.Free()
+        surf.Free()
         wheel.Free()
         outside.Free()
     End Method
