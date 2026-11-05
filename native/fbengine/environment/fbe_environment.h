@@ -11,8 +11,8 @@
 extern "C" {
 #endif
 
-// Bakes `source`, a texture of the light all around, y up, +X at its middle and the sky along its
-// top, into an environment, in the frame's graph, so what's drawn after it reads it: its specular
+// Bakes `source`, a texture of the light all around, y up, -Z at its middle as a sky has it, and
+// the sky along its top, into an environment, in the frame's graph, so what's drawn after it reads it: its specular
 // light `size` texels across at no roughness, a power of 2 from 16 to 2048, each texel taking
 // `samples` samples, 1 to 4096. Mipmaps on `source` make few samples less noisy, and a small sun
 // count for what it should; it holds the source until it's baked, and its light past 8192 is read

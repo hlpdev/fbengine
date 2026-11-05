@@ -261,13 +261,13 @@ double lobe(const vec3_t& direction) {
     return 4.0 * along * along;
 }
 
-/// The lobe as an equirectangular image, +X at its middle and y up.
+/// The lobe as an equirectangular image, -Z at its middle and y up.
 std::uint64_t lobe_source(std::int32_t width, std::int32_t height) {
     return source_of(width, height, true, [width, height](std::int32_t x, std::int32_t y) {
         const double phi = (((static_cast<double>(x) + 0.5) / width) - 0.5) * 2.0 * pi;
         const double theta = ((static_cast<double>(y) + 0.5) / height) * pi;
         const auto value = static_cast<float>(lobe(
-            { std::cos(phi) * std::sin(theta), std::cos(theta), std::sin(phi) * std::sin(theta) }));
+            { std::sin(phi) * std::sin(theta), std::cos(theta), -std::cos(phi) * std::sin(theta) }));
         return std::array<float, 3>{ value, value, value };
     });
 }
@@ -692,8 +692,8 @@ TEST_CASE("occlusion and emission are what they should be", "[gpu]") {
     stop_gpu();
 }
 
-// The sky's along the top of the image, +Y at the map's middle and -Y at its corners; +X at the
-// image's middle comes out on the +X side of the map.
+// The sky's along the top of the image, +Y at the map's middle and -Y at its corners; -Z at the
+// image's middle comes out on the -Z side of the map.
 TEST_CASE("an environment's directions are the image's", "[gpu]") {
     start();
     const std::uint64_t sky = source_of(64, 32, false, [](std::int32_t, std::int32_t y) {
@@ -710,7 +710,7 @@ TEST_CASE("an environment's directions are the image's", "[gpu]") {
     CHECK(mirror.at(7, 7)[0] > 0.99F);
     CHECK(mirror.at(15, 15)[0] < 0.01F);
 
-    // A spot at the image's middle row and column, on the horizon at +X.
+    // A spot at the image's middle row and column, on the horizon at -Z.
     const std::uint64_t spot = source_of(64, 32, false, [](std::int32_t x, std::int32_t y) {
         const bool lit = std::abs(x - 32) < 4 && std::abs(y - 16) < 4;
         return std::array<float, 3>{ lit ? 8.0F : 0.0F, 0.0F, 0.0F };
@@ -732,7 +732,7 @@ TEST_CASE("an environment's directions are the image's", "[gpu]") {
     }
     const vec3_t found = octahedral_direction(brightest_x, brightest_y, 32);
     INFO(found[0] << ", " << found[1] << ", " << found[2]);
-    CHECK(found[0] > 0.9);
+    CHECK(found[2] < -0.9);
     stop_gpu();
 }
 
@@ -778,11 +778,11 @@ TEST_CASE("every direction at a pole reads one column of an image", "[gpu]") {
             CHECK(across(-off, y, -off) == 0.5F);
         }
     }
-    // Far enough off, a texel of the largest map, it's the angle again: +X's middle, +Z's three
-    // quarters.
-    CHECK(std::abs(across(1e-3F, -1.0F, 0.0F) - 0.5F) < 0.001F);
-    CHECK(std::abs(across(0.0F, -1.0F, 1e-3F) - 0.75F) < 0.001F);
-    CHECK(std::abs(across(0.0F, 1.0F, -1e-3F) - 0.25F) < 0.001F);
+    // Far enough off, a texel of the largest map, it's the angle again: -Z's middle, +X's three
+    // quarters, and -X's one.
+    CHECK(std::abs(across(0.0F, -1.0F, -1e-3F) - 0.5F) < 0.001F);
+    CHECK(std::abs(across(1e-3F, -1.0F, 0.0F) - 0.75F) < 0.001F);
+    CHECK(std::abs(across(-1e-3F, 1.0F, 0.0F) - 0.25F) < 0.001F);
     stop_gpu();
 }
 

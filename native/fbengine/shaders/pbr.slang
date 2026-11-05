@@ -170,8 +170,8 @@ public float3 directionOfOctahedral(float2 at)
     return normalize(float3(across.x, up, across.y));
 }
 
-/// How far across an equirectangular image `direction`, a unit vector, is, y up, 0 to 1, +X at its
-/// middle. At a pole there's no angle: a direction a float's rounding away from one has one that's
+/// How far across an equirectangular image `direction`, a unit vector, is, y up, 0 to 1, -Z at its
+/// middle, as a sky has it, so one image is both, the same way round. At a pole there's no angle: a direction a float's rounding away from one has one that's
 /// anything, as a map's corners do on a driver that divides by a reciprocal, so all of them across
 /// it read its one middle column.
 public float equirectangularAcross(float3 direction)
@@ -180,7 +180,7 @@ public float equirectangularAcross(float3 direction)
     {
         return 0.5;
     }
-    return (atan2(direction.z, direction.x) / (2.0 * PI)) + 0.5;
+    return (atan2(direction.x, -direction.z) / (2.0 * PI)) + 0.5;
 }
 
 /// An octahedral texture in `direction` at a whole `level`. Its texels are baked with the first and
