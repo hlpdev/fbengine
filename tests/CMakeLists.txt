@@ -215,6 +215,10 @@ if(FBENGINE_FB_TESTS)
     add_test(NAME models.reference
              COMMAND "${FBENGINE_PYTHON}" "${CMAKE_CURRENT_SOURCE_DIR}/models/reference.py" --check)
     set_tests_properties(models.reference PROPERTIES PASS_REGULAR_EXPRESSION "as worked out")
+    # The export check's macOS side, by stubs of otool and nm, so it's checked without a Mac.
+    add_test(NAME tools.check_exports
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_exports_test.py")
+    set_tests_properties(tools.check_exports PROPERTIES PASS_REGULAR_EXPRESSION "macOS side holds")
   endif()
   add_test(NAME models.golden
            COMMAND fbengine_gpu_tests "the sample models' frames match their golden images")
@@ -1689,6 +1693,7 @@ add_executable(fbengine_assets_tests assets/images_tests.cpp assets/models_tests
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/pak.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/disk.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/jobs/jobs.cpp")
+fbengine_use_fetched_simdjson(fbengine_assets_tests)
 target_include_directories(fbengine_assets_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
 # Hostile files the reviews found, which mustn't decode.
 target_compile_definitions(fbengine_assets_tests PRIVATE
@@ -2016,6 +2021,7 @@ add_executable(fbengine_tools_tests tools/cook_tests.cpp tools/model_tests.cpp a
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/vfs.cpp"
                tools/pak_tests.cpp "${PROJECT_SOURCE_DIR}/native/fbengine_tools/cook/pak.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine_tools/tools/atomic.cpp")
+fbengine_use_fetched_simdjson(fbengine_tools_tests)
 target_include_directories(fbengine_tools_tests PRIVATE
                            "${PROJECT_SOURCE_DIR}/native/fbengine_tools"
                            "${PROJECT_SOURCE_DIR}/native/fbengine")

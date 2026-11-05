@@ -12,6 +12,8 @@ target_compile_definitions(fbengine_native PRIVATE FBE_BUILDING
 set(fbengine_links SDL3::SDL3-static freetype fbengine_harfbuzz fbengine_sheenbidi fbengine_stb
     ktx_read fastgltf::fastgltf volk Vulkan::Headers fbengine_vma)
 target_link_libraries(fbengine_native PRIVATE ${fbengine_links})
+# fastgltf's own simdjson, before any other a folder of the rest has (cmake/assets.cmake).
+fbengine_use_fetched_simdjson(fbengine_native)
 # Its float arithmetic as written, never fused, so it rounds alike on every target, but for what
 # a target's own libm gives: arm64's compilers fuse multiply-adds, which rounded a terrain pick
 # there another way.
@@ -28,6 +30,7 @@ if(FBENGINE_BUILD_TESTS)
   target_compile_definitions(fbengine_internal PUBLIC FBE_BUILDING
                              FBE_VERSION="${PROJECT_VERSION}")
   target_link_libraries(fbengine_internal PUBLIC ${fbengine_links})
+  fbengine_use_fetched_simdjson(fbengine_internal)
   if(NOT MSVC)
     target_compile_options(fbengine_internal PRIVATE -ffp-contract=off)
   endif()
