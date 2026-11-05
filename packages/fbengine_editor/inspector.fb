@@ -3,16 +3,22 @@
 
 Import std.collections
 Import std.core
+Import std.io
 Import std.math
 Import std.text
 Import fbengine
 Import fbengine_ui
+Import "./browser"
 Import "./component"
 Import "./history"
 Import "./scene"
 
 // How wide a row's title is.
-Const TITLE_WIDTH: Float32 = 136.0
+Const TITLE_WIDTH: Float32 = 180.0
+
+// How tall a row of a texture's list is, and the most of them that show before it scrolls.
+Const LIST_ROW: Float32 = 28.0
+Const LIST_MOST: Float32 = 280.0
 
 // What shows in a field while what's selected differ.
 Const MIXED = "—"
@@ -37,11 +43,13 @@ Function Rounded(value: Float, parts: Double): String
     Return "{rounded}"
 End Function
 
-// "FieldOfView" as "Field Of View".
+// "FieldOfView" as "Field Of View", and "TemporalAA" as "Temporal AA".
 Function Spaced(name: String): String
     Local spaced = ""
+    Local wasUpper = True
     For letter In name.Chars
-        If spaced != "" && letter.IsUpper() Then spaced += " "
+        If letter.IsUpper() && !wasUpper Then spaced += " "
+        wasUpper = letter.IsUpper()
         spaced += "{letter}"
     End For
     Return spaced
@@ -424,6 +432,165 @@ Public Final Class NoteRow Extends PropertyRow
     End New
 End Class
 
+// Every image under the res:// folder `path`, by its path.
+Function ImagesUnder(path: String, found: String[])
+    Local entries: AssetEntry[] = []
+    Try
+        entries = Try Assets.Entries(path)
+    Catch error As IOError
+        Return
+    End Try
+    For entry In entries
+        If entry.Kind == FileKind.DIRECTORY
+            ImagesUnder(entry.Path, found)
+        ElseIf SortOf(entry.Name) == AssetSort.IMAGE
+            found.Add(entry.Path)
+        End If
+    End For
+End Function
+
+/// A texture going to the file at a path, or Null for none, on what has it, each back to what it had on
+/// undoing. One that can't be read, or can't be there, is an IOError, changing nothing.
+Public Final Class TextureEdit Extends Edit
+    Field edited: Editable<Texture?>
+    Field path: String?
+    Field takes: Func(Texture): String?
+    Field before: (Int, Texture?)[]
+    Field loaded: Texture? = Null
+
+    /// `changed` going to the file at `to`, as long as `can` says nothing against it.
+    Public New(changed: Editable<Texture?>, to: String?, can: Func(Texture): String?)
+        edited = changed
+        path = to
+        takes = can
+        before = changed.Values()
+        Super.New("Set {Spaced(changed.Name)}")
+    End New
+
+    Public Override Method Apply() Throws IOError
+        Local file = path
+        If file != Null && loaded == Null
+            Local read = Try Assets.Load<Texture>(file)
+            Local against = takes(read)
+            If against != Null Then Throw IOError(IOErrorKind.INVALID_DATA, against, file)
+            loaded = read
+        End If
+        For each In before
+            edited.Write(each.0, loaded)
+        End For
+    End Method
+
+    Public Override Method Undo() Throws IOError
+        For each In before
+            edited.Write(each.0, each.1)
+        End For
+    End Method
+
+    Public Override Method ChangesTree(): Bool => False
+End Class
+
+/// A row of a texture, by the file it's from: a button that opens a list of the project's images, or
+/// what's let go on it from the Assets pane.
+Public Final Class TextureRow Extends PropertyRow
+    Field edited: Editable<Texture?>
+    Field history: History
+    Field takes: Func(Texture): String?
+    Field button: Button
+    Field list: Node? = Null
+
+    /// A row editing `changed`, which takes what `can` says nothing against.
+    Public New(changed: Editable<Texture?>, edits: History, can: Func(Texture): String?)
+        edited = changed
+        history = edits
+        takes = can
+        button = Button(MIXED, "inspector.{changed.Name}.button")
+        Super.New(changed.Name)
+        button.SetTranslates(False)
+        button.SetWidth(Sizing.Fill())
+        button.OnClick(Function[Weak Self](pressed: Button)
+            Self?.Opened()
+        End Function)
+        Add(button)
+        Refreshed()
+    End New
+
+    /// The button that opens its list.
+    Public Method Chooser(): Button => button
+
+    /// The list it's opened, or Null.
+    Public Method Choices(): Node? => list
+
+    /// Makes what's selected have the texture of the file at `path`, or none for Null, through undo.
+    Public Method Choose(path: String?)
+        Close(False)
+        history.Commit(TextureEdit(edited, path, takes))
+    End Method
+
+    Override Package Method Refresh(ui: Ui?)
+        Refreshed()
+    End Method
+
+    Override Package Method Close(keep: Bool)
+        Local ui = Owner()
+        Local open = list
+        If ui != Null && open != Null Then ui.ClosePopup(open)
+        list = Null
+    End Method
+
+    Method Opened()
+        Local ui = Owner()
+        If ui == Null Then Return
+        Local column = Widget("menu", "inspector.{edited.Name}.list")
+        Local scroller = ScrollView("inspector.{edited.Name}.scroller")
+        Local items = Node("inspector.{edited.Name}.items")
+        Local none = Button("None", "inspector.texture.none")
+        none.SetTranslates(False)
+        none.SetStyleName("menu.item")
+        none.OnClick(Function[Weak Self](pressed: Button)
+            Self?.Choose(Null)
+        End Function)
+        items.Add(none)
+        Local paths: String[] = []
+        ImagesUnder("res://", paths)
+        For path In paths
+            Local item = Button(path, "inspector.texture.{path}")
+            item.SetTranslates(False)
+            item.SetStyleName("menu.item")
+            item.OnClick(Function[Weak Self](pressed: Button)
+                Self?.Choose(path)
+            End Function)
+            items.Add(item)
+        End For
+        scroller.Add(items)
+        scroller.SetHeight(Sizing.Fixed(Min(LIST_ROW * ((paths.Count + 1) As Float32), LIST_MOST)))
+        scroller.SetMinSize(TITLE_WIDTH * 2.0, 0.0)
+        column.Add(scroller)
+        Local box = button.Box()
+        list = column
+        ui.OpenPopupAt(column, Vec2(box.X, box.Y + box.Height), PopupKind.MENU,
+                       Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.list = Null
+        End Function)
+    End Method
+
+    Method Refreshed()
+        Local text = MIXED
+        Local values = edited.Values()
+        For i = 0 Until values.Count
+            Local texture = values[i].1
+            Local here = texture == Null ? "None" : texture.Path() ?? "Its own"
+            If i == 0
+                text = here
+            ElseIf here != text
+                text = MIXED
+                Break
+            End If
+        End For
+        If button.Text() != text Then button.SetText(text)
+    End Method
+End Class
+
 /// A row with a box to tick, what's selected going all one way.
 Public Final Class ToggleRow Extends PropertyRow
     Field edited: Editable<Bool>
@@ -575,6 +742,7 @@ Public Final Class SceneInspector Extends Widget
     Field knownKinds: Int = 0
     Field shownData: ComponentData[] = []
     Field menu: Node? = Null
+    Field layersShown: Int = 0
     // Which row's next, as one's looked at each frame; whether they all should be, and how many have.
     Field turn: Int = 0
     Field changed: Bool = False
@@ -618,6 +786,22 @@ Public Final Class SceneInspector Extends Widget
     /// The rows it's showing, in order.
     Public Method Rows(): PropertyRow[] => rows.Clone()
 
+    /// The row of a texture at `point`, as a file let go there, or Null.
+    Public Method TextureRowAt(point: Vec2): TextureRow?
+        If !Box().Contains(point) Then Return Null
+        For row In rows
+            Local texture = row As? TextureRow
+            If texture != Null && texture.Box().Contains(point) Then Return texture
+        End For
+        Return Null
+    End Method
+
+    /// Scrolls the row called `title` into view.
+    Public Method ShowRow(title: String)
+        Local row = RowOf(title)
+        If row != Null Then scroller.ScrollIntoView(row.Box())
+    End Method
+
     /// The row called `title`, the first if more than one is, or Null.
     Public Method RowOf(title: String): PropertyRow?
         For row In rows
@@ -634,7 +818,8 @@ Public Final Class SceneInspector Extends Widget
         // What's said of the kinds can wait for what's being typed to finish.
         Local typing = (ui?.Focused() As? EntryField) != Null
         If !SameAs(selected, entities) || !SameMaterials(MaterialsOf(selected)) ||
-           (knownKinds != kinds.Changes() && !typing) || !SameData(DataOf(selected))
+           (knownKinds != kinds.Changes() && !typing) || !SameData(DataOf(selected)) ||
+           layersShown != LayersOf(materials)
             For row In rows
                 row.Close(True)
             End For
@@ -720,6 +905,7 @@ Public Final Class SceneInspector Extends Widget
         rows = []
         entities = scene.Selected()
         materials = MaterialsOf(entities)
+        layersShown = 0
         shownData = DataOf(entities)
         knownKinds = kinds.Changes()
         If entities.Count == 0
@@ -743,6 +929,7 @@ Public Final Class SceneInspector Extends Widget
                                  Function(material: Material) => !material.Freed(),
                                  Set<String>())
             AddMetalRough(materials)
+            AddTextures(materials)
         End If
         AddComponents()
     End Method
@@ -761,8 +948,7 @@ Public Final Class SceneInspector Extends Widget
             If together.Count != all.Count Then Continue
             Local name = item.Kind
             Added(ButtonRow(name, "Remove", Function[Weak Self](pressed: Button)
-                Local own = Self
-                If own != Null Then own.history.Commit(RemoveComponentEdit(own.entities, name))
+                Self?.RemoveKind(name)
             End Function))
             AddFields(name, together)
         End For
@@ -771,7 +957,7 @@ Public Final Class SceneInspector Extends Widget
         End If
         If kinds.Kinds().Count == 0 Then Return
         Added(ButtonRow("AddComponent", "Add…", Function[Weak Self](pressed: Button)
-            Self?.ChoosingKind(pressed)
+            Self?.ChoosingKind()
         End Function))
     End Method
 
@@ -828,10 +1014,70 @@ Public Final Class SceneInspector Extends Widget
         Added(NoteRow(field.Name, "Nothing here edits this"))
     End Method
 
-    // The list of what can be added, under `pressed`.
-    Method ChoosingKind(pressed: Button)
+    /// Whether there's something selected, and a kind of component to put on it.
+    Public Method CanAddKind(): Bool => scene.Selected().Count > 0 && kinds.Kinds().Count > 0
+
+    /// Whether what's selected all have a kind of component to take off.
+    Public Method CanRemoveKind(): Bool => KindsOnAll().Count > 0
+
+    // The kinds of component all that's selected has.
+    Method KindsOnAll(): String[]
+        Local all = scene.Selected()
+        Local names: String[] = []
+        If all.Count == 0 Then Return names
+        For item In ComponentsOf(all[0])
+            Local onEach = True
+            For entity In all
+                If !ComponentsOf(entity).Any(Function(other: ComponentData) => other.Kind ==
+                                             item.Kind)
+                    onEach = False
+                End If
+            End For
+            If onEach Then names.Add(item.Kind)
+        End For
+        Return names
+    End Method
+
+    // What's called `name` off what's selected, through undo.
+    Method RemoveKind(name: String)
+        ClosingMenu()
+        history.Commit(RemoveComponentEdit(scene.Selected(), name))
+    End Method
+
+    // Under the row that adds one, or at the top of the inspector if there's none showing.
+    Method ListPlace(): Vec2
+        Local row = RowOf("AddComponent") As? ButtonRow
+        Local box = row != Null ? row.Pressing().Box() : Box()
+        Return Vec2(box.X, row != Null ? box.Y + box.Height : box.Y)
+    End Method
+
+    /// Opens the list of what can be taken off what's selected, as a command does.
+    Public Method ChoosingRemoval()
         Local ui = Owner()
         If ui == Null Then Return
+        ClosingMenu()
+        Local column = Widget("menu", "inspector.removals")
+        For name In KindsOnAll()
+            Local item = Button(name, "inspector.remove.{name}")
+            item.SetTranslates(False)
+            item.SetStyleName("menu.item")
+            item.OnClick(Function[Weak Self](chosen: Button)
+                Self?.RemoveKind(name)
+            End Function)
+            column.Add(item)
+        End For
+        menu = column
+        ui.OpenPopupAt(column, ListPlace(), PopupKind.MENU, Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.menu = Null
+        End Function)
+    End Method
+
+    /// Opens the list of what can be added to what's selected, as a command does.
+    Public Method ChoosingKind()
+        Local ui = Owner()
+        If ui == Null Then Return
+        ClosingMenu()
         Local column = Widget("menu", "inspector.kinds")
         For kind In kinds.Kinds()
             Local item = Button(kind.Name, "inspector.kind.{kind.Name}")
@@ -843,21 +1089,20 @@ Public Final Class SceneInspector Extends Widget
                 own.ClosingMenu()
                 // What they all have already is nothing to add.
                 Local lacking = False
-                For entity In own.entities
+                Local going = own.scene.Selected()
+                For entity In going
                     Local has = False
                     For component In ComponentsOf(entity)
                         If component.Kind == kind.Name Then has = True
                     End For
                     If !has Then lacking = True
                 End For
-                If lacking Then own.history.Commit(AddComponentEdit(own.entities, kind))
+                If lacking Then own.history.Commit(AddComponentEdit(going, kind))
             End Function)
             column.Add(item)
         End For
-        Local box = pressed.Box()
         menu = column
-        ui.OpenPopupAt(column, Vec2(box.X, box.Y + box.Height), PopupKind.MENU,
-                       Function[Weak Self]()
+        ui.OpenPopupAt(column, ListPlace(), PopupKind.MENU, Function[Weak Self]()
             Local own = Self
             If own != Null Then own.menu = Null
         End Function)
@@ -882,6 +1127,7 @@ Public Final Class SceneInspector Extends Widget
         If cameras != Null
             AddSection<Camera>("Camera", cameras, Function(camera: Camera) => there(camera), seen)
             AddRanges(cameras)
+            AddPicture(cameras)
         End If
         Local meshes = EachIs<Mesh>(entities)
         If meshes != Null Then AddSection<Mesh>("Mesh", meshes, Function(mesh: Mesh) => there(mesh),
@@ -1085,6 +1331,84 @@ Public Final Class SceneInspector Extends Widget
                                         Function(index: Int, roughness: Float)
             all[index].SetMetalRough(all[index].Metallic(), roughness)
         End Function, alive, Limits(0, 1)), history))
+    End Method
+
+    // How many layers of `all` are shown: as far as one has a texture, and one more to give it next.
+    Method LayersOf(all: Material[]): Int
+        Local shown = 0
+        If all.Count == 0 Then Return shown
+        shown = 1
+        For material In all
+            If material.Freed() Then Continue
+            For layer = 0 To 7
+                If material.Texture(layer) != Null Then shown = Max(shown, Min(layer + 2, 8))
+            End For
+        End For
+        Return shown
+    End Method
+
+    // A material's textures, a row a layer as far as they're used, and each of its maps.
+    Method AddTextures(all: Material[])
+        Local alive = Function(index: Int) => !all[index].Freed()
+        layersShown = LayersOf(all)
+        For layer = 0 Until layersShown
+            Added(TextureRow(Editable<Texture?>("Layer{layer}", all.Count,
+                                                Function(index: Int) => all[index].Texture(layer),
+                                                Function(index: Int, texture: Texture?)
+                all[index].SetTexture(layer, texture)
+            End Function, alive), history, Function(texture: Texture): String? => Null))
+        End For
+        For each In [(MaterialMap.METAL_ROUGH, "MetalRoughMap"), (MaterialMap.NORMAL, "NormalMap"),
+                     (MaterialMap.OCCLUSION, "OcclusionMap"), (MaterialMap.EMISSIVE, "EmissiveMap")]
+            Local map, title = each
+            Added(TextureRow(Editable<Texture?>(title, all.Count,
+                                                Function(index: Int) => all[index].Map(map),
+                                                Function(index: Int, texture: Texture?)
+                all[index].SetMap(map, texture, all[index].MapUvSet(map))
+            End Function, alive), history, Function(texture: Texture): String?
+                If Material.MapTakes(map, texture) Then Return Null
+                Return "{texture.Path() ?? "That"} is stored as a color, and a {Spaced(title)}'s numbers: its import settings can say it isn't sRGB"
+            End Function))
+        End For
+    End Method
+
+    // What an HDR camera's bloom and color grade are, each a number or a vector, set together.
+    Method AddPicture(cameras: Camera[])
+        Local alive = Function(index: Int) => !cameras[index].Freed()
+        Added(NumberRow(Editable<Float>("BloomIntensity", cameras.Count,
+                                        Function(index: Int) => cameras[index].BloomIntensity(),
+                                        Function(index: Int, intensity: Float)
+            cameras[index].SetBloom(intensity, cameras[index].BloomThreshold())
+        End Function, alive, Limits(0)), history))
+        Added(NumberRow(Editable<Float>("BloomThreshold", cameras.Count,
+                                        Function(index: Int) => cameras[index].BloomThreshold(),
+                                        Function(index: Int, threshold: Float)
+            cameras[index].SetBloom(cameras[index].BloomIntensity(), threshold)
+        End Function, alive, Limits(0)), history))
+        Added(Vec3Row(Editable<Vec3>("GradeSlope", cameras.Count,
+                                     Function(index: Int) => cameras[index].Grade().Slope,
+                                     Function(index: Int, slope: Vec3)
+            Local grade = cameras[index].Grade()
+            cameras[index].SetGrade(ColorGrade(slope, grade.Offset, grade.Power, grade.Saturation))
+        End Function, alive, Limits(0)), history))
+        Added(Vec3Row(Editable<Vec3>("GradeOffset", cameras.Count,
+                                     Function(index: Int) => cameras[index].Grade().Offset,
+                                     Function(index: Int, offset: Vec3)
+            Local grade = cameras[index].Grade()
+            cameras[index].SetGrade(ColorGrade(grade.Slope, offset, grade.Power, grade.Saturation))
+        End Function, alive), history))
+        Added(Vec3Row(Editable<Vec3>("GradePower", cameras.Count,
+                                     Function(index: Int) => cameras[index].Grade().Power,
+                                     Function(index: Int, power: Vec3)
+            Local grade = cameras[index].Grade()
+            cameras[index].SetGrade(ColorGrade(grade.Slope, grade.Offset, power, grade.Saturation))
+        End Function, alive, Limits(0, Above: True)), history))
+        Added(NumberRow(Editable<Float>("GradeSaturation", cameras.Count,
+                                        Function(index: Int) => cameras[index].Grade().Saturation,
+                                        Function(index: Int, saturation: Float)
+            Local grade = cameras[index].Grade()
+            cameras[index].SetGrade(ColorGrade(grade.Slope, grade.Offset, grade.Power, saturation))
+        End Function, alive, Limits(0)), history))
     End Method
 
     // A spot's cone, set as one, inner within outer.

@@ -90,10 +90,12 @@ Public Final Class Texture Implements Asset
     End New
 
     // What's drawn for a texture of a file that can't be loaded: a pixel of magenta, that keeps saying
-    // it's from `path`.
+    // it's from `path`; of `format`, as a map that isn't a color has to be.
     @MainThread
-    Package Static Method Lost(path: String): Texture Throws GraphicsError
-        Local made = Try Texture(1, 1, TextureFormat.RGBA8, False)
+    Package Static Method Lost(path: String,
+                               format: TextureFormat =
+                               TextureFormat.RGBA8): Texture Throws GraphicsError
+        Local made = Try Texture(1, 1, format, False)
         made.WritePixels(0, 0, 1, 1, [255, 0, 255, 255])
         fbe_texture_set_path(made.handle, path)
         Return made

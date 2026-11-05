@@ -207,10 +207,9 @@ Function AReleasesPakIsBesideTheExecutableOrInItsBundle() Throws IOError
     Local built = Try TempDir()
     Defer Try? built.Close()
     writer.Add("built.txt", "built".Bytes, ZipMethod.STORE)
-    Try File.WriteBytes(built.Path / "game.pak", writer.Finish())
+    Try File.WriteBytes(built.Path / "game.pak", Try writer.Finish())
     // That's only for what fb run runs: anything else, built with -o, fails, not reading it.
-    Local byFb = Assets.RunByFb(Path(Folders.Executable ?? ""), Path(Folders.Temp ?? ""))
-    If byFb
+    If Assets.RunByFb()
         Try Assets.MountRelease(name, (built.Path / "game.pak").Text)
         Expect((Try Assets.ReadText("res://built.txt")) == "built")
         Expect(Assets.Unmount("res://"))
@@ -224,7 +223,7 @@ Function AReleasesPakIsBesideTheExecutableOrInItsBundle() Throws IOError
     Try Dir.CreateAll(resources)
     Defer If made Then Try? Dir.RemoveAll(resources)
     writer.Add("bundle.txt", "bundle".Bytes, ZipMethod.STORE)
-    Try File.WriteBytes(resources / "{name}.pak", writer.Finish())
+    Try File.WriteBytes(resources / "{name}.pak", Try writer.Finish())
     Defer Try? File.Delete(resources / "{name}.pak")
     // Only a Mac has them.
     If System.Platform == Platform.MACOS
@@ -234,7 +233,7 @@ Function AReleasesPakIsBesideTheExecutableOrInItsBundle() Throws IOError
     End If
     // Beside it comes first.
     writer.Add("beside.txt", "beside".Bytes, ZipMethod.STORE)
-    Try File.WriteBytes(beside, writer.Finish())
+    Try File.WriteBytes(beside, Try writer.Finish())
     Defer Try? File.Delete(beside)
     Try Assets.MountRelease(name)
     Expect((Try Assets.ReadText("res://beside.txt")) == "beside")
@@ -246,7 +245,7 @@ Function AReleasesPakIsBesideTheExecutableOrInItsBundle() Throws IOError
     Expect(!Assets.Exists("res://beside.txt"))
     writer.Add("beside.txt", "beside".Bytes, ZipMethod.STORE)
     writer.Add(GAME_VERSION_FILE, "1.2.2".Bytes, ZipMethod.STORE)
-    Try File.WriteBytes(beside, writer.Finish())
+    Try File.WriteBytes(beside, Try writer.Finish())
     Local older = ExpectThrows<IOError>(Assets.MountRelease(name, "", "1.2.3"))
     Expect(older?.Kind == IOErrorKind.INVALID_DATA)
     Expect((older?.Message ?? "").Contains("1.2.2"))
@@ -257,27 +256,16 @@ Function AReleasesPakIsBesideTheExecutableOrInItsBundle() Throws IOError
 End Function
 
 @Test
-Function OnlyWhatFbRunsIsRunByFb() Throws IOError
-    // As fb says, or doesn't, whatever it says of this test.
+Function OnlyWhatFbRunsIsRunByFb()
+    // fb's own word: this test is run by it, and without that word, nothing is.
     Local said = Env.Get("FUTUREBLITZ_RUN")
     Defer If said != Null Then Env.Set("FUTUREBLITZ_RUN", said) Else Env.Unset("FUTUREBLITZ_RUN")
-    Env.Unset("FUTUREBLITZ_RUN")
-    Local temp = Try TempDir()
-    Defer Try? temp.Close()
-    Local under = temp.Path / "futureblitz" / "game-26cc205e"
-    Try Dir.CreateAll(under)
-    Expect(Assets.RunByFb(under / "game.exe", temp.Path))
-    // A folder of that name somewhere else, as a person may have, isn't.
-    Local other = Try TempDir()
-    Defer Try? other.Close()
-    Expect(!Assets.RunByFb(under / "game.exe", other.Path))
-    Try Dir.CreateAll(temp.Path / "shipped")
-    Expect(!Assets.RunByFb(temp.Path / "shipped" / "game.exe", temp.Path))
-    // With fb's word for it, anywhere is; with anything else, it isn't.
-    Env.Set("FUTUREBLITZ_RUN", "1")
-    Expect(Assets.RunByFb(temp.Path / "shipped" / "game.exe", temp.Path))
+    Expect(said == "1")
+    Expect(Assets.RunByFb())
     Env.Set("FUTUREBLITZ_RUN", "0")
-    Expect(!Assets.RunByFb(temp.Path / "shipped" / "game.exe", temp.Path))
+    Expect(!Assets.RunByFb())
+    Env.Unset("FUTUREBLITZ_RUN")
+    Expect(!Assets.RunByFb())
 End Function
 
 @Test

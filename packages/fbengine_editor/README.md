@@ -51,7 +51,9 @@ Try Components.Describe()
 A game with no such program just has none. `@Limits` and `@ShownInDegrees` on a Field say what they
 say on a setter, of each number of a vector too, and `@Skip` leaves one out. What's edited is a Bool, a
 number, a String, an Enum whose members FutureBlitz's Load can find, a Vec2, a Vec3, or a Color; anything
-else shows a note. fbengine_physics's "Body" is one of these.
+else shows a note. fbengine_physics's "Body" is one of these. A
+game's `Scene.Load` puts each on its entity, as `Entity.Data<T>()` gives it, so it adds its kinds first; what
+can't be attached is an error that names both.
 
 `-- --watch` plays a scene of its own by itself, keeping nothing of yours, for anyone to look at (`python
 tools/show.py ../packages/fbengine_editor`).

@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  FB_VERSION: 1.2.2
+  FB_VERSION: 1.2.3
 
 jobs:
   native:
@@ -60,10 +60,6 @@ jobs:
         env:
           SDL_VIDEO_DRIVER: offscreen
           FBENGINE_NO_GPU: '1'
-          # A runner's TEMP goes through an 8.3 short name, and fb 1.2.2's FileWatcher gets no
-          # events there; the next fb release fixes it, and these two lines go then.
-          TEMP: ${{ runner.temp }}
-          TMP: ${{ runner.temp }}
           FBENGINE_ENDS_AT_ONCE: '8'
         run: |
           tar -xf native-${{ matrix.target }}.tar
@@ -201,42 +197,51 @@ jobs:
         with:
           version: ${{ env.FB_VERSION }}
 
+      # Khronos's files, kept by what pins them, so a slow GitHub doesn't lose this job. Another pin's
+      # cache brings what hasn't changed, and CMake checks each by its hash whatever's brought.
+      - name: Restore Khronos's files
+        id: khronos
+        uses: actions/cache/restore@v6
+        with:
+          path: build/khronos
+          key: khronos-${{ runner.os }}-${{ hashFiles('tests/khronos/files.cmake') }}
+          restore-keys: khronos-${{ runner.os }}-
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DFBENGINE_REQUIRE_KHRONOS=ON
+
+      # Saved here, not at the job's end, so a red test doesn't lose what was fetched.
+      - name: Save Khronos's files
+        if: steps.khronos.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: build/khronos
+          key: ${{ steps.khronos.outputs.cache-primary-key }}
+
       # macOS drops DYLD_ variables on the way into the shell, so they're given to ctest itself,
       # which finds the loader there for volk. Vulkan's validation layers check every test's GPU
       # work, which a test requires when FBE_GPU_VALIDATION is 1.
       - name: Build and test
         env:
-          # As the test job's: fb 1.2.2's FileWatcher and a runner's 8.3 TEMP.
-          TEMP: ${{ runner.temp }}
-          TMP: ${{ runner.temp }}
           FBENGINE_ENDS_AT_ONCE: '8'
           SDL_VIDEO_DRIVER: offscreen
           FBE_GPU_VALIDATION: '1'
         run: |
           echo "VK_DRIVER_FILES=$VK_DRIVER_FILES"
           export VK_LOADER_DEBUG=error,warn
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DFBENGINE_REQUIRE_KHRONOS=ON
           # Every target, so ctest finds every test it lists: the C++ tests, the packages', and the
           # examples'.
           cmake --build build --parallel
           # Tests registered only by a second configure would be skipped here without a word.
           ctest --test-dir build -N -R '^examples\.arcade' --no-tests=error > /dev/null
           if [ "$RUNNER_OS" = Linux ]; then tar -xf native-${{ matrix.target }}.tar; fi
-          # On Windows, a panic with the GPU going hangs at the process's end: fb 1.2.2 ends by _Exit,
-          # which runs its DLLs' detach after their threads are gone. Back in once FB_VERSION is the
-          # release whose end_program uses TerminateProcess. The test job, with no GPU, still runs them.
-          # Slack Water's cooked_not and cooked_other_walk go the same way, failing on purpose by
-          # Process.Exit(1), and come back with them.
-          if [ "$RUNNER_OS" = Windows ]; then set -- -E '\.panics\.|^gpu\.ends\.(panics|exits)$|^examples\.slack_water\.(cooked_not|cooked_other_walk)$'; fi
-          DYLD_FALLBACK_LIBRARY_PATH="${VULKAN_LIBRARIES:-}" ctest --test-dir build --output-on-failure "$@"
+          DYLD_FALLBACK_LIBRARY_PATH="${VULKAN_LIBRARIES:-}" ctest --test-dir build --output-on-failure --stop-on-failure
 
       # A real display's modes, and a switch to one: no offscreen driver here, and on Linux a display
       # of Xvfb's. It's registered only by a configure that has FBENGINE_REAL_DISPLAY, and that's never
       # on a person's machine, as it opens a window.
       - name: A real display's modes
         env:
-          TEMP: ${{ runner.temp }}
-          TMP: ${{ runner.temp }}
           FBENGINE_ENDS_AT_ONCE: '8'
           FBENGINE_REAL_DISPLAY: '1'
         run: |

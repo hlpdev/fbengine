@@ -10,6 +10,7 @@ Import std.os
 Import std.text
 Import "./camera"
 Import "./collision"
+Import "./components"
 Import "./entity"
 Import "./geometry"
 Import "./light"
@@ -31,16 +32,21 @@ Const FORMAT: Int32 = 1
 // What a file can say of an entity, whatever it is, and of each kind.
 Const EVERY_ENTITY = ["path", "kind", "name", "position", "rotation", "scale", "hidden", "pick",
                       "blocks_sight", "group", "shape", "radius", "box", "step_height", "max_slope",
-                      "auto_fade", "components"]
+                      "auto_fade", "occluder", "casts_shadows", "components"]
 Const OF_MESH = ["geometry", "material", "color", "morph"]
-Const OF_LIGHT = ["light", "color", "intensity", "range", "cone"]
+Const OF_LIGHT = ["light", "color", "intensity", "range", "cone", "shadows", "shadow_size",
+                  "shadow_bias", "cascades", "shadow_distance"]
 Const OF_CAMERA = ["projection", "field_of_view", "height", "range", "clear", "clear_depth",
-                   "clear_color", "order", "fog", "fog_color", "fog_range", "fog_density"]
+                   "clear_color", "order", "fog", "fog_color", "fog_range", "fog_density", "hdr",
+                   "exposure", "tonemap", "gamma", "bloom", "grade", "occlusion",
+                   "ambient_occlusion", "ambient_occlusion_radius", "fxaa", "temporal_aa"]
 Const OF_SPRITE = ["material", "color", "view", "size", "handle", "turn"]
 Const OF_DOCUMENT = ["format", "material", "geometry", "entity"]
 Const OF_MATERIAL = ["id", "color", "shading", "blend", "alpha_cutoff", "shininess",
                      "vertex_colors",
-                     "wireframe", "two_sided", "fogged", "order", "layers"]
+                     "wireframe", "two_sided", "fogged", "order", "layers", "metallic",
+                     "roughness", "emissive", "normal_scale", "occlusion_strength", "maps"]
+Const OF_MAP = ["map", "texture", "uv_set", "uv"]
 Const OF_LAYER = ["layer", "texture", "blend", "uv_set", "uv", "bump"]
 Const OF_GEOMETRY = ["id", "source", "surfaces", "cull_box"]
 Const OF_SURFACE = ["material", "vertices", "triangles"]
@@ -65,6 +71,34 @@ End Function
 Function Three(v: Vec3): Value Throws IOError => Try Numbers([v.x, v.y, v.z])
 
 Function Four(c: Color): Value Throws IOError => Try Numbers([c.r, c.g, c.b, c.a])
+
+// Where in a component `value` is what TOML can't write, which would panic at it, or Null. An Object's
+// Null is only left out, so it's read back as what its Field has at first.
+Function Unwritable(value: Value, at: String, depth: Int = 0): String?
+    If depth >= MOST_NESTED Then Return "{at} is nested past the {MOST_NESTED} deep a scene can hold"
+    Select value.Kind
+        Case ValueKind.UINT
+            Return "{at} is {value}, past the Int64 a scene's whole numbers are"
+        Case ValueKind.BYTES
+            Return "{at} is bytes, which a scene can't hold"
+        Case ValueKind.ARRAY
+            Local items = value.AsArray() ?? []
+            For i = 0 Until items.Count
+                If items[i].IsNull Then Return "{at}[{i}] is Null, which a scene's lists can't hold"
+                Local said = Unwritable(items[i], "{at}[{i}]", depth + 1)
+                If said != Null Then Return said
+            End For
+        Case ValueKind.OBJECT
+            For key In value.Keys()
+                Local part = value[key]
+                If part == Null Then Continue
+                Local said = Unwritable(part, "{at}.{key}", depth + 1)
+                If said != Null Then Return said
+            End For
+        Default
+    End Select
+    Return Null
+End Function
 
 // What's being written: what's in it, and the ids it's given what's shared. What's in a file keeps its
 // id from one save to the next, on the thing itself; what's new takes its id from its first user's
@@ -164,6 +198,36 @@ Class Writing
         If material.Order() != 0 Then table["order"] = Value(material.Order() As Int32)
         Local plain = Material()
         Defer plain.Free()
+        If material.Metallic() != plain.Metallic() Then table["metallic"] = Try Number(material.Metallic())
+        If material.Roughness() != plain.Roughness()
+            table["roughness"] = Try Number(material.Roughness())
+        End If
+        Local glow = material.Emissive()
+        If glow != plain.Emissive() Then table["emissive"] = Try Numbers([glow.r, glow.g, glow.b])
+        If material.NormalScale() != plain.NormalScale()
+            table["normal_scale"] = Try Number(material.NormalScale())
+        End If
+        If material.OcclusionStrength() != plain.OcclusionStrength()
+            table["occlusion_strength"] = Try Number(material.OcclusionStrength())
+        End If
+        Local maps = Value.Array()
+        For map In ALL_MAPS
+            Local texture = material.Map(map)
+            Local turn = material.MapUv(map)
+            Local uvSet = material.MapUvSet(map)
+            If texture == Null && uvSet == 0 && turn == plain.MapUv(map) Then Continue
+            Local one = Value.Object()
+            one["map"] = Value("{map}")
+            If texture != Null Then one["texture"] = Value(Try FileOf(texture, user,
+                                                                      "the {map} map"))
+            If uvSet != 0 Then one["uv_set"] = Value(uvSet)
+            If turn != plain.MapUv(map)
+                one["uv"] = Try Numbers([turn.Scale.x, turn.Scale.y, turn.Angle, turn.Offset.x,
+                                         turn.Offset.y])
+            End If
+            maps.Add(one)
+        End For
+        If maps.Count > 0 Then table["maps"] = maps
         Local layers = Value.Array()
         For at = 0 To 7
             Local texture = material.Texture(at)
@@ -176,18 +240,8 @@ Class Writing
             End If
             Local layer = Value.Object()
             layer["layer"] = Value(at As Int32)
-            If texture != Null
-                Local path = texture.Path()
-                If path == Null
-                    Throw IOError(IOErrorKind.INVALID_DATA,
-                                  "{user}: layer {at} of its material has a texture from no file, which a scene can't name")
-                End If
-                If !path.StartsWith("res://")
-                    Throw IOError(IOErrorKind.INVALID_DATA,
-                                  "{user}: layer {at} of its material has a texture from {path}, which isn't under res://, so nothing else would find it")
-                End If
-                layer["texture"] = Value(path)
-            End If
+            If texture != Null Then layer["texture"] = Value(Try FileOf(texture, user,
+                                                                        "layer {at}"))
             layer["blend"] = Value("{material.LayerBlend(at)}")
             layer["uv_set"] = Value(material.LayerUvSet(at) As Int32)
             layer["uv"] = Try Numbers([turn.Scale.x, turn.Scale.y, turn.Angle, turn.Offset.x,
@@ -202,6 +256,20 @@ Class Writing
         all.Add(table)
         MaterialIds[handle] = id
         Return id
+    End Method
+
+    // The res:// file `texture` is from, which `slot` of the material of `user` has it.
+    Method FileOf(texture: Texture, user: String, slot: String): String Throws IOError
+        Local path = texture.Path()
+        If path == Null
+            Throw IOError(IOErrorKind.INVALID_DATA,
+                          "{user}: {slot} of its material has a texture from no file, which a scene can't name")
+        End If
+        If !path.StartsWith("res://")
+            Throw IOError(IOErrorKind.INVALID_DATA,
+                          "{user}: {slot} of its material has a texture from {path}, which isn't under res://, so nothing else would find it")
+        End If
+        Return path
     End Method
 
     // What a mesh at `user` is made of: a file's by the text it says; built in by the same, if it's
@@ -323,6 +391,8 @@ Class Writing
         If entity.MaxSlope() != DEFAULT_SLOPE Then table["max_slope"] = Try Number(entity.MaxSlope())
         Local fade = entity.AutoFade()
         If fade != Vec2(0, 0) Then table["auto_fade"] = Try Numbers([fade.x, fade.y])
+        If entity.Occluder() Then table["occluder"] = Value(True)
+        If !entity.CastsShadows() Then table["casts_shadows"] = Value(False)
         Local mesh = entity As? Mesh
         If mesh != Null
             Local geometry = mesh.Geometry()
@@ -340,6 +410,15 @@ Class Writing
             table["intensity"] = Try Number(light.Intensity())
             table["range"] = Try Number(light.Range())
             table["cone"] = Try Numbers([light.InnerCone(), light.OuterCone()])
+            If light.Shadows() Then table["shadows"] = Value(True)
+            If light.ShadowSize() != 1024 Then table["shadow_size"] = Value(light.ShadowSize())
+            If light.ShadowBias() != DEFAULT_BIAS.x || light.ShadowNormalBias() != DEFAULT_BIAS.y
+                table["shadow_bias"] = Try Numbers([light.ShadowBias(), light.ShadowNormalBias()])
+            End If
+            If light.Cascades() != 3 Then table["cascades"] = Value(light.Cascades())
+            If light.ShadowDistance() != 100.0
+                table["shadow_distance"] = Try Number(light.ShadowDistance())
+            End If
         End If
         Local camera = entity As? Camera
         If camera != Null
@@ -355,6 +434,30 @@ Class Writing
             table["fog_color"] = Try Four(camera.FogColor())
             table["fog_range"] = Try Numbers([camera.FogStart(), camera.FogEnd()])
             table["fog_density"] = Try Number(camera.FogDensity())
+            If camera.Hdr() Then table["hdr"] = Value(True)
+            If camera.Exposure() != 1.0 Then table["exposure"] = Try Number(camera.Exposure())
+            If camera.Tonemap() != Tonemap.NONE Then table["tonemap"] = Value("{camera.Tonemap()}")
+            If camera.Gamma() != 1.0 Then table["gamma"] = Try Number(camera.Gamma())
+            If camera.BloomIntensity() != 0.0 || camera.BloomThreshold() != 1.0
+                table["bloom"] = Try Numbers([camera.BloomIntensity(), camera.BloomThreshold()])
+            End If
+            Local grade = camera.Grade()
+            If grade.Slope != Vec3(1, 1, 1) || grade.Offset != Vec3(0, 0, 0) ||
+               grade.Power != Vec3(1, 1, 1) || grade.Saturation != 1.0
+                table["grade"] = Try Numbers([grade.Slope.x, grade.Slope.y, grade.Slope.z,
+                                              grade.Offset.x, grade.Offset.y, grade.Offset.z,
+                                              grade.Power.x, grade.Power.y, grade.Power.z,
+                                              grade.Saturation])
+            End If
+            If !camera.Occlusion() Then table["occlusion"] = Value(False)
+            If camera.AmbientOcclusion() != 0.0
+                table["ambient_occlusion"] = Try Number(camera.AmbientOcclusion())
+            End If
+            If camera.AmbientOcclusionRadius() != 1.0
+                table["ambient_occlusion_radius"] = Try Number(camera.AmbientOcclusionRadius())
+            End If
+            If camera.Fxaa() Then table["fxaa"] = Value(True)
+            If camera.TemporalAA() Then table["temporal_aa"] = Value(True)
         End If
         Local sprite = entity As? Sprite
         If sprite != Null
@@ -370,7 +473,10 @@ Class Writing
         If names.Count > 0
             Local components = Value.Object()
             For name In names
-                components[name] = entity.Component(name) ?? Value()
+                Local held = entity.Component(name) ?? Value()
+                Local wrong = Unwritable(held, name)
+                If wrong != Null Then Throw IOError(IOErrorKind.INVALID_DATA, "{path}: its {wrong}")
+                components[name] = held
             End For
             table["components"] = components
         End If
@@ -395,6 +501,8 @@ Class Reading
     Field Roots: Entity[] = []
     Field Tolerant: Bool
     Field Problems: String[] = []
+    // What's to be attached once all's made: which, where it's from, its kind, and what it has.
+    Field Attaching: (Entity, String, String, Value)[] = []
 
     New(document: Value, tolerant: Bool) Throws IOError
         Tolerant = tolerant
@@ -425,6 +533,15 @@ Class Reading
             each.Free()
         End For
         Models.Clear()
+    End Method
+
+    // Each component on what it's for, as a game has them, and it's what can't be that's wrong.
+    Method Attached() Throws IOError
+        For each In Attaching
+            Local entity, path, kind, values = each
+            Local said = Components.Attach(entity, kind, values)
+            If said != Null Then Throw Wrong("{path}: its {kind}: {said}")
+        End For
     End Method
 
     // What it had made, for a file that couldn't be finished.
@@ -460,6 +577,35 @@ Class Reading
         made.SetTwoSided(Try BoolOf(table, "two_sided", False, where))
         made.SetFogged(Try BoolOf(table, "fogged", True, where))
         made.SetOrder(Try IntOf(table, "order", 0, where))
+        Local metallic = Try FloatOf(table, "metallic", made.Metallic(), where)
+        Try Must(metallic >= 0.0 && metallic <= 1.0, where, "metallic", "is 0 to 1")
+        Local roughness = Try FloatOf(table, "roughness", made.Roughness(), where)
+        Try Must(roughness >= 0.0 && roughness <= 1.0, where, "roughness", "is 0 to 1")
+        made.SetMetalRough(metallic, roughness)
+        Local glow = Try FloatsOf(table, "emissive", 3, where)
+        If glow != Null
+            Try Must(glow[0] >= 0.0 && glow[1] >= 0.0 && glow[2] >= 0.0, where, "emissive",
+                     "is 0 or more")
+            made.SetEmissive(Color(glow[0], glow[1], glow[2]))
+        End If
+        made.SetNormalScale(Try FloatOf(table, "normal_scale", made.NormalScale(), where))
+        Local strength = Try FloatOf(table, "occlusion_strength", made.OcclusionStrength(), where)
+        Try Must(strength >= 0.0 && strength <= 1.0, where, "occlusion_strength", "is 0 to 1")
+        made.SetOcclusionStrength(strength)
+        For one In Try Items(table, "maps", where)
+            Try Only(one, OF_MAP, where)
+            Try Required(one, "map", where)
+            Local map = Try Named<MaterialMap>(one, "map", MaterialMap.NORMAL, ALL_MAPS, where)
+            Local uvSet = Try IntOf(one, "uv_set", 0, where)
+            Try Must(uvSet == 0 || uvSet == 1, where, "uv_set", "is 0 or 1")
+            Local path = Try TextOf(one, "texture", where)
+            made.SetMap(map, path != Null ? Try MapTextureOf(map, path, where) : Null, uvSet)
+            Local uv = Try FloatsOf(one, "uv", 5, where)
+            If uv != Null
+                Try Must(uv[0] != 0.0 && uv[1] != 0.0, where, "uv", "has a scale that isn't 0")
+                made.SetMapUv(map, UvTurn(Vec2(uv[0], uv[1]), uv[2], Vec2(uv[3], uv[4])))
+            End If
+        End For
         For layer In Try Items(table, "layers", where)
             Try Only(layer, OF_LAYER, where)
             Local index = Try IntOf(layer, "layer", -1, where)
@@ -488,19 +634,38 @@ Class Reading
         Return made
     End Method
 
-    // The texture of the file at `path`, or if it can't be and that's allowed, one that says it's lost.
-    Method TextureOf(path: String, at: String): Texture Throws IOError
+    // The texture of the file at `path`, or if it can't be and that's allowed, one that says it's lost,
+    // of `format`.
+    Method TextureOf(path: String, at: String,
+                     format: TextureFormat = TextureFormat.RGBA8): Texture Throws IOError
         Try
             Return Try Assets.Load<Texture>(path)
         Catch error As IOError
-            If !Tolerant Then Throw Wrong("{at}: {error.Message}")
-            Problems.Add("{at}: {error.Message}")
-            Try
-                Return Try Texture.Lost(path)
-            Catch lost As GraphicsError
-                Throw Wrong("{at}: {lost.Message}")
-            End Try
+            Return Try LostTexture(path, at, error.Message, format)
         End Try
+    End Method
+
+    Method LostTexture(path: String, at: String, says: String,
+                       format: TextureFormat): Texture Throws IOError
+        If !Tolerant Then Throw Wrong("{at}: {says}")
+        Problems.Add("{at}: {says}")
+        Try
+            Return Try Texture.Lost(path, format)
+        Catch lost As GraphicsError
+            Throw Wrong("{at}: {lost.Message}")
+        End Try
+    End Method
+
+    // The texture of the file at `path` as `map`, for what SetMap would panic at otherwise: a color,
+    // where what's wanted is numbers.
+    Method MapTextureOf(map: MaterialMap, path: String, at: String): Texture Throws IOError
+        Local format =
+            map == MaterialMap.EMISSIVE ? TextureFormat.RGBA8 : TextureFormat.RGBA8_LINEAR
+        Local read = Try TextureOf(path, at, format)
+        If Material.MapTakes(map, read) Then Return read
+        Return Try LostTexture(path, at,
+                               "{path} is stored as a color, and a {map} map's numbers: its import settings can say it isn't sRGB",
+                               format)
     End Method
 
     // What's built in is a mesh's own, and what's in a table or a file is shared.
@@ -701,11 +866,15 @@ Class Reading
                      "auto_fade", "is 0 <= start < end, or 0 and 0")
             made.SetAutoFade(fade[0], fade[1])
         End If
+        made.SetOccluder(Try BoolOf(table, "occluder", False, path))
+        made.SetCastsShadows(Try BoolOf(table, "casts_shadows", True, path))
         Local components = table["components"]
         If components != Null
             Try Must(components.IsObject, path, "components", "is a table")
             For key In components.Keys()
-                made.SetComponent(key, components[key])
+                Local values = components[key] ?? Value()
+                made.SetComponent(key, values)
+                If !Tolerant Then Attaching.Add((made, path, key, values))
             End For
         End If
         Local mesh = made As? Mesh
@@ -731,6 +900,21 @@ Class Reading
                          "is 0 <= inner <= outer <= Pi / 2")
                 light.SetCone(cone[0], cone[1])
             End If
+            light.SetShadows(Try BoolOf(table, "shadows", False, path))
+            Local tile = Try IntOf(table, "shadow_size", 1024, path)
+            Try Must(tile >= 16 && tile <= 8192, path, "shadow_size", "is 16 to 8192")
+            light.SetShadowSize(tile)
+            Local bias = Try FloatsOf(table, "shadow_bias", 2, path)
+            If bias != Null
+                Try Must(bias[0] >= 0.0 && bias[1] >= 0.0, path, "shadow_bias", "is 0 or more")
+                light.SetShadowBias(bias[0], bias[1])
+            End If
+            Local cascades = Try IntOf(table, "cascades", 3, path)
+            Try Must(cascades >= 1 && cascades <= 4, path, "cascades", "is 1 to 4")
+            light.SetCascades(cascades)
+            Local reach = Try FloatOf(table, "shadow_distance", 100.0, path)
+            Try Must(reach > 0.0, path, "shadow_distance", "is above 0")
+            light.SetShadowDistance(reach)
         End If
         Local camera = made As? Camera
         If camera != Null
@@ -765,6 +949,40 @@ Class Reading
             Local density = Try FloatOf(table, "fog_density", camera.FogDensity(), path)
             Try Must(density >= 0.0, path, "fog_density", "is 0 or more")
             camera.SetFogDensity(density)
+            camera.SetHdr(Try BoolOf(table, "hdr", False, path))
+            Local exposure = Try FloatOf(table, "exposure", 1.0, path)
+            Try Must(exposure >= 0.0, path, "exposure", "is 0 or more")
+            camera.SetExposure(exposure)
+            camera.SetTonemap(Try Named<Tonemap>(table, "tonemap", Tonemap.NONE, ALL_TONEMAPS,
+                                                 path))
+            Local gamma = Try FloatOf(table, "gamma", 1.0, path)
+            Try Must(gamma > 0.0 && IsFinite(1.0 / gamma), path, "gamma", "is above 0")
+            camera.SetGamma(gamma)
+            Local bloom = Try FloatsOf(table, "bloom", 2, path)
+            If bloom != Null
+                Try Must(bloom[0] >= 0.0 && bloom[1] >= 0.0, path, "bloom", "is 0 or more")
+                camera.SetBloom(bloom[0], bloom[1])
+            End If
+            Local grade = Try FloatsOf(table, "grade", 10, path)
+            If grade != Null
+                Try Must(grade[0] >= 0.0 && grade[1] >= 0.0 && grade[2] >= 0.0, path, "grade",
+                         "has a slope of 0 or more")
+                Try Must(grade[6] > 0.0 && grade[7] > 0.0 && grade[8] > 0.0, path, "grade",
+                         "has a power above 0")
+                Try Must(grade[9] >= 0.0, path, "grade", "has a saturation of 0 or more")
+                camera.SetGrade(ColorGrade(Vec3(grade[0], grade[1], grade[2]),
+                                           Vec3(grade[3], grade[4], grade[5]),
+                                           Vec3(grade[6], grade[7], grade[8]), grade[9]))
+            End If
+            camera.SetOcclusion(Try BoolOf(table, "occlusion", True, path))
+            Local occlusion = Try FloatOf(table, "ambient_occlusion", 0.0, path)
+            Try Must(occlusion >= 0.0, path, "ambient_occlusion", "is 0 or more")
+            camera.SetAmbientOcclusion(occlusion)
+            Local around = Try FloatOf(table, "ambient_occlusion_radius", 1.0, path)
+            Try Must(around >= 0.0001, path, "ambient_occlusion_radius", "is 0.0001 or more")
+            camera.SetAmbientOcclusionRadius(around)
+            camera.SetFxaa(Try BoolOf(table, "fxaa", False, path))
+            camera.SetTemporalAA(Try BoolOf(table, "temporal_aa", False, path))
         End If
         Local sprite = made As? Sprite
         If sprite != Null
@@ -789,6 +1007,13 @@ End Class
 
 // A sliding mover's MaxSlope at first.
 Const DEFAULT_SLOPE: Float32 = 0.7853982
+// A light's shadows' depth and normal biases at first.
+Const DEFAULT_BIAS = Vec2(0.02, 1.5)
+// As deep as a component's lists and tables can go in a file, which Toml.Write panics past 256 of.
+Const MOST_NESTED = 200
+Const ALL_MAPS = [MaterialMap.METAL_ROUGH, MaterialMap.NORMAL, MaterialMap.OCCLUSION,
+                  MaterialMap.EMISSIVE]
+Const ALL_TONEMAPS = [Tonemap.NONE, Tonemap.REINHARD, Tonemap.ACES, Tonemap.NEUTRAL]
 
 // What's in `table`'s array `key`, none if it hasn't one.
 Function Items(table: Value, key: String, at: String): Value[] Throws IOError
@@ -953,10 +1178,10 @@ End Class
 /// thing, each entity's named by its path of names under its tree, so a change to an entity is a change
 /// to its own lines, and what's named after it, as a material whose first user it is, keeps its id. A
 /// same-named sibling put before another takes its #n, and so changes those paths; and a Geometry's
-/// vertices are a line to each array of them, so two edits of those don't merge.
+/// vertices are a line each.
 ///
 /// A scene holds Pivots, Meshes, Lights, Cameras, and Sprites, with what each is set to, and each one's
-/// components, whatever they're for; a Mesh by what it's made of: a file's mesh, as a model's that
+/// components, which Load puts on it by Components.Attach; a Mesh by what it's made of: a file's mesh, as a model's that
 /// hasn't changed since it loaded, by its res:// path and number; built in, as Geometry.Cube's is; or
 /// else by its vertices, in the file. What's drawn in a Material by a table of it, its textures by the
 /// res:// files they're from. A Skin and a game's own SetData aren't saved, so a model's skinned Mesh
@@ -993,7 +1218,8 @@ Public Final Class Scene
 
     /// `roots`, and all under each, as a scene's text. It's an IOError of INVALID_DATA for what can't
     /// be held: a kind of entity it hasn't, a texture or model from no res:// file, a number that isn't
-    /// finite, or what the file it came from said that it doesn't know.
+    /// finite, what the file it came from said that it doesn't know, or in a component, what TOML has no
+    /// way to write, as a list holding Null, or a whole number past an Int64, which it names.
     @MainThread Public Static Method Text(roots: Entity[]): String Throws IOError
         Local writing = Writing()
         For root In roots
@@ -1018,8 +1244,10 @@ Public Final Class Scene
     End Method
 
     /// The scene in the file at `path`, a res:// path, made under `parent` or at the top of the current
-    /// World, giving what's at its top in order. It's an IOError for a file that can't be read, isn't
-    /// a scene, or names what can't be found, all that it had made freed.
+    /// World, giving what's at its top in order, each entity's components attached, as Entity.Data
+    /// gives them, so a game adds its kinds to Components first. It's an IOError for a file that can't
+    /// be read, isn't a scene, names what can't be found, or has a component that can't be attached,
+    /// which it names with its entity, all that it had made freed.
     @MainThread Public Static Method Load(path: String,
                                           parent: Entity? = Null): Entity[] Throws IOError
         Return Try FromText(Try Assets.ReadText(path), parent)
@@ -1033,7 +1261,8 @@ Public Final Class Scene
 
     /// The scene in the file at `path`, as an editor wants it: as Load, but a texture or model that
     /// can't be loaded stands in as a plain one, keeping its reference for saving again, and is said
-    /// in Problems. What's wrong with the file itself is still an IOError.
+    /// in Problems, and components stay what Entity.Component gives, attached to nothing, as an editor
+    /// has no game's kinds. What's wrong with the file itself is still an IOError.
     @MainThread Public Static Method Open(path: String,
                                           parent: Entity? = Null): OpenedScene Throws IOError
         Return Try Reading_(Try Assets.ReadText(path), parent, True)
@@ -1056,6 +1285,7 @@ Public Final Class Scene
             For table In Try Items(document, "entity", "the file")
                 Try reading.Entity(table)
             End For
+            Try reading.Attached()
         Catch error As IOError
             reading.Undone()
             Throw error

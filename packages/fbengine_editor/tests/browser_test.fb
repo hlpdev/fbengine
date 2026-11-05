@@ -15,6 +15,7 @@ Import std.time
 Import fbengine
 Import fbengine_editor
 Import fbengine_ui
+Import "./watching"
 
 Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
 
@@ -47,6 +48,7 @@ Function Started(settings: Path, folder: Path): Editor Throws IOError, GraphicsE
     editor.Docked.Show("assets")
     editor.Step()
     editor.Step()
+    If Dir.Exists(folder / "assets") Then Try WatcherStarted(folder / "assets", "res://")
     Return editor
 End Function
 
@@ -85,6 +87,7 @@ Function StepUntil(editor: Editor, done: Func(): Bool)
         editor.Step()
         Sleep(5.Milliseconds)
     End While
+    Expect(done(), "what it waited for never came")
 End Function
 
 @Test
@@ -853,7 +856,6 @@ Function ASceneWithALostFileOpens() Throws IOError, GraphicsError
     editor.Step()
     Expect(editor.SceneFile() == "res://a.scene")
     Expect(editor.ShowingDialog() != Null)
-    Expect((Found(editor, "dialog.OK")) != Null)
     Try ClickOn(editor, "dialog.OK")
     Expect(editor.Edited.Entities().Count == 1)
     editor.Edits.Commit(RenameEdit(editor.Edited.Entities()[0], "saved"))
@@ -1233,4 +1235,233 @@ Function ASidecarIsReplacedWhole() Throws IOError
     Expect(ExpectThrows<IOError>(other.Apply()) != Null)
     Expect(Dir.Exists(there) && (Try Dir.Entries(folder.Path)).Count == 2)
     Try folder.Close()
+End Function
+
+// A component's what's saved of it, and read, as data: a kind that isn't known, and one taken off.
+// A scene's path typed in its dialog, and Open.
+@Test
+Function AScenesPathIsTypedAndOpened() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local folder = Try Game(games.Path)
+    Local editor = Try Started(settings.Path, folder)
+    Defer editor.Finish()
+    editor.Actions.Run("add.cube")
+    editor.SaveScene("res://typed.scene")
+    Expect(editor.Actions.Run("file.new_scene"))
+    editor.Step()
+    Expect(editor.Edited.Entities().Count == 0 && editor.SceneFile() == Null)
+    Expect(editor.Actions.Run("file.open_scene"))
+    editor.Step()
+    editor.Step()
+    Local field = Found(editor, "dialog.path") As? TextField
+    If field == Null Then Panic("its field")
+    editor.Shown.Focus(field)
+    editor.Step()
+    field.SelectAll()
+    Try Simulate.Text("res://typed.scene")
+    editor.Step()
+    Expect(field.Text() == "res://typed.scene", field.Text())
+    Try ClickOn(editor, "dialog.Open")
+    editor.Step()
+    Expect(editor.SceneFile() == "res://typed.scene" && editor.Edited.Entities().Count == 1)
+    Expect(editor.ShowingDialog() == Null)
+End Function
+
+// A material's texture rows, in the inspector, with what's selected in view.
+Function Textured(editor: Editor, title: String): TextureRow
+    editor.Docked.Show("inspector")
+    editor.Step()
+    editor.Step()
+    editor.Inspector.ShowRow(title)
+    editor.Step()
+    editor.Step()
+    Local row = editor.Inspector.RowOf(title) As? TextureRow
+    If row == Null Then Panic("there's no {title}")
+    Return row
+End Function
+
+// By its list, through undo; what's next shown as one's used; and what can't be says why.
+@Test
+Function ATexturesChosenFromItsList() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local folder = Try Game(games.Path)
+    Try File.WriteBytes(folder / "assets" / "sub" / "bumps.png", Picture(9))
+    Try File.WriteText(folder / "assets" / "sub" / "bumps.png.toml", "srgb = false\n")
+    Local editor = Try Started(settings.Path, folder)
+    Defer editor.Finish()
+    editor.Actions.Run("add.cube")
+    Local mesh = editor.Edited.Entities()[0] As? Mesh
+    Local paint = mesh?.Material()
+    If paint == Null Then Panic("its material")
+    Local layer = Textured(editor, "Layer0")
+    Expect(layer.Chooser().Text() == "None")
+    Expect(editor.Inspector.RowOf("Layer1") == Null)
+    Try ClickAt(editor, layer.Chooser().Box().Center)
+    editor.Step()
+    Local list = layer.Choices()
+    If list == Null Then Panic("its list")
+    // Every image in the project, and only those.
+    Expect(list.Find("inspector.texture.res://wall.png") != Null)
+    Expect(list.Find("inspector.texture.res://sub/bumps.png") != Null)
+    Expect(list.Find("inspector.texture.res://note.txt") == Null)
+    Try ClickAt(editor, Found(editor, "inspector.texture.res://wall.png").Box().Center)
+    editor.Step()
+    editor.Step()
+    Expect(layer.Choices() == Null)
+    Expect(paint.Texture(0)?.Path() == "res://wall.png")
+    Expect(editor.Edits.UndoName() == "Set Layer0")
+    Expect((editor.Inspector.RowOf("Layer0") As? TextureRow)?.Chooser()?.Text() == "res://wall.png")
+    Expect(editor.Inspector.RowOf("Layer1") != Null, "the next one's not shown")
+    Expect(editor.Actions.Run("edit.undo"))
+    editor.Step()
+    editor.Step()
+    Expect(paint.Texture(0) == Null && editor.Inspector.RowOf("Layer1") == Null)
+    Expect(editor.Actions.Run("edit.redo"))
+    Expect(paint.Texture(0)?.Path() == "res://wall.png")
+    // A color can't be a normal map, which panics, so it's said.
+    Local normal = Textured(editor, "NormalMap")
+    normal.Choose("res://wall.png")
+    editor.Step()
+    Expect(paint.Map(MaterialMap.NORMAL) == Null && editor.ShowingDialog() != Null)
+    Expect(editor.Edits.UndoName() == "Set Layer0", "it's kept what it didn't do")
+    Try Simulate.PressKey(Key.ESCAPE)
+    editor.Step()
+    editor.Step()
+    normal.Choose("res://sub/bumps.png")
+    Expect(paint.Map(MaterialMap.NORMAL)?.Path() == "res://sub/bumps.png")
+    Local metal = Textured(editor, "MetalRoughMap")
+    metal.Choose("res://sub/bumps.png")
+    Expect(paint.Map(MaterialMap.METAL_ROUGH)?.Path() == "res://sub/bumps.png")
+    Local occlusion = Textured(editor, "OcclusionMap")
+    occlusion.Choose("res://sub/bumps.png")
+    Expect(paint.Map(MaterialMap.OCCLUSION)?.Path() == "res://sub/bumps.png")
+    // Any file can be what it emits.
+    Local glow = Textured(editor, "EmissiveMap")
+    glow.Choose("res://wall.png")
+    Expect(paint.Map(MaterialMap.EMISSIVE)?.Path() == "res://wall.png")
+    // None takes it off, keeping which set of UVs it reads.
+    paint.SetMap(MaterialMap.NORMAL, paint.Map(MaterialMap.NORMAL), 1)
+    normal = Textured(editor, "NormalMap")
+    normal.Choose(Null)
+    Expect(paint.Map(MaterialMap.NORMAL) == Null && paint.MapUvSet(MaterialMap.NORMAL) == 1)
+    // What's gone says so too.
+    Local before = editor.Edits.UndoName()
+    layer = Textured(editor, "Layer1")
+    layer.Choose("res://gone.png")
+    editor.Step()
+    Expect(paint.Texture(1) == Null && editor.ShowingDialog() != Null)
+    Expect(editor.Edits.UndoName() == before)
+End Function
+
+// From the Assets pane, on its row: an image goes on it, and a model or what's elsewhere doesn't.
+@Test
+Function AnImageLetGoOnATexturesRowGoesOnIt() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings.Path, Try Game(games.Path))
+    Defer editor.Finish()
+    editor.Actions.Run("add.cube")
+    Local mesh = editor.Edited.Entities()[0] As? Mesh
+    Local paint = mesh?.Material()
+    If paint == Null Then Panic("its material")
+    Local row = Textured(editor, "Layer0")
+    editor.Files.SetOpen("res://sub", True)
+    editor.Step()
+    Local to = row.Box().Center
+    Expect(editor.Inspector.TextureRowAt(to) != Null)
+    Expect(editor.Inspector.TextureRowAt(Vec2(1, 1)) == Null)
+    Local drag = Function(path: String, at: Vec2)
+        Try
+            Local from = Row(editor, path).Center
+            Try Simulate.MoveMouse(from.x, from.y)
+            editor.Step()
+            Try Simulate.MouseDown(MouseButton.LEFT)
+            editor.Step()
+            Try Simulate.MoveMouse(at.x, at.y)
+            editor.Step()
+            editor.Step()
+            Try Simulate.MouseUp(MouseButton.LEFT)
+            editor.Step()
+            editor.Step()
+        Catch error As GraphicsError
+            Panic(error.Message)
+        End Try
+    End Function
+    drag("res://note.txt", to)
+    Expect(paint.Texture(0) == Null, "a text file went on it")
+    drag("res://sub/ball.gltf", to)
+    Expect(paint.Texture(0) == Null && editor.Edited.Entities().Count == 1, "a model went on it")
+    drag("res://wall.png", editor.View.Box().Center)
+    Expect(paint.Texture(0) == Null && editor.Edited.Entities().Count == 1, "it went on the scene")
+    drag("res://wall.png", to)
+    Expect(paint.Texture(0)?.Path() == "res://wall.png")
+    Expect(editor.Edits.UndoName() == "Set Layer0")
+    // A model still goes on the scene.
+    drag("res://sub/ball.gltf", editor.View.Box().Center)
+    Expect(editor.Edited.Entities().Count > 1, "a model's not placed")
+End Function
+
+// A row scrolled out of sight can't be let go on, where it'd be.
+@Test
+Function ATexturesRowOutOfSightTakesNothing() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings.Path, Try Game(games.Path))
+    Defer editor.Finish()
+    Try Window.SetSize(1000, 400)
+    editor.Actions.Run("add.cube")
+    // All its layers' rows, so its rows are more than it shows.
+    (editor.Edited.Entities()[0] As? Mesh)?.Material()?.SetTexture(6, Try Texture(1, 1))
+    Local last = Textured(editor, "EmissiveMap")
+    Local first = Textured(editor, "Layer0")
+    Local hidden = last.Box().Center
+    Expect(!editor.Inspector.Box().Contains(hidden), "it's in sight at {hidden}")
+    Local takesIt = editor.Inspector.TextureRowAt(hidden) != Null
+    Expect(!takesIt, "a row out of sight took it")
+    Local takesFirst = editor.Inspector.TextureRowAt(first.Box().Center) != Null
+    Expect(takesFirst, "the one in sight didn't")
+End Function
+
+@Test
+Function ComponentsAreSavedAndOpenedAsData() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local folder = Try Game(games.Path)
+    Local editor = Try Started(settings.Path, folder)
+    Defer editor.Finish()
+    editor.Actions.Run("add.cube")
+    Local cube = editor.Edited.Entities()[0]
+    Local door = Value.Object()
+    door["Speed"] = Value(7.0)
+    SetComponentsOf(cube, [ComponentData("Door", door), ComponentData("Odd", Value("kept"))])
+    editor.SaveScene("res://kept.scene")
+    Local text = Try File.ReadText(folder / "assets" / "kept.scene")
+    Expect(text.Contains("[entity.components.Door]\nSpeed = 7.0\n") &&
+           text.Contains("Odd = \"kept\""), text)
+    // Taken off, it's gone from the file too.
+    SetComponentsOf(cube, [ComponentData("Door", door)])
+    editor.SaveScene("res://kept.scene")
+    text = Try File.ReadText(folder / "assets" / "kept.scene")
+    Expect(text.Contains("[entity.components.Door]") && !text.Contains("Odd"), text)
+    SetComponentsOf(cube, [ComponentData("Door", door), ComponentData("Odd", Value("kept"))])
+    editor.SaveScene("res://kept.scene")
+    editor.OpenScene("res://kept.scene")
+    Local read = editor.Edited.Entities()[0]
+    Local items = ComponentsOf(read)
+    Expect(items.Count == 2 && items[0].Kind == "Door" && items[1].Kind == "Odd")
+    Expect(items[0].Values["Speed"]?.AsDouble() == 7 && items[1].Values.AsString() == "kept")
+    // They're the editor's data now, not left behind as well, and a copy has its own.
+    Expect(read.ComponentNames().Count == 0)
+    Local before = Try File.ReadText(folder / "assets" / "kept.scene")
+    editor.SaveScene("res://kept.scene")
+    Expect((Try File.ReadText(folder / "assets" / "kept.scene")) == before,
+           "saved again, it changed")
+    Expect(ComponentsOf(read).Count == 2)
 End Function

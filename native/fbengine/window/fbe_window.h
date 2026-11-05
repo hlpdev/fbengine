@@ -85,6 +85,9 @@ FBE_API bool fbe_window_resizable(void);
 // pressed, or the app was asked to quit, which stays so until the window's closed; whether it has
 // the keyboard's focus; whether it's minimized. All false without a window.
 FBE_API bool fbe_window_closed(void);
+// Takes back that its close button was pressed, so fbe_window_closed is false until it's pressed
+// again.
+FBE_API void fbe_window_keep_open(void);
 FBE_API bool fbe_window_focused(void);
 FBE_API bool fbe_window_minimized(void);
 
