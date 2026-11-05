@@ -209,7 +209,7 @@ End Function
 
 // What the island shows now.
 Function Shown(island: Island): Image Throws GraphicsError, IOError
-    island.Scene().Render()
+    island.Render()
     Local image = Try Screen.ToImage()
     Flip(False)
     Return image
@@ -217,7 +217,7 @@ End Function
 
 // What the island shows now, saved as `name` in `folder`.
 Function SavedAs(island: Island, folder: Path, name: String): Image Throws GraphicsError, IOError
-    island.Scene().Render()
+    island.Render()
     Try Screen.Save(folder / "{name}.png")
     Local image = Try Screen.ToImage()
     Flip(False)
@@ -284,6 +284,17 @@ Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws Grap
     Local sky = Try SavedAs(island, folder, "sun")
     Local sunPixel = PixelOf(camera, sky, island.SunPlace())
     Checks("the sun's drawn, bright", sunPixel != Null && Brightness(sunPixel) > 720)
+    // From wherever it's seen, as far off: from 200 m along, it's still its way from there.
+    Local here = camera.Position()
+    camera.SetPosition(here + Vec3(200.0, 0.0, 0.0))
+    island.Render()
+    Local along = Try Screen.ToImage()
+    Flip(False)
+    Local seenFrom = PixelOf(camera, along, here + Vec3(200.0, 0.0, 0.0) + way * SUN_OFF)
+    Checks("and it's its way from wherever it's seen",
+           Length(island.SunPlace() - (here + Vec3(200.0, 0.0, 0.0) + way * SUN_OFF)) < 0.01 &&
+           seenFrom != Null && Brightness(seenFrom) > 720)
+    camera.SetPosition(here)
     Local light = island.SunTurned() * Vec3(0.0, 0.0, -1.0)
     Checks("where its light's from",
            Abs(light.x + way.x) < 0.001 && Abs(light.y + way.y) < 0.001 &&
@@ -362,7 +373,7 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     For view In Views()
         camera.SetPosition(view.1)
         camera.PointAt(view.2)
-        island.Scene().Render()
+        island.Render()
         Try Screen.Save(folder / "{view.0}.png")
         images[view.0] = Try Screen.ToImage()
         saved += 1
@@ -374,7 +385,7 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     camera.SetPosition(first.1)
     camera.PointAt(first.2)
     island.Update(TIDE_IN_AT)
-    island.Scene().Render()
+    island.Render()
     Try Screen.Save(folder / "island_high_tide.png")
     Local high = Try Screen.ToImage()
     saved += 1
@@ -432,11 +443,11 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     Local pipView = Views()[2]
     camera.SetPosition(pipView.1)
     camera.PointAt(pipView.2)
-    island.Scene().Render()
+    island.Render()
     Local lit = Try Screen.ToImage()
     Flip(False)
     island.SetAround(False)
-    island.Scene().Render()
+    island.Render()
     Local unlit = Try Screen.ToImage()
     Flip(False)
     island.SetAround(True)
@@ -444,7 +455,7 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
            Brightness(lit[640, 360]) > Brightness(unlit[640, 360]) + 30)
     Checks("the camera's in HDR, and tonemapped", camera.Hdr() && camera.Tonemap() == Tonemap.ACES)
     camera.SetHdr(False)
-    island.Scene().Render()
+    island.Render()
     Local flat = Try Screen.ToImage()
     Flip(False)
     camera.SetHdr(True)
@@ -454,19 +465,19 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     camera.SetPosition(yardView.1)
     camera.PointAt(yardView.2)
     Local early = island.SunTurned()
-    island.Scene().Render()
+    island.Render()
     Local yardEarly = Try Screen.ToImage()
     Flip(False)
     // The sun alone, as the sea's height would change the picture too.
     island.TurnSun(TIDE_IN_AT)
     Checks("the sun moves by the clock", island.SunTurned() != early)
-    island.Scene().Render()
+    island.Render()
     Local yardLate = Try Screen.ToImage()
     Flip(False)
     Checks("and what's lit with it", Different(yardEarly, yardLate) > 0.1)
     // The mill's shadow, on the yard.
     island.SetSunShadows(False)
-    island.Scene().Render()
+    island.Render()
     Local unshadowed = Try Screen.ToImage()
     Flip(False)
     island.SetSunShadows(True)
@@ -475,7 +486,7 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     Local highView = Views()[0]
     camera.SetPosition(highView.1)
     camera.PointAt(highView.2)
-    island.Scene().Render()
+    island.Render()
     Local fromFar = Try Screen.ToImage()
     Flip(False)
     Checks("the ground's repeats don't show from far off",
@@ -490,11 +501,11 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     Local insideView = Views()[3]
     camera.SetPosition(insideView.1)
     camera.PointAt(insideView.2)
-    island.Scene().Render()
+    island.Render()
     Local byLantern = Try Screen.ToImage()
     Flip(False)
     island.SetLantern(False)
-    island.Scene().Render()
+    island.Render()
     Local noLantern = Try Screen.ToImage()
     Flip(False)
     island.SetLantern(True)
@@ -504,11 +515,11 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     camera.PointAt(yardView.2)
     // The storm's grade: greyer, by its saturation, and darker.
     camera.SetGrade(StormGrade(0.0))
-    island.Scene().Render()
+    island.Render()
     Local clear = Try Screen.ToImage()
     Flip(False)
     camera.SetGrade(StormGrade(1.0))
-    island.Scene().Render()
+    island.Render()
     Local stormy = Try Screen.ToImage()
     Flip(False)
     Try Screen.Save(folder / "storm.png")
@@ -519,12 +530,12 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     camera.SetPosition(pipView.1)
     camera.PointAt(pipView.2)
     camera.SetGrade(StormGrade(0.0))
-    island.Scene().Render()
+    island.Render()
     Local brassy = Try Screen.ToImage()
     Flip(False)
     Local body = island.PipBody()
     island.SetPipBody(Material(Color(0.0, 1.0, 0.0)))
-    island.Scene().Render()
+    island.Render()
     Local green = Try Screen.ToImage()
     Flip(False)
     island.SetPipBody(body)
@@ -1265,7 +1276,7 @@ Function SaveWalk(folder: Path) Throws GraphicsError, IOError, AudioError
     Local failure = ""
     Local save = Function(game: Game, name: String): Image?
         game.View().SetRenderTarget(Null)
-        island.Scene().Render()
+        island.Render()
         Try
             Try Screen.Save(folder / "{name}.png")
             saved += 1
@@ -1281,7 +1292,7 @@ Function SaveWalk(folder: Path) Throws GraphicsError, IOError, AudioError
     Local isSeen = Function(game: Game, image: Image?, part: Part, what: String)
         Local thing = island.PartEntity(part)
         thing.Hide()
-        island.Scene().Render()
+        island.Render()
         Try
             Local without = Try Screen.ToImage()
             Flip(False)
@@ -1331,17 +1342,17 @@ Function SaveWalk(folder: Path) Throws GraphicsError, IOError, AudioError
                 Checks("the wheel's seen", wheel != Null && (wheel.r As Int) > (wheel.b As Int) + 4)
                 Local lamp = PixelOf(game.View(), lit, island.LampAt())
                 island.LightLamp(False)
-                island.Scene().Render()
+                island.Render()
                 Try
                     Local dim = PixelOf(game.View(), Try Screen.ToImage(), island.LampAt())
                     Checks("the lamp's brighter lit than dim", lamp != Null && dim != Null &&
                            Brightness(lamp) > Brightness(dim))
                     // Its bloom: the sky just beside it's lighter with it than without.
                     island.LightLamp(True)
-                    island.Scene().Render()
+                    island.Render()
                     Local bloomed = Try Screen.ToImage()
                     game.View().SetBloom(0.0, 1.0)
-                    island.Scene().Render()
+                    island.Render()
                     Local plain = Try Screen.ToImage()
                     Looked(game.View())
                     // And the sky's past where bloom starts, far from the lamp.
@@ -1423,7 +1434,7 @@ Function FrameCost(device: Int32, frames: Int) Throws GraphicsError, IOError, Au
         If view.0 == lit.0 Then island.LightLamp(True)
         Flip(False)
         UpdateWorld(1.0 / 60.0)
-        island.Scene().Render()
+        island.Render()
         If frame > 10 Then costs.Add(Gpu.Counters().GpuMilliseconds)
     End For
     Local last = Try Screen.ToImage()
@@ -1584,7 +1595,7 @@ Function Felt() Throws GraphicsError, IOError, InputError
         into = Try WentBy(game, controls, Key.W)
     End For
     Checks("the wall stops you", Abs(into.y) < 0.01)
-    island.Scene().Render()
+    island.Render()
     Local image = Try Screen.ToImage()
     Local held = PixelOf(game.View(), image, island.PartEntity(Part.GEAR).Position(Space.WORLD))
     Checks("what's in your hand is seen against a wall", held != Null && IsWarm(held))
@@ -1792,7 +1803,7 @@ Function EndShown(folder: Path) Throws GraphicsError, IOError, AudioError, Input
     Try Stepped(session, 35)
     Checks("dark says so", session.ending.Says() ==
            "The lamp stays dark\nThe tide came in with the sluice shut.\n0 of 3 parts fitted")
-    island.Scene().Render()
+    island.Render()
     Local bare = Try Screen.ToImage()
     session.ending.Draw()
     Try Screen.Save(folder / "end_dark.png")
@@ -1903,7 +1914,7 @@ Function Played() Throws GraphicsError, IOError, InputError, AudioError
         Flip()
         Try session.Step(FrameStep(Frame.Delta()) As Float)
         If Screen.Texture() == Null Then Continue
-        island.Scene().Render()
+        island.Render()
         session.Draw()
     End While
 End Function
