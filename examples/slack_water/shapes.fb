@@ -85,8 +85,6 @@ Public Function Beveled(half: Vec3, bevel: Float): Geometry
         Local other = along == 2 ? 1 : 2
         For a In signs
             For b In signs
-                Local low = Vec3(0.0, 0.0, 0.0)
-                Local high = Vec3(0.0, 0.0, 0.0)
                 Local points: Vec3[] = []
                 For end In signs
                     Local s = [0.0, 0.0, 0.0]

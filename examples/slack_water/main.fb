@@ -633,11 +633,11 @@ Function Checked(folder: Path) Throws GraphicsError, IOError
     End If
     Local mesh = found As Mesh
     Local geometry = pip.Geometries()[0]
-    Checks("its surfaces, morphs, and bones are what they are", geometry.SurfaceCount() == 2 &&
+    Checks("its surfaces, morphs, and bones are what they are", geometry.SurfaceCount() == 3 &&
            geometry.Surface(0).MorphTargetCount() == 1 && mesh.Palette().Count == 8)
     Local bounds = geometry.Bounds()
-    Checks("it's 0.8 m high, on the ground",
-           IsClose(bounds.Max.y, 0.8, 0.001) && IsClose(bounds.Min.y, 0.0, 0.001))
+    Checks("it's 0.9 m high to its antenna's top, on the ground",
+           IsClose(bounds.Max.y, 0.9, 0.001) && IsClose(bounds.Min.y, 0.0, 0.001))
     // No clip: every joint where it was bound, so its palette's all identity.
     Local identity = True
     For matrix In mesh.Palette()

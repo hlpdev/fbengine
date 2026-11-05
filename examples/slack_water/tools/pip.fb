@@ -235,7 +235,7 @@ End Function
 
 /// Writes Pip in `folder`, and gives how many joints it has.
 Public Function WritePip(folder: Path): Int Throws IOError
-    // Its joints, as its nodes, by their indices: it stands on y 0, facing +Z, 0.8 m high.
+    // Its joints, as its nodes, by their indices: it stands on y 0, facing +Z, 0.9 m high to its antenna's top.
     Local joints = [Joint("root", -1, 0.0, 0.0, 0.0), Joint("hips", 0, 0.0, LEG, 0.0),
                     Joint("body", 1, 0.0, 0.06, 0.0), Joint("head", 2, 0.0, 0.2, 0.0),
                     Joint("arm_l", 2, 0.16, 0.12, 0.0), Joint("arm_r", 2, -0.16, 0.12, 0.0),
@@ -255,7 +255,7 @@ Public Function WritePip(folder: Path): Int Throws IOError
     brass.Ellipsoid(0.0, 0.64, 0.0, 0.045, 0.04, 0.045, head)
     brass.Ellipsoid(0.0, 0.73, 0.0, 0.13, 0.085, 0.105, head)
     brass.Ellipsoid(0.0, 0.84, 0.0, 0.008, 0.04, 0.008, head)
-    brass.Ellipsoid(0.0, 0.885, 0.0, 0.018, 0.018, 0.018, head)
+    brass.Ellipsoid(0.0, 0.882, 0.0, 0.018, 0.018, 0.018, head)
     For side In [1.0, -1.0]
         Local arm = side > 0.0 ? armL : armR
         brass.Ellipsoid(side * 0.165, 0.58, 0.0, 0.035, 0.035, 0.035, arm)
