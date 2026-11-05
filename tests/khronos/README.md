@@ -5,8 +5,10 @@ below. ctest runs it as `khronos.models`, and `khronos.golden` then checks the f
 `tests/golden/khronos_*.png`, so a change shows however small, all but DamagedHelmet's, whose 2016
 original is non-commercial, and MultiUVTest's, which is mostly Khronos's logo, so no rendering of those is
 kept here. CMake fetches the models and their reference images at configure, from a pinned commit, each
-checked by its SHA-256 (`tests/CMakeLists.txt`, `fetch.cmake`). Offline they're left out with a warning, and
-`FBENGINE_REQUIRE_KHRONOS`, which CI sets, makes that fatal. `tests/models/LICENSES.md` has their licenses.
+checked by its SHA-256 (`files.cmake`, `fetch.cmake`). Offline they're left out with a warning, at once, and
+`FBENGINE_REQUIRE_KHRONOS`, which CI sets, tries each again after 5, 20, and 60 s before it's fatal. CI keeps
+them in a cache keyed by `files.cmake`, saved once they're fetched, whatever the tests go on to do, and each
+is still checked by its hash. `tests/models/LICENSES.md` has their licenses.
 
 On Linux, `khronos.golden` lets four frames differ, as what's measured there says, since golden images are
 Mesa 26.2.4's and Linux's CI has Ubuntu's 25.2.8. The same natives on 25.2.8 on Windows give what Linux x64
