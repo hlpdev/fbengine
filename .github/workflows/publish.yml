@@ -22,7 +22,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  FB_VERSION: 1.2.2
+  FB_VERSION: 1.2.3
 
 jobs:
   version:

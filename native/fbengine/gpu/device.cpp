@@ -658,7 +658,7 @@ void stop_at_the_end() {
 /// Has a GPU that's still going when the program ends stopped first: by exit, in the C runtime the
 /// program itself has, as this DLL's own atexit would run with the threads gone. A program ends
 /// with it going as a rule, since a window's closing doesn't stop it. A panic and FB's Process.Exit
-/// end by _Exit, which runs none of this.
+/// end by TerminateProcess, which runs none of this.
 void stop_as_the_process_ends() {
 #ifdef _WIN32
     static const bool asked = [] {

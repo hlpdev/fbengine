@@ -8,12 +8,13 @@ Import std.io
 Import std.test
 Import fbengine
 
-Function Pak(files: Map<String, String>, method: ZipMethod = ZipMethod.STORE): UInt8[]
+Function Pak(files: Map<String, String>,
+             method: ZipMethod = ZipMethod.STORE): UInt8[] Throws IOError
     Local writer = ZipWriter()
     For file In files
         writer.Add(file.0, file.1.Bytes, method)
     End For
-    Return writer.Finish()
+    Return Try writer.Finish()
 End Function
 
 Function Names(entries: AssetEntry[]): String
@@ -42,7 +43,7 @@ End Function
 
 @Test
 Function APakFromZipWriterMountsFromTheDiskAndFromMemory() Throws IOError
-    Local pak = Pak({"textures/wall.txt": "wall", "readme.txt": "hello"})
+    Local pak = Try Pak({"textures/wall.txt": "wall", "readme.txt": "hello"})
     Local folder = Try TempDir()
     Try File.WriteBytes(folder.Path / "game.pak", pak)
     Try Assets.MountPak("res://test-pak", folder.Path / "game.pak")
@@ -92,7 +93,8 @@ End Function
 
 @Test
 Function AZipThatIsntAPakDoesntMount() Throws IOError
-    Local compressed = Pak({"a.txt": "compressed, which a pak's files aren't"}, ZipMethod.DEFLATE)
+    Local compressed = Try Pak({"a.txt": "compressed, which a pak's files aren't"},
+                               ZipMethod.DEFLATE)
     Expect(ExpectThrows<IOError>(Assets.MountPakBytes("res://test-bad", compressed))?.Kind ==
            IOErrorKind.INVALID_DATA)
     Expect(ExpectThrows<IOError>(Assets.MountPakBytes("res://test-bad", "no zip".Bytes))?.Kind ==
@@ -134,7 +136,7 @@ Function AMountedPakOnTheDiskCanBeDeleted() Throws IOError
     writer.Add("a.txt", "first".Bytes, ZipMethod.STORE)
     Local folder = Try TempDir()
     Local file = folder.Path / "game.pak"
-    Try File.WriteBytes(file, writer.Finish())
+    Try File.WriteBytes(file, Try writer.Finish())
     Try Assets.MountPak("res://test-deleted", file)
     Defer Assets.Unmount("res://test-deleted")
     // As an updater does, while the game has it mounted, which still reads it.
