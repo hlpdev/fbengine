@@ -187,6 +187,12 @@ Public Function Blocked(x: Float, z: Float): Bool
     If inWalls && !inside && !door Then Return True
     // The works, inside, and the wheel, outside its east wall.
     If Abs(x - (MAIN_X + 3.5)) < 1.6 && Abs(z + 3.0) < 1.6 Then Return True
+    // The lighthouse's foot.
+    Local place = LighthouseSpot()
+    If (x - place.x) * (x - place.x) + (z - place.y) * (z - place.y) <
+       LIGHTHOUSE_SOLID * LIGHTHOUSE_SOLID
+        Return True
+    End If
     // The barrels and crates between the wheel and the door, which Pip goes around with the mill, and
     // the millstone and bench inside.
     If x > MAIN_X + 6.3 && x < MAIN_X + 9.3 && z > 3.5 && z < 5.6 Then Return True
@@ -312,4 +318,76 @@ Public Function CoverAt(x: Float, z: Float, height: Float, slope: Float): (Vec3,
     color = Mixed(color, Vec3(color.x * 0.58, color.y * 0.56, color.z * 0.54), wet)
     rough = rough + (0.28 - rough) * wet
     Return (color, Clamp(rough, 0.0, 1.0))
+End Function
+
+/// Where the far islet's lighthouse stands, on its side toward the yard.
+Public Function LighthouseSpot(): Vec2 => Vec2(FAR_X - 2.0, FAR_Z - 11.0)
+
+// How far from the lighthouse's middle its foot is solid.
+Const LIGHTHOUSE_SOLID: Float = 1.9
+
+/// How far across the jetty runs, on the main island's west shore.
+Public Const JETTY_Z: Float = -6.0
+
+/// Where the main island's west shore is, along JETTY_Z: the first ground going west from the yard
+/// that's under 0.3, at slack water.
+Public Function JettyShore(): Vec2
+    Local x = MAIN_X - 20.0
+    While x > -(SIDE As Float) / 2.0 && GroundHeight(x, JETTY_Z) > 0.3
+        x -= 0.25
+    End While
+    Return Vec2(x, JETTY_Z)
+End Function
+
+/// The jetty's landward end, on the shore, and its seaward end, out over the sea.
+Public Function JettyStart(): Vec2 => Vec2(JettyShore().x + 3.0, JETTY_Z)
+
+Public Function JettyEnd(): Vec2 => Vec2(JettyShore().x - 12.0, JETTY_Z)
+
+/// How sandy what covers the ground is at (`x`, `z`), `height` high with `slope`, from 0 to 1, as
+/// CoverAt paints it: where what's washed up lies.
+Public Function SandAt(x: Float, z: Float, height: Float, slope: Float): Float
+    Return Sand(height, slope, Patches(x, z))
+End Function
+
+/// Whether (`x`, `z`) is kept clear of what's washed up: the road and the causeway's shores, within 3 m
+/// of a part's spot or a landing, by the jetty, and where anything's solid.
+Public Function KeptClear(x: Float, z: Float): Bool
+    If x > ROAD_WEST - ROAD_INTO && x < ROAD_EAST + ROAD_INTO && Abs(z - RoadZ(x)) < ROAD_SIDE + 3.0
+        Return True
+    End If
+    If Blocked(x, z) Then Return True
+    For spot In [GearSpot(), PaddleSpot(), BeltSpot(), Landing(False), Landing(True),
+                 PipLanding(False),
+                 PipLanding(True), JettyStart()]
+        If (spot.x - x) * (spot.x - x) + (spot.y - z) * (spot.y - z) < 9.0 Then Return True
+    End For
+    Return Abs(z - JETTY_Z) < 4.0 && x < JettyStart().x + 2.0 && x > JettyEnd().x - 2.0
+End Function
+
+/// Where what's washed up lies along the shores, each on sand above the sea at slack water: where it
+/// is, what it is (0 driftwood, 1 rope, 2 a rock), how it's turned, and how big. Never on the road or
+/// the causeway's shores, by the parts' spots or the landings, by the jetty, or where anything's solid.
+Public Function ShoreSpots(): (Vec2, Int, Float, Float)[]
+    Local spots: (Vec2, Int, Float, Float)[] = []
+    Local half = (SIDE As Float) / 2.0 - EDGE
+    For row = 0 Until 60
+        For column = 0 Until 60
+            Local x = -half + ((column As Float) + Hash(column, row + 900)) * (2.0 * half / 60.0)
+            Local z = -half + ((row As Float) + Hash(column + 900, row)) * (2.0 * half / 60.0)
+            Local height = GroundHeight(x, z)
+            If height < 0.15 || height > 1.4 Then Continue
+            Local dx = GroundHeight(x + 1.0, z) - GroundHeight(x - 1.0, z)
+            Local dz = GroundHeight(x, z + 1.0) - GroundHeight(x, z - 1.0)
+            Local slope = Sqrt(dx * dx + dz * dz) / 2.0
+            If SandAt(x, z, height, slope) < 0.7 Then Continue
+            If KeptClear(x, z) Then Continue
+            // Only some of what passes, so it's scattered.
+            If Hash(column + 300, row + 700) > 0.45 Then Continue
+            Local kind = (Hash(column + 50, row + 60) * 3.0) As Int
+            spots.Add((Vec2(x, z), Min(kind, 2), Hash(column + 70, row + 80) * 6.283,
+                       0.6 + Hash(column + 90, row + 10) * 0.8))
+        End For
+    End For
+    Return spots
 End Function

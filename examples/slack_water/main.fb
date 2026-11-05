@@ -575,6 +575,140 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     // By how bright it is, as the sea moves between them, and their pixels move by a part of one.
     Checks("a still's drawn afresh, with nothing of the view before it",
            Abs(MeanBrightness(yardAgain) - MeanBrightness(yardAfterDark)) < AFRESH)
+    Try CheckLandmarks(folder, island, camera)
+End Function
+
+// Each of `island`'s landmarks, as `camera` sees it, with it hidden and shown: in `image` of the view
+// it's in, whether it changes what's near `place`.
+Function SeenIn(island: Island, camera: Camera, image: Image, thing: Entity,
+                place: Vec3): Bool Throws GraphicsError
+    thing.Hide()
+    island.Drawn(camera)
+    Local without = Try Screen.ToImage()
+    Flip(False)
+    thing.Show()
+    Return DiffersNear(camera, image, without, place)
+End Function
+
+// What the GPU takes for a frame of what `camera` sees, in milliseconds: the middle of 16, after 4 to
+// settle.
+Function FrameMilliseconds(island: Island): Float
+    Local costs: Float[] = []
+    For frame = 1 To 20
+        island.Scene().Render()
+        Flip(False)
+        If frame > 4 Then costs.Add(Gpu.Counters().GpuMilliseconds)
+    End For
+    costs.Sort()
+    Return costs[costs.Count / 2]
+End Function
+
+// The lighthouse, seen from the yard and from by it, its lamp lit as the storm comes; the jetty and
+// its boat, riding the sea; and what's along the shores. Each one's share of a frame of the whole
+// island, said.
+Function CheckLandmarks(folder: Path, island: Island, camera: Camera) Throws GraphicsError, IOError
+    Local marks = island.Marks()
+    Local pieces = marks.Pieces()
+    Local yardView = Views()[1]
+    camera.SetPosition(yardView.1)
+    camera.PointAt(yardView.2)
+    island.Update(0.0)
+    island.Drawn(camera)
+    Local yard = Try Screen.ToImage()
+    Flip(False)
+    Checks("the lighthouse is seen from the yard",
+           Try SeenIn(island, camera, yard, pieces[0].1, marks.LampAt() - Vec3(0.0, 4.0, 0.0)))
+    // From the road's far end, at slack water, and as the tide's in.
+    Local by = Vec3(ROAD_EAST + 3.0, GroundHeight(ROAD_EAST + 3.0, RoadZ(ROAD_EAST + 3.0)) + 3.0,
+                    RoadZ(ROAD_EAST + 3.0) + 3.0)
+    camera.SetPosition(by)
+    camera.PointAt(marks.LampAt() - Vec3(0.0, 3.0, 0.0))
+    island.Update(0.0)
+    Local unlit = marks.Beam()
+    island.Drawn(camera)
+    Local early = Try Screen.ToImage()
+    Try Screen.Save(folder / "lighthouse.png")
+    Flip(False)
+    Checks("and from by it", Try SeenIn(island, camera, early, pieces[0].1, marks.LampAt()))
+    island.Update(TIDE_IN_AT)
+    island.Drawn(camera)
+    Local late = Try Screen.ToImage()
+    Try Screen.Save(folder / "lighthouse_lit.png")
+    Flip(False)
+    Local before = PixelOf(camera, early, marks.LampAt())
+    Local after = PixelOf(camera, late, marks.LampAt())
+    Checks("its lamp's lit as the storm comes, and not before",
+           unlit == 0.0 && marks.Beam() > 0.0 && before != Null && after != Null &&
+           Brightness(after) > Brightness(before) + 60)
+    // The jetty, from its landward end, and the boat by it, riding the sea up.
+    Local start = JettyStart()
+    Local end = JettyEnd()
+    camera.SetPosition(Vec3(start.x + 4.0, GroundHeight(start.x + 4.0, start.y) + 3.0,
+                            start.y + 5.0))
+    camera.PointAt(Vec3((start.x + end.x) / 2.0, 1.5, end.y))
+    island.Update(0.0)
+    Local boatLow = marks.BoatAt().y
+    island.Drawn(camera)
+    Local jetty = Try Screen.ToImage()
+    Try Screen.Save(folder / "jetty.png")
+    Flip(False)
+    Checks("the jetty's seen", Try SeenIn(island, camera, jetty, pieces[1].1,
+                                          Vec3((start.x + end.x) / 2.0, 2.0, end.y)))
+    Checks("and the boat by it", Try SeenIn(island, camera, jetty, pieces[2].1, marks.BoatAt()))
+    island.Update(TIDE_IN_AT)
+    Checks("which rides the sea up",
+           Abs(marks.BoatAt().y - boatLow - (SeaHeight(TIDE_IN_AT) - SeaHeight(0.0))) < 0.2)
+    island.Update(0.0)
+    // What's along the shores: all of it placed, and some of it seen from the jetty.
+    Local spots = ShoreSpots()
+    Checks("what's washed up lies where it was placed, {spots.Count} of it",
+           marks.LitterCount() == spots.Count && spots.Count >= 20)
+    Local nearest = spots[0].0
+    For spot In spots
+        Local away = (spot.0.x - start.x) * (spot.0.x - start.x) +
+                     (spot.0.y - start.y) * (spot.0.y - start.y)
+        Local best = (nearest.x - start.x) * (nearest.x - start.x) +
+                     (nearest.y - start.y) * (nearest.y - start.y)
+        If away < best Then nearest = spot.0
+    End For
+    camera.SetPosition(Vec3(nearest.x + 3.0, GroundHeight(nearest.x, nearest.y) + 2.0,
+                            nearest.y + 3.0))
+    camera.PointAt(Vec3(nearest.x, GroundHeight(nearest.x, nearest.y), nearest.y))
+    island.Drawn(camera)
+    Local shore = Try Screen.ToImage()
+    Try Screen.Save(folder / "shore_litter.png")
+    Flip(False)
+    Checks("and it's seen", Try SeenIn(island, camera, shore, pieces[3].1,
+                                       Vec3(nearest.x, GroundHeight(nearest.x, nearest.y) + 0.1,
+                                            nearest.y)))
+    // Each one's share of a frame of the whole island, from above: its draws and triangles, exactly,
+    // and its time, as the middle of five turns of it hidden and shown, beside how much the frame's own
+    // time wanders, which a share under can't be told from.
+    Local whole = Views()[0]
+    camera.SetPosition(whole.1)
+    camera.PointAt(whole.2)
+    FrameMilliseconds(island)
+    Local counted = Gpu.Counters()
+    Local all = FrameMilliseconds(island)
+    Print("cost's wander: {Abs(FrameMilliseconds(island) - all) / all * 100.0}% of {all} ms, " +
+          "{counted.Draws} draws, {counted.Triangles} triangles")
+    For piece In pieces
+        Local shares: Float[] = []
+        Local draws: Int64 = 0
+        Local triangles: Int64 = 0
+        For turn = 1 To 5
+            Local shown = FrameMilliseconds(island)
+            piece.1.Hide()
+            Local hidden = FrameMilliseconds(island)
+            draws = counted.Draws - Gpu.Counters().Draws
+            triangles = counted.Triangles - Gpu.Counters().Triangles
+            piece.1.Show()
+            shares.Add((shown - hidden) / shown * 100.0)
+        End For
+        shares.Sort()
+        Print("cost of the {piece.0}: {shares[2]}% of the frame's time, {draws} draws, " +
+              "{triangles} triangles")
+    End For
 End Function
 
 // How much of two images of a size differ, by more than a little, from 0 to 1.

@@ -9,6 +9,7 @@ Import fbengine
 Import "./flow"
 Import "./follow"
 Import "./ground"
+Import "./landmarks"
 Import "./map"
 Import "./res" As Res
 Import "./sea"
@@ -451,12 +452,14 @@ Public Final Class Island
     Field sizes: Vec3[] = []
     Field pipHead: Entity
     Field pipMesh: Mesh
+    Field landmarks: Landmarks
 
     New(scene: World, ground: Terrain, sea: Sea, sunShown: SunShown, model: Model, pip: Entity,
         held: Texture[],
         mill: Pivot, wheel: Mesh, lamp: Mesh, parts: Mesh[], sun: Light, around: Environment,
-        lantern: Light)
+        lantern: Light, landmarks: Landmarks)
         Self.scene = scene
+        Self.landmarks = landmarks
         Self.ground = ground
         Self.sea = sea
         Self.sunShown = sunShown
@@ -518,6 +521,12 @@ Public Final Class Island
 
         Local mill, wheel, lamp, lantern = Try BuildMill(held)
         Local parts = Try BuildParts(held)
+        Local landmarks = Landmarks.Make(Try Wood(held),
+                                         Try Surfaced(held, Res.WoodAlbedo, Res.WoodNormal,
+                                                      Res.WoodRough, 0.0, Color(0.62, 0.55, 0.5),
+                                                      1.0),
+                                         Try Iron(held, Color(1.0, 1.0, 1.0)),
+                                         Try Rock(held, Color(0.8, 0.8, 0.82), 1.0))
 
         Local model = Try Assets.Load<Model>(Res.Pip)
         Local pip = Try model.Spawn()
@@ -529,7 +538,7 @@ Public Final Class Island
         pip.Player().Play(model.Clips()[0])
         Return Island(scene, ground, sea, sunShown, model, pip, held, mill, wheel, lamp, parts, sun,
                       around,
-                      lantern)
+                      lantern, landmarks)
     End Method
 
     /// The World it's in.
@@ -605,6 +614,7 @@ Public Final Class Island
     Public Method Update(clock: Float64)
         sea.Update(clock)
         TurnSun(clock)
+        landmarks.Update(clock)
     End Method
 
     /// Draws what `camera` sees afresh, for a still: what the frames before had there, which
@@ -614,6 +624,9 @@ Public Final Class Island
         camera.ResetHistory()
         scene.Render()
     End Method
+
+    /// The lighthouse, the jetty, the boat, and what's along the shores.
+    @MainThread Public Method Marks(): Landmarks => landmarks
 
     /// What the ground's drawn with.
     @MainThread

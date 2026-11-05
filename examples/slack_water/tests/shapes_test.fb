@@ -79,3 +79,23 @@ Function WhatsStackedByTheMillIsSolid()
     Expect(!Blocked(MAIN_X - 4.4, -2.6))
     Expect(!Blocked(MAIN_X - 1.5, -3.4))
 End Function
+
+@Test
+Function ARockIsLumpyAboutItsRadiusAndFacesOut()
+    Local rock = Lumpy(0.5, 7)
+    Defer rock.Free()
+    Expect(FacesOut(rock, Vec3(0.0, 0.0, 0.0)))
+    Local nearest = 1000.0
+    Local furthest = 0.0
+    For point In rock.Positions()
+        Local away = Sqrt(Dot(point, point))
+        nearest = Min(nearest, away)
+        furthest = Max(furthest, away)
+    End For
+    Expect(nearest >= 0.5 * 0.78 - 0.001 && furthest <= 0.5 * 1.22 + 0.001)
+    // Lumpy, not round, and another seed another rock.
+    Expect(furthest - nearest > 0.1)
+    Local other = Lumpy(0.5, 8)
+    Defer other.Free()
+    Expect(other.Positions()[20] != rock.Positions()[20])
+End Function

@@ -195,3 +195,47 @@ Public Function Gable(halfDepth: Float, rise: Float, thick: Float): Geometry
     geometry.Translate(Vec3(0.0, rise / 3.0, 0.0))
     Return geometry
 End Function
+
+// A number from 0 to 1 for `at` of `seed`, the same each time.
+Function Scattered(at: Int, seed: Int): Float
+    Local mixed: Int64 = (((at As Int64) * 73856093) ^ ((seed As Int64) * 19349663)) & 0x7FFFFFFF
+    mixed = ((mixed ^ (mixed >> 13)) * 1274126177) & 0x7FFFFFFF
+    Return ((mixed & 0xFFFF) As Float) / 65535.0
+End Function
+
+/// A rock about `radius` across from its middle, lumpy by `seed`: a sphere of 8 rings and 12 around,
+/// each point in or out by up to a quarter, its faces flat, as a broken stone's are.
+@MainThread
+Public Function Lumpy(radius: Float, seed: Int): Geometry
+    Local geometry = Geometry()
+    Local surface = geometry.AddSurface()
+    Local rings = 8
+    Local around = 12
+    Local points: Vec3[] = []
+    For ring = 0 To rings
+        Local down = Pi64 * (ring As Float64) / (rings As Float64)
+        Local up = Cos(down) As Float
+        Local out = ring == 0 || ring == rings ? 0.0 : Sin(down) As Float
+        For step = 0 Until around
+            Local angle = 2.0 * Pi * (step As Float) / (around As Float)
+            Local lump = 1.0
+            If ring > 0 && ring < rings Then lump = 0.78 + Scattered(ring * around + step,
+                                                                     seed) * 0.44
+            points.Add(Vec3(out * Cos(angle) * radius * lump, up * radius * lump,
+                            out * Sin(angle) * radius * lump))
+        End For
+    End For
+    Local half = Vec3(radius, radius, radius)
+    For ring = 0 Until rings
+        For step = 0 Until around
+            Local next = (step + 1) % around
+            Local a = points[ring * around + step]
+            Local b = points[(ring + 1) * around + step]
+            Local c = points[ring * around + next]
+            Local d = points[(ring + 1) * around + next]
+            If ring > 0 Then Face(surface, [a, b, c], half)
+            If ring < rings - 1 Then Face(surface, [c, b, d], half)
+        End For
+    End For
+    Return geometry
+End Function
