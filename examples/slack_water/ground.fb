@@ -187,6 +187,11 @@ Public Function Blocked(x: Float, z: Float): Bool
     If inWalls && !inside && !door Then Return True
     // The works, inside, and the wheel, outside its east wall.
     If Abs(x - (MAIN_X + 3.5)) < 1.6 && Abs(z + 3.0) < 1.6 Then Return True
+    // The barrels and crates between the wheel and the door, which Pip goes around with the mill, and
+    // the millstone and bench inside.
+    If x > MAIN_X + 6.3 && x < MAIN_X + 9.3 && z > 3.5 && z < 5.6 Then Return True
+    If x > MAIN_X - 5.8 && x < MAIN_X - 4.8 && z > -3.6 && z < -1.6 Then Return True
+    If x > MAIN_X - 3.3 && x < MAIN_X + 0.3 && z > -4.8 && z < -3.7 Then Return True
     Return Abs(x - (MAIN_X + 8.0)) < 0.9 && Abs(z) < 3.4
 End Function
 

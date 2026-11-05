@@ -91,7 +91,9 @@ instead); saves; depth of field.
   own, baked for the light around, which is what brass reflects; a sun with shadows, lowering by the
   clock; HDR, ACES, and bloom on the lamp; a grade as the storm comes, by the clock. The ground: a
   headland of crags, and a far rock's, by ridged noise, under a cover baked from height and slope (sand,
-  wet shore, a tide line, rock where it's steep, turf, a path), and grit at two scales. Ambient
+  wet shore, a tide line, rock where it's steep, turf, a path), and grit at two scales. The mill, of shapes built in code (beveled blocks, turned barrels, a gable):
+  a plinth, corner stones, a framed door, a roof of boards to a ridge, a spoked wheel, the lamp in a
+  cage, barrels and crates, a millstone, and a bench. Ambient
   occlusion and antialiasing over frames; `--low` has FXAA in their place. Depth of field, the first the
   design said to cut if it's long, isn't in.
 - **The budget for 60 fps at 1080p**, 16.6 ms a frame on a mid-range GPU, as it's spent: the scene with
