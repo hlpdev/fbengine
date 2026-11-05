@@ -161,7 +161,8 @@ End Function
 
 // A lattice point's number, from 0 to 1, by SoftNoise's, each octave its own.
 Function LatticeAt(x: Int, y: Int, octave: Int): Float
-    Return SoftNoise((x As Float) + (octave As Float) * 97.0, (y As Float) + (octave As Float) * 61.0)
+    Return SoftNoise((x As Float) + (octave As Float) * 97.0,
+                     (y As Float) + (octave As Float) * 61.0)
 End Function
 
 /// The sheet of sea and what it's drawn with.
@@ -293,7 +294,8 @@ Public Final Class Sea
     Public Method Update(clock: Float64)
         Local height = SeaHeight(clock)
         sheet.SetPosition(Vec3(0.0, height, 0.0))
-        Local at = (Floor(clock * (WAVES_RATE As Float64)) As Int64 % (WAVES_FRAMES As Int64)) As Int
+        Local at = (Floor(clock * (WAVES_RATE As Float64)) As Int64 %
+                    (WAVES_FRAMES As Int64)) As Int
         If at != frame
             frame = at
             water.SetMap(MaterialMap.NORMAL, frames[at])

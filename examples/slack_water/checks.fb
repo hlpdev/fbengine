@@ -47,7 +47,8 @@ Public Function Share(image: Image, test: Func(Color32): Bool): Float
 End Function
 
 /// How much of the pixels from (`left`, `top`) up to (`right`, `bottom`) `test` holds for, from 0 to 1.
-Public Function ShareWithin(image: Image, test: Func(Color32): Bool, left: Int, top: Int, right: Int,
+Public Function ShareWithin(image: Image, test: Func(Color32): Bool, left: Int, top: Int,
+                            right: Int,
                             bottom: Int): Float
     Local count = 0
     For y = top Until bottom

@@ -3569,9 +3569,9 @@ TEST_CASE("an environment's directions are the world's, however the camera's tur
     fbe_material_release(material);
 }
 
-// One image for both: what a mirror shows, whichever way it's turned, is what's behind whoever looks
-// at it, as the sky has it there. A band of a color each way round, so a quarter turn between them
-// shows.
+// One image for both: what a mirror shows, whichever way it's turned, is what's behind whoever
+// looks at it, as the sky has it there. A band of a color each way round, so a quarter turn between
+// them shows.
 TEST_CASE("a World's sky and its environment are the same image, the same way round",
           "[gpu][scene]") {
     const scene_t scene;
@@ -3579,12 +3579,14 @@ TEST_CASE("a World's sky and its environment are the same image, the same way ro
     constexpr std::int32_t down = 32;
     const std::uint64_t source = fbe_texture_create(across, down, FBE_TEXTURE_RGBA16F, false);
     REQUIRE(source != 0);
-    const std::array<std::array<float, 3>, 4> bands{ {
-        { 0.8F, 0.1F, 0.1F },
-        { 0.1F, 0.8F, 0.1F },
-        { 0.1F, 0.1F, 0.8F },
-        { 0.8F, 0.8F, 0.1F },
-    } };
+    const std::array<std::array<float, 3>, 4> bands{
+        {
+            { 0.8F, 0.1F, 0.1F },
+            { 0.1F, 0.8F, 0.1F },
+            { 0.1F, 0.1F, 0.8F },
+            { 0.8F, 0.8F, 0.1F },
+        },
+    };
     std::vector<float> pixels;
     for (std::int32_t y = 0; y < down; ++y) {
         for (std::int32_t x = 0; x < across; ++x) {
@@ -3609,12 +3611,14 @@ TEST_CASE("a World's sky and its environment are the same image, the same way ro
         float along_x;
         float along_z;
     };
-    const std::array<turn_t, 4> turns{ {
-        { 0.0F, 1.0F, 0.0F, -1.0F },
-        { root, root, -1.0F, 0.0F },
-        { 1.0F, 0.0F, 0.0F, 1.0F },
-        { -root, root, 1.0F, 0.0F },
-    } };
+    const std::array<turn_t, 4> turns{
+        {
+            { .y = 0.0F, .w = 1.0F, .along_x = 0.0F, .along_z = -1.0F },
+            { .y = root, .w = root, .along_x = -1.0F, .along_z = 0.0F },
+            { .y = 1.0F, .w = 0.0F, .along_x = 0.0F, .along_z = 1.0F },
+            { .y = -root, .w = root, .along_x = 1.0F, .along_z = 0.0F },
+        },
+    };
     std::array<rgba_t, 4> skies{};
     require(fbe_entity_set_hidden(mesh, true));
     for (std::size_t at = 0; at < turns.size(); ++at) {
@@ -3634,8 +3638,10 @@ TEST_CASE("a World's sky and its environment are the same image, the same way ro
         INFO("turn " << at);
         CHECK(near(seen, { behind[0], behind[1], behind[2] }, 12));
         // And the four are different, or this says nothing.
-        CHECK(!near(skies.at(at), { skies.at((at + 1) % 4)[0], skies.at((at + 1) % 4)[1],
-                                    skies.at((at + 1) % 4)[2] }, 30));
+        CHECK(!near(
+            skies.at(at),
+            { skies.at((at + 1) % 4)[0], skies.at((at + 1) % 4)[1], skies.at((at + 1) % 4)[2] },
+            30));
     }
     fbe_environment_free(environment);
     fbe_material_release(mirror);

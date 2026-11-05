@@ -273,7 +273,8 @@ Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws Grap
     Checks("the sun's drawn, bright", sunPixel != Null && Brightness(sunPixel) > 720)
     Local light = island.SunTurned() * Vec3(0.0, 0.0, -1.0)
     Checks("where its light's from",
-           Abs(light.x + way.x) < 0.001 && Abs(light.y + way.y) < 0.001 && Abs(light.z + way.z) < 0.001)
+           Abs(light.x + way.x) < 0.001 && Abs(light.y + way.y) < 0.001 &&
+           Abs(light.z + way.z) < 0.001)
     Local place = island.SunPlace()
     island.Update(TIDE_IN_AT)
     Checks("and it moves as that does", Length(island.SunPlace() - place) > 1000.0)

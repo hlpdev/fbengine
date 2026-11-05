@@ -195,7 +195,8 @@ Public Final Class Island
     Field pipHead: Entity
     Field pipMesh: Mesh
 
-    New(scene: World, ground: Terrain, sea: Sea, sunShown: SunShown, model: Model, pip: Entity, held: Texture[],
+    New(scene: World, ground: Terrain, sea: Sea, sunShown: SunShown, model: Model, pip: Entity,
+        held: Texture[],
         mill: Pivot, wheel: Mesh, lamp: Mesh, parts: Mesh[], sun: Light, around: Environment,
         lantern: Light)
         Self.scene = scene
@@ -269,7 +270,8 @@ Public Final Class Island
         // Facing the yard's view, as glTF's front is +Z.
         pip.SetRotation(0.0, ToRadians(20.0), 0.0)
         pip.Player().Play(model.Clips()[0])
-        Return Island(scene, ground, sea, sunShown, model, pip, held, mill, wheel, lamp, parts, sun, around,
+        Return Island(scene, ground, sea, sunShown, model, pip, held, mill, wheel, lamp, parts, sun,
+                      around,
                       lantern)
     End Method
 
