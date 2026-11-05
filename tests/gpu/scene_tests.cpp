@@ -112,6 +112,12 @@ std::uint8_t srgb(float linear) {
     return static_cast<std::uint8_t>(std::lround(encoded * 255.0F));
 }
 
+/// The light an sRGB byte stores.
+float light_of(std::uint8_t stored) {
+    const float value = static_cast<float>(stored) / 255.0F;
+    return value <= 0.04045F ? value / 12.92F : std::pow((value + 0.055F) / 1.055F, 2.4F);
+}
+
 /// What glTF's BRDF, height-correlated as pbr.slang's, gives one channel of a light, times the
 /// cosine, by the dots of its normal with the light, the view, and what's halfway, and of the view
 /// with what's halfway.
@@ -570,7 +576,8 @@ TEST_CASE("point lights fall off per pixel as glTF's", "[gpu][scene]") {
     fbe_material_release(material);
 }
 
-TEST_CASE("per vertex lighting falls off as range over distance, with no end", "[gpu][scene]") {
+TEST_CASE("per vertex lighting falls off as range over distance, with no end, and past 1 within",
+          "[gpu][scene]") {
     const scene_t scene;
     const std::uint64_t material = fbe_material_create();
     require(fbe_material_set_shading(material, FBE_SHADING_VERTEX));
@@ -580,8 +587,14 @@ TEST_CASE("per vertex lighting falls off as range over distance, with no end", "
     // At 3, half: what's stored.
     require(fbe_entity_set_position(lamp, 0.0F, 0.0F, 2.0F, FBE_SPACE_WORLD));
     CHECK(near(middle(scene.drawn()), { 128, 128, 128 }, 1));
-    // At 1.2, inside its range, all of it.
+    // At 1.2, inside its range, past all of it: 1.25 of a light 102 stores, as DirectX 7 had it,
+    // with nothing clamped till the lights are summed.
     require(fbe_entity_set_position(lamp, 0.0F, 0.0F, 0.2F, FBE_SPACE_WORLD));
+    const float dim = light_of(102);
+    require(fbe_light_set_color(lamp, dim, dim, dim));
+    CHECK(near(middle(scene.drawn()), { 128, 128, 128 }, 1));
+    // A white one, 1.25 of white, is white.
+    require(fbe_light_set_color(lamp, 1.0F, 1.0F, 1.0F));
     CHECK(near(middle(scene.drawn()), { 255, 255, 255 }, 1));
     // Clamped at the vertices, before any texture: a second lamp adds nothing past white.
     const std::uint64_t half = flat_texture(128, 128, 128, 255, FBE_TEXTURE_RGBA8_LINEAR);
@@ -10845,12 +10858,6 @@ std::uint64_t game_pass(float which = pass_inverts) {
     require(fbe_shader_release(shader));
     require(fbe_material_set_parameter(material, 0, which, 0.0F, 0.0F, 0.0F));
     return material;
-}
-
-/// The light an sRGB byte stores.
-float light_of(std::uint8_t stored) {
-    const float value = static_cast<float>(stored) / 255.0F;
-    return value <= 0.04045F ? value / 12.92F : std::pow((value + 0.055F) / 1.055F, 2.4F);
 }
 
 /// Whether what's in the middle comes to `linear` drawn in linear light, `stored` in stored values,

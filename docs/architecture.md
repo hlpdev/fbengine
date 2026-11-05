@@ -198,7 +198,8 @@ good modern engine on its own. Every structural choice is checked against both.
   constants, so any mix of them draws in the same pass.
   UNLIT and VERTEX are the fixed-function look, so they work in encoded values: layers, ADD, ×2,
   and fog on what's stored, with only the final color converted to linear for the target; PBR is
-  linear throughout. VERTEX's light is `min(range / distance, 1)` with no end, clamped per vertex
+  linear throughout. VERTEX's light is `range / distance` with no end, past 1 within its range, as
+  DirectX 7's attenuation of `1 / range` alone is, and only the lights' sum is clamped, per vertex
   before texturing, from the first 8 shown lights in the tree's order; PBR keeps
   KHR_lights_punctual's window, which clusters need. Range means each in its model. A Texture has
   an alpha flag, which AUTO blending honors.
