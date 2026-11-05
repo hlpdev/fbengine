@@ -176,6 +176,14 @@ def check_build(build):
     return True
 
 
+def vulkan_driver(build):
+    """The tests' Vulkan driver, which tests/CMakeLists.txt chose; empty on a Mac, or if it's unset.
+    Every test gets it, as with none the loader offers the machine's real GPUs, and a run on the
+    user's integrated GPU once took their PC down."""
+    file = pathlib.Path(build) / "tests-vulkan-driver.txt"
+    return file.read_text().strip() if file.exists() else ""
+
+
 def check_tests(build, only=None):
     step("ctest")
     listed = re.findall(r"Test +#\d+: (\S+)", output(["ctest", "--test-dir", str(build), "-N"]))
@@ -188,6 +196,12 @@ def check_tests(build, only=None):
     shutil.rmtree(temp, ignore_errors=True)
     temp.mkdir(parents=True, exist_ok=True)
     environment = dict(os.environ, SDL_VIDEO_DRIVER="offscreen", TEMP=str(temp), TMP=str(temp), TMPDIR=str(temp))
+    driver = vulkan_driver(build)
+    if driver:
+        environment["VK_DRIVER_FILES"] = driver
+    elif sys.platform != "darwin":
+        fail("no Vulkan driver for the tests, so a test could reach this machine's real GPUs")
+        return
     command = ["ctest", "--test-dir", str(build), "--output-on-failure"]
     if only is not None:
         command += ["--no-tests=error", "-R", only]

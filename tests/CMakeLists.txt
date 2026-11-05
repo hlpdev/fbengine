@@ -44,6 +44,14 @@ if(NOT fbengine_vulkan_driver STREQUAL "")
   cmake_path(NATIVE_PATH fbengine_vulkan_driver fbengine_vulkan_driver)
   set(fbengine_vulkan_environment "VK_DRIVER_FILES=${fbengine_vulkan_driver}")
 endif()
+# Every Catch2 test found at build time sees only the tests' Vulkan driver too.
+function(catch_discover_tests)
+  if(fbengine_vulkan_environment STREQUAL "")
+    _catch_discover_tests(${ARGV})
+  else()
+    _catch_discover_tests(${ARGV} PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}")
+  endif()
+endfunction()
 
 # stb's PNGs, for the golden image harness; stb has no releases, so it's pinned to a commit.
 FetchContent_Declare(
@@ -2316,3 +2324,15 @@ foreach(test IN LISTS fbengine_all_tests)
     set_tests_properties("${test}" PROPERTIES TIMEOUT 60)
   endif()
 endforeach()
+
+# Every test sees only the tests' Vulkan driver, whether or not it means to draw: with none set, the
+# loader offers the machine's real GPUs, and a run on the user's integrated GPU once took their PC
+# down. verify.py reads the same driver from this file, for tests found at build time.
+get_property(fbengine_all_tests DIRECTORY PROPERTY TESTS)
+foreach(test IN LISTS fbengine_all_tests)
+  get_test_property("${test}" ENVIRONMENT said)
+  if(NOT said MATCHES "VK_DRIVER_FILES=" AND NOT fbengine_vulkan_environment STREQUAL "")
+    set_property(TEST "${test}" APPEND PROPERTY ENVIRONMENT "${fbengine_vulkan_environment}")
+  endif()
+endforeach()
+file(WRITE "${CMAKE_BINARY_DIR}/tests-vulkan-driver.txt" "${fbengine_vulkan_driver}")
