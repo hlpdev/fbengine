@@ -252,6 +252,8 @@ struct recorded_pass_t {
     bool shadows = false;
     /// Whether it's a camera's prepass, by the same shader's for that.
     bool prepass = false;
+    /// Whether its camera draws in stored values.
+    bool stored = false;
     /// What it reads as its camera's ambient occlusion.
     gpu::resource_t occlusion = gpu::no_resource;
 };

@@ -1,7 +1,8 @@
 // Gamma as a game does it itself: a frame's copy added over it to brighten it, a gray multiplied over
 // it to darken it, and a real curve, a pixel at a time, by a table; the engine has no gamma of its own
 // until E6's tonemap. It prints each pixel it reads against the sums, the canvas blending in linear
-// light; with --watch, a window of a ramp, its keys changing it.
+// light, and then, on a target of linear bytes, on what's stored, as DirectX 7 did; with --watch, a
+// window of a ramp, its keys changing it.
 
 Import std.collections
 Import std.core
@@ -59,8 +60,8 @@ Function Curve(gamma: Float): UInt8[]
 End Function
 
 // A target of a pixel of 100, and one each side, 0 and 255.
-Function Frame3(): Texture Throws GraphicsError
-    Local target = Try Texture.Target(3, 1)
+Function Frame3(format: TextureFormat = TextureFormat.RGBA8): Texture Throws GraphicsError
+    Local target = Try Texture.Target(3, 1, format)
     Local canvas = Canvas(target)
     canvas.SetColor(Gray(100))
     canvas.Clear()
@@ -105,6 +106,18 @@ Function Proved() Throws GraphicsError
     Check("by a curve", target.ReadPixel(1, 0), Gray(160))
     Check("its ends stay", target.ReadPixel(0, 0), Gray(0))
     Check("and the other", target.ReadPixel(2, 0), Gray(255))
+
+    // On what's stored, a Canvas into linear bytes storing what it's given: 100 and half of itself,
+    // 100 + 100 x 128 / 255 = 150, and 100 x 128 / 255 = 50.
+    target = Try Frame3(TextureFormat.RGBA8_LINEAR)
+    copy = Try Texture.Target(3, 1, TextureFormat.RGBA8_LINEAR)
+    Brighter(target, copy, 128.0 / 255.0)
+    Check("on what's stored, brighter", target.ReadPixel(1, 0), Gray(150))
+    Check("white stays", target.ReadPixel(2, 0), Gray(255))
+    target = Try Frame3(TextureFormat.RGBA8_LINEAR)
+    Darker(target, 128)
+    Check("on what's stored, darker", target.ReadPixel(1, 0), Gray(50))
+    Check("white comes to the gray", target.ReadPixel(2, 0), Gray(128))
 End Function
 
 // A window of a ramp of grays, by each pass: B brighter, D darker, which change how much; or `frames`

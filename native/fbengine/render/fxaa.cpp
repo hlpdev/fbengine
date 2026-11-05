@@ -32,6 +32,8 @@ bool add_fxaa(const scene::camera_t& camera, gpu::resource_t image, gpu::resourc
         .color = format,
         .samples = samples,
         .blend = camera.clears_color ? gpu::blend_t::NONE : gpu::blend_t::PREMULTIPLIED,
+        .constants = { camera.stored_values ? 1U : 0U },
+        .constant_count = 1,
     });
     if (pipeline == VK_NULL_HANDLE) {
         return false;
@@ -44,6 +46,7 @@ bool add_fxaa(const scene::camera_t& camera, gpu::resource_t image, gpu::resourc
         .name = "fxaa",
         .colors = { {
             .target = into,
+            .stored = camera.stored_values,
         }, },
         .uses = { { image, gpu::use_t::SAMPLED } },
         .record =

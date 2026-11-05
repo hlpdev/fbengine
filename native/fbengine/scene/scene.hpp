@@ -460,6 +460,7 @@ struct camera_t {
     float ambient_occlusion_radius = 1.0F;
     /// Whether its picture's antialiased from itself, after all else.
     bool fxaa = false;
+    bool stored_values = false;
     /// Whether an HDR camera antialiases over frames, and how many times it's been told to forget.
     bool temporal_aa = false;
     std::uint64_t history_resets = 0;
