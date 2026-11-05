@@ -219,6 +219,11 @@ if(FBENGINE_FB_TESTS)
     add_test(NAME tools.check_exports
              COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_exports_test.py")
     set_tests_properties(tools.check_exports PROPERTIES PASS_REGULAR_EXPRESSION "macOS side holds")
+    # Each target that builds gltf.cpp reads the simdjson fastgltf fetched, as its own compile says.
+    add_test(NAME tools.check_simdjson
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_simdjson.py" "${PROJECT_BINARY_DIR}")
+    set_tests_properties(tools.check_simdjson PROPERTIES
+                         PASS_REGULAR_EXPRESSION "targets read the simdjson fastgltf fetched")
   endif()
   add_test(NAME models.golden
            COMMAND fbengine_gpu_tests "the sample models' frames match their golden images")
