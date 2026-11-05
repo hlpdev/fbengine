@@ -184,6 +184,56 @@ def vulkan_driver(build):
     return file.read_text().strip() if file.exists() else ""
 
 
+def required_fb(ci_text):
+    """The FutureBlitz CI builds with, by its workflow's FB_VERSION."""
+    found = re.search(r"^\s*FB_VERSION:\s*([0-9][0-9.]*)\s*$", ci_text, re.MULTILINE)
+    return found.group(1) if found else None
+
+
+def fb_version_of(said):
+    """The version an fb says with --version: "fb 1.2.3 (c77a32a, windows-x64)" is 1.2.3."""
+    found = re.match(r"fb ([0-9][0-9.]*)", said.strip())
+    return found.group(1) if found else None
+
+
+def cached_fb(build):
+    """The fb a build folder's tests run, as CMake found it when it first configured."""
+    cache = pathlib.Path(build) / "CMakeCache.txt"
+    if not cache.exists():
+        return None
+    found = re.search(r"^FBENGINE_FB:FILEPATH=(.*)$", cache.read_text(errors="replace"), re.MULTILINE)
+    return found.group(1).strip() if found else None
+
+
+def fb_problem(name, version, required):
+    """What's wrong with an fb of `version`, where CI's is `required`; None if nothing. One that's
+    older runs what's written for the newer, as a release that fb run doesn't say it runs, and its
+    tests fail in ways that look like anything but that."""
+    if required is None:
+        return "there's no FB_VERSION in .github/workflows/ci.yml to check fb against"
+    if version is None:
+        return f"{name} doesn't say its version"
+    if version != required:
+        return f"{name} is FutureBlitz {version}, and CI's is {required}"
+    return None
+
+
+def check_fb(build):
+    """Whether the fb the tests run, and the one on PATH, are CI's; false, with why, if not."""
+    step("fb")
+    required = required_fb((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    fine = True
+    for name, program in (("the build's fb", cached_fb(build)), ("the fb on PATH", shutil.which("fb"))):
+        if program is None:
+            continue
+        problem = fb_problem(f"{name}, {program},", fb_version_of(output([program, "--version"])), required)
+        if problem is not None:
+            hint = " (cmake -B <build> -DFBENGINE_FB=<one that is>)" if name == "the build's fb" else ""
+            fail(problem + hint)
+            fine = False
+    return fine
+
+
 def check_tests(build, only=None):
     step("ctest")
     listed = re.findall(r"Test +#\d+: (\S+)", output(["ctest", "--test-dir", str(build), "-N"]))
@@ -312,8 +362,9 @@ def main():
     held = [hold_build(build), wait_for_turn()]
 
     built = options.no_build or check_build(build)
+    fb_fine = check_fb(build)
     if options.only is not None:
-        if built:
+        if built and fb_fine:
             check_tests(build, options.only)
         check_bindings()
         check_line_ends()
@@ -332,7 +383,7 @@ def main():
         del held
         return
     check_locks()
-    if built:
+    if built and fb_fine:
         check_tests(build)
         check_exports()
     check_bindings()
