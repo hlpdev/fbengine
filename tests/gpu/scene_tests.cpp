@@ -11283,7 +11283,7 @@ TEST_CASE("what's stored goes through a pass's pictures to the byte", "[gpu][sce
     const std::uint64_t second = game_pass(pass_reads_beside_it);
     require(fbe_camera_add_pass(scene.camera, first));
     require(fbe_camera_add_pass(scene.camera, second));
-    for (const std::uint8_t stored : { 1, 128, 251, 254 }) {
+    for (const std::uint8_t stored : std::array<std::uint8_t, 4>{ 1, 128, 251, 254 }) {
         CAPTURE(int{ stored });
         const float light = light_of(stored);
         require(fbe_camera_set_clear_color(scene.camera, light, light, light, 1.0F));
