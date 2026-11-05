@@ -376,8 +376,10 @@ TEST_CASE("the LOD bias and anisotropy are every texture's, within their range",
     stop_gpu();
 }
 
-// A GPU whose samplers have no LOD bias, as Metal's through MoltenVK haven't, draws as with none,
-// and makes them with none, which the validation layers would find, though the setting's kept.
+// A GPU whose samplers have no LOD bias, as Metal's through MoltenVK haven't, makes them with none,
+// which the validation layers would find, though the setting's kept. What's read straight through a
+// sampler draws as with none; the scene's layers take it through their shader, as scene_tests
+// shows.
 TEST_CASE("a GPU with no LOD bias draws with none", "[gpu]") {
     const std::vector<std::uint8_t> pixels = card();
     const auto drawn = [&pixels] {

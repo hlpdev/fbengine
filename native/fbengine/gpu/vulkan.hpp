@@ -210,6 +210,9 @@ bool window_open();
 
 /// The index of the sampler for a filter and a wrap in U and V, fbe_texture.h's.
 std::uint32_t sampler_index(std::int32_t filter, std::int32_t wrap_u, std::int32_t wrap_v);
+/// What's left of the LOD bias after what the samplers can take, for a shader to add: all of it on
+/// a GPU whose samplers have none, as Metal's through MoltenVK haven't.
+float lod_bias_left();
 /// The index of 2D's sampler for a filter, clamped or repeating, which has no LOD bias or
 /// anisotropy.
 std::uint32_t sampler_2d_index(std::int32_t filter, bool repeat);

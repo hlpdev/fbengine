@@ -97,6 +97,75 @@ Function Strip(): Image
     Return strip
 End Function
 
+// Two texels by two, red, green, and blue, and white: what's past its right edge, clamped, is green,
+// and repeating, red; past its bottom, clamped, blue, and repeating, red.
+Function Corners(): Image
+    Local corners = Image(2, 2)
+    corners[0, 0] = Color32(255, 0, 0, 255)
+    corners[1, 0] = Color32(0, 255, 0, 255)
+    corners[0, 1] = Color32(0, 0, 255, 255)
+    corners[1, 1] = Color32(255, 255, 255, 255)
+    Return corners
+End Function
+
+// A square filling the view of the camera `Drawn` draws through, its UVs from 0 to 1.
+Function Square(): Geometry
+    Local made = Geometry()
+    Local surface = made.AddSurface()
+    Local facing = Vec3(0, 0, 1)
+    Local tint = Color(1, 1, 1)
+    Local none = Vec2(0, 0)
+    Local a = surface.AddVertex(Vertex(Vec3(-1, 1, 0), facing, Vec2(0, 0), none, tint))
+    Local b = surface.AddVertex(Vertex(Vec3(1, 1, 0), facing, Vec2(1, 0), none, tint))
+    Local c = surface.AddVertex(Vertex(Vec3(1, -1, 0), facing, Vec2(1, 1), none, tint))
+    Local d = surface.AddVertex(Vertex(Vec3(-1, -1, 0), facing, Vec2(0, 1), none, tint))
+    surface.AddTriangle(a, c, b)
+    surface.AddTriangle(a, d, c)
+    Return made
+End Function
+
+// What a 3D material's first layer of `texture` draws at the middle of the screen, through `uv`.
+Function Drawn(texture: Texture, uv: UvTurn): Color32 Throws GraphicsError
+    Local world = World()
+    Defer world.Free()
+    World.SetCurrent(world)
+    Local target = Try Texture.Target(8, 8, TextureFormat.RGBA8, 1, True)
+    Local camera = Camera()
+    camera.SetProjection(Projection.ORTHOGRAPHIC)
+    camera.SetOrthographicHeight(2)
+    camera.SetRange(0.1, 100)
+    camera.SetRenderTarget(target)
+    camera.SetClearColor(Color(0, 0, 0))
+    Local material = Material()
+    material.SetShading(Shading.UNLIT)
+    material.SetColor(Color(1, 1, 1))
+    material.SetTexture(0, texture)
+    material.SetLayerUv(0, uv)
+    Local square = Mesh(Square())
+    square.SetMaterial(material)
+    square.SetPosition(Vec3(0, 0, -5))
+    camera.Render()
+    Return target.ReadPixel(4, 4)
+End Function
+
+// Which of a texture's four colors `pixel` mostly is, a filter's little of the next aside.
+Function Named(pixel: Color32): String
+    If pixel.r > 200 && pixel.g > 200 Then Return "white"
+    If pixel.r > 200 && pixel.g < 50 && pixel.b < 50 Then Return "red"
+    If pixel.g > 200 && pixel.r < 50 && pixel.b < 50 Then Return "green"
+    If pixel.b > 200 && pixel.r < 50 && pixel.g < 50 Then Return "blue"
+    Return "{pixel}"
+End Function
+
+// What a texture draws past its right, and past its bottom: a quarter of the way into the next of it,
+// held still by a scale that keeps the whole screen at one place.
+Function Past(what: String, texture: Texture) Throws GraphicsError
+    Local still = Vec2(1000.0, 1000.0)
+    Local right = Try Drawn(texture, UvTurn(still, 0.0, Vec2(-1.25, -0.25)))
+    Local bottom = Try Drawn(texture, UvTurn(still, 0.0, Vec2(-0.25, -1.25)))
+    Print("{what}, past its right {Named(right)}, past its bottom {Named(bottom)}")
+End Function
+
 // The game's files: names that say nothing of what's in them, sidecars, and folders.
 Function Files(): Map<String, UInt8[]>
     Local faded = Filled(4, Color32(255, 255, 255, 255))
@@ -110,6 +179,18 @@ Function Files(): Map<String, UInt8[]>
         "gfx/faded.png": Png.Encode(faded),
         "gfx/clamped.png": Png.Encode(Filled(4, Color32(0, 0, 200, 255))),
         "gfx/clamped.png.toml": "clamp_across = true\nclamp_down = true".Bytes,
+        "gfx/across.png": Png.Encode(Filled(4, Color32(0, 0, 200, 255))),
+        "gfx/across.png.toml": "clamp_across = true".Bytes,
+        "gfx/down.png": Png.Encode(Filled(4, Color32(0, 0, 200, 255))),
+        "gfx/down.png.toml": "clamp_down = true".Bytes,
+        "gfx/corners_across.png": Png.Encode(Corners()),
+        "gfx/corners_across.png.toml": "clamp_across = true\nmipmaps = false".Bytes,
+        "gfx/corners_down.png": Png.Encode(Corners()),
+        "gfx/corners_down.png.toml": "clamp_down = true\nmipmaps = false".Bytes,
+        "gfx/corners_both.png": Png.Encode(Corners()),
+        "gfx/corners_both.png.toml": "clamp_across = true\nclamp_down = true\nmipmaps = false".Bytes,
+        "gfx/corners_neither.png": Png.Encode(Corners()),
+        "gfx/corners_neither.png.toml": "mipmaps = false".Bytes,
         "gfx/strip.png": Png.Encode(Strip()),
         "gfx/photo.jpg": Jpeg.Encode(Filled(8, Color32(255, 255, 255, 255))),
         "gfx/old.bmp": Bmp(4, 255, 128, 0),
@@ -148,6 +229,15 @@ Function Proved() Throws GraphicsError, IOError
     Print("alpha in a whole one {plain.Alpha()}")
     Local clamped = Try Assets.Load<Texture>("res://game/gfx/clamped.png")
     Print("clamped {clamped.WrapAcross()}, {clamped.WrapDown()}")
+    // Each by itself, and what each does when it's drawn.
+    Local across = Try Assets.Load<Texture>("res://game/gfx/across.png")
+    Print("clamped across alone {across.WrapAcross()}, {across.WrapDown()}")
+    Local down = Try Assets.Load<Texture>("res://game/gfx/down.png")
+    Print("clamped down alone {down.WrapAcross()}, {down.WrapDown()}")
+    Try Past("across alone", Try Assets.Load<Texture>("res://game/gfx/corners_across.png"))
+    Try Past("down alone", Try Assets.Load<Texture>("res://game/gfx/corners_down.png"))
+    Try Past("both", Try Assets.Load<Texture>("res://game/gfx/corners_both.png"))
+    Try Past("neither", Try Assets.Load<Texture>("res://game/gfx/corners_neither.png"))
 
     // A strip's frames, each drawn by its number.
     Local strip = Sprite2D(Try Assets.Load<Texture>("res://game/gfx/strip.png"))
@@ -158,6 +248,14 @@ Function Proved() Throws GraphicsError, IOError
     For frame = 0 To 3
         canvas.Draw(strip, 0.0, 0.0, frame)
         Print("frame {frame} {target.ReadPixel(4, 4)}")
+    End For
+
+    // And on a 3D material's layer, as a monitor's sheet of frames is: a frame's a quarter of its UVs,
+    // through a layer's scale, and moved along by its offset.
+    Local sheet = Try Assets.Load<Texture>("res://game/gfx/strip.png")
+    For frame = 0 To 3
+        Local turn = UvTurn(Vec2(4.0, 1.0), 0.0, Vec2(-(frame As Float) * 0.25, 0.0))
+        Print("on a 3D material's layer, frame {frame} {Named(Try Drawn(sheet, turn))}")
     End For
 
     // JPEG and BMP, and names that say nothing, in any case, by backslashes.
