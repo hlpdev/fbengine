@@ -2,6 +2,7 @@
 // sources, whose operator new fails the allocation it's told to: nothing a call throws gets out of
 // it, a call that fails says "out of memory", and what it was called on works after.
 
+#include "../../native/common/handles.hpp"
 #include "core/engine.hpp"
 #include "fbengine.h"
 #include "gpu/buffer.hpp"
@@ -274,6 +275,29 @@ TEST_CASE("shaders' calls that run out of memory say so, and leave things workin
     const std::uint64_t made = fbe_shader_create(bytes.data(), size, "after");
     CHECK(made != 0);
     CHECK(fbe_shader_release(made));
+}
+
+// A release never allocates, so none can run out of memory: freeing a slot puts it where make made
+// room. libc++ grows a vector at another size than libstdc++ and MSVC's, so only macOS's sweep of
+// shaders' calls reached a free that did.
+TEST_CASE("freeing a slot allocates nothing, however many were made and freed") {
+    fbe::handle_slots_t slots{ fbe::SHADER_KIND };
+    std::vector<std::uint32_t> made;
+    for (int round = 0; round < 3; ++round) {
+        for (int i = 0; i < 37; ++i) {
+            made.push_back(slots.make());
+        }
+        allocated = 0;
+        failed = false;
+        failing = 0;
+        for (const std::uint32_t slot : made) {
+            slots.free(slot);
+        }
+        failing = -1;
+        CHECK_FALSE(failed);
+        CHECK(allocated == 0);
+        made.clear();
+    }
 }
 
 TEST_CASE("an index that isn't there, out of memory, says so without throwing") {

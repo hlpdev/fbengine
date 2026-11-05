@@ -6,6 +6,7 @@
 
 Import std.collections
 Import std.core
+Import std.image.image
 Import std.math
 Import std.os
 Import fbengine
@@ -233,6 +234,7 @@ Function Watched(frames: Int) Throws GraphicsError
     Local waited: Float = 0
     Local waving = False
     Local age: Float = 0
+    Local last: Image? = Null
     While !Window.Closed() && (frames == 0 || count < frames)
         If KeyHit(Key.ESCAPE) Then Break
         Local delta = Frame.Delta() As Float
@@ -250,8 +252,20 @@ Function Watched(frames: Int) Throws GraphicsError
         // After the update, as a game does it, its head looks at what flies round it.
         figure.Head.PointAt(fly)
         RenderWorld()
+        If frames > 0 && count == frames Then last = Try Screen.ToImage()
         Flip()
     End While
+    If last != Null
+        // Its head, posed by the game after the update, looks at the fly; and its body's drawn where
+        // it is, over what the camera clears to, 0.1, 0.12, 0.16's stored 89, 97, 111.
+        Local toward = fly.Position(Space.WORLD) - figure.Head.Position(Space.WORLD)
+        Local looks = Dot(figure.Head.Forward(), toward * (1.0 / Sqrt(Dot(toward, toward)))) > 0.999
+        Local at = camera.Project(figure.Body.Position(Space.WORLD) + Vec3(0, 1, 0)) ??
+                   Vec3(0, 0, 0)
+        Local body = last[at.x As Int, at.y As Int]
+        Print(
+            "its head looks at the fly {looks}, its body drawn {body != Color32(89, 97, 111, 255)}")
+    End If
     Print("watched {count} frames")
 End Function
 

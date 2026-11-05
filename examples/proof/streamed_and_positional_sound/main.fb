@@ -318,6 +318,7 @@ Function Watch(frames: Int) Throws AudioError, SoundError
     Frame.SetLimit(frames > 0 ? 1000 : 60)
     Defer Frame.SetLimit(0)
     Local total = frames > 0 ? frames : 960
+    Local said: String[] = []
     For frame = 1 To total
         Local seconds = (frame As Float32) / 60.0
         // Two seconds of blips from left to right, rising; then music, and into other music.
@@ -340,8 +341,14 @@ Function Watch(frames: Int) Throws AudioError, SoundError
         If frame >= 600 Then car.SetPosition(Vec3((seconds - 12.5) * 6.0, 0, -2))
         If frame == 600 Then running = engine.Play(hum)
         If frame == 930 && running != Null Then running.FadeOut(0.5)
+        // What each step left, as the numbers run has them.
+        If frame == 280 && music != Null Then said.Add("paused {music.Paused()}")
+        If frame == 310 && music != Null Then said.Add("resumed {music.Playing() && !music.Paused()}")
+        If frame == 400 && next != Null Then said.Add("the next playing {next.Playing()}")
+        If frame == 610 && running != Null Then said.Add("the car's playing {running.Playing()}, looping {running.Looping()}")
         Flip(False)
     End For
+    If said.Count > 0 Then Print(said.Join(", "))
     Print("watched {total} frames")
 End Function
 

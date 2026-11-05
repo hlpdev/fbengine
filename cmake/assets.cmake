@@ -62,11 +62,11 @@ FetchContent_Declare(
   EXCLUDE_FROM_ALL
 )
 
-# simdjson, which fastgltf uses one of installed, as Homebrew's on macOS, or downloads. It gives
-# what links it the headers of the copy it downloads, but links an installed one privately; the
-# engine's glTF decoder reads extras through simdjson, as fastgltf hands them over, so an installed
-# one is found here, where the engine's targets see it, and given them through fastgltf too.
-find_package(simdjson CONFIG QUIET)
+# simdjson: fastgltf would use an installed one, as Homebrew's on macOS, as a shared library a
+# player's machine hasn't got, so it's never looked for, and fastgltf builds the copy it downloads
+# into itself, whose headers it gives what links it, as the engine's glTF decoder reads extras
+# through it.
+set(CMAKE_DISABLE_FIND_PACKAGE_simdjson TRUE)
 set(FASTGLTF_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
   fastgltf
@@ -77,9 +77,22 @@ FetchContent_Declare(
   EXCLUDE_FROM_ALL
 )
 FetchContent_MakeAvailable(stb KTX fastgltf)
-if(TARGET simdjson::simdjson)
-  target_link_libraries(fastgltf INTERFACE simdjson::simdjson)
+# The fetched simdjson's headers, ahead of every other folder of what includes them: an Intel Mac's
+# Homebrew puts its own in /usr/local/include, which other dependencies' folders reach first. Its
+# version, which gltf.cpp holds the header it gets to, so one from elsewhere fails the build; what
+# builds gltf.cpp calls fbengine_use_fetched_simdjson.
+set(fbengine_simdjson_folder "${fastgltf_SOURCE_DIR}/deps/simdjson")
+file(STRINGS "${fbengine_simdjson_folder}/simdjson.h" fbengine_simdjson_line
+     REGEX "^#define SIMDJSON_VERSION \"[0-9.]+\"")
+string(REGEX MATCH "[0-9.]+" fbengine_simdjson_version "${fbengine_simdjson_line}")
+if(NOT fbengine_simdjson_version)
+  message(FATAL_ERROR "fastgltf's simdjson.h says no version")
 endif()
+target_include_directories(fastgltf BEFORE PRIVATE "${fbengine_simdjson_folder}")
+function(fbengine_use_fetched_simdjson target)
+  target_include_directories(${target} BEFORE PRIVATE "${fbengine_simdjson_folder}")
+  target_compile_definitions(${target} PRIVATE FBE_SIMDJSON_VERSION="${fbengine_simdjson_version}")
+endfunction()
 
 
 # stb_image is patched where a PNG whose first IDAT is empty has stbi__getn copy none of it from

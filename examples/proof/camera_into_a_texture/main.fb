@@ -221,7 +221,15 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
         Local frame = Screen.Texture()
         If frame != Null Then shot.CopyFrom(frame, 0, 0, across, down)
     End While
-    Print("drew {Try Drew()}")
+    If count == frames
+        // The cube by way of the monitor, 0.2, 0.8, 0.3, is greenest, faded 180 of 255 over what was last
+        // there; the monitor's own clear round it, 0.01, 0.03, 0.02, isn't what the player's clears to,
+        // and beyond the monitor that's all there is, stored 39, 39, 48.
+        Local image = Try Screen.ToImage()
+        Local middle = image[400, 225]
+        Print("the cube on the monitor's greenest {middle.g > middle.r + 40 && middle.g > middle.b + 40}")
+        Print("beyond the monitor {image[20, 20]}")
+    End If
     Print("watched {count} frames")
 End Function
 
@@ -239,18 +247,6 @@ Function Asked(arguments: String[]): Int
     Local at = arguments.IndexOf("--frames")
     If at == Null || at + 1 >= arguments.Count Then Return 0
     Return Int.Parse(arguments[at + 1]) ?? 0
-End Function
-
-// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
-Function Drew(): Bool Throws GraphicsError
-    Local image = Try Screen.ToImage()
-    Local behind = image[0, 0]
-    For y = 0 To image.Height - 1
-        For x = 0 To image.Width - 1
-            If image[x, y] != behind Then Return True
-        End For
-    End For
-    Return False
 End Function
 
 Local arguments = Process.Arguments()

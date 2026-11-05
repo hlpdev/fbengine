@@ -9,6 +9,7 @@ commit 8f492390ddc7a2ae221a1369ef560589cf8c70fb, unchanged, with its own LICENSE
 | SimpleMorph | glTF-Embedded/SimpleMorph.gltf | CC0-1.0 | Khronos's sample assets |
 | RiggedSimple | glTF-Binary/RiggedSimple.glb | CC-BY-4.0 | Cesium, 2017 |
 | MorphPrimitivesTest | glTF-Binary/MorphPrimitivesTest.glb | CC-BY-4.0 | ft-lab, 2018 |
+| AnimatedMorphCube | glTF-Binary/AnimatedMorphCube.glb | CC0-1.0 | Microsoft, 2017 |
 
 They're test data, never part of a package.
 

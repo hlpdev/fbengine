@@ -372,7 +372,22 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
         lamp.SetPosition(Vec3(2 + Sin(time) * 3.0, 1, -4 + Cos(time) * 2.0))
         RenderWorld()
     End While
-    Print("drew {Try Drew()}")
+    If count == frames
+        // A room's sums, as Proved has them, 125, 110, 102 and 75, 66, 61, then fogged a quarter, at 7 of
+        // 4 to 16, to its fog's stored 39, 39, 48: 103, 92, 89 and 66, 59, 58.
+        Local shown = Try Screen.ToImage()
+        Check("a room's lightmap and diffuse, fogged, left",
+              Seen(camera, shown, Vec3(-3.25, 0, -7)),
+              Color32(103, 92, 89, 255))
+        Check("then", Seen(camera, shown, Vec3(-2.75, 0, -7)), Color32(66, 59, 58, 255))
+        // The pane, stored 124, 203, 242, fogged a twelfth to 117, 189, 226, then half over what clears
+        // in light: 89, 141, 168.
+        Check("the pane's half over what's behind", Seen(camera, shown, Vec3(0, 0, -5)),
+              Color32(89, 141, 168, 255))
+        // The crate's 0.8, 0.6, 0.4 by a white light, reddest to bluest.
+        Local crated = Seen(camera, shown, Vec3(2, 0, -6))
+        Print("the crate's lit {crated.r > crated.g && crated.g > crated.b}")
+    End If
     Print("watched {count} frames")
 End Function
 
@@ -392,16 +407,10 @@ Function Asked(arguments: String[]): Int
     Return Int.Parse(arguments[at + 1]) ?? 0
 End Function
 
-// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
-Function Drew(): Bool Throws GraphicsError
-    Local image = Try Screen.ToImage()
-    Local behind = image[0, 0]
-    For y = 0 To image.Height - 1
-        For x = 0 To image.Width - 1
-            If image[x, y] != behind Then Return True
-        End For
-    End For
-    Return False
+// What's drawn where `camera` sees `place`.
+Function Seen(camera: Camera, image: Image, place: Vec3): Color32
+    Local at = camera.Project(place) ?? Vec3(0, 0, 0)
+    Return image[at.x As Int, at.y As Int]
 End Function
 
 Local arguments = Process.Arguments()

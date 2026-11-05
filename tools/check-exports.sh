@@ -1,7 +1,8 @@
 #!/bin/sh
 # Checks each package's DLL exports its C API and nothing else, like the static libraries in it,
 # and that no two DLLs export one name: every package's DLL loads into one program, where a name
-# two of them export would resolve to whichever loaded first.
+# two of them export would resolve to whichever loaded first. And that each loads only the system's
+# own libraries, as a player's machine has nothing else: no Homebrew's, nor MinGW's runtime.
 #     check-exports.sh <prefix, like fbe_> <dll, .so, or .dylib>...
 set -eu
 prefix="$1"
@@ -29,6 +30,39 @@ for file in "$@"; do
     fi
     printf '%s\n' "$names" | grep "^$prefix" | sort -u >> "$all"
     echo "$file exports $(printf '%s\n' "$names" | grep -c "^$prefix") $prefix functions, and nothing else"
+
+    # What it loads that isn't the system's: on macOS, outside /usr/lib and /System; on Linux, other
+    # than glibc's own; on Windows, other than the API sets and what's in System32.
+    case "$file" in
+        *.dll)
+            system="${SYSTEMROOT:-C:/Windows}"
+            if command -v cygpath > /dev/null 2>&1; then system="$(cygpath -u "$system")"; fi
+            foreign=""
+            for name in $(objdump -p "$file" | awk '/DLL Name:/ { print $3 }'); do
+                case "$name" in
+                    api-ms-win-*) ;;
+                    *) [ -f "$system/System32/$name" ] || foreign="$foreign $name" ;;
+                esac
+            done ;;
+        *.dylib)
+            # What its load commands load: not its own install name, LC_ID_DYLIB, which otool -L
+            # lists among them.
+            foreign="$(otool -l "$file" | awk '
+                $1 == "cmd" { kind = $2 }
+                $1 == "name" && (kind == "LC_LOAD_DYLIB" || kind == "LC_LOAD_WEAK_DYLIB" ||
+                                 kind == "LC_REEXPORT_DYLIB" || kind == "LC_LOAD_UPWARD_DYLIB") {
+                    print $2
+                }' | grep -v -e '^/usr/lib/' -e '^/System/Library/' || true)" ;;
+        *)
+            foreign="$(readelf -d "$file" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' |
+                       grep -v -E '^(libc|libm|libdl|libpthread|librt)\.so\.[0-9]+$' |
+                       grep -v -E '^ld-linux[-a-z0-9_.]*\.so\.[0-9]+$' || true)" ;;
+    esac
+    if [ -n "$(printf '%s' "$foreign" | tr -d ' ')" ]; then
+        echo "$file loads what isn't the system's:" $foreign >&2
+        exit 1
+    fi
+    echo "$file loads only the system's libraries"
 done
 
 shared="$(sort "$all" | uniq -d)"

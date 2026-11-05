@@ -123,16 +123,10 @@ Function Asked(arguments: String[]): Int
     Return Int.Parse(arguments[at + 1]) ?? 0
 End Function
 
-// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
-Function Drew(): Bool Throws GraphicsError
-    Local image = Try Screen.ToImage()
-    Local behind = image[0, 0]
-    For y = 0 To image.Height - 1
-        For x = 0 To image.Width - 1
-            If image[x, y] != behind Then Return True
-        End For
-    End For
-    Return False
+// What's drawn where `camera` sees `place`.
+Function Seen(camera: Camera, image: Image, place: Vec3): Color32
+    Local at = camera.Project(place) ?? Vec3(0, 0, 0)
+    Return image[at.x As Int, at.y As Int]
 End Function
 
 // A window's camera at `at`, looking at `looking`, over almost black.
@@ -161,7 +155,7 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     rockets.Burst = sparks
     rockets.BurstCount = 6
     Local right = Emitter(Vec3(2, -1.5, -6), 3.0, 1.0, 7, rockets)
-    Watching(Vec3(0, 0, 0), Vec3(0, 0, -6))
+    Local camera = Watching(Vec3(0, 0, 0), Vec3(0, 0, -6))
     Local time: Float = 0.0
     Local count = 0
     While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
@@ -174,7 +168,15 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
         right.Step(seconds)
         RenderWorld()
     End While
-    Print("drew {Try Drew()}")
+    If count == frames
+        // 20 a second, so 2 a frame of a tenth, each gone on its 15th, so 14 frames' worth alive: 28; and
+        // its smoke's brighter over where they start than the view's far corner, which none reach and
+        // is what it clears to, 39, 39, 48.
+        Local shown = Try Screen.ToImage()
+        Print("{left.Alive.Count} alive of its smoke")
+        Local over = Seen(camera, shown, left.At + Vec3(0, 0.3, 0))
+        Print("over where it starts brighter {over.r > 39 && over.g > 39}, the corner {shown[2, 447]}")
+    End If
     Print("watched {count} frames")
 End Function
 

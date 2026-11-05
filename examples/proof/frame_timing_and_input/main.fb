@@ -267,7 +267,8 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     Try Graphics(800, 450)
     Defer EndGraphics()
     Window.SetTitle("frame timing and input: Escape ends it")
-    Frame.SetLimit(60)
+    // No limit of its own: a person's run reads Flip's waiting off "a second", the display's refresh
+    // with V's vsync on and far past it with it off.
     Local font = Font.BuiltIn(18.0)
     Local clock = Stopwatch.StartNew()
     Local hits = 0
@@ -280,7 +281,7 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
         Flip(vsync)
         count += 1
         Try Driven(arguments, count)
-        If KeyHit(Key.R) Then Try Relative(!MouseRelative())
+        If KeyHit(Key.R) Then Relative(!MouseRelative())
         If KeyHit(Key.H) Then SetCursorVisible(!CursorVisible())
         If KeyHit(Key.V) Then vsync = !vsync
         If KeyHit(Key.M)
@@ -304,7 +305,7 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
                        "left down {MouseDown(MouseButton.LEFT)}, wheel {MouseWheel()}", "focused {Window.Focused()}",
                        "R relative {MouseRelative()}, H shown {CursorVisible()}, V vsync {vsync}, M moved {moved}, F flushed {flushed}"]
         For i = 0 To lines.Count - 1
-            canvas.DrawText(font, lines[i], 16, 16 + (i As Int32) * 28)
+            canvas.DrawText(font, lines[i], 16, 16 + i * 28)
         End For
         // Where the mouse is, as a game's own pointer.
         canvas.SetColor(Color32(76, 141, 255, 255))

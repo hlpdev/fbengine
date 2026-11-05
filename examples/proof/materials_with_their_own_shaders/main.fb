@@ -5,7 +5,7 @@
 
 Import std.collections
 Import std.core
-Import std.io
+Import std.image.image
 Import std.math
 Import std.os
 Import fbengine
@@ -197,14 +197,30 @@ Function Watched(frames: Int) Throws GraphicsError, IOError
     water.SetRotation(Quat.FromAxisAngle(Vec3(1, 0, 0), Deg(-90)))
     Local count = 0
     Local age: Float = 0
+    Local earlier: Image? = Null
+    Local last: Image? = Null
     While !Window.Closed() && (frames == 0 || count < frames)
         If KeyHit(Key.ESCAPE) Then Break
         age += Frame.Delta() As Float
         count += 1
         material.SetParameter(0, Vec4(0.4, 18, age * 2, 0))
         RenderWorld()
+        If frames > 0 && count == frames / 2 Then earlier = Try Screen.ToImage()
+        If frames > 0 && count == frames Then last = Try Screen.ToImage()
         Flip()
     End While
+    If last != Null && earlier != Null
+        // Its own shader's water, blue by its second parameter, 0.2, 0.5, 0.9, and its ripple moved on
+        // by the time it's given, so its middle isn't what it was.
+        Local middle = last[512, 288]
+        Local moved = 0
+        For y = 200 To 380
+            For x = 400 To 620
+                If last[x, y] != earlier[x, y] Then moved += 1
+            End For
+        End For
+        Print("its water bluest {middle.b > middle.g && middle.g > middle.r}, its ripple moved {moved > 500}")
+    End If
     Print("watched {count} frames")
 End Function
 

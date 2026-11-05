@@ -208,13 +208,17 @@ if(FBENGINE_FB_TESTS)
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        FIXTURES_SETUP model_frames TIMEOUT 300
                        PASS_REGULAR_EXPRESSION "
-21 of 21 frames as worked out\r?\n$")
+25 of 25 frames as worked out\r?\n$")
   # What masks.bin and worked_out.fb were worked out from, and that it refuses what it can't work out.
   find_program(FBENGINE_PYTHON NAMES python3 python)
   if(FBENGINE_PYTHON)
     add_test(NAME models.reference
              COMMAND "${FBENGINE_PYTHON}" "${CMAKE_CURRENT_SOURCE_DIR}/models/reference.py" --check)
     set_tests_properties(models.reference PROPERTIES PASS_REGULAR_EXPRESSION "as worked out")
+    # The export check's macOS side, by stubs of otool and nm, so it's checked without a Mac.
+    add_test(NAME tools.check_exports
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_exports_test.py")
+    set_tests_properties(tools.check_exports PROPERTIES PASS_REGULAR_EXPRESSION "macOS side holds")
   endif()
   add_test(NAME models.golden
            COMMAND fbengine_gpu_tests "the sample models' frames match their golden images")
@@ -327,11 +331,6 @@ if(FBENGINE_FB_TESTS)
                          SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 120)
     fbengine_add_watched(proof.${name}_escape "${folder}" "--press-at;1" "\nwatched 2 frames\r?\n$")
     fbengine_add_watched(proof.${name}_close "${folder}" "--close-at;1" "\nwatched 2 frames\r?\n$")
-  endfunction()
-  function(fbengine_add_drawn_proof name)
-    fbengine_add_proof(${name} ${ARGN})
-    set_tests_properties(proof.${name}_watch PROPERTIES
-                         PASS_REGULAR_EXPRESSION "\ndrew True\r?\nwatched 40 frames\r?\n$")
   endfunction()
   fbengine_add_proof(frame_timing_and_input
                      "after a sleep of 20 ms, the clock's gone 15 or more True"
@@ -717,7 +716,7 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(proof.materials_with_their_own_shaders_watch PROPERTIES TIMEOUT 300
                        RESOURCE_LOCK fbengine_own_shaders
                        ENVIRONMENT "FBENGINE_SLANGC=${FBENGINE_SLANGC};SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
-                       PASS_REGULAR_EXPRESSION "\nwatched 40 frames\r?\n$")
+                       PASS_REGULAR_EXPRESSION "\nits water bluest True, its ripple moved True\r?\nwatched 40 frames\r?\n$")
   # Section 6's item 14, its receiving side: what a game gets of a converter's glTF.
   fbengine_add_proof_of_numbers(models_as_a_converter_writes_them
       "nodes under the figure: Bip01, Bip01 Spine, Bip01 Head, Bip01 HeadNub, body#1"
@@ -731,7 +730,7 @@ if(FBENGINE_FB_TESTS)
       "surface 0's vertex colors: 1 0 0 1, 0 1 0 0.5, 0 0 1 1, 0.25 0.5 0.75 1"
       "surface 1's vertex colors: 1 0 0 1, 0 0.2 0.4 1, 0 0 1 1, 1 1 1 1")
   # Those that draw: what each prints, and its --watch, which has to have drawn something.
-  fbengine_add_drawn_proof(swept_collisions
+  fbengine_add_proof(swept_collisions
                            "a ball falls 100 and rests at 0[.]00, 0[.]50, 0[.]00"
                            "it touched 1, the floor True, facing 0[.]00, 1[.]00, 0[.]00, at 0[.]00, 0[.]00, 0[.]00"
                            "what it hit has it too True"
@@ -763,7 +762,7 @@ if(FBENGINE_FB_TESTS)
                            "a door moved across the move, this frame: 0[.]000, 1[.]000, -3[.]999"
                            "by UpdateWorld: 0[.]000, 0[.]501, 0[.]000, touching 1"
                            "into a box: 138[.]499, 1[.]000, 0[.]000")
-  fbengine_add_drawn_proof(picks
+  fbengine_add_proof(picks
                            "down onto the floor: floor at 1[.]00, 0[.]00, 3[.]00, facing 0[.]00, 1[.]00, 0[.]00, 0[.]50 along"
                            "down onto the ball: ball at 2[.]00, 1[.]50, 0[.]00, facing 0[.]00, 1[.]00, 0[.]00, 0[.]35 along"
                            "down onto the crate: crate at -3[.]00, 2[.]00, 0[.]00, facing 0[.]00, 1[.]00, 0[.]00, 0[.]30 along"
@@ -788,7 +787,7 @@ if(FBENGINE_FB_TESTS)
                            "off to its left: floor at -1[.]886, 0[.]000, 0[.]000, facing 0[.]000, 1[.]000, 0[.]000, 0[.]003 along"
                            "ahead of a mesh with its geometry ahead: nothing"
                            "the floor's triangle there 30")
-  fbengine_add_drawn_proof(in_view_by_bounds
+  fbengine_add_proof(in_view_by_bounds
                            "in front True, behind False"
                            "at its near end True, nearer False"
                            "at its far end True, farther False"
@@ -824,7 +823,7 @@ if(FBENGINE_FB_TESTS)
                            "y 7[.]4 True, 7[.]6 False"
                            "at zoom 1[.]1, 84[.]5 degrees across"
                            "x 9 True, 9[.]2 False")
-  fbengine_add_drawn_proof(scene_trees
+  fbengine_add_proof(scene_trees
                            "the room has 2, first door, then lamp"
                            "the handle's parent door, the room's none"
                            "found under the room True, not there True"
@@ -856,7 +855,7 @@ if(FBENGINE_FB_TESTS)
                            "alpha 0: a mover rests at 0[.]000, 1[.]501, 0[.]000"
                            "alpha 1: what's over it [(]255, 0, 0, 255[)]"
                            "alpha 0: what's over it [(]0, 0, 255, 255[)]")
-  fbengine_add_drawn_proof(meshes_in_code
+  fbengine_add_proof(meshes_in_code
                            "1 surface, 4 vertices, 2 triangles"
                            "its second UVs [(]0[.]5, 0[.]75[)], first [(]0, 1[)]"
                            "its color's alpha 0[.]5"
@@ -884,7 +883,7 @@ if(FBENGINE_FB_TESTS)
                            "its cull box out of view [(]0, 0, 255, 255[)]"
                            "in its surface's material [(]10, 200, 30, 255[)]"
                            "its texture's from wall[.]png True")
-  fbengine_add_drawn_proof(binary_saves_and_maps
+  fbengine_add_proof(binary_saves_and_maps
                            "the file's 75 bytes"
                            "its magic MAP1"
                            "seed 1234567890123, time 61[.]5"
@@ -901,7 +900,7 @@ if(FBENGINE_FB_TESTS)
                            "a folder as a file False, a file as a folder False, the folder True"
                            "deleted, it's there False"
                            "its folder removed, it's there False")
-  fbengine_add_drawn_proof(pathfinding_over_a_graph
+  fbengine_add_proof(pathfinding_over_a_graph
                            "lobby door vault, 8[.]00 long"
                            "the door closed: lobby hall bend vault, 20[.]00 long"
                            "both closed: no way"
@@ -914,7 +913,7 @@ if(FBENGINE_FB_TESTS)
                            "cheapest with more steps: [[]0, 1, 2, 3[]], cost 3"
                            "past a guess's favorite: [[]0, 2, 3[]], cost 4"
                            "a good guess opens fewer than none True")
-  fbengine_add_drawn_proof(particles_on_sprites
+  fbengine_add_proof(particles_on_sprites
                            "after 1 second, 20 made, 20 alive"
                            "the oldest's risen True, its alpha True"
                            "the newest's nearly at the start True, almost opaque True"
@@ -933,7 +932,7 @@ if(FBENGINE_FB_TESTS)
                            "a sprite's pixel, added, out of the fog [(]255, 6[2-6], 0, 255[)]"
                            "beside it [(]255, 0, 0, 255[)]")
 
-  fbengine_add_drawn_proof(fixed_function_look
+  fbengine_add_proof(fixed_function_look
                            "a room's lightmap and diffuse, left: [(]125, 110, 102, 255[)]"
                            "and right, its lightmap's UVs its own: [(]75, 66, 61, 255[)]"
                            "a stage's clamped: [(]120, 120, 120, 255[)]"
@@ -973,7 +972,7 @@ if(FBENGINE_FB_TESTS)
                            "FIXED from above and aside: 0 across, 0 high"
                            "UPRIGHT from above and aside: 32 across, 16 high"
                            "UPRIGHT_YAW from above and aside: 16 across, 8 high")
-  fbengine_add_drawn_proof(cameras_and_viewports
+  fbengine_add_proof(cameras_and_viewports
                            "the left camera's middle: [(]255, 0, 0, 255[)]"
                            "its clear: [(]0, 0, 255, 255[)]"
                            "the right camera's middle: [(]255, 0, 0, 255[)]"
@@ -994,7 +993,7 @@ if(FBENGINE_FB_TESTS)
                            "deeper, clearing both: [(]0, 255, 255, 255[)]"
                            "a hidden camera's part stays: [(]0, 0, 255, 255[)]"
                            "the other's changes: [(]255, 0, 255, 255[)]")
-  fbengine_add_drawn_proof(camera_into_a_texture
+  fbengine_add_proof(camera_into_a_texture
                            "the monitor's middle on the screen: [(]255, 0, 0, 255[)]"
                            "its corner: [(]0, 0, 255, 255[)]"
                            "the frame, copied: [(]255, 0, 0, 255[)]"
@@ -1010,7 +1009,7 @@ if(FBENGINE_FB_TESTS)
                            "the monitor in stored values, on the screen: [(]128, 0, 0, 255[)]"
                            "and half of it, in linear light: [(]92, 0, 0, 255[)]"
                            "and in stored values: [(]64, 0, 0, 255[)]")
-  fbengine_add_drawn_proof(bump
+  fbengine_add_proof(bump
                            "a flat map's left: [(]255, 0, 0, 255[)]"
                            "its right: [(]0, 255, 0, 255[)]"
                            "shifted a quarter across: [(]0, 255, 0, 255[)]"
@@ -1019,7 +1018,7 @@ if(FBENGINE_FB_TESTS)
                            "half its light, by its blue: [(]0, 128, 0, 255[)]"
                            "all of it, offset by half: [(]0, 255, 0, 255[)]"
                            "its matrix moves a texel or so back True")
-  fbengine_add_drawn_proof(render_settings
+  fbengine_add_proof(render_settings
                            "by itself, its pixels are within 8 of each other True"
                            "the bias -3"
                            "sharper, they're apart by over 64 True"
@@ -1032,7 +1031,7 @@ if(FBENGINE_FB_TESTS)
                            "wireframe's lines, some True, under half True"
                            "inside a triangle: [(]0, 0, 0, 255[)]"
                            "validation errors 0")
-  fbengine_add_drawn_proof(gamma
+  fbengine_add_proof(gamma
                            "the sum for adding half 121"
                            "brighter: [(]121, 121, 121, 255[)]"
                            "black stays: [(]0, 0, 0, 255[)]"
@@ -1048,7 +1047,7 @@ if(FBENGINE_FB_TESTS)
                            "white stays: [(]255, 255, 255, 255[)]"
                            "on what's stored, darker: [(]50, 50, 50, 255[)]"
                            "white comes to the gray: [(]128, 128, 128, 255[)]")
-  fbengine_add_drawn_proof(seeded_random
+  fbengine_add_proof(seeded_random
                            "at first its state 4660"
                            "its first numbers 0[.]35565948, 0[.]7478714, 0[.]31705475, 0[.]40476227, 0[.]5803604"
                            "then its state 1446483090"
@@ -1069,7 +1068,7 @@ if(FBENGINE_FB_TESTS)
                            "of 25 a's 553648062"
                            "of an accented e 401"
                            "std's Random from 42 isn't it True")
-  fbengine_add_drawn_proof(ini_settings
+  fbengine_add_proof(ini_settings
                            "its own key 3"
                            "its sections [[]version, window, keys, room ambience[]]"
                            "a key with a space, in a section with one GFX.map.a[.]rmesh"
@@ -1085,7 +1084,7 @@ if(FBENGINE_FB_TESTS)
                            "width 1920, volume 0[.]75, title \"  a game  \""
                            "written twice the same True"
                            "not an INI file: line 2")
-  fbengine_add_drawn_proof(procedural_map
+  fbengine_add_proof(procedural_map
                            "[.][.][.][.][.][.][.][.][.][.][.][.][.][.][.][.][.][.]"
                            "[.][.][.][.][.][.][.][.][.][.][.][.][.][.][.][.]E[.]"
                            "[.][.][.][.][.][.][.][.][.][.][.][.][.][.][.][.]d[.]"
@@ -1116,7 +1115,7 @@ if(FBENGINE_FB_TESTS)
                            "an empty cell, nothing True"
                            "of 40 seeds: linked with 5 dead ends 40, with a 4-way 40, apart 40, walkable 40, different 29"
                            "kinds a 84, b 52, c 30, d 1767, e 869, f 299, g 345, h 146, i 164, j 78, k 30, l 10")
-  fbengine_add_drawn_proof(room_files
+  fbengine_add_proof(room_files
                            "its children [[]PIVOT , MESH drawn, MESH collision, PIVOT , PIVOT , PIVOT copies, LIGHT , LIGHT []]"
                            "2 surfaces, the floor's 4 vertices, 2 triangles"
                            "a corner [(]1024, 0, -1024[)], its UVs [(]1, 1[)] and [(]0[.]25, 0[.]5[)], stored [(]128, 64, 32, 255[)]"
@@ -1179,19 +1178,56 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(proof.room_files_no_gpu PROPERTIES
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;FBENGINE_NO_GPU=1"
                        PASS_REGULAR_EXPRESSION "\nno GPU here\r?\n$" TIMEOUT 120)
-  # Their --watch's own keys and what they end with, each done by the walk.
-  set_tests_properties(proof.ini_settings_watch PROPERTIES
-                       PASS_REGULAR_EXPRESSION "\nthe volume 3\r?\ndrew True\r?\nwatched 40 frames\r?\n$")
-  set_tests_properties(proof.seeded_random_watch PROPERTIES
-                       PASS_REGULAR_EXPRESSION "\nits bars 217, 284, 8000\r?\nthe foot of its first [(]76, 141, 255, 255[)]\r?\ndrew True\r?\nwatched 40 frames\r?\n$")
-  set_tests_properties(proof.procedural_map_watch PROPERTIES
-                       PASS_REGULAR_EXPRESSION "\nits last seed 5, 103 rooms of 103, in the world 103\r?\ndrew True\r?\nwatched 40 frames\r?\n$")
-  set_tests_properties(proof.room_files_watch PROPERTIES
-                       PASS_REGULAR_EXPRESSION "\nthe middle room's forward -1[.]000, -?0[.]000, 0[.]029\r?\ndrew True\r?\nwatched 40 frames\r?\n$")
+  # What each --watch's last frame shows, read off it by the sample and checked here, what the walk
+  # pressed included; a color a GPU can round another way is within 1.
+  set_tests_properties(proof.swept_collisions_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\nthe ball's inside True, drawn [(]124, 218, 242, 255[)]\r?\nits walls, 1 touched, each its color True\r?\nwatched 40 frames\r?\n$")
+  set_tests_properties(proof.picks_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\nunder its point: floor at -5[.]96, 0[.]00, 0[.]71, facing 0[.]00, 1[.]00, 0[.]00, 0[.]01 along\r?\nmarked [(]255, 89, 89, 255[)]\r?\nthe ball, the crate, the floor: [(]124, 218, 242, 255[)], [(]231, 188, 124, 255[)], [(]108, 108, 124, 255[)]\r?\nwatched 40 frames\r?\n$")
+  set_tests_properties(proof.in_view_by_bounds_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\n3 green and 9 red, as the sums have them True\r?\nwatched 40 frames\r?\n$")
+  set_tests_properties(proof.scene_trees_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\na door [(]218, 170, 124, 255[)], its handle on the side it's seen from False, drawn so True\r?\nthe copy's door hidden 20 frames of 40, drawn just while it's not True\r?\nwatched 40 frames\r?\n$")
+  set_tests_properties(proof.meshes_in_code_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\nits red corner True, its blue True\r?\nthe wall through its corner of no alpha True\r?\nlit by what it's worked out from its rise True\r?\nwatched 40 frames\r?\n$")
+  set_tests_properties(proof.binary_saves_and_maps_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\n4 rooms, each drawn by what's read back True, the first's light 0[.]95\r?\nwatched 40 frames\r?\n$")
+  set_tests_properties(proof.pathfinding_over_a_graph_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\nits way 49 squares from 0 to 575, by a wall of 17, each its color True\r?\nwatched 40 frames\r?\n$")
+  set_tests_properties(proof.particles_on_sprites_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\n28 alive of its smoke\r?\nover where it starts brighter True, the corner [(]39, 39, 48, 255[)]\r?\nwatched 40 frames\r?\n$")
+  set_tests_properties(proof.fixed_function_look_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\na room's lightmap and diffuse, fogged, left: [(]103, 92, 89, 255[)]\r?\nthen: [(]66, 59, 58, 255[)]\r?\nthe pane's half over what's behind: [(]89, 141, 168, 255[)]\r?\nthe crate's lit True\r?\nwatched 40 frames\r?\n$")
+  set_tests_properties(proof.cameras_and_viewports_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\nits clears: [(]39, 39, 89, 255[)], [(]39, 89, 39, 255[)]\r?\nthe cube on the left [(]231, 124, 89, 255[)], on the right fogged True\r?\nthe badge over them [(]255, 231, 0, 255[)]\r?\nwatched 40 frames\r?\n$")
+  set_tests_properties(proof.camera_into_a_texture_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\nthe cube on the monitor's greenest True\r?\nbeyond the monitor [(]39, 39, 48, 255[)]\r?\nwatched 40 frames\r?\n$")
+  set_tests_properties(proof.bump_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\nits bricks moved True, each a brick's True, the middle [(][0-9]+, [0-9]+, [0-9]+, 255[)]\r?\nwatched 40 frames\r?\n$")
   set_tests_properties(proof.render_settings_watch PROPERTIES
-                       PASS_REGULAR_EXPRESSION "\nby its keys: bias 0, samples 1, wireframe True\r?\ndrew True\r?\nwatched 40 frames\r?\n$")
+                       PASS_REGULAR_EXPRESSION "\nby its keys: bias 0, samples 1, wireframe True\r?\nthe floor's far checks sharper at -2 than 2 True, by [0-9]+ and [0-9]+\r?\nthe cube's pixels fewer in wireframe True\r?\nwatched 40 frames\r?\n$")
   set_tests_properties(proof.gamma_watch PROPERTIES
-                       PASS_REGULAR_EXPRESSION "\nby its keys: gamma 1[.]25\r?\ndrew True\r?\nwatched 40 frames\r?\n$")
+                       PASS_REGULAR_EXPRESSION "\nby its keys: gamma 1[.]25\r?\nits bars of 0, 136, and 255: [(]0, 0, 0, 255[)], [(]15[0-2], 15[0-2], 15[0-2], 255[)], [(]255, 255, 255, 255[)]\r?\nwatched 40 frames\r?\n$")
+  set_tests_properties(proof.seeded_random_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\nits bars 217, 284, 8000\r?\nthe foot of its first [(]76, 141, 255, 255[)], each bar as tall as its count True, the tallest 360\r?\nwatched 40 frames\r?\n$")
+  set_tests_properties(proof.ini_settings_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\nthe volume 3\r?\nits bar to [(]76, 141, 255, 255[)], past it [(]24, 28, 36, 255[)]\r?\n5 lines of text\r?\nwatched 40 frames\r?\n$")
+  set_tests_properties(proof.procedural_map_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\nits last seed 5, 103 rooms of 103, in the world 103\r?\n91 of its rooms drawn where they are, its corner [(]39, 39, 48, 255[)]\r?\nwatched 40 frames\r?\n$")
+  set_tests_properties(proof.room_files_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\nthe middle room's forward -1[.]000, -?0[.]000, 0[.]029\r?\n3 of its 3 copies drawn, its corner [(]39, 39, 48, 255[)]\r?\nwatched 40 frames\r?\n$")
+  set_tests_properties(proof.sprites_over_a_scene_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\nthe rect over what's behind [(]16[2-4], 3[5-7], (3[89]|40), 255[)], the oval's middle [(]16[2-4], 3[5-7], (3[89]|40), 255[)], off its corner [(]24, 28, 36, 255[)]\r?\nthe strip's first frame [(]255, 200, 80, 255[)], off its block [(]24, 28, 36, 255[)]\r?\nturned [(]255, 200, 80, 255[)], off it [(]120, 130, 150, 255[)]\r?\nthe mesh under them [(]120, 130, 150, 255[)], the text's ink True\r?\nwatched 40 frames\r?\n$")
+  set_tests_properties(proof.pixels_of_images_and_textures_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\n10240 written: at 10, 3 [(]218, 20, 6, 255[)], by its sum [(]218, 20, 6, 255[)]\r?\nthe last row it reached and the next: [(]13, 0, 158, 255[)], [(]0, 0, 0, 255[)]\r?\nwatched 40 frames\r?\n$")
+  set_tests_properties(proof.display_modes_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\nWINDOWED, its squares [(]76, 141, 255, 255[)], [(]76, 141, 255, 255[)], off them [(]24, 28, 36, 255[)], [(]24, 28, 36, 255[)]\r?\nwatched 40 frames\r?\n$")
+  set_tests_properties(proof.text_input_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\ntyped \"Cabin\", shown True\r?\nwatched 40 frames\r?\n$")
+  set_tests_properties(proof.debug_ui_and_console_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\nat speed 15, its square [(]76, 141, 255, 255[)], past it [(]24, 28, 36, 255[)]\r?\nnoclip True, console True\r?\nwatched 40 frames\r?\n$")
+  set_tests_properties(proof.textures_by_their_settings_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\neach one: [(]200, 0, 0, 255[)], [(]0, 200, 0, 255[)], [(]188, 188, 255, 255[)], [(]255, 255, 255, 255[)], [(]0, 0, 200, 255[)], [(]255, 255, 255, 255[)], [(]255, 128, 0, 255[)], [(]255, 0, 255, 255[)], [(]255, 255, 255, 255[)]\r?\nthe strip's frame 2: [(]0, 0, 255, 255[)]\r?\nwatched 40 frames\r?\n$")
 
   # Their --watch, which a person watches in a window (tools/show.py), walked here offscreen, a step
   # each frame.
@@ -1539,6 +1575,8 @@ if(FBENGINE_FB_TESTS)
                           "fitted to 200 by 96: 128 by 96, at 36, 0"
                           "its bars black, black, its middle white"
                           "skipped at half a second: heard True, then False")
+  set_tests_properties(proof.two_videos_at_startup_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\nthe 1th video, at its frame [0-9]+\r?\nwatched 40 frames\r?\n$")
   fbengine_add_watched(proof.two_videos_at_startup_skipped
                        "${PROJECT_SOURCE_DIR}/examples/proof/two_videos_at_startup" "--skip-at;10"
                        "\nthe 2th video, at its frame [0-9]+\r?\nwatched 40 frames\r?\n$")
@@ -1656,6 +1694,7 @@ add_executable(fbengine_assets_tests assets/images_tests.cpp assets/models_tests
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/pak.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/disk.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/jobs/jobs.cpp")
+fbengine_use_fetched_simdjson(fbengine_assets_tests)
 target_include_directories(fbengine_assets_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
 # Hostile files the reviews found, which mustn't decode.
 target_compile_definitions(fbengine_assets_tests PRIVATE
@@ -1983,6 +2022,7 @@ add_executable(fbengine_tools_tests tools/cook_tests.cpp tools/model_tests.cpp a
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/vfs.cpp"
                tools/pak_tests.cpp "${PROJECT_SOURCE_DIR}/native/fbengine_tools/cook/pak.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine_tools/tools/atomic.cpp")
+fbengine_use_fetched_simdjson(fbengine_tools_tests)
 target_include_directories(fbengine_tools_tests PRIVATE
                            "${PROJECT_SOURCE_DIR}/native/fbengine_tools"
                            "${PROJECT_SOURCE_DIR}/native/fbengine")
@@ -2229,13 +2269,13 @@ ${fbengine_skin_proof_lines}\r?\n$")
                        TIMEOUT 120
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        PASS_REGULAR_EXPRESSION "
-watched 300 frames\r?\n$")
+its head looks at the fly True, its body drawn True\r?\nwatched 300 frames\r?\n$")
   add_test(NAME proof.streamed_and_positional_sound_watch
            COMMAND "${FBENGINE_FB}" --color never run
                    "${PROJECT_SOURCE_DIR}/examples/proof/streamed_and_positional_sound"
                    -- --watch --frames 960)
   set_tests_properties(proof.streamed_and_positional_sound_watch PROPERTIES TIMEOUT 120
-                       PASS_REGULAR_EXPRESSION "\nwatched 960 frames\r?\n$")
+                       PASS_REGULAR_EXPRESSION "\npaused True, resumed True, the next playing True, the car's playing True, looping True\r?\nwatched 960 frames\r?\n$")
   # 64 channels at 44100 Hz under a game's load, within the budget.
   add_test(NAME examples.audio_stress
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/audio_stress")

@@ -49,7 +49,8 @@ public:
 
     explicit handle_slots_t(handle_kind_t kind) : m_kind(kind) {}
 
-    /// A free slot, or a new one; its handle is handle(slot).
+    /// A free slot, or a new one; its handle is handle(slot). A new one has room made for it in
+    /// the free list first, so freeing it never allocates: a release can't run out of memory.
     std::uint32_t make() {
         if (!m_free.empty()) {
             const std::uint32_t slot = m_free.back();
@@ -57,6 +58,7 @@ public:
             m_live[slot] = true;
             return slot;
         }
+        m_free.reserve(m_generations.size() + 1);
         m_live.push_back(true);
         try {
             m_generations.push_back(1);
@@ -67,7 +69,7 @@ public:
         return static_cast<std::uint32_t>(m_generations.size() - 1);
     }
 
-    /// Frees a slot; its handles are caught from now on.
+    /// Frees a slot; its handles are caught from now on. It never allocates, as make made room.
     void free(std::uint32_t slot) {
         m_live[slot] = false;
         if (m_generations[slot] < last_generation) {
