@@ -513,6 +513,8 @@ Function ASceneKeepsPassesAndShaders() Throws IOError, GraphicsError
     mesh.SetMaterial(own)
     Local text = Try Scene.Text([camera, mesh])
     Expect(text.Contains("passes = ["), text)
+    // Up to the last that's set, and none for what has none.
+    Expect(text.Contains("parameters = [[0.0, 0.0, 0.0, 0.0], [0.25, 0.5, 0.75, 1.0]]\n"), text)
     Try File.WriteText(folder.Path / "kept.scene", text)
     Assets.MountFolder("res://scene-kept", folder.Path)
     Defer Assets.Unmount("res://scene-kept")

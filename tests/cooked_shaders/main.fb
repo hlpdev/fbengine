@@ -1,0 +1,23 @@
+// The shaders here cooked as a game's are, each by its name, into the folder it's given: for the tests
+// of what can't cook, as the editor's, which ctest points at them.
+
+Import std.core
+Import std.io
+Import std.os
+Import fbengine_tools
+
+Function Run(arguments: String[]) Throws IOError
+    If arguments.Count != 2 Then Throw IOError(IOErrorKind.INVALID_DATA,
+                                               "from what folder, to what")
+    Local from = Path(arguments[0])
+    Local to = Path(arguments[1])
+    Try Dir.CreateAll(to)
+    Local cooked = 0
+    For name In ["inverts.slang", "flat.slang"]
+        Try Cooker.CookShader(from / name, to / name)
+        cooked += 1
+    End For
+    Print("cooked {cooked} shaders")
+End Function
+
+Try Run(Process.Arguments())

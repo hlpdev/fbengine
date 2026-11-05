@@ -152,6 +152,18 @@ if(FBENGINE_FB_TESTS)
                            "FBENGINE_FAKE_SLANGC=$<TARGET_FILE:fbengine_fake_slangc>;FBENGINE_WRONG_SLANGC=$<TARGET_FILE:fbengine_wrong_slangc>;FBENGINE_FAKE_SLANGC_LOG=${CMAKE_CURRENT_BINARY_DIR}/fake_slangc.log;FBENGINE_FAKE_SLANGC_SPV=${CMAKE_CURRENT_BINARY_DIR}/test_shaders/game_shader.spv;FBENGINE_SLANGC=${FBENGINE_SLANGC};SDL_VIDEO_DRIVER=offscreen;FBENGINE_TEST_FONTS=${harfbuzz_SOURCE_DIR}/test/api/fonts;FBENGINE_OWN_TEST_FONTS=${CMAKE_CURRENT_SOURCE_DIR}/fonts;FBENGINE_PACKAGES=${PROJECT_SOURCE_DIR}/packages")
     endif()
   endforeach()
+  # A pass and a material's shader cooked as a game's are, at test time, so they're always this
+  # build's, for the editor's tests, which can't cook, as it doesn't depend on fbengine_tools.
+  set(fbengine_cooked_shaders "${CMAKE_CURRENT_BINARY_DIR}/cooked_shaders")
+  add_test(NAME tools.cooked_shaders
+           COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/cooked_shaders"
+                   -- "${CMAKE_CURRENT_SOURCE_DIR}/cooked_shaders" "${fbengine_cooked_shaders}")
+  set_tests_properties(tools.cooked_shaders PROPERTIES FIXTURES_SETUP cooked_shaders TIMEOUT 300
+                       ENVIRONMENT "FBENGINE_SLANGC=${FBENGINE_SLANGC};FBENGINE_PACKAGES=${PROJECT_SOURCE_DIR}/packages"
+                       PASS_REGULAR_EXPRESSION "\ncooked 2 shaders\r?\n$")
+  set_tests_properties(fbengine_editor.package PROPERTIES FIXTURES_REQUIRED cooked_shaders)
+  set_property(TEST fbengine_editor.package APPEND PROPERTY ENVIRONMENT
+               "FBENGINE_COOKED_SHADERS=${fbengine_cooked_shaders}")
 
   # A program that ends with the GPU going, each way it can, and has to end: Windows' ending a process
   # with it going seems to have waited for good on CI. An end of its own stops the GPU first, and says
