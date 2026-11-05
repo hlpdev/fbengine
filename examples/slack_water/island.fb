@@ -3,7 +3,6 @@
 // parts; and Pip.
 
 Import std.core
-Import std.image.hdr
 Import std.math
 Import fbengine
 Import "./flow"
@@ -11,17 +10,16 @@ Import "./follow"
 Import "./ground"
 Import "./map"
 Import "./res" As Res
+Import "./sea"
+Import "./sky"
 
 // How high the mill's floor is above the yard.
 Const FLOOR: Float = 0.1
 // How much smaller a part is in your hand, close to you, so it stays this side of a wall.
 Const HELD_SIZE: Float = 0.35
 
-/// The sky's color at the horizon, which the fog goes into.
-Public Const SKY: Color = Color(0.62, 0.72, 0.8)
-// How bright the sky is, how bright the sun, what a camera's light's multiplied by, and its bloom, how
-// much, and from how bright.
-Const SKY_LIGHT: Float = 1.2
+// How bright the sun, what a camera's light's multiplied by, and its bloom, how much, and from how
+// bright.
 Const AROUND_LIGHT: Float = 0.45
 Const SUN_LIGHT: Float = 4.5
 Const EXPOSURE: Float = 0.8
@@ -86,30 +84,6 @@ End Function
 @MainThread
 Function Iron(held: Texture[], color: Color): Material Throws IOError
     Return Try Surfaced(held, Res.IronAlbedo, Res.IronNormal, Res.IronRough, 1.0, color, 1.0)
-End Function
-
-/// The light all around, from straight up, through the haze at the horizon, to the sea below it, by
-/// height alone, so it's the same whichever way a sky or Environment takes as ahead: light past 1's
-/// what's kept in it, so a metal has something bright to reflect.
-Public Function SkyImage(): HdrImage
-    Local width = 64
-    Local height = 128
-    Local values: Float32[] = []
-    For y = 0 Until height
-        // From 1, straight up, to -1, straight down.
-        Local up = 1.0 - 2.0 * ((y As Float) + 0.5) / (height As Float)
-        Local haze = 1.0 - Clamp(Abs(up) * 3.0, 0.0, 1.0)
-        Local r = up >= 0.0 ? 0.36 + (SKY.r - 0.36) * haze : 0.08 + (SKY.r - 0.08) * haze
-        Local g = up >= 0.0 ? 0.5 + (SKY.g - 0.5) * haze : 0.16 + (SKY.g - 0.16) * haze
-        Local b = up >= 0.0 ? 0.74 + (SKY.b - 0.74) * haze : 0.2 + (SKY.b - 0.2) * haze
-        For x = 0 Until width
-            values.Add(r * SKY_LIGHT)
-            values.Add(g * SKY_LIGHT)
-            values.Add(b * SKY_LIGHT)
-            values.Add(1.0)
-        End For
-    End For
-    Return HdrImage.FromFloats(width, height, values)
 End Function
 
 /// Sets `camera` to see as the game does: into an HDR image, its light past white rolled off, bloom on
@@ -203,7 +177,8 @@ End Function
 Public Final Class Island
     Field scene: World
     Field ground: Terrain
-    Field sea: Mesh
+    Field sea: Sea
+    Field sunShown: SunShown
     Field model: Model
     Field pip: Entity
     Field held: Texture[]
@@ -220,12 +195,13 @@ Public Final Class Island
     Field pipHead: Entity
     Field pipMesh: Mesh
 
-    New(scene: World, ground: Terrain, sea: Mesh, model: Model, pip: Entity, held: Texture[],
+    New(scene: World, ground: Terrain, sea: Sea, sunShown: SunShown, model: Model, pip: Entity, held: Texture[],
         mill: Pivot, wheel: Mesh, lamp: Mesh, parts: Mesh[], sun: Light, around: Environment,
         lantern: Light)
         Self.scene = scene
         Self.ground = ground
         Self.sea = sea
+        Self.sunShown = sunShown
         Self.model = model
         Self.pip = pip
         Self.held = held
@@ -256,7 +232,7 @@ Public Final Class Island
         Local skyTexture = Try Texture.FromHdr(SkyImage())
         held.Add(skyTexture)
         scene.SetSkyTexture(skyTexture)
-        Local around = Try Environment.Bake(skyTexture, 128, 64)
+        Local around = Try Environment.Bake(skyTexture, 256, 64)
         scene.SetEnvironment(around, AROUND_LIGHT)
 
         Local sun = Light(LightType.DIRECTIONAL)
@@ -279,12 +255,8 @@ Public Final Class Island
         ground.SetHeights(heights)
         ground.SetMaterial(Try Rock(held, Color(1.0, 1.0, 1.0), 12.0))
 
-        Local sea = Mesh(Geometry.Plane(1))
-        sea.SetScale(Vec3(3000.0, 1.0, 3000.0))
-        // Smooth, so it's the sky it shows.
-        Local water = Material(Color(0.03, 0.15, 0.2))
-        water.SetMetalRough(0.0, 0.18)
-        sea.SetMaterial(water)
+        Local sea = Try Sea.Make(held)
+        Local sunShown = Try SunShown.Make(held)
 
         Local mill, wheel, lamp, lantern = Try BuildMill(held)
         Local parts = Try BuildParts(held)
@@ -297,7 +269,7 @@ Public Final Class Island
         // Facing the yard's view, as glTF's front is +Z.
         pip.SetRotation(0.0, ToRadians(20.0), 0.0)
         pip.Player().Play(model.Clips()[0])
-        Return Island(scene, ground, sea, model, pip, held, mill, wheel, lamp, parts, sun, around,
+        Return Island(scene, ground, sea, sunShown, model, pip, held, mill, wheel, lamp, parts, sun, around,
                       lantern)
     End Method
 
@@ -360,7 +332,7 @@ Public Final Class Island
     End Method
 
     /// How high the sea's drawn.
-    @MainThread Public Method SeaDrawnAt(): Float => sea.Position().y
+    @MainThread Public Method SeaDrawnAt(): Float => sea.DrawnAt()
 
     /// How high the ground's drawn at (`x`, `z`), or Null off it.
     @MainThread
@@ -372,9 +344,10 @@ Public Final Class Island
     /// Sets the sea's height for `clock` seconds into the slack water.
     @MainThread
     Public Method Update(clock: Float64)
-        sea.SetPosition(Vec3(0.0, SeaHeight(clock), 0.0))
+        sea.Update(clock)
         Local height, turned = SunAt(clock)
         sun.SetRotation(-height, turned, 0.0)
+        sunShown.Update(clock)
     End Method
 
     /// Puts a part on the mill's works, each in its place.
@@ -395,6 +368,22 @@ Public Final Class Island
 
     /// What the sun's light does now, its rotation.
     @MainThread Public Method SunTurned(): Quat => sun.Rotation()
+
+    /// Where the sun's drawn.
+    @MainThread Public Method SunPlace(): Vec3 => sunShown.Place()
+
+    /// Hides the ground, or shows it again, to see what shows through the sea.
+    @MainThread Public Method SetGroundHidden(hidden: Bool)
+        If hidden Then ground.Hide() Else ground.Show()
+    End Method
+
+    /// How rough the sea is at most, as its wind's patches have it.
+    @MainThread Public Method SeaRoughness(): Float => sea.Shown().Roughness()
+
+    /// Stills the sea, or sets it going again, to see what's in it.
+    @MainThread Public Method SetSeaStill(still: Bool)
+        sea.SetStill(still)
+    End Method
 
     /// The World's light all around.
     @MainThread Public Method Around(): Environment? => scene.LitBy()
