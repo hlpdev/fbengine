@@ -220,10 +220,16 @@ if(FBENGINE_FB_TESTS)
              COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_exports_test.py")
     set_tests_properties(tools.check_exports PROPERTIES PASS_REGULAR_EXPRESSION "macOS side holds")
     # Each target that builds gltf.cpp reads the simdjson fastgltf fetched, as its own compile says.
+    # With no compile_commands.json, as under the Visual Studio generator, it says so and is skipped.
     add_test(NAME tools.check_simdjson
-             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_simdjson.py" "${PROJECT_BINARY_DIR}")
-    set_tests_properties(tools.check_simdjson PROPERTIES
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_simdjson.py" "${PROJECT_BINARY_DIR}"
+                     "${fbengine_simdjson_folder}/simdjson.h")
+    set_tests_properties(tools.check_simdjson PROPERTIES SKIP_RETURN_CODE 77
                          PASS_REGULAR_EXPRESSION "targets read the simdjson fastgltf fetched")
+    add_test(NAME tools.check_simdjson_reads
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_simdjson_test.py")
+    set_tests_properties(tools.check_simdjson_reads PROPERTIES
+                         PASS_REGULAR_EXPRESSION "reads commands and rules as it should")
   endif()
   add_test(NAME models.golden
            COMMAND fbengine_gpu_tests "the sample models' frames match their golden images")
