@@ -773,6 +773,7 @@ Function AGameSayingALotIsntKeptWaiting() Throws IOError, GraphicsError
     Local since = Instant.Now()
     StepUntil(editor, Function() => !editor.Run.Going())
     Expect(editor.Run.State() == PlayState.ENDED, Said(editor))
+    // One read a frame takes 40 seconds; this took 17 with the machine busy.
     Expect((Instant.Now() - since) < 30.Seconds, "8 MB took {Instant.Now() - since}")
 End Function
 
@@ -931,7 +932,7 @@ Function ARealGameReadsTheSavedScene() Throws IOError, GraphicsError
     Local settings = Try TempDir()
     Local games = Try TempDir()
     Local engine = Try Engine()
-    Local program = "Import std.collections\nImport std.core\nImport std.io\nImport fbengine\n\nFunction Main() Throws IOError, GraphicsError\n    Window.SetHeadless(True)\n    Try Graphics(64, 64)\n    Assets.MountFolder(\"res://\", Path(\"assets\"))\n    Local asked = Try Scene.Requested()\n    If asked == Null Then Panic(\"no scene asked for\")\n    Local roots = Try Scene.Load(asked)\n    Print(\"read {{roots.Count}}, {{roots[0].Name()}} at {{roots[0].Position()}}\")\n    EndGraphics()\nEnd Function\n\nTry Main()\n"
+    Local program = "Import std.collections\nImport std.core\nImport std.io\nImport fbengine\n\nClass Door\n    Public Field Speed: Float = 1\nEnd Class\n\nFunction Main() Throws IOError, GraphicsError\n    Window.SetHeadless(True)\n    Try Graphics(64, 64)\n    Components.Add<Door>(\"Door\")\n    Assets.MountFolder(\"res://\", Path(\"assets\"))\n    Local asked = Try Scene.Requested()\n    If asked == Null Then Panic(\"no scene asked for\")\n    Local roots = Try Scene.Load(asked)\n    Print(\"read {{roots.Count}}, {{roots[0].Name()}} at {{roots[0].Position()}}, going {{roots[0].Data<Door>()?.Speed ?? 0}}\")\n    EndGraphics()\nEnd Function\n\nTry Main()\n"
     Local folder = Try Game(games.Path, "real", program,
                             "fbengine = {{ path = \"{engine.Text.Replace("\\", "/")}\" }}\n")
     Local editor = Try Started(settings.Path, folder)
@@ -940,9 +941,12 @@ Function ARealGameReadsTheSavedScene() Throws IOError, GraphicsError
     Local cube = editor.Edited.Entities()[0]
     cube.SetPosition(Vec3(1.5, 2, -3))
     cube.SetName("Crate")
+    Local door = Value.Object()
+    door["Speed"] = Value(7.0)
+    SetComponentsOf(cube, [ComponentData("Door", door)])
     editor.SaveScene("res://level.scene")
     editor.Play()
     StepUntil(editor, Function() => !editor.Run.Going())
     Expect(editor.Run.State() == PlayState.ENDED && editor.Run.ExitCode() == 0, Said(editor))
-    Expect(Said(editor).Contains("read 1, Crate at (1.5, 2, -3)"), Said(editor))
+    Expect(Said(editor).Contains("read 1, Crate at (1.5, 2, -3), going 7"), Said(editor))
 End Function

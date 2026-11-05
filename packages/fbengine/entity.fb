@@ -264,7 +264,8 @@ Public Class Entity Implements Printable
     End Method
 
     /// The component of the entity's that's called `name`, or Null: what a scene file keeps for it
-    /// whatever it's for, under `[entity.components.<name>]`, read and written as it is.
+    /// under `[entity.components.<name>]`, read and written as it is. Scene.Load also attaches it, and
+    /// refuses a file with a name no kind in Components has; only Scene.Open, an editor's, takes any.
     @MainThread @PanicsAtCaller
     Public Method Component(name: String): Value?
         Live("Component")

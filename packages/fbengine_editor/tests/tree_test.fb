@@ -610,6 +610,7 @@ Function WhatsTakenOutIsntPickedOrInTheSceneAndANewSceneHasNoneOfIt() Throws IOE
     editor.Edits.Commit(RemoveEdit(editor.Edited, [cube]))
     Expect(editor.Edited.Selected().Count == 0)
     // Closed, a new scene's there, and the tree with it.
+    editor.Edits.MarkSaved()
     editor.Actions.Run("file.close")
     editor.Step()
     Expect(cube.Freed() && editor.Tree.ShownEntities().Count == 0)

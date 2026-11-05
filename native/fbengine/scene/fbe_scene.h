@@ -802,6 +802,8 @@ FBE_API float fbe_material_occlusion_strength(uint64_t material);
 // makes of them.
 FBE_API bool fbe_material_set_map(uint64_t material, int32_t map, uint64_t texture, int32_t uv_set);
 FBE_API uint64_t fbe_material_map(uint64_t material, int32_t map);
+// Whether fbe_material_set_map would take a texture as a map, by what's stored in it.
+FBE_API bool fbe_material_map_takes(int32_t map, uint64_t texture);
 FBE_API int32_t fbe_material_map_uv_set(uint64_t material, int32_t map);
 FBE_API bool fbe_material_set_map_uv(uint64_t material, int32_t map, float scale_u, float scale_v,
                                      float angle, float offset_u, float offset_v);

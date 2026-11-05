@@ -200,6 +200,10 @@ FBE_API bool fbe_window_closed(void) {
     return closed;
 }
 
+FBE_API void fbe_window_keep_open(void) {
+    closed = false;
+}
+
 FBE_API bool fbe_window_focused(void) {
     return focused;
 }

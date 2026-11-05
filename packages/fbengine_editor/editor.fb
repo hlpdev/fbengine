@@ -156,7 +156,11 @@ Public Final Class Editor
         Local showing = dialog
         If showing != Null Then showing.Update()
         Retitled()
-        If Window.Closed() Then quitting = True
+        If Window.Closed()
+            // It's still open if what's changed is to be kept, which asks; and asks again if pressed again.
+            Window.KeepOpen()
+            Quit()
+        End If
         If Screen.Texture() == Null Then Return
         If Docked.Active("scene") && project != Null Then View.Render()
         Screen.Canvas().Clear()
@@ -465,6 +469,14 @@ Public Final Class Editor
         Run.Start(open, scene)
     End Method
 
+    // Asked to end, after asking whether to save what's changed.
+    Method Quit()
+        Guarded(Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.quitting = True
+        End Function)
+    End Method
+
     // `action`, after asking whether to save what's changed, if anything has.
     Method Guarded(action: Func())
         If !Edits.Modified()
@@ -598,7 +610,10 @@ Public Final Class Editor
         asking.AddButton("Cancel")
         Local opening = asking.AddButton("Open", Function[Weak Self]()
             Local own = Self
-            If own != Null && field.Text() != "" Then own.OpenFolder(Path(field.Text()))
+            If own == Null || field.Text() == "" Then Return
+            own.Guarded(Function[Weak Self]()
+                Self?.OpenFolder(Path(field.Text()))
+            End Function)
         End Function)
         asking.SubmitWith(field, opening)
         Showed(asking)
@@ -658,11 +673,27 @@ Public Final Class Editor
                 Self?.OpenScene(path)
             End Function)
         End Function)
-        Files.OnDrop(Function[Weak Self](point: Vec2): Bool
+        Files.OnDrop(Function[Weak Self](path: String, point: Vec2): Bool
             Local own = Self
-            Return own != Null && own.Docked.Active("scene") && own.View.Box().Contains(point)
+            If own == Null Then Return False
+            Select SortOf(path)
+                Case AssetSort.MODEL
+                    Return own.Docked.Active("scene") && own.View.Box().Contains(point)
+                Case AssetSort.IMAGE
+                    Return own.Docked.Active("inspector") &&
+                           own.Inspector.TextureRowAt(point) != Null
+                Default
+                    Return False
+            End Select
         End Function, Function[Weak Self](path: String, point: Vec2)
-            Self?.DropModel(path, point)
+            Local own = Self
+            If own == Null Then Return
+            If SortOf(path) == AssetSort.MODEL
+                own.DropModel(path, point)
+            Else
+                own.assetsHaveKeys = False
+                own.Inspector.TextureRowAt(point)?.Choose(path)
+            End If
         End Function)
         Files.OnPressed(Function[Weak Self]()
             Local own = Self
@@ -722,14 +753,15 @@ Public Final Class Editor
         End Function)
         Actions.Add("file.close", "Close Project", Function[Weak Self]()
             Local own = Self
-            If own != Null Then own.CloseProject()
+            If own != Null Then own.Guarded(Function[Weak Self]()
+                Self?.CloseProject()
+            End Function)
         End Function, Null, hasProject)
         Actions.Add("file.reload_components", "Reload Components", Function[Weak Self]()
             Self?.ReadKinds()
         End Function, Null, hasProject)
         Actions.Add("file.quit", "Quit", Function[Weak Self]()
-            Local own = Self
-            If own != Null Then own.quitting = True
+            Self?.Quit()
         End Function, PrimaryKey(Key.Q))
         Actions.Add("edit.undo", "Undo", Function[Weak Self]()
             Local own = Self
@@ -828,6 +860,45 @@ Public Final Class Editor
                 Return light
             End Function))
         End Function, Null, hasProject)
+        Actions.Add("add.camera", "Camera", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.Edits.Commit(MadeEdit("Add Camera", own.Edited,
+                                                          Function(): Entity
+                Local camera = Camera()
+                camera.SetName("Camera")
+                Return camera
+            End Function))
+        End Function, Null, hasProject)
+        Actions.Add("add.pivot", "Pivot", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.Edits.Commit(MadeEdit("Add Pivot", own.Edited,
+                                                          Function(): Entity
+                Local pivot = Pivot()
+                pivot.SetName("Pivot")
+                Return pivot
+            End Function))
+        End Function, Null, hasProject)
+        Actions.Add("add.sprite", "Sprite", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.Edits.Commit(MadeEdit("Add Sprite", own.Edited,
+                                                          Function(): Entity
+                Local sprite = Sprite(Material())
+                sprite.SetName("Sprite")
+                Return sprite
+            End Function))
+        End Function, Null, hasProject)
+        Actions.Add("component.add", "Component…", Function[Weak Self]()
+            Self?.Inspector?.ChoosingKind()
+        End Function, Null, Function[Weak Self](): Bool
+            Local own = Self
+            Return own != Null && own.Inspector.CanAddKind()
+        End Function)
+        Actions.Add("component.remove", "Remove Component…", Function[Weak Self]()
+            Self?.Inspector?.ChoosingRemoval()
+        End Function, Null, Function[Weak Self](): Bool
+            Local own = Self
+            Return own != Null && own.Inspector.CanRemoveKind()
+        End Function)
         Local anySelected = Function[Weak Self](): Bool
             Local own = Self
             Return own != Null && own.Edited.Selected().Count > 0 && !own.View.HandleHeld() &&
@@ -897,7 +968,9 @@ Public Final Class Editor
                       ["edit.undo", "edit.redo", SEPARATOR, "tree.find", "tree.rename",
                        "tree.duplicate", "tree.hide", "tree.delete",
                        SEPARATOR, "select.none"])
-        Menus.AddMenu("Add", ["add.cube", "add.light"])
+        Menus.AddMenu("Add",
+                      ["add.cube", "add.light", "add.camera", "add.pivot", "add.sprite", SEPARATOR,
+                       "component.add", "component.remove"])
         Menus.AddMenu("Play", ["play.run", "play.stop"])
         Menus.AddMenu("Tools",
                       ["tool.move", "tool.turn", "tool.scale", SEPARATOR, "tool.space",

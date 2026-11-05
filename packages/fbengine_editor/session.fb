@@ -26,7 +26,8 @@ Function TrustKey(path: String): String
     Return "{Folded(path)} {Hex.Encode(Sha256.Hash(says))}"
 End Function
 
-// `path` as it's compared: on Windows, whose files are found in any case, in one case.
+// `path` as it's compared: on Windows, whose files are found in any case, in one case. Another spelling
+// of a folder on a Mac's or Linux's case-insensitive volume is asked about again, on the safe side.
 Function Folded(path: String): String => System.Platform == Platform.WINDOWS ? path.ToLower() : path
 
 /// The window's place and size as it was.
