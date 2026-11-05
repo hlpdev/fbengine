@@ -306,6 +306,12 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     Flip(False)
     Checks("the ground's repeats don't show from far off",
            RepeatShows(camera, fromFar) > GROUND_APART)
+    Local cover = island.GroundMaterial()
+    Checks("the ground's as rough as what covers it, under grit at two scales, one turned",
+           cover != Null && cover.Map(MaterialMap.METAL_ROUGH) != Null &&
+           cover.Map(MaterialMap.METAL_ROUGH) != cover.Map(MaterialMap.NORMAL) &&
+           cover.Texture(2) != Null && cover.LayerUv(2).Angle != 0.0 &&
+           cover.LayerUv(2).Scale.x != cover.LayerUv(1).Scale.x)
     // The lantern, in the mill.
     Local insideView = Views()[3]
     camera.SetPosition(insideView.1)
@@ -390,12 +396,13 @@ Function Checked(folder: Path) Throws GraphicsError, IOError
         Return
     End If
     Window.SetHeadless(True)
-    For material In ["rock", "sand", "wood", "brass", "iron"]
+    For material In ["rock", "sand", "wood", "brass", "iron", "grit"]
         Local albedo = Try Assets.Load<Texture>("res://made/{material}_albedo.png")
         Local normal = Try Assets.Load<Texture>("res://made/{material}_normal.png")
         Local rough = Try Assets.Load<Texture>("res://made/{material}_rough.png")
         Checks("{material}'s textures load as what they are",
-               albedo.Width() == (material == "rock" || material == "sand" ? 256 : 128) &&
+               albedo.Width() ==
+               (material == "rock" || material == "sand" || material == "grit" ? 256 : 128) &&
                albedo.Format() == TextureFormat.RGBA8 &&
                normal.Format() == TextureFormat.RGBA8_LINEAR &&
                rough.Format() == TextureFormat.RGBA8_LINEAR)

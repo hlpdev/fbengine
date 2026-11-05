@@ -150,11 +150,28 @@ Final Class Iron Implements Maker
     End Method
 End Class
 
+// What the ground's cover is multiplied by, twice over, so its middle leaves it as it is: pits, flecks, and
+// pebbles, about a middle that's half as much light.
+Final Class Grit Implements Maker
+    Method Height(x: Float, y: Float): Float
+        Return Layered(x, y, 5, 3, 61) * 0.55 + Layered(x, y, 24, 3, 62) * 0.45
+    End Method
+
+    Method Albedo(x: Float, y: Float, height: Float): (Float, Float, Float)
+        Local shade = 0.735 + (height - 0.5) * 0.9 + (Layered(x, y, 48, 2, 63) - 0.5) * 0.3
+        Return (shade, shade, shade)
+    End Method
+
+    Method Roughness(x: Float, y: Float, height: Float): Float => 0.85
+
+    Method Metalness(x: Float, y: Float, height: Float): Float => 0.0
+End Class
+
 /// A material's name, how many pixels across it is, what makes it, and how strong its normals are.
 Public Function Materials(): (String, Int, Maker, Float)[]
     Return [("rock", 256, Rock() As Maker, 6.0), ("sand", 256, Sand() As Maker, 3.0),
             ("wood", 128, Wood() As Maker, 5.0), ("brass", 128, Brass() As Maker, 2.0),
-            ("iron", 128, Iron() As Maker, 4.0)]
+            ("iron", 128, Iron() As Maker, 4.0), ("grit", 256, Grit() As Maker, 7.0)]
 End Function
 
 /// A material's height at each pixel, row after row.
