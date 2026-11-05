@@ -45,8 +45,14 @@ for file in "$@"; do
                 esac
             done ;;
         *.dylib)
-            foreign="$(otool -L "$file" | tail -n +2 | awk '{ print $1 }' |
-                       grep -v -e '^/usr/lib/' -e '^/System/Library/' || true)" ;;
+            # What its load commands load: not its own install name, LC_ID_DYLIB, which otool -L
+            # lists among them.
+            foreign="$(otool -l "$file" | awk '
+                $1 == "cmd" { kind = $2 }
+                $1 == "name" && (kind == "LC_LOAD_DYLIB" || kind == "LC_LOAD_WEAK_DYLIB" ||
+                                 kind == "LC_REEXPORT_DYLIB" || kind == "LC_LOAD_UPWARD_DYLIB") {
+                    print $2
+                }' | grep -v -e '^/usr/lib/' -e '^/System/Library/' || true)" ;;
         *)
             foreign="$(readelf -d "$file" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' |
                        grep -v -E '^(libc|libm|libdl|libpthread|librt)\.so\.[0-9]+$' |

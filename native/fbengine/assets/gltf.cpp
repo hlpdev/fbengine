@@ -26,9 +26,15 @@
 #include <optional>
 #include <simdjson.h>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <variant>
+
+// The simdjson fastgltf fetched and was built with, not one installed elsewhere, as Homebrew's in
+// an Intel Mac's /usr/local/include, whose types fastgltf's wouldn't match (cmake/assets.cmake).
+static_assert(std::string_view(SIMDJSON_VERSION) == std::string_view(FBE_SIMDJSON_VERSION),
+              "simdjson.h isn't the one fastgltf fetched");
 
 // The model's vectors as fastgltf reads its accessors into them.
 template <>
