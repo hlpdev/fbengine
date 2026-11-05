@@ -267,6 +267,7 @@ Function KeysRunCommandsAndWhatsEditedUndoes() Throws IOError, GraphicsError
     editor.Step()
     Expect(editor.ShowingDialog() == Null)
     Expect(!editor.Quitting())
+    editor.Edits.MarkSaved()
     Try Primary(Key.Q)
     editor.Step()
     Expect(editor.Quitting())
@@ -347,6 +348,7 @@ Function AFailedOpenLeavesWhatsOpenAsItIs() Throws IOError, GraphicsError
         value = 0
     End Function))
     editor.Step()
+    editor.Edits.MarkSaved()
     Expect(editor.Actions.Run("file.close"))
     Expect(!editor.Edits.CanUndo(), "it kept the closed project's edits")
     editor.Finish()

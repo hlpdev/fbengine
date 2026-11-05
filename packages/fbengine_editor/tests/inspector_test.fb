@@ -3,6 +3,8 @@
 
 Import std.collections
 Import std.core
+Import std.data
+Import std.image
 Import std.io
 Import std.math
 Import std.os
@@ -107,6 +109,178 @@ Function HasRows(editor: Editor, titles: String): Bool
     Return True
 End Function
 
+// What a row shows: each field's text, or what its button says, or whether its box is ticked.
+Function ShownBy(row: PropertyRow): String
+    Local parts = row.Parts().Map(Function(part: TextField) => part.Text())
+    Local button = row.Find("inspector.{row.Title}.button") As? Button
+    If button != Null Then parts.Add(button.Text())
+    Local box = row.Find("inspector.{row.Title}.box") As? Toggle
+    If box != Null Then parts.Add("{box.On()}")
+    Return "{row.Title} = {parts.Join(", ")}"
+End Function
+
+Function AllShown(editor: Editor): String[]
+    Return editor.Inspector.Rows().Map(Function(row: PropertyRow) => ShownBy(row))
+End Function
+
+// Each row away from what it shows, whatever it is, as a person would.
+Function EveryRowChanged(editor: Editor) Throws GraphicsError
+    Local index = 0
+    // A row of a texture brings the next, so they're asked for each time.
+    While index < editor.Inspector.Rows().Count
+        Local row = editor.Inspector.Rows()[index]
+        Local before = ShownBy(row)
+        Local title = row.Title
+        Local texture = row As? TextureRow
+        If title == "Name"
+            index += 1
+            Continue
+        ElseIf texture != Null
+            Local numbers = title == "NormalMap" || title == "MetalRoughMap" ||
+                            title == "OcclusionMap"
+            texture.Choose(numbers ? "res://numbers.png" : "res://picture.png")
+            editor.Step()
+            editor.Step()
+            Expect(editor.ShowingDialog() == Null, "{title} wouldn't take it")
+        ElseIf row.Parts().Count > 0
+            For part In row.Parts()
+                Local was = part.Text()
+                For text In ["0.5", "0.25", "0.75", "2", "3", "16", "32", "1"]
+                    If text == was Then Continue
+                    Try Typing(editor, part, text)
+                    Try Simulate.PressKey(Key.RETURN)
+                    editor.Step()
+                    editor.Step()
+                    If part.Text() != was Then Break
+                End For
+            End For
+        Else
+            Local box = row.Find("inspector.{title}.box") As? Toggle
+            If box != Null
+                box.Click()
+                editor.Step()
+                editor.Step()
+            Else
+                Local button = row.Find("inspector.{title}.button") As? Button
+                If button == Null Then Panic("{title} is no row this knows")
+                button.Click()
+                editor.Step()
+                editor.Step()
+                Local popups = editor.Shown.Popups()
+                If popups.Count != 1 Then Panic("{title}'s list didn't open")
+                Local chose = False
+                For item In popups[0].Children()
+                    Local choice = item As? Button
+                    If !chose && choice != Null && choice.Text() != button.Text()
+                        choice.Click()
+                        chose = True
+                    End If
+                End For
+                editor.Step()
+                editor.Step()
+            End If
+        End If
+        Expect(ShownBy(editor.Inspector.Rows()[index]) != before, "{before} couldn't be changed")
+        index += 1
+    End While
+End Function
+
+// By what's shown, whichever rows there are, so a setter added with no key in a scene's file fails this.
+@Test
+Function EveryRowIsKeptInItsFile() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local assets = games.Path / "game" / "assets"
+    Try Dir.CreateAll(assets)
+    Local pixel = Image(1, 1)
+    pixel[0, 0] = Color32(128, 128, 255, 255)
+    Try File.WriteBytes(assets / "picture.png", Png.Encode(pixel))
+    Try File.WriteBytes(assets / "numbers.png", Png.Encode(pixel))
+    Try File.WriteText(assets / "numbers.png.toml", "srgb = false\n")
+    Local editor = Try Started(settings, games)
+    Local kinds = ["add.pivot", "add.cube", "add.light", "add.camera", "add.sprite"]
+    Local shown: Map<String, String[]> = {}
+    For kind In kinds
+        Expect(editor.Actions.Run(kind))
+        editor.Step()
+        editor.Step()
+        Local made = editor.Edited.Selected()[0]
+        made.SetName(kind)
+        editor.Step()
+        Try EveryRowChanged(editor)
+        Try Simulate.MoveMouse(1, 1)
+        editor.Step()
+        shown[kind] = AllShown(editor)
+    End For
+    editor.SaveScene("res://every.scene")
+    Expect(editor.ShowingDialog() == Null, "it wasn't saved")
+    editor.OpenScene("res://every.scene")
+    editor.Step()
+    Expect(editor.ShowingDialog() == Null, "it wasn't read")
+    For kind In kinds
+        Local read = editor.Edited.Entities().Filter(Function(each: Entity) => each.Name() == kind)
+        Expect(read.Count == 1, "{kind} has {read.Count}")
+        Selecting(editor, read[0])
+        editor.Step()
+        Local now = AllShown(editor)
+        Local had = shown[kind]
+        Expect(now.Count == had.Count, "{kind}: {now.Join(" | ")}\nnot {had.Join(" | ")}")
+        For at = 0 Until Min(now.Count, had.Count)
+            Expect(now[at] == had[at], "{kind}: {now[at]}, not {had[at]}")
+        End For
+    End For
+    editor.Finish()
+End Function
+
+// Through its commands and by Simulate, what's on what's selected comes off by its list.
+@Test
+Function AComponentComesOffByItsCommand() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Expect(!editor.Actions.Run("component.add"), "nothing's selected")
+    Expect(!editor.Actions.Run("component.remove"), "nothing's selected")
+    Local pivot = Pivot()
+    Selecting(editor, pivot)
+    Expect(!editor.Actions.Run("component.add"), "there are no kinds")
+    KnowingKinds(editor)
+    Expect(!editor.Actions.Run("component.remove"), "there's none on it")
+    Try Adding(editor, "Door")
+    Try Adding(editor, "Latch")
+    Expect(ComponentsOf(pivot).Count == 2)
+    Expect(editor.Actions.Run("component.remove"))
+    editor.Step()
+    editor.Step()
+    Local popups = editor.Shown.Popups()
+    If popups.Count != 1 Then Panic("its list didn't open")
+    Local item = popups[0].Find("inspector.remove.Door")
+    If item == Null Then Panic("Door's not in it")
+    Expect(popups[0].Find("inspector.remove.Latch") != Null)
+    Try ClickOn(editor, item.Box())
+    Expect(editor.Shown.Popups().Count == 0)
+    Expect(ComponentsOf(pivot).Count == 1 && ComponentsOf(pivot)[0].Kind == "Latch")
+    Expect(editor.Actions.Run("edit.undo"))
+    Expect(ComponentsOf(pivot).Count == 2 && ComponentsOf(pivot)[0].Kind == "Door")
+    // Of many, only what they all have.
+    Local other = Pivot()
+    SetComponentsOf(other, [ComponentData("Latch", Value.Object())])
+    editor.Edited.ToggleSelected(other)
+    editor.Step()
+    editor.Step()
+    Expect(editor.Actions.Run("component.remove"))
+    editor.Step()
+    popups = editor.Shown.Popups()
+    If popups.Count != 1 Then Panic("its list didn't open")
+    Expect(popups[0].Find("inspector.remove.Door") == Null)
+    Local both = popups[0].Find("inspector.remove.Latch")
+    If both == Null Then Panic("Latch's not in it")
+    Try ClickOn(editor, both.Box())
+    Expect(ComponentsOf(other).Count == 0 && ComponentsOf(pivot).Count == 1)
+    editor.Finish()
+End Function
+
 @Test
 Function ItShowsWhatReflectionFindsOnEachKind() Throws IOError, GraphicsError
     If NoGpu() Then Skip("no GPU here")
@@ -128,6 +302,34 @@ Function ItShowsWhatReflectionFindsOnEachKind() Throws IOError, GraphicsError
     Selecting(editor, camera)
     Expect(HasRows(editor, own + " Projection FogMode ClearColor FogColor FieldOfView " +
                    "OrthographicHeight FogDensity Order ClearsColor ClearsDepth Range FogRange"))
+    Expect(HasRows(editor, "BloomIntensity BloomThreshold GradeSlope GradeOffset GradePower " +
+                   "GradeSaturation"))
+    // As it's read.
+    For said In [("TemporalAA", "Temporal AA"), ("FieldOfView", "Field Of View"), ("Hdr", "Hdr")]
+        Local title = RowCalled(editor, said.0).Find("inspector.title") As? Label
+        Expect(title?.Text() == said.1, title?.Text() ?? "no title")
+    End For
+    // Each of what's set together, alone, and what panics isn't taken.
+    Try Entered(editor, "BloomIntensity", "0.5")
+    Try Entered(editor, "BloomThreshold", "2")
+    Expect(camera.BloomIntensity() == 0.5 && camera.BloomThreshold() == 2)
+    Try Entered(editor, "BloomIntensity", "-1")
+    Try Entered(editor, "BloomThreshold", "-1")
+    Expect(camera.BloomIntensity() == 0.5 && camera.BloomThreshold() == 2)
+    Try Entered(editor, "GradeSlope", "2", 1)
+    Try Entered(editor, "GradeOffset", "-0.5", 2)
+    Try Entered(editor, "GradePower", "3", 0)
+    Try Entered(editor, "GradeSaturation", "0.25")
+    Local grade = camera.Grade()
+    Expect(grade.Slope == Vec3(1, 2, 1) && grade.Offset == Vec3(0, 0, -0.5))
+    Expect(grade.Power == Vec3(3, 1, 1) && grade.Saturation == 0.25)
+    Try Entered(editor, "GradeSlope", "-1")
+    Try Entered(editor, "GradePower", "0")
+    Try Entered(editor, "GradeSaturation", "-1")
+    grade = camera.Grade()
+    Expect(grade.Slope.x == 1 && grade.Power.x == 3 && grade.Saturation == 0.25)
+    Expect(editor.Actions.Run("edit.undo"))
+    Expect(camera.Grade().Saturation == 1, "one undo, one number")
     Local mesh = Mesh(Geometry.Cube())
     mesh.SetMaterial(Material(Color(1, 0, 0)))
     Selecting(editor, mesh)
@@ -945,19 +1147,14 @@ Function KnowingKinds(editor: Editor)
 End Function
 
 Function Adding(editor: Editor, name: String) Throws GraphicsError
-    Local row = RowCalled(editor, "AddComponent") As? ButtonRow
-    If row == Null Then Panic("there's no way to add one")
-    row.Pressing().Click()
+    Expect(editor.Actions.Run("component.add"), "there's no way to add one")
     editor.Step()
     editor.Step()
     Local popups = editor.Shown.Popups()
     Expect(popups.Count == 1, "its list didn't open")
     Local item = popups[0].Find("inspector.kind.{name}")
-    Local button = item As? Button
-    If button == Null Then Panic("{name} isn't in its list")
-    button.Click()
-    editor.Step()
-    editor.Step()
+    If item == Null Then Panic("{name} isn't in its list")
+    Try ClickOn(editor, item.Box())
     Expect(editor.Shown.Popups().Count == 0, "its list stayed open")
 End Function
 
@@ -1136,6 +1333,7 @@ Function WhatTheProjectDoesntKnowStaysAsItIs() Throws IOError, GraphicsError
     // Closing the project, it knows of none.
     KnowingKinds(editor)
     Expect(editor.Kinds.Kinds().Count == 2)
+    editor.Edits.MarkSaved()
     Expect(editor.Actions.Run("file.close"))
     Expect(editor.Kinds.Kinds().Count == 0, "it kept what the project said")
     editor.Finish()

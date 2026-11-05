@@ -55,6 +55,12 @@ Public Final Class Window
     /// quit, which stays True until the window's closed.
     @MainThread Public Static Method Closed(): Bool => fbe_window_closed()
 
+    /// Takes back that the close button was pressed, as a program that asked first and was told not to
+    /// does: Closed is False until it's pressed again.
+    @MainThread Public Static Method KeepOpen()
+        fbe_window_keep_open()
+    End Method
+
     /// Whether, by the last Flip, the window has the keyboard's focus.
     @MainThread Public Static Method Focused(): Bool => fbe_window_focused()
 

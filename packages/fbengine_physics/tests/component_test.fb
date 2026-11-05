@@ -15,6 +15,21 @@ Function FieldOf(kind: ComponentKind, name: String): ComponentField
     Panic("{kind.Name} has no {name}")
 End Function
 
+// A game's scene gives its entity a body's component, as what's built from.
+@Test
+Function ASceneLoadedGivesAnEntityItsBody() Throws IOError
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Components.Clear()
+    Defer Components.Clear()
+    AddBodyComponent()
+    Local read = Try Scene.FromText("format = 1\n[[entity]]\npath = \"crate\"\nkind = \"PIVOT\"\n[entity.components.Body]\nMass = 4.0\nForm = \"SPHERE\"\n")
+    Local component = read[0].Data<BodyComponent>()
+    If component == Null Then Panic("it isn't on it")
+    Expect(component.Mass == 4 && component.Friction == Fresh().Friction)
+End Function
+
 // What's in a new one's Fields, as Load makes it from nothing.
 Function Fresh(): BodyComponent
     Try

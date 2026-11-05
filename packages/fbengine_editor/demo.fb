@@ -2,12 +2,15 @@
 // golden images are of, so neither needs a game.
 
 Import std.core
+Import std.image
 Import std.io
 Import std.math
 Import fbengine
 Import "./component"
 Import "./editor"
 Import "./handles"
+
+Const TRIANGLE = "{{\"asset\":{{\"version\":\"2.0\"}},\"scene\":0,\"scenes\":[{{\"nodes\":[0]}}],\"nodes\":[{{\"name\":\"blade\",\"mesh\":0}}],\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":0}}}}]}}],\"accessors\":[{{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\",\"min\":[0,0,0],\"max\":[1,0,1]}}],\"bufferViews\":[{{\"buffer\":0,\"byteLength\":36}}],\"buffers\":[{{\"byteLength\":36,\"uri\":\"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAIA/AACAPwAAAAAAAAAA\"}}]}}"
 
 // A door, as a game's own program would say one is.
 Enum DemoSwing
@@ -39,10 +42,21 @@ Public Struct DemoScene
     Public Field Hinge: Entity
 End Struct
 
-/// Makes a project in `folder` that needs nothing.
+/// Makes a project in `folder` that needs nothing, with some files to show.
 Public Function MakeDemoProject(folder: Path) Throws IOError
-    Try Dir.CreateAll(folder)
+    Try Dir.CreateAll(folder / "assets" / "levels")
     Try File.WriteText(folder / "project.toml", "[project]\nname = \"demo\"\n")
+    Local checks = Image(16, 16)
+    For y = 0 Until 16
+        For x = 0 Until 16
+            checks[x, y] = (x / 4 + y / 4) % 2 == 0 ? Color32(190, 150, 90, 255) : Color32(70, 90,
+                                                                                           120, 255)
+        End For
+    End For
+    Try File.WriteBytes(folder / "assets" / "checks.png", Png.Encode(checks))
+    Try File.WriteText(folder / "assets" / "notes.txt", "what's left to do\n")
+    Try File.WriteText(folder / "assets" / "blade.gltf", TRIANGLE)
+    Try File.WriteText(folder / "assets" / "levels" / "first.scene", "format = 1\n")
 End Function
 
 /// Fills `editor`'s scene: a floor, a crate with a lid on it, a light and a camera, with what a game's

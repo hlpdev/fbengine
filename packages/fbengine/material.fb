@@ -394,6 +394,13 @@ Public Final Class Material
         If !fbe_material_set_map(Live("SetMap"), map As Int32, handle, uvSet) Then Failed("SetMap")
     End Method
 
+    /// Whether SetMap takes `texture` as `map`, by what's stored in it: what isn't a color, but for
+    /// EMISSIVE, which takes anything.
+    @MainThread @PanicsAtCaller
+    Public Static Method MapTakes(map: MaterialMap, texture: Texture): Bool
+        Return fbe_material_map_takes(map As Int32, texture.Live("MapTakes"))
+    End Method
+
     /// A map's Texture, or Null.
     @MainThread @PanicsAtCaller
     Public Method Map(map: MaterialMap): Texture?

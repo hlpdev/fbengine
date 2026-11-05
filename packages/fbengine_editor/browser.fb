@@ -11,6 +11,7 @@ Import std.text
 Import std.time
 Import fbengine
 Import fbengine_ui
+Import "./component"
 Import "./history"
 Import "./project"
 Import "./scene"
@@ -176,7 +177,7 @@ Function Shrunk(image: Image): Image
 End Function
 
 /// res:// as a tree, each file with a thumbnail where it has one, made a few a frame: a click selects,
-/// a double click on a scene asks OnOpen, a model dragged and let go asks OnDrop, and what's selected
+/// a double click on a scene asks OnOpen, a file dragged and let go asks OnDrop, and what's selected
 /// shows its import settings beside them, each change a sidecar written through its own Edits, apart
 /// from any scene's. Update, each frame before the Ui's, looks at the disk now and then, and takes what's
 /// been loaded again.
@@ -213,7 +214,7 @@ Public Final Class AssetBrowser Extends Widget
     Field models: Map<String, Model>
     Field onOpen: (Func(String))? = Null
     Field onDrop: (Func(String, Vec2))? = Null
-    Field onDropOver: (Func(Vec2): Bool)? = Null
+    Field onDropOver: (Func(String, Vec2): Bool)? = Null
     Field onReloaded: (Func())? = Null
     Field onPressed: (Func())? = Null
     Field looked: Stopwatch
@@ -324,9 +325,9 @@ Public Final Class AssetBrowser Extends Widget
         onOpen = handler
     End Method
 
-    /// Runs `handler` with a model's path and where it's let go, when `over` says that's somewhere it
-    /// can go; `over` also says whether to show that it can, as it's dragged.
-    Public Method OnDrop(over: (Func(Vec2): Bool)?, handler: (Func(String, Vec2))?)
+    /// Runs `handler` with a file's path and where it's let go, when `over`, of the same, says that's
+    /// somewhere it can go; `over` also says whether to show that it can, as it's dragged.
+    Public Method OnDrop(over: (Func(String, Vec2): Bool)?, handler: (Func(String, Vec2))?)
         onDropOver = over
         onDrop = handler
     End Method
@@ -892,7 +893,7 @@ Public Final Class AssetBrowser Extends Widget
 
     Package Method DragOver(ui: Ui, path: String, point: Vec2)
         Local over = onDropOver
-        If SortOf(path) != AssetSort.MODEL || over == Null || !over(point)
+        If over == Null || !over(path, point)
             ui.ClosePopup(hint)
             Return
         End If
@@ -905,7 +906,7 @@ Public Final Class AssetBrowser Extends Widget
         ui.ClosePopup(hint)
         Local over = onDropOver
         Local handler = onDrop
-        If SortOf(path) == AssetSort.MODEL && over != Null && handler != Null && over(point)
+        If over != Null && handler != Null && over(path, point)
             handler(path, point)
         End If
     End Method
@@ -995,8 +996,17 @@ Final Class AssetRow Extends Widget
 End Class
 
 /// The scene in `edited` written to `file`, whole or not at all: what isn't the editor's. It's an
-/// IOError for what a scene can't hold, or the OS won't.
+/// IOError for what a scene can't hold, or the OS won't. What ComponentsOf gives is what's saved of
+/// each entity's components, in their names' order.
 Public Function SaveEdited(edited: EditedScene, file: Path) Throws IOError
+    For entity In edited.Entities()
+        For name In entity.ComponentNames()
+            entity.SetComponent(name, Null)
+        End For
+        For item In ComponentsOf(entity)
+            entity.SetComponent(item.Kind, item.Values)
+        End For
+    End For
     Try Scene.Save(file, edited.SiblingsOf(Null))
 End Function
 
@@ -1008,6 +1018,15 @@ Public Function LoadEdited(path: String): (EditedScene, String[]) Throws IOError
     Local edited = EditedScene()
     Try
         Local opened = Try Scene.Open(path)
+        // As data, as the editor has them; a kind it doesn't know is kept as it is.
+        For entity In edited.Entities()
+            Local items: ComponentData[] = []
+            For name In entity.ComponentNames()
+                items.Add(ComponentData(name, entity.Component(name) ?? Value()))
+                entity.SetComponent(name, Null)
+            End For
+            If items.Count > 0 Then SetComponentsOf(entity, items)
+        End For
         Return (edited, opened.Problems)
     Catch error As IOError
         edited.Free()

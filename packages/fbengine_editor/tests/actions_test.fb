@@ -3,10 +3,12 @@
 
 Import std.collections
 Import std.core
+Import std.data
 Import std.io
 Import std.math
 Import std.os
 Import std.test
+Import std.text
 Import std.time
 Import std.os As os
 Import fbengine
@@ -115,10 +117,17 @@ Function Drivings(): Map<String, Driving>
         End While
         Return editor.Run.State() == PlayState.STOPPED
     End Function)
-    // With no program it has nothing to do, and it's enabled; its work's in inspector_test.
-    all["file.reload_components"] = Driving(Nothing,
-                                            Function(editor: Editor,
-                                                     scene: DemoScene) => !editor.Kinds.Running())
+    // Given a program, it's a folder not yet asked about, so it asks; inspector_test has the rest.
+    all["file.reload_components"] = Driving(Function(editor: Editor, scene: DemoScene)
+        Local open = editor.Current()
+        If open == Null Then Panic("its project")
+        Try
+            Try Dir.CreateAll(open.Folder / "components")
+            Try File.WriteText(open.Folder / "components" / "main.fb", "")
+        Catch error As IOError
+            Panic(error.Message)
+        End Try
+    End Function, Function(editor: Editor, scene: DemoScene) => editor.ShowingDialog() != Null)
     all["file.quit"] = Driving(Nothing,
                                Function(editor: Editor, scene: DemoScene) => editor.Quitting())
     all["edit.undo"] = Driving(Added,
@@ -174,6 +183,31 @@ Function Drivings(): Map<String, Driving>
     all["add.light"] = Driving(Nothing, Function(editor: Editor, scene: DemoScene)
         Return Count(editor) == 7 && editor.Edits.UndoName() == "Add Light" &&
                (editor.Edited.Selected()[0] As? Light) != Null
+    End Function)
+    all["add.camera"] = Driving(Nothing, Function(editor: Editor, scene: DemoScene)
+        Return Count(editor) == 7 && editor.Edits.UndoName() == "Add Camera" &&
+               (editor.Edited.Selected()[0] As? Camera) != Null
+    End Function)
+    all["add.pivot"] = Driving(Nothing, Function(editor: Editor, scene: DemoScene)
+        Return Count(editor) == 7 && editor.Edits.UndoName() == "Add Pivot" &&
+               editor.Edited.Selected()[0].Kind() == EntityKind.PIVOT
+    End Function)
+    all["add.sprite"] = Driving(Nothing, Function(editor: Editor, scene: DemoScene)
+        Local made = editor.Edited.Selected()[0] As? Sprite
+        Return Count(editor) == 7 && editor.Edits.UndoName() == "Add Sprite" && made != Null &&
+               made.Material() != Null
+    End Function)
+    // Each opens a list of kinds, which a click on goes through undo.
+    all["component.add"] = Driving(Selected, Function(editor: Editor, scene: DemoScene)
+        Return Listed(editor, "inspector.kind.Door") &&
+               ComponentsOf(scene.Crate).Count == 1 && editor.Edits.UndoName() == "Add Door"
+    End Function)
+    all["component.remove"] = Driving(Function(editor: Editor, scene: DemoScene)
+        editor.Edited.SelectOnly(scene.Crate)
+        SetComponentsOf(scene.Crate, [ComponentData("Door", Value.Object())])
+    End Function, Function(editor: Editor, scene: DemoScene)
+        Return Listed(editor, "inspector.remove.Door") &&
+               ComponentsOf(scene.Crate).Count == 0 && editor.Edits.UndoName() == "Remove Door"
     End Function)
     all["tree.rename"] = Driving(Selected,
                                  Function(editor: Editor,
@@ -241,6 +275,20 @@ Function Menued(editor: Editor, id: String): Node? Throws GraphicsError
     Return Null
 End Function
 
+// Whether the list that's open has what's called `name`, which it clicks, as a person does.
+Function Listed(editor: Editor, name: String): Bool
+    Local popups = editor.Shown.Popups()
+    If popups.Count != 1 Then Return False
+    Local item = popups[0].Find(name)
+    If item == Null Then Return False
+    Try
+        Try Click(editor, item)
+    Catch error As GraphicsError
+        Panic(error.Message)
+    End Try
+    Return editor.Shown.Popups().Count == 0
+End Function
+
 // A fresh editor, with `id` ready to run, and what's expected of it.
 Function Each(id: String, driving: Driving, run: Func(Editor): Bool,
               how: String) Throws IOError, GraphicsError
@@ -258,6 +306,116 @@ Function Each(id: String, driving: Driving, run: Func(Editor): Bool,
         Expect(driving.Did(editor, scene), "{id} by {how} did nothing")
     End If
     editor.Finish()
+End Function
+
+// Whether the last dialog's what asks to save.
+Function AsksToSave(editor: Editor): Bool
+    Local showing = editor.ShowingDialog()
+    Return showing != Null && showing.Find("dialog.Don't Save") != Null
+End Function
+
+// Each way of leaving what's been changed asks first; Cancel leaves it all as it is, and it asks again.
+@Test
+Function WhatsUnsavedIsAskedAboutEachWayOut() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local routes: (String, Func(Editor), Func(Editor): Bool)[] = []
+    routes.Add(("file.close", Function(editor: Editor)
+        editor.Actions.Run("file.close")
+    End Function, Function(editor: Editor) => editor.Current() == Null))
+    routes.Add(("file.quit", Function(editor: Editor)
+        editor.Actions.Run("file.quit")
+    End Function, Function(editor: Editor) => editor.Quitting()))
+    routes.Add(("the window's close button", Function(editor: Editor)
+        Try
+            Try Simulate.CloseWindow()
+        Catch error As GraphicsError
+            Panic(error.Message)
+        End Try
+    End Function, Function(editor: Editor) => editor.Quitting()))
+    routes.Add(("another project", Function(editor: Editor)
+        Try
+            editor.Actions.Run("file.open")
+            editor.Step()
+            editor.Step()
+            Local showing = editor.ShowingDialog()
+            If showing == Null Then Panic("it didn't ask where")
+            Local field = showing.Find("dialog.path") As? TextField
+            If field == Null Then Panic("its field")
+            field.SetText(editor.Kept.Recent()[0] + "-other")
+            Try Click(editor, showing.Find("dialog.Open"))
+        Catch error As GraphicsError
+            Panic(error.Message)
+        End Try
+    End Function, Function(editor: Editor)
+        Return (editor.Current()?.Folder?.Text ?? "").EndsWith("-other")
+    End Function))
+    For route In routes
+        Local name, going, gone = route
+        Local settings = Try TempDir()
+        Local games = Try TempDir()
+        Local editor = Try Opened(settings, games)
+        Local here = editor.Current()
+        If here == Null Then Panic("its project")
+        Try MakeDemoProject(Path(here.Folder.Text + "-other"))
+        Local cube = Function()
+            editor.Actions.Run("add.cube")
+        End Function
+        cube()
+        Expect(editor.Edits.Modified())
+        going(editor)
+        editor.Step()
+        editor.Step()
+        Expect(AsksToSave(editor), "{name} didn't ask")
+        Expect(!gone(editor) && editor.Edits.Modified(), "{name} went ahead")
+        Expect(!Window.Closed(), "{name} is still closing")
+        Local showing = editor.ShowingDialog()
+        If showing == Null Then Panic("its dialog")
+        Try Click(editor, showing.Find("dialog.Cancel"))
+        editor.Step()
+        Expect(editor.ShowingDialog() == Null && !gone(editor) && Count(editor) == 1,
+               "{name} cancelled, it went")
+        // And again, this time not keeping it.
+        going(editor)
+        editor.Step()
+        editor.Step()
+        Expect(AsksToSave(editor), "{name} didn't ask again")
+        showing = editor.ShowingDialog()
+        If showing == Null Then Panic("its dialog")
+        Try Click(editor, showing.Find("dialog.Don't Save"))
+        editor.Step()
+        Expect(gone(editor), "{name} didn't do it, told not to save")
+        editor.Finish()
+    End For
+End Function
+
+// Save keeps it, then does what was asked; if it can't be saved, it stays.
+@Test
+Function SavingFirstThenItGoesAhead() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Opened(settings, games)
+    editor.Actions.Run("add.cube")
+    editor.SaveScene("res://kept.scene")
+    editor.Actions.Run("add.light")
+    Try Simulate.CloseWindow()
+    editor.Step()
+    editor.Step()
+    Local showing = editor.ShowingDialog()
+    If showing == Null Then Panic("its dialog")
+    Try Click(editor, showing.Find("dialog.Save"))
+    editor.Step()
+    Expect(editor.Quitting(), "it didn't end")
+    Expect((Try File.ReadText(games.Path / "game" / "assets" /
+                              "kept.scene")).Contains("kind = \"LIGHT\""))
+    editor.Finish()
+    // Nothing changed, nothing's asked.
+    Local more = Try TempDir()
+    Local again = Try Opened(more, games)
+    Try Simulate.CloseWindow()
+    again.Step()
+    Expect(again.Quitting() && again.ShowingDialog() == Null)
+    again.Finish()
 End Function
 
 @Test
