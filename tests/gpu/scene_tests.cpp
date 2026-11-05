@@ -10909,7 +10909,7 @@ TEST_CASE("a shader of its own reaches the prepass: what it moves, and what it c
             const float across = tangent * depth / 64.0F;
             fbe::golden::frame_t last;
             for (int frame = 0; frame <= 24; ++frame) {
-                move_to((0.5F + static_cast<float>(frame - 24) * 2.0F) * across);
+                move_to((0.5F + (static_cast<float>(frame - 24) * 2.0F)) * across);
                 last = scene.drawn();
             }
             // Each one's middle row, a mirror of the other about the view's middle.
