@@ -988,7 +988,8 @@ Function SidecarEditsHaveAHistoryOfTheirOwn() Throws IOError, GraphicsError
     Defer editor.Finish()
     editor.Actions.Run("add.cube")
     editor.SaveScene("res://a.scene")
-    editor.Step()
+    // Its row comes when its watcher says, which is later on a Mac, and moves the rows below it.
+    StepUntil(editor, Function() => editor.Files.RowOf("res://a.scene") != Null)
     Try ClickAt(editor, Row(editor, "res://wall.png").Center)
     (Found(editor, "assets.srgb") As? Toggle)?.Click()
     editor.Step()

@@ -842,7 +842,6 @@ Function ItsTexturesAreSavedAsItsImages() Throws IOError, GraphicsError
     Assets.MountFiles("res://kept", {"it.gltf": Dressed(material, textures, samplers)})
     Defer Assets.Unmount("res://kept")
     Local model = Try Assets.Load<Model>("res://kept/it.gltf")
-    Defer model.Free()
     Local paint = model.Materials()[0]
     Local color = paint.Texture(0)
     Local rough = paint.Map(MaterialMap.METAL_ROUGH)
@@ -894,4 +893,8 @@ Function ItsTexturesAreSavedAsItsImages() Throws IOError, GraphicsError
     For root In opened.Roots
         root.Free()
     End For
+    // What's read of it holds it no longer than the reading, and keeps what it draws.
+    model.Free()
+    Expect(model.Freed(), "a scene read of it still holds it")
+    Expect(again.Texture(0)?.Path() == "res://kept/it.gltf#1", "it's lost what it draws")
 End Function
