@@ -2856,8 +2856,8 @@ TEST_CASE("the LOD bias reaches what a cut-out's cut by in its shadow", "[gpu][s
     const std::uint64_t paint = fbe_material_create();
     wall(scene.world, -10.0F, 30.0F, paint);
     sun_from_right(scene.world);
-    // Whole in its middle, so a shadow; a quarter whole by its last level, which the cutoff cuts. A bias
-    // is on a level found from how UVs change, so they have to.
+    // Whole in its middle, so a shadow; a quarter whole by its last level, which the cutoff cuts. A
+    // bias is on a level found from how UVs change, so they have to.
     const std::uint64_t texture = fbe_texture_create(8, 8, FBE_TEXTURE_RGBA8, true);
     std::vector<std::uint8_t> pixels;
     for (int y = 0; y < 8; ++y) {
