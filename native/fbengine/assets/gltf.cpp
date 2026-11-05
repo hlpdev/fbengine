@@ -18,13 +18,13 @@
 #include <fastgltf/core.hpp>
 #include <fastgltf/tools.hpp>
 #include <fastgltf/types.hpp>
+#include <fbengine_simdjson.h>
 #include <format>
 #include <limits>
 #include <mutex>
 #include <new>
 #include <numbers>
 #include <optional>
-#include <simdjson.h>
 #include <string>
 #include <string_view>
 #include <unordered_set>

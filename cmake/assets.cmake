@@ -77,10 +77,13 @@ FetchContent_Declare(
   EXCLUDE_FROM_ALL
 )
 FetchContent_MakeAvailable(stb KTX fastgltf)
-# The fetched simdjson's headers, ahead of every other folder of what includes them: an Intel Mac's
-# Homebrew puts its own in /usr/local/include, which other dependencies' folders reach first. Its
-# version, which gltf.cpp holds the header it gets to, so one from elsewhere fails the build; what
-# builds gltf.cpp calls fbengine_use_fetched_simdjson.
+# The fetched simdjson, through a header of ours beside it, fbengine_simdjson.h, whose quoted include
+# finds the simdjson.h in its own folder first, whatever folders come before: an Intel Mac's Homebrew
+# puts its own simdjson.h in /usr/local/include, and a dependency's plain -I reaching it is searched
+# before the fetched folder, which comes as -isystem from fastgltf, a SYSTEM dependency. Beside it,
+# it's a system header as simdjson.h is, whose warnings aren't ours. Its version, which gltf.cpp
+# holds the header it gets to, so one from elsewhere fails the build; what builds gltf.cpp calls
+# fbengine_use_fetched_simdjson, and tools/check_simdjson.py asks each one's compile what it reads.
 set(fbengine_simdjson_folder "${fastgltf_SOURCE_DIR}/deps/simdjson")
 file(STRINGS "${fbengine_simdjson_folder}/simdjson.h" fbengine_simdjson_line
      REGEX "^#define SIMDJSON_VERSION \"[0-9.]+\"")
@@ -89,8 +92,9 @@ if(NOT fbengine_simdjson_version)
   message(FATAL_ERROR "fastgltf's simdjson.h says no version")
 endif()
 target_include_directories(fastgltf BEFORE PRIVATE "${fbengine_simdjson_folder}")
+file(CONFIGURE OUTPUT "${fbengine_simdjson_folder}/fbengine_simdjson.h"
+     CONTENT "// Made by fbengine's cmake/assets.cmake: the simdjson.h beside it.\n#include \"simdjson.h\"\n")
 function(fbengine_use_fetched_simdjson target)
-  target_include_directories(${target} BEFORE PRIVATE "${fbengine_simdjson_folder}")
   target_compile_definitions(${target} PRIVATE FBE_SIMDJSON_VERSION="${fbengine_simdjson_version}")
 endfunction()
 
