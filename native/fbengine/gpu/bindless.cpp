@@ -30,6 +30,8 @@ VkDescriptorSetLayout layout = VK_NULL_HANDLE;
 VkDescriptorPool pool = VK_NULL_HANDLE;
 VkDescriptorSet set = VK_NULL_HANDLE;
 std::uint32_t capacity = 0;
+/// The images the pool was made for, which the set's textures and samples are.
+std::uint32_t pool_held = 0;
 std::array<VkSampler, fbe::gpu::sampler_slots> samplers{};
 std::vector<std::uint32_t> free_samples_slots;
 
@@ -249,6 +251,7 @@ bool start_bindless() {
         .poolSizeCount = static_cast<std::uint32_t>(sizes.size()),
         .pPoolSizes = sizes.data(),
     };
+    pool_held = sizes[1].descriptorCount;
     result = vkCreateDescriptorPool(gpu.device, &pool_info, nullptr, &pool);
     if (result != VK_SUCCESS) {
         return fail_vulkan("couldn't make the bindless set's pool", result);
@@ -293,6 +296,10 @@ VkDescriptorSet bindless_set() {
 
 std::uint32_t texture_capacity() {
     return capacity;
+}
+
+std::uint32_t pool_images() {
+    return pool_held;
 }
 
 void write_texture(std::uint32_t index, VkImageView view) {

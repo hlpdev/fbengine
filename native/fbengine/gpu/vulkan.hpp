@@ -195,6 +195,9 @@ VkDescriptorSet bindless_set();
 
 /// How many textures the set holds, which is how many there can be.
 std::uint32_t texture_capacity();
+/// How many images the set's pool was made for: as many as the set has, or allocating it may fail
+/// on a GPU that, unlike lavapipe, holds a pool to its sizes.
+std::uint32_t pool_images();
 
 /// Points the set's texture `index` at `view`, sampled in SHADER_READ_ONLY_OPTIMAL.
 void write_texture(std::uint32_t index, VkImageView view);
