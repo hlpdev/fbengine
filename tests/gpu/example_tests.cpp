@@ -41,27 +41,42 @@ fbe::golden::frame_t saved(const std::filesystem::path& path) {
 
 } // namespace
 
-// Khronos's sample models, as tests/khronos saves them, which holds them to more than this.
+// Khronos's sample models, as tests/khronos saves them, which holds them to more than this. Golden
+// images are Mesa 26.2.4's, and Linux's CI has Ubuntu's 25.2.8, whose vkCmdBlitImage, what makes
+// mipmaps, rounds an 8-bit linear format's half a 255th high at each level, though sRGB's are the
+// same. So a normal or metal-rough map differs from far off, moving a floor's highlights and a
+// reflected horizon. On Linux, a frame with those can differ by the most CI measures there, past
+// linux-arm64's 1.39%, 0.44%, 0.06%, and 0.07% of its pixels, and everywhere else not at all.
 TEST_CASE("Khronos's sample models' frames match their golden images", "[.example]") {
+#ifdef __linux__
+    constexpr bool older_mesa = true;
+#else
+    constexpr bool older_mesa = false;
+#endif
+    struct model_frame_t {
+        std::string_view frame;
+        double share_on_older_mesa = 0.0;
+    };
     REQUIRE(fbe_window_set_headless(true));
     require(fbe_gpu_start());
-    for (const std::string_view frame : {
-             "AlphaBlendModeTest",
-             "EmissiveStrengthTest",
-             "MetalRoughSpheres",
-             "MetalRoughSpheresNoTextures",
-             "NormalTangentMirrorTest",
-             "NormalTangentTest",
-             "TextureLinearInterpolationTest",
-             "TextureSettingsTest",
-             "TextureTransformMultiTest",
-             "TextureTransformTest",
-             "Worked",
+    for (const auto& [frame, share_on_older_mesa] : {
+             model_frame_t{ .frame = "AlphaBlendModeTest", .share_on_older_mesa = 0.015 },
+             model_frame_t{ .frame = "EmissiveStrengthTest" },
+             model_frame_t{ .frame = "MetalRoughSpheres" },
+             model_frame_t{ .frame = "MetalRoughSpheresNoTextures" },
+             model_frame_t{ .frame = "NormalTangentMirrorTest", .share_on_older_mesa = 0.005 },
+             model_frame_t{ .frame = "NormalTangentTest", .share_on_older_mesa = 0.001 },
+             model_frame_t{ .frame = "TextureLinearInterpolationTest" },
+             model_frame_t{ .frame = "TextureSettingsTest" },
+             model_frame_t{ .frame = "TextureTransformMultiTest", .share_on_older_mesa = 0.001 },
+             model_frame_t{ .frame = "TextureTransformTest" },
+             model_frame_t{ .frame = "Worked" },
          }) {
         INFO("frame " << frame);
         const std::filesystem::path path = std::filesystem::path(FBENGINE_EXAMPLE_FRAMES) /
                                            "khronos" / std::format("frame_{}.png", frame);
-        fbe::golden::check(std::format("khronos_{}", frame), saved(path));
+        fbe::golden::check(std::format("khronos_{}", frame), saved(path),
+                           { .channel = 2, .share = older_mesa ? share_on_older_mesa : 0.0 });
     }
     stop_gpu();
 }

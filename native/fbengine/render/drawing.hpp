@@ -6,8 +6,11 @@
 #include "environment/environment.hpp"
 #include "fbengine.h"
 #include "gpu/buffer.hpp"
+#include "gpu/graph.hpp"
+#include "gpu/pipeline.hpp"
 #include "gpu/vulkan.hpp"
 #include "morph/morph.hpp"
+#include "render/render.hpp"
 #include "scene/camera.hpp"
 #include "scene/math.hpp"
 #include "scene/scene.hpp"
@@ -28,7 +31,8 @@ namespace fbe::render {
 /// it's skinned; its tangents', if it has them; its morph targets' and the ones it's drawn with, if
 /// it's morphed; its emitter's, if it's particles; its instances', if it has them; its material's
 /// index in the camera's; its own lights; how many matrices its palette has, 0 if it isn't skinned;
-/// how many targets it's drawn with, and how many vertices each has; and whether it has tangents.
+/// how many targets it's drawn with, and how many vertices each has; whether it has tangents; and
+/// which of its camera's previous records is its entity's, with temporal antialiasing.
 struct draw_data_t {
     std::array<float, 16> to_view;
     std::array<std::array<float, 4>, 3> normals;
@@ -48,7 +52,7 @@ struct draw_data_t {
     std::uint32_t drawn_target_count;
     std::uint32_t target_vertices;
     std::uint32_t has_tangents;
-    std::uint32_t spare;
+    std::uint32_t previous;
 };
 static_assert(sizeof(draw_data_t) == 224, "the scene shader reads draws 224 bytes apart");
 
@@ -162,8 +166,25 @@ struct camera_data_t {
     environment::shader_data_t environment;
     std::uint32_t has_environment;
     std::uint32_t spare_too;
+    /// What its entities were last frame, if it goes by that; how far its projection's off, as
+    /// its clip space goes; and what its ambient occlusion's raised to, 0 for none.
+    VkDeviceAddress previous;
+    std::array<float, 2> jitter;
+    float ambient_occlusion;
+    std::uint32_t moving;
 };
-static_assert(sizeof(camera_data_t) == 288, "the scene shader reads a camera of 288 bytes");
+static_assert(sizeof(camera_data_t) == 312, "the scene shader reads a camera of 312 bytes");
+
+/// An entity as it was last frame, as the scene shader's prepass reads it: from its space to clip
+/// space then, and its skin's palette then, if it had the same one.
+struct previous_data_t {
+    std::array<float, 16> to_clip;
+    VkDeviceAddress palette;
+    std::uint32_t has_palette;
+    std::uint32_t spare;
+};
+static_assert(sizeof(previous_data_t) == 80,
+              "the scene shader reads previous records 80 bytes apart");
 static_assert(sizeof(fbe_draw_light_t) == 64, "the scene shader reads lights 64 bytes apart");
 static_assert(sizeof(fbe_vertex_t) == 56, "the scene shader reads vertices 56 bytes apart");
 
@@ -230,7 +251,25 @@ struct recorded_pass_t {
     VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
     /// Whether it's a shadow pass, by the shader's own entry points for that.
     bool shadows = false;
+    /// Whether it's a camera's prepass, by the same shader's for that.
+    bool prepass = false;
+    /// What it reads as its camera's ambient occlusion.
+    gpu::resource_t occlusion = gpu::no_resource;
 };
+
+/// Records a triangle over a target, by a pipeline of its own, with what its shader's given.
+template <typename Push>
+void record_full_screen(VkCommandBuffer commands, VkPipeline pipeline, const Push& push) {
+    VkDescriptorSet set = gpu::bindless_set();
+    VkPipelineLayout layout = gpu::pipeline_layout();
+    vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &set, 0,
+                            nullptr);
+    vkCmdPushConstants(commands, layout, gpu::flag<VkShaderStageFlags>(VK_SHADER_STAGE_ALL), 0,
+                       sizeof(push), &push);
+    vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdDraw(commands, 3, 1, 0, 0);
+    gpu::count_draws(1, 1);
+}
 
 /// `found` in the frame's ring, or with `failed` set if there's no memory for it. An empty list is
 /// still one zeroed item, since a shader's loads from an address aren't all behind what stops them
@@ -259,6 +298,72 @@ material_data_t material_data(std::uint32_t material, std::uint64_t target,
 
 /// Records a pass's draws.
 void record_pass(VkCommandBuffer commands, const recorded_pass_t& pass);
+
+/// What a camera's main view's entities were last frame, and what goes to the next.
+struct motion_t {
+    scene::mat4_t to_clip;
+    std::unordered_map<std::uint64_t, scene::mat4_t> matrices;
+    std::unordered_map<std::uint64_t, scene::mat4_t> matrices_now;
+    std::unordered_map<std::uint64_t, std::vector<scene::mat4_t>> palettes;
+    std::unordered_map<std::uint64_t, std::vector<scene::mat4_t>> palettes_now;
+    std::vector<previous_data_t> records;
+    std::unordered_map<std::uint64_t, std::uint32_t> indices;
+};
+
+/// A camera's temporal antialiasing as it stands: its two textures, which is newest, and what it
+/// went by, the frame it was last drawn in among them; how many frames there are in it, 0 for none;
+/// how many it's been jittered, and this one's, in its clip space; and how its last view was
+/// turned, from the world.
+struct history_t {
+    std::array<std::uint64_t, 2> textures{};
+    std::size_t newest = 0;
+    VkExtent2D size{};
+    std::array<float, 4> viewport{};
+    std::uint64_t resets = 0;
+    std::uint64_t target = 0;
+    std::int64_t last_frame = 0;
+    std::uint32_t frames = 0;
+    std::uint32_t jittered = 0;
+    std::array<float, 2> jitter{};
+    scene::quat_t from_world;
+    motion_t motion;
+};
+
+/// A camera's history for this frame, made if it has to be, with no frames in it if its target,
+/// its size, or its viewport, or what it's been told have changed, or it's gone a while undrawn:
+/// null, with fbe_error's why, if it can't be.
+history_t* history_of(const scene::camera_t& camera, std::uint64_t target, VkExtent2D size,
+                      const std::array<float, 4>& viewport);
+
+/// Which of `motion`'s records is an item's entity's, added if it isn't there; `failed` if there's
+/// no memory for it. finish_motion's to go after a view's items.
+std::uint32_t previous_of(motion_t& motion, const item_t& item, const scene::tweened_t& tweened,
+                          bool& failed);
+void finish_motion(motion_t& motion, const scene::mat4_t& to_clip_now);
+
+/// Adds a camera's prepass, of its main view's opaque draws, as render/prepass.cpp has it, before
+/// its scene pass, sampling what `uses` says, as a cut-out's layers are: its target, or
+/// no_resource, with fbe_error's why.
+gpu::resource_t add_prepass(const view_batches_t& view, const recorded_pass_t& scene_pass,
+                            std::vector<std::pair<gpu::resource_t, gpu::use_t>> uses,
+                            VkExtent2D size);
+
+/// Adds a camera's ambient occlusion's passes, from its prepass: what they leave, or no_resource,
+/// with fbe_error's why.
+gpu::resource_t add_ambient_occlusion(const scene::camera_t& camera, const scene::view_t& view,
+                                      gpu::resource_t prepass, const recorded_pass_t& scene_pass,
+                                      const std::array<float, 2>& jitter, std::uint32_t frame,
+                                      VkExtent2D size);
+
+/// Adds a camera's FXAA, from a picture done but for it: false, with fbe_error's why, if it can't.
+bool add_fxaa(const scene::camera_t& camera, gpu::resource_t image, gpu::resource_t into,
+              VkExtent2D size, VkFormat format, VkSampleCountFlagBits samples, VkRect2D scissor);
+
+/// Adds what resolves a camera's image over its history: what comes of it, which the camera's post
+/// processing reads in its image's place, or no_resource, with fbe_error's why.
+gpu::resource_t add_resolve(history_t& history, const scene::camera_t& camera,
+                            const scene::view_t& view, gpu::resource_t image,
+                            gpu::resource_t prepass, const recorded_pass_t& scene_pass);
 
 /// A camera's shadows this frame: the atlas, 0 for none, its tiles as the shader reads them but for
 /// their matrices, which are from each view, what those are from, and each shadowed light's first.

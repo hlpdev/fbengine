@@ -11,16 +11,20 @@
 //     void move(inout float3 position, inout float3 normal, MovingVertex vertex)
 //
 // which takes each vertex of what's drawn but particles, morphed and skinned, in its own space, and
-// of its shadow, in meters and radians, never °. The view culls by the Geometry's bounds, not
-// where this moves it, so a Geometry moved further than they reach wants a SetCullBox; a Terrain has
-// none, and is culled where its heights have it, so moving one stays near them; and an Instances is
-// culled by where each of its instances is, moved in its own space before its matrix, so the same.
+// of its shadow and its prepass, in meters and radians, never °. The view culls by the Geometry's
+// bounds, not where this moves it, so a Geometry moved further than they reach wants a SetCullBox; a
+// Terrain has none, and is culled where its heights have it, so moving one stays near them; and an
+// Instances is culled by where each of its instances is, moved in its own space before its matrix,
+// so the same.
 //
 // Whatever `shade` returns goes on as the scene's own color does: its alpha to the material's cutoff,
 // then fog and blend. Colors are in linear light, whatever the material's shading. A material's blend
 // doesn't look at what `shade` returns: BLEND AUTO goes by the material's color and textures, so a
 // shader whose alpha is to blend sets BLEND ALPHA on it. A shadow's cut out by the material's own
-// alpha, as `shade` can light what it draws, and a shadow's pass has no lights.
+// alpha, as `shade` can light what it draws, and a shadow's pass has no lights. A camera's prepass,
+// for ambient occlusion and temporal antialiasing, runs `shade` too, where the material has a cutoff,
+// so what's cut there by what it returns has none of either; a `discard` of its own isn't seen there,
+// and in that pass what it's given has no ambient occlusion in it.
 //
 // It reads only what's here. A texture of its own, or a global that isn't `static`, is something the
 // scene's pipelines don't bind, which CookShader refuses: parameters and a material's layers are how

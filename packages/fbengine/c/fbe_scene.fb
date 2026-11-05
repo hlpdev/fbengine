@@ -283,6 +283,15 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_world_ambient(world: UInt64, color: Ptr<fbe_color_t>): Bool
     Function fbe_camera_set_hdr(camera: UInt64, hdr: Bool): Bool
     Function fbe_camera_hdr(camera: UInt64): Bool
+    Function fbe_camera_set_ambient_occlusion(camera: UInt64, strength: Float32): Bool
+    Function fbe_camera_ambient_occlusion(camera: UInt64): Float32
+    Function fbe_camera_set_ambient_occlusion_radius(camera: UInt64, radius: Float32): Bool
+    Function fbe_camera_ambient_occlusion_radius(camera: UInt64): Float32
+    Function fbe_camera_set_fxaa(camera: UInt64, on: Bool): Bool
+    Function fbe_camera_fxaa(camera: UInt64): Bool
+    Function fbe_camera_set_temporal_aa(camera: UInt64, on: Bool): Bool
+    Function fbe_camera_temporal_aa(camera: UInt64): Bool
+    Function fbe_camera_reset_history(camera: UInt64): Bool
     Function fbe_camera_set_exposure(camera: UInt64, exposure: Float32): Bool
     Function fbe_camera_exposure(camera: UInt64): Float32
     Function fbe_camera_set_tonemap(camera: UInt64, tonemap: Int32): Bool

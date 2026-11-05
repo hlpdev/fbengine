@@ -245,7 +245,7 @@ gpu::resource_t add_bloom(const scene::camera_t& camera, gpu::resource_t image, 
 
 bool add_post_passes(const scene::camera_t& camera, gpu::resource_t image, gpu::resource_t into,
                      VkExtent2D size, VkFormat format, VkSampleCountFlagBits samples,
-                     VkRect2D scissor) {
+                     VkRect2D scissor, bool into_nothing) {
     const bool blooms =
         camera.bloom_intensity > 0.0F &&
         !bloom_levels({ .width = scissor.extent.width, .height = scissor.extent.height }).empty();
@@ -259,7 +259,8 @@ bool add_post_passes(const scene::camera_t& camera, gpu::resource_t image, gpu::
         .shader = &shaders::tonemap,
         .color = format,
         .samples = samples,
-        .blend = camera.clears_color ? gpu::blend_t::NONE : gpu::blend_t::PREMULTIPLIED,
+        .blend =
+            camera.clears_color || into_nothing ? gpu::blend_t::NONE : gpu::blend_t::PREMULTIPLIED,
     });
     if (pipeline == VK_NULL_HANDLE) {
         return false;
@@ -289,6 +290,7 @@ bool add_post_passes(const scene::camera_t& camera, gpu::resource_t image, gpu::
         .name = "tonemap",
         .colors = { {
             .target = into,
+            .clear = into_nothing,
         }, },
         .uses = std::move(uses),
         .record =

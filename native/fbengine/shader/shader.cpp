@@ -55,7 +55,7 @@ struct entry_t {
     std::string_view name;
     std::uint32_t model;
 };
-constexpr std::array<entry_t, 7> entries{
+constexpr std::array<entry_t, 10> entries{
     {
         { .name = "vertexMain", .model = model_vertex },
         { .name = "fragmentMain", .model = model_fragment },
@@ -64,6 +64,9 @@ constexpr std::array<entry_t, 7> entries{
         { .name = "shadowFragment", .model = model_fragment },
         { .name = "instanceVertex", .model = model_vertex },
         { .name = "shadowInstanceVertex", .model = model_vertex },
+        { .name = "prepassVertex", .model = model_vertex },
+        { .name = "prepassInstanceVertex", .model = model_vertex },
+        { .name = "prepassFragment", .model = model_fragment },
     },
 };
 

@@ -327,6 +327,14 @@ struct instance_cluster_t {
     vec3_t high;
     /// The biggest sphere one of them is in, which is what its size in a view goes by.
     float radius = 0.0F;
+    /// Whether their matrices mirror, as all of a cluster's do or none.
+    bool mirrored = false;
+};
+
+/// A level of an Instances' geometry that some of its clusters draw, and whether those mirror.
+struct instance_level_t {
+    std::uint32_t level = none;
+    bool mirrored = false;
 };
 
 /// An Instances entity: what it draws, in, and its instances, in an order where those near each
@@ -348,6 +356,8 @@ struct instances_t {
     std::vector<std::uint32_t> stale_clusters;
     /// How many of them have an alpha under 1.
     std::size_t faded = 0;
+    /// Where those whose matrices mirror start in `items`, after those that don't.
+    std::size_t mirrored_first = 0;
     /// Where in `items` they've changed since they went to the GPU, if not all of them have.
     std::vector<std::uint32_t> changed;
     bool all_changed = true;
@@ -449,6 +459,14 @@ struct camera_t {
     float fog_density = 0.02F;
     /// Whether it draws into an HDR image, and what that comes to in its target.
     bool hdr = false;
+    /// What its ambient occlusion's raised to, 0 for none, and how far it reaches in the world.
+    float ambient_occlusion = 0.0F;
+    float ambient_occlusion_radius = 1.0F;
+    /// Whether its picture's antialiased from itself, after all else.
+    bool fxaa = false;
+    /// Whether an HDR camera antialiases over frames, and how many times it's been told to forget.
+    bool temporal_aa = false;
+    std::uint64_t history_resets = 0;
     float exposure = 1.0F;
     std::int32_t tonemap = FBE_TONEMAP_NONE;
     float gamma = 1.0F;
@@ -614,9 +632,10 @@ bool instances_bounds(instances_t& found, vec3_t& min, vec3_t& max);
 std::uint32_t cluster_lod(const instances_t& found, const instance_cluster_t& cluster,
                           const mat4_t& matrix, const camera_t& camera, vec3_t eye,
                           float half_height);
-/// The levels some cluster of it draws.
-std::vector<std::uint32_t> instances_levels(instances_t& found, const mat4_t& matrix,
-                                            const camera_t& camera, vec3_t eye, float half_height);
+/// The levels some cluster of it draws, each with whether those mirror.
+std::vector<instance_level_t> instances_levels(instances_t& found, const mat4_t& matrix,
+                                               const camera_t& camera, vec3_t eye,
+                                               float half_height);
 /// The geometry to draw of one with levels of detail, by slot, or none for nothing, at a place and
 /// size in the world, from an eye, by how the camera's view spreads: half its height at a depth of
 /// 1, or in world units.
