@@ -1210,8 +1210,8 @@ void record_depth_read(VkCommandBuffer commands, const texture_t& target) {
         .layerCount = 1,
         .pDepthAttachment = &attachment,
     };
-    vkCmdBeginRendering(commands, &rendering);
-    vkCmdEndRendering(commands);
+    gpu::device()->begin_rendering(commands, &rendering);
+    gpu::device()->end_rendering(commands);
     moved(read->image, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, output, resolving, shaders, sampled);
     moved(target.depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,

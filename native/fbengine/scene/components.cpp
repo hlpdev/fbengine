@@ -64,6 +64,10 @@ void copy_component(std::uint32_t from, std::uint32_t to) {
         if (copy.target != 0) {
             fbe_texture_retain(copy.target);
         }
+        // The same passes, which it holds as well, as it lets each go when it's freed.
+        for (const std::uint64_t pass : copy.passes) {
+            fbe_material_retain(pass);
+        }
     } else if (entities.kind[from] == FBE_ENTITY_LIGHT) {
         light_t& copy = scene().lights[entities.component[to]];
         copy = scene().lights[entities.component[from]];

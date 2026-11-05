@@ -68,6 +68,23 @@ def check_vulkan_driver(verify):
         assert verify.vulkan_driver(folder) == "lavapipe.json", "verify doesn't read CMake's driver"
 
 
+def check_device_entries(verify):
+    """A call of Vulkan 1.3's own entry is found anywhere in native code but device.cpp, and not in a
+    comment or where it's only named."""
+    with tempfile.TemporaryDirectory() as folder:
+        root = pathlib.Path(folder)
+        (root / "native" / "a" / "gpu").mkdir(parents=True)
+        (root / "native" / "a" / "x.cpp").write_text(
+            "void f() {\n    // vkCmdBeginRendering(commands, &info);\n    vkCmdEndRendering (commands);\n}\n")
+        (root / "native" / "a" / "y.hpp").write_text("auto g = vkCmdBeginRenderingKHR(commands, &info);\n")
+        (root / "native" / "a" / "gpu" / "device.cpp").write_text(
+            "begin = core13 ? vkCmdBeginRendering : vkCmdBeginRenderingKHR;\nvkCmdBeginRendering(c, &i);\n")
+        (root / "native" / "a" / "z.cpp").write_text("gpu.begin_rendering(commands, &info);\n")
+        found = verify.direct_entries(root)
+        assert found == ["native/a/x.cpp:3", "native/a/y.hpp:1"], found
+    assert verify.direct_entries(verify.ROOT) == [], verify.direct_entries(verify.ROOT)
+
+
 def main():
     show_finds_what_has_a_watch()
     verify = load()
@@ -80,6 +97,7 @@ def main():
     assert len(set(verify.TURNS)) == 4, "four verifies at a time take four locks"
     check_no_error_dialogs(verify)
     check_vulkan_driver(verify)
+    check_device_entries(verify)
     print("verify's locks hold")
 
 

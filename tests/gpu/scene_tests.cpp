@@ -10928,6 +10928,30 @@ TEST_CASE("a pass runs on a target of any format and samples", "[gpu][scene]") {
     fbe_texture_release(target);
 }
 
+// Entity.Copy and the editor's duplicate: both hold the passes, so freeing one leaves the other's.
+TEST_CASE("a camera's copy runs its passes, and holds them as its own", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.25F, 0.25F, 0.25F, 1.0F));
+    const std::uint64_t pass = game_pass(pass_inverts);
+    require(fbe_camera_add_pass(scene.camera, pass));
+    const std::uint64_t copy = fbe_entity_copy(scene.camera, scene.world, 0);
+    REQUIRE(copy != 0);
+    CHECK(fbe_camera_pass_count(copy) == 1);
+    CHECK(fbe_camera_pass(copy, 0) == pass);
+    // Only the copy, into the same target.
+    require(fbe_entity_set_hidden(scene.camera, true));
+    CHECK(near(middle(scene.drawn()), { srgb(0.75F), srgb(0.75F), srgb(0.75F) }));
+    require(fbe_entity_free(copy));
+    require(fbe_entity_set_hidden(scene.camera, false));
+    CHECK(near(middle(scene.drawn()), { srgb(0.75F), srgb(0.75F), srgb(0.75F) }));
+    require(fbe_camera_remove_pass(scene.camera, pass));
+    // The game's is the only hold left.
+    CHECK(fbe_material_set_parameter(pass, 1, 1.0F, 1.0F, 1.0F, 1.0F));
+    require(fbe_material_release(pass));
+    CHECK_FALSE(fbe_material_set_parameter(pass, 1, 1.0F, 1.0F, 1.0F, 1.0F));
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
 TEST_CASE("a material with a pass's shader draws as one with none does", "[gpu][scene]") {
     const scene_t scene;
     const std::uint64_t paint = game_pass();
