@@ -28,6 +28,7 @@ Const EXPOSURE: Float = 0.8
 Const BLOOM: Float = 0.5
 Const BLOOM_FROM: Float = 1.5
 Const LAMP_GLOW: Float = 4.0
+Const LANTERN_LIGHT: Float = 30.0
 
 /// Places on the island a game goes to, and walks through.
 Public Enum Spot
@@ -145,7 +146,7 @@ End Function
 // The mill, blocked out: walls with a door in the south one, a floor, a roof, the wheel by its east
 // wall, and the lamp on top; gives its pivot, its wheel, and its lamp.
 @MainThread
-Function BuildMill(held: Texture[]): (Pivot, Mesh, Mesh) Throws IOError
+Function BuildMill(held: Texture[]): (Pivot, Mesh, Mesh, Light) Throws IOError
     Local wood = Try Wood(held)
     Local iron = Try Iron(held, Color(1.0, 1.0, 1.0))
     Local stone = Try Rock(held, Color(0.8, 0.8, 0.82), 0.5)
@@ -172,7 +173,7 @@ Function BuildMill(held: Texture[]): (Pivot, Mesh, Mesh) Throws IOError
     // A lantern over the works, so what's fitted can be seen, as the walls keep the sky out.
     Local lantern = Light(LightType.POINT, mill)
     lantern.SetColor(Color(1.0, 0.72, 0.42))
-    lantern.SetIntensity(30.0)
+    lantern.SetIntensity(LANTERN_LIGHT)
     lantern.SetRange(14.0)
     lantern.SetPosition(Vec3(0.5, 3.8, 0.0))
     // The lamp on the roof, unlit until the water's back.
@@ -180,7 +181,7 @@ Function BuildMill(held: Texture[]): (Pivot, Mesh, Mesh) Throws IOError
     lamp.SetMaterial(brass)
     lamp.SetPosition(Vec3(0.0, 6.1, 0.0))
     lamp.SetScale(Vec3(0.5, 0.5, 0.5))
-    Return (mill, wheel, lamp)
+    Return (mill, wheel, lamp, lantern)
 End Function
 
 // The parts, each lying where it does, by its number: the gear, the paddle, and the belt.
@@ -212,6 +213,7 @@ Public Final Class Island
     Field parts: Mesh[]
     Field sun: Light
     Field around: Environment
+    Field lantern: Light
     Field lampLight: Light? = Null
     Field lampUnlit: Material
     Field sizes: Vec3[] = []
@@ -219,7 +221,8 @@ Public Final Class Island
     Field pipMesh: Mesh
 
     New(scene: World, ground: Terrain, sea: Mesh, model: Model, pip: Entity, held: Texture[],
-        mill: Pivot, wheel: Mesh, lamp: Mesh, parts: Mesh[], sun: Light, around: Environment)
+        mill: Pivot, wheel: Mesh, lamp: Mesh, parts: Mesh[], sun: Light, around: Environment,
+        lantern: Light)
         Self.scene = scene
         Self.ground = ground
         Self.sea = sea
@@ -232,6 +235,7 @@ Public Final Class Island
         Self.parts = parts
         Self.sun = sun
         Self.around = around
+        Self.lantern = lantern
         lampUnlit = lamp.Material() ?? Material(Color(1.0, 1.0, 1.0))
         pipHead = pip.Find("head") ?? pip
         pipMesh = (pip.Find("pip") ?? pip) As Mesh
@@ -282,7 +286,7 @@ Public Final Class Island
         water.SetMetalRough(0.0, 0.18)
         sea.SetMaterial(water)
 
-        Local mill, wheel, lamp = Try BuildMill(held)
+        Local mill, wheel, lamp, lantern = Try BuildMill(held)
         Local parts = Try BuildParts(held)
 
         Local model = Try Assets.Load<Model>(Res.Pip)
@@ -293,7 +297,8 @@ Public Final Class Island
         // Facing the yard's view, as glTF's front is +Z.
         pip.SetRotation(0.0, ToRadians(20.0), 0.0)
         pip.Player().Play(model.Clips()[0])
-        Return Island(scene, ground, sea, model, pip, held, mill, wheel, lamp, parts, sun, around)
+        Return Island(scene, ground, sea, model, pip, held, mill, wheel, lamp, parts, sun, around,
+                      lantern)
     End Method
 
     /// The World it's in.
@@ -398,6 +403,22 @@ Public Final Class Island
     @MainThread
     Public Method SetAround(on: Bool)
         scene.SetEnvironment(on ? around : Null, AROUND_LIGHT)
+    End Method
+
+    /// Turns the sun's shadows off or on, to see what they do.
+    @MainThread Public Method SetSunShadows(on: Bool)
+        sun.SetShadows(on)
+    End Method
+
+    /// Turns the lantern in the mill off or on, to see what it does.
+    @MainThread Public Method SetLantern(on: Bool)
+        lantern.SetIntensity(on ? LANTERN_LIGHT : 0.0)
+    End Method
+
+    /// Whether Pip's body has brass's maps, which its file hasn't: only a color.
+    @MainThread Public Method PipHasMaps(): Bool
+        Local body = model.Geometries()[0].Surface(0).Material()
+        Return body != Null && body.Map(MaterialMap.NORMAL) != Null
     End Method
 
     /// How far the wheel's turned.

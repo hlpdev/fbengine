@@ -289,6 +289,28 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     Local yardLate = Try Screen.ToImage()
     Flip(False)
     Checks("and what's lit with it", Different(yardEarly, yardLate) > 0.1)
+    // The mill's shadow, on the yard.
+    island.SetSunShadows(False)
+    island.Scene().Render()
+    Local unshadowed = Try Screen.ToImage()
+    Flip(False)
+    island.SetSunShadows(True)
+    Checks("the sun casts shadows", Different(yardLate, unshadowed) > 0.0005)
+    // The lantern, in the mill.
+    Local insideView = Views()[3]
+    camera.SetPosition(insideView.1)
+    camera.PointAt(insideView.2)
+    island.Scene().Render()
+    Local byLantern = Try Screen.ToImage()
+    Flip(False)
+    island.SetLantern(False)
+    island.Scene().Render()
+    Local noLantern = Try Screen.ToImage()
+    Flip(False)
+    island.SetLantern(True)
+    Checks("the lantern lights the mill", Different(byLantern, noLantern) > 0.2)
+    camera.SetPosition(yardView.1)
+    camera.PointAt(yardView.2)
     // The storm's grade: greyer, by its saturation, and darker.
     camera.SetGrade(StormGrade(0.0))
     island.Scene().Render()
@@ -299,7 +321,9 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     Local stormy = Try Screen.ToImage()
     Flip(False)
     Try Screen.Save(folder / "storm.png")
-    Checks("the storm darkens what's seen", Brightness(stormy[640, 4]) < Brightness(clear[640, 4]))
+    // By how bright it looks, which greying alone leaves about where it was.
+    Checks("the storm darkens what's seen", Luma(stormy[640, 4]) < Luma(clear[640, 4]) * 0.97)
+    Checks("Pip's body is its brass", island.PipHasMaps())
 End Function
 
 // How much of two images of a size differ, by more than a little, from 0 to 1.
@@ -965,6 +989,11 @@ Function WarmNear(camera: Camera, image: Image, place: Vec3): Bool
     Return False
 End Function
 
+// How bright a color looks.
+Function Luma(pixel: Color32): Float
+    Return 0.2126 * (pixel.r As Float) + 0.7152 * (pixel.g As Float) + 0.0722 * (pixel.b As Float)
+End Function
+
 // How bright a color is, adding its channels.
 Function Brightness(pixel: Color32): Int => (pixel.r As Int) + (pixel.g As Int) + (pixel.b As Int)
 
@@ -1021,6 +1050,8 @@ Function SaveWalk(folder: Path) Throws GraphicsError, IOError, AudioError
             looksWarm(game, save(game, "walk_fitting"), Part.PADDLE, "the paddle's seen, fitted")
         End If
         If doing == "ended"
+            Checks("the storm's grade is on what you see, at its end",
+                   game.View().Grade().Saturation < 1.0)
             // From outside, to see the lamp and the wheel.
             Local view = LitView()
             game.View().SetPosition(view.0)
@@ -1068,11 +1099,13 @@ End Function
 // its first, and its worst. Run as a release, with nothing else on the GPU, it's the number for 60 fps.
 Function FrameCost(device: Int32, frames: Int) Throws GraphicsError, IOError, AudioError
     Window.SetHeadless(True)
-    // Not on a real GPU unless it's asked for: on an integrated one, this has lost the GPU, over and over,
-    // and taken the machine with it.
-    Local chosen = (Try Gpu.Devices())[device]
-    If !MayMeasureOn(chosen.Kind == GpuKind.CPU, Env.Get("SLACK_WATER_REAL_GPU"))
-        PrintError("--fps is on a real GPU only with SLACK_WATER_REAL_GPU=1, not {chosen}")
+    // Not on a real GPU unless it's asked for and the loader shows that one alone: on an integrated one,
+    // this lost the GPU, over and over, and took the machine with it.
+    Local devices = Try Gpu.Devices()
+    Local chosen = devices[device]
+    If !MayMeasureOn(chosen.Kind == GpuKind.CPU, Env.Get("SLACK_WATER_REAL_GPU"), devices.Count)
+        PrintError("--fps is on a real GPU only with SLACK_WATER_REAL_GPU=1, and with it the only device " +
+                   "the loader shows, not {chosen} of {devices.Count}")
         Process.Exit(2)
     End If
     Gpu.SetDevice(device)

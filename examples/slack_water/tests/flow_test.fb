@@ -834,15 +834,16 @@ Function TheStormAndSunGoByTheClock()
     Expect(SunAt(TIDE_IN_AT + 100.0).0 == last.0)
 End Function
 
-// What a frame's cost is measured on: a real GPU only if that's asked for by name.
+// What a frame's cost is measured on: a real GPU only if that's asked for, and the only one shown.
 @Test
-Function ARealGpuIsMeasuredOnlyIfAsked()
-    Expect(MayMeasureOn(True, Null))
-    Expect(MayMeasureOn(True, "0"))
-    Expect(!MayMeasureOn(False, Null))
-    Expect(!MayMeasureOn(False, "0"))
-    Expect(!MayMeasureOn(False, ""))
-    Expect(MayMeasureOn(False, "1"))
+Function ARealGpuIsMeasuredOnlyIfAskedAndAlone()
+    Expect(MayMeasureOn(True, Null, 1))
+    Expect(MayMeasureOn(True, "0", 3))
+    Expect(!MayMeasureOn(False, Null, 1))
+    Expect(!MayMeasureOn(False, "0", 1))
+    Expect(!MayMeasureOn(False, "", 1))
+    Expect(MayMeasureOn(False, "1", 1))
+    Expect(!MayMeasureOn(False, "1", 2))
 End Function
 
 // A cost from a lost GPU isn't a cost, however low it looks.
