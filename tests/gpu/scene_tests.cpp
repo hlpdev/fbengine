@@ -3770,8 +3770,12 @@ TEST_CASE("an HDR camera's target takes it in its own format", "[gpu][scene]") {
     std::array<std::uint8_t, sizeof(halves)> read_bytes{};
     require(fbe_texture_read(floats, 0, read_bytes.data(), sizeof(halves)));
     std::memcpy(halves.data(), read_bytes.data(), sizeof(halves));
-    CHECK(halves[((std::size_t{ 4 } * 8) + 4) * 4] == 0x4400);
-    CHECK(halves[(((std::size_t{ 4 } * 8) + 4) * 4) + 1] == 0x3800);
+    // A GPU may round to either half beside what it worked out: Apple's has 0x37FF for 0.5.
+    const auto within_a_unit = [](std::uint16_t half, std::uint16_t exact) {
+        return std::abs(static_cast<int>(half) - static_cast<int>(exact)) <= 1;
+    };
+    CHECK(within_a_unit(halves[((std::size_t{ 4 } * 8) + 4) * 4], 0x4400));
+    CHECK(within_a_unit(halves[(((std::size_t{ 4 } * 8) + 4) * 4) + 1], 0x3800));
     const std::uint64_t linear = fbe_texture_create_target(8, 8, FBE_TEXTURE_RGBA8_LINEAR, 1, true);
     require(linear != 0);
     require(fbe_camera_set_target(scene.camera, linear));
@@ -8815,11 +8819,13 @@ TEST_CASE("bloom's what its passes say, pixel by pixel", "[gpu][scene]") {
     light_rig_t rig(scene, width, height);
     const plane_t picture = off_center(width, height);
     rig.show(picture);
-    // Without it, the picture's what's drawn, where it should be.
+    // Without it, the picture's what's drawn, where it should be, to a unit of a half float, which
+    // is at most 1/1024th of what it holds, and at 40 more than 0.01.
     int wrong = 0;
     const plane_t plain = rig.drawn();
     for (std::size_t at = 0; at < plain.light.size(); ++at) {
-        wrong += std::abs(plain.light[at] - picture.light[at]) > 0.01F ? 1 : 0;
+        const float room = 0.01F + (picture.light[at] / 1024.0F);
+        wrong += std::abs(plain.light[at] - picture.light[at]) > room ? 1 : 0;
     }
     CHECK(wrong == 0);
     require(fbe_camera_set_bloom(scene.camera, 0.5F, 1.0F));

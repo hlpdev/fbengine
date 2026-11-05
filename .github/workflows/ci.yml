@@ -197,6 +197,31 @@ jobs:
         with:
           version: ${{ env.FB_VERSION }}
 
+      # Khronos's files, kept by what pins them, so a slow GitHub doesn't lose this job. Another pin's
+      # cache brings what hasn't changed, and CMake checks each by its hash whatever's brought.
+      - name: Restore Khronos's files
+        id: khronos
+        uses: actions/cache/restore@v6
+        with:
+          path: build/khronos
+          key: khronos-${{ runner.os }}-${{ hashFiles('tests/khronos/files.cmake') }}
+          restore-keys: khronos-${{ runner.os }}-
+
+      - name: Configure
+        env:
+          # As the test job's: fb 1.2.2's FileWatcher and a runner's 8.3 TEMP.
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DFBENGINE_REQUIRE_KHRONOS=ON
+
+      # Saved here, not at the job's end, so a red test doesn't lose what was fetched.
+      - name: Save Khronos's files
+        if: steps.khronos.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: build/khronos
+          key: ${{ steps.khronos.outputs.cache-primary-key }}
+
       # macOS drops DYLD_ variables on the way into the shell, so they're given to ctest itself,
       # which finds the loader there for volk. Vulkan's validation layers check every test's GPU
       # work, which a test requires when FBE_GPU_VALIDATION is 1.
@@ -208,7 +233,6 @@ jobs:
         run: |
           echo "VK_DRIVER_FILES=$VK_DRIVER_FILES"
           export VK_LOADER_DEBUG=error,warn
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DFBENGINE_REQUIRE_KHRONOS=ON
           # Every target, so ctest finds every test it lists: the C++ tests, the packages', and the
           # examples'.
           cmake --build build --parallel
