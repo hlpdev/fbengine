@@ -266,9 +266,12 @@ std::uint64_t lobe_source(std::int32_t width, std::int32_t height) {
     return source_of(width, height, true, [width, height](std::int32_t x, std::int32_t y) {
         const double phi = (((static_cast<double>(x) + 0.5) / width) - 0.5) * 2.0 * pi;
         const double theta = ((static_cast<double>(y) + 0.5) / height) * pi;
-        const auto value =
-            static_cast<float>(lobe({ std::sin(phi) * std::sin(theta), std::cos(theta),
-                                      -std::cos(phi) * std::sin(theta) }));
+        const vec3_t direction{
+            std::sin(phi) * std::sin(theta),
+            std::cos(theta),
+            -std::cos(phi) * std::sin(theta),
+        };
+        const auto value = static_cast<float>(lobe(direction));
         return std::array<float, 3>{ value, value, value };
     });
 }
