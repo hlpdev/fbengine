@@ -975,3 +975,16 @@ Function HowBrightAnImageIsIsItsChannelsMean()
     image[1, 0] = Color32(0, 0, 0, 0)
     Expect(MeanBrightness(image) == 30.0)
 End Function
+
+@Test
+Function WhatsWhiteIsBrightAndGrey()
+    Local image = Image(20, 20)
+    image[10, 10] = Color32(230, 228, 220, 255)
+    image[11, 10] = Color32(240, 200, 90, 255)
+    image[12, 10] = Color32(160, 160, 160, 255)
+    // Bright, but brass's color.
+    image[10, 11] = Color32(255, 210, 175, 255)
+    image[17, 10] = Color32(250, 250, 250, 255)
+    Expect(WhiteAround(image, 10, 10) == 1)
+    Expect(WhiteAround(image, 11, 10) == 2)
+End Function

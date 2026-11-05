@@ -130,3 +130,17 @@ Public Function MeanBrightness(image: Image): Float
     End For
     Return sum / (3.0 * ((image.Width * image.Height) As Float))
 End Function
+
+/// How many pixels of `image` within 6 of (`x`, `y`) are white: bright, and about as blue as they're red.
+Public Function WhiteAround(image: Image, x: Int, y: Int): Int
+    Local count = 0
+    For row = Max(y - 6, 0) To Min(y + 6, image.Height - 1)
+        For column = Max(x - 6, 0) To Min(x + 6, image.Width - 1)
+            Local pixel = image[column, row]
+            Local least = Min(pixel.r As Int, Min(pixel.g As Int, pixel.b As Int))
+            Local most = Max(pixel.r As Int, Max(pixel.g As Int, pixel.b As Int))
+            If least > 170 && most - least < 40 Then count += 1
+        End For
+    End For
+    Return count
+End Function

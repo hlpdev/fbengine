@@ -531,6 +531,21 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     island.Drawn(camera)
     Local brassy = Try Screen.ToImage()
     Flip(False)
+    // Its eyes shut, saved for a person to see, and seen.
+    island.BlinkPip(1.0)
+    island.Drawn(camera)
+    Try Screen.Save(folder / "pip_blink.png")
+    Local blinked = Try Screen.ToImage()
+    Flip(False)
+    island.BlinkPip(0.0)
+    // One of them, a little in front of its head, as Pip faces.
+    Local pipNow = island.PipEntity()
+    Local eyes = pipNow.Position(Space.WORLD) +
+                 pipNow.Rotation(Space.WORLD) * Vec3(0.05, 0.745, 0.1)
+    Local eyeAt = camera.Project(eyes)
+    Local openWhite = eyeAt != Null ? WhiteAround(brassy, eyeAt.x As Int, eyeAt.y As Int) : 0
+    Local shutWhite = eyeAt != Null ? WhiteAround(blinked, eyeAt.x As Int, eyeAt.y As Int) : 0
+    Checks("its eyes shut, as they're drawn", openWhite > 2 * shutWhite + 4)
     Local body = island.PipBody()
     island.SetPipBody(Material(Color(0.0, 1.0, 0.0)))
     island.Drawn(camera)
