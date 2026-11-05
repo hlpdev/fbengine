@@ -952,6 +952,19 @@ End Function
 // Whether a color's warm, as brass and oiled wood are, and not gray.
 Function IsWarm(pixel: Color32): Bool => (pixel.r As Int) > (pixel.b As Int) + 20
 
+// Whether what's drawn at `place` looks warm, or just beside it, as the middle of a thin part seen from
+// under it may be its underside, which reflects the sky's grey.
+Function WarmNear(camera: Camera, image: Image, place: Vec3): Bool
+    Local at = camera.Project(place)
+    If at == Null Then Return False
+    For y = Max((at.y As Int) - 6, 0) To Min((at.y As Int) + 6, image.Height - 1)
+        For x = Max((at.x As Int) - 6, 0) To Min((at.x As Int) + 6, image.Width - 1)
+            If IsWarm(image[x, y]) Then Return True
+        End For
+    End For
+    Return False
+End Function
+
 // How bright a color is, adding its channels.
 Function Brightness(pixel: Color32): Int => (pixel.r As Int) + (pixel.g As Int) + (pixel.b As Int)
 
@@ -980,8 +993,8 @@ Function SaveWalk(folder: Path) Throws GraphicsError, IOError, AudioError
     End Function
     Local looksWarm = Function(game: Game, image: Image?, part: Part, what: String)
         If image != Null
-            Local pixel = PixelOf(game.View(), image, island.PartEntity(part).Position(Space.WORLD))
-            Checks(what, pixel != Null && IsWarm(pixel))
+            Checks(what,
+                   WarmNear(game.View(), image, island.PartEntity(part).Position(Space.WORLD)))
         End If
     End Function
     Local holding = False
@@ -1055,6 +1068,13 @@ End Function
 // its first, and its worst. Run as a release, with nothing else on the GPU, it's the number for 60 fps.
 Function FrameCost(device: Int32, frames: Int) Throws GraphicsError, IOError, AudioError
     Window.SetHeadless(True)
+    // Not on a real GPU unless it's asked for: on an integrated one, this has lost the GPU, over and over,
+    // and taken the machine with it.
+    Local chosen = (Try Gpu.Devices())[device]
+    If !MayMeasureOn(chosen.Kind == GpuKind.CPU, Env.Get("SLACK_WATER_REAL_GPU"))
+        PrintError("--fps is on a real GPU only with SLACK_WATER_REAL_GPU=1, not {chosen}")
+        Process.Exit(2)
+    End If
     Gpu.SetDevice(device)
     Try Graphics(1920, 1080)
     Defer EndGraphics()
@@ -1086,6 +1106,9 @@ Function FrameCost(device: Int32, frames: Int) Throws GraphicsError, IOError, Au
     Local counters = Gpu.Counters()
     Print("{Gpu.Name()}, {Gpu.Kind()}: {median} ms a frame, {worst} at most, at 1920 by 1080; " +
           "{counters.Draws} draws, {counters.Triangles} triangles")
+    // What lavapipe says it uses isn't this program's alone.
+    If Gpu.Kind() != GpuKind.CPU Then Print("{Gpu.MemoryUsage() / 1048576} MB of the GPU's memory")
+    Checks("the GPU's not lost, and its time was read", CostWasRead(Gpu.Lost(), costs[0]))
     If Gpu.Kind() != GpuKind.CPU
         Checks("under 16.6 ms a frame, for 60 fps", worst < 16.6)
     End If

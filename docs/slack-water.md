@@ -91,3 +91,14 @@ instead); saves; depth of field.
   own, baked for the light around, which is what brass reflects; a sun with shadows, lowering by the
   clock; HDR, ACES, and bloom on the lamp; a grade as the storm comes, by the clock. Depth of field,
   the first the design said to cut if it's long, isn't in.
+- **The number for 60 fps at 1080p, open.** It waits on a person, as nothing here runs on a real GPU any
+  more: on 2026-11-04, Slack Water lost the AMD integrated GPU of the machine it's made on within its
+  first frames, each run, and the machine froze and reset. `--fps` refuses a real GPU unless
+  SLACK_WATER_REAL_GPU=1. On a machine and at a time of your choosing, with nothing else that matters
+  going on, and on a discrete GPU's index from `Gpu.Devices()`:
+
+      SLACK_WATER_REAL_GPU=1 SLACK_WATER_CHECKS=1 SDL_VIDEO_DRIVER=offscreen fb run --release examples/slack_water -- --fps <device> 300
+
+  The one number so far, one run on an RTX 4080, far above a mid-range GPU: 0.53 ms a frame, 1.04 at most.
+  On lavapipe, under GPU-assisted validation, it has no out-of-bounds address or index, and sync
+  validation's clean; that doesn't say why the AMD was lost.

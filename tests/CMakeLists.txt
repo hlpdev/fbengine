@@ -560,13 +560,13 @@ if(FBENGINE_FB_TESTS)
     slack_water_shipped(shipped_bundle -DBUNDLE=ON)
   endif()
   # What a frame costs, as the program's own timing says; on a software GPU it's no more than that it
-  # runs, and a release on a real one, with nothing else on it, is where the number's from.
+  # runs. The program refuses a real GPU unless SLACK_WATER_REAL_GPU=1, which nothing here sets.
   add_test(NAME examples.slack_water.frame_cost
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
                    -- --fps 0 15)
   set_tests_properties(examples.slack_water.frame_cost PROPERTIES RESOURCE_LOCK slack_water
                        ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
-                       PASS_REGULAR_EXPRESSION "ms a frame, [^\n]* at most, at 1920 by 1080"
+                       PASS_REGULAR_EXPRESSION "the GPU's not lost, and its time was read True"
                        SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
   add_test(NAME examples.slack_water.hear
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
