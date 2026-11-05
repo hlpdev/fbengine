@@ -8438,6 +8438,33 @@ TEST_CASE("a tonemap reads the samples its image has, whatever its target draws"
     fbe_texture_release(four);
 }
 
+// Their layout, which a software GPU draws the same in any of, and validation can't see through a
+// bindless set: what reads samples has them moved for it, and what can't read them leaves them.
+TEST_CASE("a tonemap's samples are moved for it, where it reads them", "[gpu][scene]") {
+    const scene_t scene;
+    fbe::scene::camera_t camera;
+    camera.tonemap = FBE_TONEMAP_REINHARD;
+    const auto barriers_at = [&camera](std::uint32_t side) {
+        const std::uint64_t flat =
+            fbe_texture_create_target(static_cast<std::int32_t>(side),
+                                      static_cast<std::int32_t>(side), FBE_TEXTURE_RGBA8, 1, false);
+        require(flat != 0);
+        const VkRect2D all{ .offset = {}, .extent = { .width = side, .height = side } };
+        require(fbe::render::add_post_passes(camera, bright_image(side, 4),
+                                             fbe::gpu::texture_resource(flat), all.extent,
+                                             VK_FORMAT_R8G8B8A8_SRGB, VK_SAMPLE_COUNT_1_BIT, all));
+        require(fbe::gpu::finish_frame());
+        const auto barriers = fbe::gpu::last_recorded().barriers;
+        fbe_texture_release(flat);
+        return barriers;
+    };
+    const auto read = barriers_at(32);
+    fbe::gpu::inject(fbe::gpu::fault_t::NO_READ_SAMPLES);
+    const auto unread = barriers_at(33);
+    CHECK(read == unread + 1);
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
 TEST_CASE("what can't read a camera's samples reads what they resolve to", "[gpu][scene]") {
     const scene_t scene;
     bright_wall(scene);
