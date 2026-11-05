@@ -22,6 +22,8 @@ struct item_t {
     std::int32_t order = 0;
     bool blended = false;
     bool mirrored = false;
+    /// Of an Instances: whether this item's of its instances that mirror, by their own matrices.
+    bool instances_mirrored = false;
     bool vertex_lit = false;
     std::uint32_t material = scene::none;
     std::uint32_t entity = scene::none;
@@ -58,12 +60,20 @@ bool read_lists(std::uint64_t camera, float target_width, float target_height, f
 void read_view(const scene::camera_t& camera, const scene::view_t& view,
                const scene::tweened_t& tweened, lists_t& lists);
 
+/// Lets go of the histories of cameras that have gone or no longer antialias by them; and, for
+/// tests, how many there are.
+void forget_unused_histories();
+std::size_t history_count();
+/// A camera's history's textures' width, 0 for none, for tests.
+std::uint32_t history_width(std::uint64_t camera);
+
 /// Adds the passes that bring a camera's HDR image to `into`, a target of `size`, `format`, and
 /// `samples`, in `scissor`, blending it by its alpha if the camera doesn't clear what's there;
-/// false, with fbe_error's why, if they can't be added.
+/// false, with fbe_error's why, if they can't be added. `into_nothing`, for one of its own that a
+/// later pass reads, clears that first and blends nothing.
 bool add_post_passes(const scene::camera_t& camera, gpu::resource_t image, gpu::resource_t into,
                      VkExtent2D size, VkFormat format, VkSampleCountFlagBits samples,
-                     VkRect2D scissor);
+                     VkRect2D scissor, bool into_nothing = false);
 
 /// Draws a camera that's showing, in the frame's graph, as fbe_render_camera says.
 bool draw_camera(std::uint32_t slot, float tween);
