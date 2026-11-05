@@ -5,8 +5,10 @@
 // blended here as the specification does, say which side of that a difference is. With --frames, it
 // saves each frame there too, which their golden images check.
 //
-// The golden images hold how the scene shader lights now, which isn't yet glTF's PBR: they're
-// recorded again when that's in, and until then say nothing of whether the lighting's right.
+// The light's pinned too: at a few pixels a frame, the color glTF's BRDF gives them, worked out by
+// reference.py from the specification, within 2 levels; the golden images then hold the rest of
+// the frame. MorphPrimitivesTest's material has a texture, which reference.py doesn't read, so its
+// frames have no pixels pinned.
 
 Import std.collections
 Import std.core
@@ -28,11 +30,12 @@ Function FileOf(folder: String): UInt8[]
     If folder == "SimpleSkin" Then Return Embed("SimpleSkin/SimpleSkin.gltf")
     If folder == "SimpleMorph" Then Return Embed("SimpleMorph/SimpleMorph.gltf")
     If folder == "RiggedSimple" Then Return Embed("RiggedSimple/RiggedSimple.glb")
+    If folder == "AnimatedMorphCube" Then Return Embed("AnimatedMorphCube/AnimatedMorphCube.glb")
     Return Embed("MorphPrimitivesTest/MorphPrimitivesTest.glb")
 End Function
 
 Function NameOf(folder: String): String
-    Return folder + (folder == "RiggedSimple" || folder == "MorphPrimitivesTest" ? ".glb" : ".gltf")
+    Return folder + (folder == "SimpleSkin" || folder == "SimpleMorph" ? ".gltf" : ".glb")
 End Function
 
 // Each triangle corner of `mesh` where its skin and morph targets put it in the world.
@@ -119,6 +122,19 @@ Function Agrees(frame: Worked, corners: Vec3[], pixels: UInt8[], masks: UInt8[],
         Print("{name} differs from its mask at {difference.0} pixels of {difference.1}")
         agrees = False
     End If
+    // Each lit pixel within 2 levels of the BRDF's.
+    For at = 0 Until frame.Lit.Count / 5
+        Local x = frame.Lit[at * 5]
+        Local y = frame.Lit[at * 5 + 1]
+        Local byte = (y * SIZE + x) * 4
+        For k = 0 To 2
+            If Abs((pixels[byte + k] As Int) - frame.Lit[at * 5 + 2 + k]) > 2
+                Print("{name} at {x}, {y} is {pixels[byte]}, {pixels[byte + 1]}, {pixels[byte + 2]}, not {frame.Lit[at * 5 + 2]}, {frame.Lit[at * 5 + 3]}, {frame.Lit[at * 5 + 4]}")
+                agrees = False
+                Break
+            End If
+        End For
+    End For
     Return agrees
 End Function
 
@@ -161,7 +177,7 @@ Function Run(saving: String?) Throws GraphicsError, IOError
         Local light = Light(LightType.POINT)
         light.SetPosition(frame.Camera + Vec3(3, 4, 0))
         light.SetRange(100)
-        light.SetIntensity(frame.Folder == "RiggedSimple" ? 400 : 40)
+        light.SetIntensity(frame.Intensity)
         RenderWorld()
         exact = Try OnLavapipe()
         Local pixels = target.ReadPixels()

@@ -1,8 +1,11 @@
 """Works out, from the glTF specification, with none of the engine's code, where each of the sample
-models' frames should be: its vertices' box and mean in the world, over its triangles' corners, and
-exactly which pixels they cover. All it takes of the engine is how its camera sees (60 degrees up
-its view, down its -Z) and what it names an unnamed node. It writes worked_out.fb and masks.bin,
-which main.fb compares what the engine does with. Run it again when FRAMES changes:
+models' frames should be: its vertices' box and mean in the world, over its triangles' corners,
+exactly which pixels they cover, and how a few of them are lit, by glTF's BRDF. All it takes of the
+engine is how its camera sees (60 degrees up its view, down its -Z), what it names an unnamed node,
+what its ambient light does (lights the base color, from everywhere), how a point light falls off
+(the inverse square, windowed to 0 at its range), and that a file with no normals gets its
+triangles' own, flat, before it's posed. It writes worked_out.fb and masks.bin, which main.fb
+compares what the engine does with. Run it again when FRAMES changes:
 
     python tests/models/reference.py
 
@@ -35,7 +38,25 @@ FRAMES = [
      (0, 0, 22), (0, 0, 0)),
     ("MorphPrimitivesTest", "MorphPrimitivesTest.glb", 1,
      [(None, None), (None, [1.0]), (None, [0.0])], (0, 1.2, 1.2), (0, 0, 0)),
+    # Normals that its morph targets move: at rest, mostly thin, between both, and mostly a ramp.
+    ("AnimatedMorphCube", "AnimatedMorphCube.glb", 0, [(t, None) for t in (0.0, 1.0, 2.1, 3.3)],
+     (3, 2.5, 4), (0, 0, 0)),
 ]
+
+# main.fb's light: white, at the camera's place plus this, out to RANGE, and its ambient light.
+LIGHT_OFF = (3.0, 4.0, 0.0)
+# Its intensity, a folder's or else the rest's: enough that the light shows, past the ambient's,
+# on a rough metal, glTF's default, and on RiggedSimple's far plastic, and little enough that
+# MorphPrimitivesTest's red isn't clipped.
+INTENSITY = {"SimpleSkin": 150.0, "SimpleMorph": 150.0, "RiggedSimple": 400.0, "AnimatedMorphCube": 100.0}
+INTENSITY_ELSE = 15.0
+RANGE = 100.0
+AMBIENT = 0.3
+# glTF's material when a primitive has none.
+DEFAULT_MATERIAL = {"baseColorFactor": [1.0, 1.0, 1.0, 1.0], "metallicFactor": 1.0, "roughnessFactor": 1.0}
+# How many lit pixels a frame's checked at, each this many pixels or more inside its triangle.
+LIT_PIXELS = 5
+MARGIN = 0.3
 
 COMPONENTS = {5126: ("f", 4), 5123: ("H", 2), 5125: ("I", 4), 5121: ("B", 1)}
 WIDTHS = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT4": 16}
@@ -168,8 +189,51 @@ def worlds(doc, parts):
     return made
 
 
+def turned(m, n):
+    """A normal by `m`'s 3 by 3, its inverse's transpose, as cofactors: what keeps it at right angles."""
+    a = (m[0], m[1], m[2])
+    b = (m[4], m[5], m[6])
+    c = (m[8], m[9], m[10])
+    cross = lambda u, v: (u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0])
+    bc, ca, ab = cross(b, c), cross(c, a), cross(a, b)
+    made = [bc[k] * n[0] + ca[k] * n[1] + ab[k] * n[2] for k in range(3)]
+    if sum(x * y for x, y in zip(a, bc)) < 0:
+        made = [-x for x in made]
+    return unit(made)
+
+
+def unit(v):
+    size = math.sqrt(sum(x * x for x in v))
+    return tuple(x / size for x in v) if size > 0 else (0.0, 0.0, 0.0)
+
+
+def flat(positions, indices):
+    """Each corner's triangle's own normal, by its winding, as a file with no normals gets."""
+    made = []
+    for t in range(0, len(indices), 3):
+        a, b, c = (positions[i] for i in indices[t:t + 3])
+        u = [y - x for x, y in zip(a, b)]
+        v = [y - x for x, y in zip(a, c)]
+        made += [unit((u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]))] * 3
+    return made
+
+
+def material_of(doc, primitive):
+    found = dict(DEFAULT_MATERIAL)
+    if "material" in primitive:
+        found.update(doc["materials"][primitive["material"]].get("pbrMetallicRoughness", {}))
+        found.setdefault("metallicFactor", 1.0)
+    return found
+
+
 def corners(doc, data, node_index, time, weights):
     """Every triangle corner's place in the world."""
+    return [c[0] for c in lit_corners(doc, data, node_index, time, weights)]
+
+
+def lit_corners(doc, data, node_index, time, weights):
+    """Every triangle corner's place in the world, its normal there, and its primitive's material,
+    or None for a material it can't work out, as one with a texture is."""
     parts = pose(doc, data, time)
     world = worlds(doc, parts)
     node = doc["nodes"][node_index]
@@ -184,27 +248,42 @@ def corners(doc, data, node_index, time, weights):
         palette = [multiply(world[j], list(binds[i])) for i, j in enumerate(skin["joints"])]
     for primitive in mesh["primitives"]:
         positions = read(doc, data, primitive["attributes"]["POSITION"])
+        indices = [i[0] for i in read(doc, data, primitive["indices"])]
+        material = material_of(doc, primitive)
+        if "baseColorTexture" in material:
+            material = None
+        # A file's normals by its vertices; flat ones by the corners, as they take them apart.
+        has_normals = "NORMAL" in primitive["attributes"]
+        normals = [list(n) for n in read(doc, data, primitive["attributes"]["NORMAL"])] if has_normals else None
         moved = [list(p) for p in positions]
         for t, target in enumerate(primitive.get("targets", [])):
             if t < len(used) and "POSITION" in target:
                 for i, by in enumerate(read(doc, data, target["POSITION"])):
                     for k in range(3):
                         moved[i][k] += by[k] * used[t]
+            if t < len(used) and "NORMAL" in target and normals is not None:
+                for i, by in enumerate(read(doc, data, target["NORMAL"])):
+                    for k in range(3):
+                        normals[i][k] += by[k] * used[t]
+        rest = None if has_normals else flat(positions, indices)
         final = []
+        matrices = []
         if palette is not None:
             joints = read(doc, data, primitive["attributes"]["JOINTS_0"])
             shares = read(doc, data, primitive["attributes"]["WEIGHTS_0"])
             for i, p in enumerate(moved):
-                at = [0.0, 0.0, 0.0]
+                blended = [0.0] * 16
                 for k in range(4):
                     if shares[i][k] != 0.0:
-                        q = point(palette[joints[i][k]], p)
-                        at = [a + b * shares[i][k] for a, b in zip(at, q)]
-                final.append(tuple(at))
+                        blended = [a + b * shares[i][k] for a, b in zip(blended, palette[joints[i][k]])]
+                final.append(point(blended, p))
+                matrices.append(blended)
         else:
             final = [point(world[node_index], p) for p in moved]
-        indices = [i[0] for i in read(doc, data, primitive["indices"])]
-        placed.extend(final[i] for i in indices)
+            matrices = [world[node_index]] * len(moved)
+        for c, i in enumerate(indices):
+            normal = normals[i] if normals is not None else rest[c]
+            placed.append((final[i], turned(matrices[i], normal), material))
     return placed
 
 
@@ -245,6 +324,113 @@ def covered(places, camera, look):
     return mask
 
 
+def view_of(camera, look):
+    """The camera's right, up, and back, as main.fb's camera points."""
+    back = unit([c - l for c, l in zip(camera, look)])
+    up = (0.0, 1.0, 0.0)
+    right = unit([up[1] * back[2] - up[2] * back[1], up[2] * back[0] - up[0] * back[2],
+                  up[0] * back[1] - up[1] * back[0]])
+    above = (back[1] * right[2] - back[2] * right[1], back[2] * right[0] - back[0] * right[2],
+             back[0] * right[1] - back[1] * right[0])
+    return right, above, back
+
+
+def encoded(linear):
+    """A linear value 0 to 1 as an sRGB target stores it."""
+    v = min(max(linear, 0.0), 1.0)
+    v = v * 12.92 if v <= 0.0031308 else 1.055 * v ** (1 / 2.4) - 0.055
+    return round(v * 255)
+
+
+def brdf(material, normal, view, to_light, radiance):
+    """glTF's metal-rough BRDF, as its specification and Khronos's viewer have it: Lambert's diffuse,
+    GGX's specular, Schlick's Fresnel, and Smith's height-correlated visibility."""
+    dot = lambda u, v: sum(x * y for x, y in zip(u, v))
+    n_l = max(dot(normal, to_light), 0.0)
+    if n_l <= 0.0:
+        return [0.0, 0.0, 0.0]
+    halfway = unit([a + b for a, b in zip(view, to_light)])
+    n_v = min(max(dot(normal, view), 0.0), 1.0)
+    n_h = min(max(dot(normal, halfway), 0.0), 1.0)
+    v_h = min(max(dot(view, halfway), 0.0), 1.0)
+    base = material["baseColorFactor"][:3]
+    metal = material["metallicFactor"]
+    alpha = max(material.get("roughnessFactor", 1.0) ** 2, 0.045 ** 2)
+    a2 = alpha * alpha
+    d = a2 / (math.pi * (n_h * n_h * (a2 - 1) + 1) ** 2)
+    ggx_v = n_l * math.sqrt(n_v * n_v * (1 - a2) + a2)
+    ggx_l = n_v * math.sqrt(n_l * n_l * (1 - a2) + a2)
+    visibility = 0.5 / (ggx_v + ggx_l) if ggx_v + ggx_l > 0 else 0.0
+    made = []
+    for k in range(3):
+        f0 = 0.04 + (base[k] - 0.04) * metal
+        fresnel = f0 + (1 - f0) * (1 - v_h) ** 5
+        diffuse = (1 - fresnel) * base[k] * (1 - metal) / math.pi
+        made.append((diffuse + fresnel * visibility * d) * radiance * n_l)
+    return made
+
+
+def lit(placed, camera, look, intensity):
+    """A few pixels well inside the nearest triangle there, front on, each with the color glTF's BRDF
+    gives it there: x, y, red, green, blue."""
+    right, above, back = view_of(camera, look)
+    per = (SIZE / 2) / math.tan(FIELD / 2)
+    light = [c + o for c, o in zip(camera, LIGHT_OFF)]
+    nearest = {}
+    for t in range(0, len(placed), 3):
+        three = placed[t:t + 3]
+        if three[0][2] is None:
+            continue
+        seen = []
+        for place, _, _ in three:
+            d = [a - c for a, c in zip(place, camera)]
+            depth = -sum(a * b for a, b in zip(d, back))
+            seen.append((SIZE / 2 + sum(a * b for a, b in zip(d, right)) * per / depth,
+                         SIZE / 2 - sum(a * b for a, b in zip(d, above)) * per / depth, depth))
+        (ax, ay, az), (bx, by, bz), (cx, cy, cz) = seen
+        twice = (bx - ax) * (cy - ay) - (cx - ax) * (by - ay)
+        # Counter-clockwise in the world is clockwise here, as y runs down: those face the camera.
+        if twice >= 0.0:
+            continue
+        edges = [math.hypot(bx - cx, by - cy), math.hypot(cx - ax, cy - ay), math.hypot(ax - bx, ay - by)]
+        for y in range(max(0, math.floor(min(ay, by, cy))), min(SIZE, math.ceil(max(ay, by, cy)) + 1)):
+            py = y + 0.5
+            for x in range(max(0, math.floor(min(ax, bx, cx))), min(SIZE, math.ceil(max(ax, bx, cx)) + 1)):
+                px = x + 0.5
+                one = ((bx - px) * (cy - py) - (cx - px) * (by - py)) / twice
+                two = ((cx - px) * (ay - py) - (ax - px) * (cy - py)) / twice
+                three_ = 1 - one - two
+                if min(one, two, three_) < 0:
+                    continue
+                # Perspective's: by one over depth, then made whole.
+                w = [one / az, two / bz, three_ / cz]
+                depth = 1 / sum(w)
+                margin = min(abs(twice) * b / e for b, e in zip((one, two, three_), edges))
+                if (x, y) not in nearest or depth < nearest[(x, y)][0]:
+                    nearest[(x, y)] = (depth, margin, [v * depth for v in w], three)
+    candidates = sorted(((m, xy) for xy, (_, m, _, _) in nearest.items() if m >= MARGIN), key=lambda c: (-c[0], c[1]))
+    chosen = []
+    for _, xy in candidates:
+        if all(math.hypot(xy[0] - o[0], xy[1] - o[1]) > 12 for o in chosen):
+            chosen.append(xy)
+        if len(chosen) == LIT_PIXELS:
+            break
+    made = []
+    for x, y in chosen:
+        _, _, w, three = nearest[(x, y)]
+        place = [sum(w[i] * three[i][0][k] for i in range(3)) for k in range(3)]
+        normal = unit([sum(w[i] * three[i][1][k] for i in range(3)) for k in range(3)])
+        material = three[0][2]
+        to_light = [l - p for l, p in zip(light, place)]
+        apart = math.sqrt(sum(v * v for v in to_light))
+        window = min(max(1 - (apart / RANGE) ** 4, 0.0), 1.0)
+        radiance = intensity * window * window / apart ** 2
+        shaded = brdf(material, normal, unit([c - p for c, p in zip(camera, place)]), unit(to_light), radiance)
+        base = material["baseColorFactor"][:3]
+        made.append((x, y, *(encoded(base[k] * AMBIENT + shaded[k]) for k in range(3))))
+    return made
+
+
 def runs_of(mask):
     """A mask's runs, each how many pixels, starting with those it doesn't cover."""
     runs = []
@@ -281,20 +467,25 @@ def main():
              "    Package Field High: Vec3", "    Package Field Mean: Vec3",
              "    // Where its mask's runs start in masks.bin, and how many.", "    Package Field Runs: Int",
              "    Package Field RunCount: Int",
+             "    // Its light's intensity, and pixels it lights, each x, y, red, green, and blue, as stored.",
+             "    Package Field Intensity: Float", "    Package Field Lit: Int[]",
              "End Struct", "", "// Time and Weight are below 0 for none.", "Package Function WorkedOut(): Worked[]",
              "    Local frames: Worked[] = []"]
     for folder, file, node_index, frames, camera, look in FRAMES:
         doc, data = load(HERE / folder / file)
         names = doc["nodes"][node_index].get("name", f"node_{node_index}")
         for index, (time, weights) in enumerate(frames):
-            places = corners(doc, data, node_index, time, weights)
+            placed = lit_corners(doc, data, node_index, time, weights)
+            places = [c[0] for c in placed]
+            intensity = INTENSITY.get(folder, INTENSITY_ELSE)
+            shown = [v for pixel in lit(placed, camera, look, intensity) for v in pixel]
             low = [min(p[k] for p in places) for k in range(3)]
             high = [max(p[k] for p in places) for k in range(3)]
             mean = [sum(p[k] for p in places) / len(places) for k in range(3)]
             runs = runs_of(covered(places, camera, look))
             start = len(masks)
             masks += struct.pack(f"<{len(runs)}H", *[0xFFFF if r == 65536 else r for r in runs])
-            print(folder, index, time, weights, low, high, mean, len(runs))
+            print(folder, index, time, weights, low, high, mean, len(runs), shown)
             vec = lambda v: "Vec3(" + ", ".join(number(x) for x in v) + ")"
             lines.append(
                 f'    frames.Add(Worked("{folder}", "{names}", {index}, '
@@ -302,7 +493,8 @@ def main():
                 f"{number(weights[0]) if weights is not None else '-1'}, "
                 f"{vec(camera)}, {vec(look)},")
             lines.append(f"                      {vec(low)}, {vec(high)},")
-            lines.append(f"                      {vec(mean)}, {start}, {len(runs)}))")
+            lines.append(f"                      {vec(mean)}, {start}, {len(runs)}, {number(intensity)},")
+            lines.append(f"                      [{', '.join(str(v) for v in shown)}] As Int[]))")
     lines += ["    Return frames", "End Function", ""]
     text = "\n".join(lines)
     if "--check" in sys.argv:
