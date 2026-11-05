@@ -11,6 +11,7 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_shader_release(shader: UInt64): Bool
     Function fbe_shader_alive(shader: UInt64): Bool
     Function fbe_shader_is_pass(shader: UInt64): Bool
+    Function fbe_shader_path(shader: UInt64): CString
     Function fbe_shader_replace(shader: UInt64, bytes: Ptr<UInt8>, size: Int64, name: CString): Bool
     Function fbe_material_set_shader(material: UInt64, shader: UInt64): Bool
     Function fbe_material_shader(material: UInt64): UInt64

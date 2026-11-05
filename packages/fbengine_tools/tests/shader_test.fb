@@ -3,6 +3,7 @@
 
 Import std.collections
 Import std.core
+Import std.image
 Import std.io
 Import std.math
 Import std.os
@@ -478,4 +479,68 @@ Function APassSaidInACommentIsntOne() Throws IOError, GraphicsError
     Defer Assets.Unmount("res://shader-commented")
     Local shader = Try Assets.Load<Shader>("res://shader-commented/commented.slang")
     Expect(!shader.IsPass())
+End Function
+
+// A scene keeps a camera's passes and a material's own shader, by their files, with their
+// parameters and layers.
+@Test
+Function ASceneKeepsPassesAndShaders() Throws IOError, GraphicsError
+    If NoSlangc() Then Skip("no slangc here")
+    Local folder = Try TempDir()
+    Try File.WriteText(folder.Path / "inverts.slang", INVERTS)
+    Try Cooker.CookShader(folder.Path / "inverts.slang", folder.Path / "inverts.cooked")
+    Try File.WriteText(folder.Path / "flat.slang", FLAT)
+    Try Cooker.CookShader(folder.Path / "flat.slang", folder.Path / "flat.cooked")
+    Local image = Image(1, 1)
+    image[0, 0] = Color32(255, 0, 0, 255)
+    Try File.WriteBytes(folder.Path / "red.png", Png.Encode(image))
+    Assets.MountFiles("res://scene-shaders",
+                      {"inverts.slang": Try File.ReadBytes(folder.Path / "inverts.cooked"),
+                       "flat.slang": Try File.ReadBytes(folder.Path / "flat.cooked"),
+                       "red.png": Try File.ReadBytes(folder.Path / "red.png")})
+    Defer Assets.Unmount("res://scene-shaders")
+    Local world = World()
+    Defer world.Free()
+    World.SetCurrent(world)
+    Local camera = Camera()
+    Local pass = camera.AddPass(Try Assets.Load<Shader>("res://scene-shaders/inverts.slang"))
+    pass.SetParameter(1, Vec4(0.25, 0.5, 0.75, 1))
+    pass.SetTexture(1, Try Assets.Load<Texture>("res://scene-shaders/red.png"))
+    Local mesh = Mesh(Geometry.Cube())
+    Local own = Material()
+    own.SetShader(Try Assets.Load<Shader>("res://scene-shaders/flat.slang"))
+    own.SetParameter(0, Vec4(1, 2, 3, 4))
+    mesh.SetMaterial(own)
+    Local text = Try Scene.Text([camera, mesh])
+    Expect(text.Contains("passes = ["), text)
+    Try File.WriteText(folder.Path / "kept.scene", text)
+    Assets.MountFolder("res://scene-kept", folder.Path)
+    Defer Assets.Unmount("res://scene-kept")
+    Local roots = Try Scene.Load("res://scene-kept/kept.scene")
+    Local read = roots[0] As? Camera
+    If read == Null Then Panic("its camera")
+    Expect(read.Passes().Count == 1)
+    Local readPass = read.Passes()[0]
+    Expect(readPass.Shader()?.Path() == "res://scene-shaders/inverts.slang")
+    Expect(readPass.Shader()?.IsPass() ?? False)
+    Expect(readPass.Parameter(1) == Vec4(0.25, 0.5, 0.75, 1))
+    Expect(readPass.Parameter(0) == Vec4(0, 0, 0, 0))
+    Expect(readPass.Texture(1)?.Path() == "res://scene-shaders/red.png")
+    Expect(readPass.Texture(0) == Null)
+    Local readOwn = (roots[1] As? Mesh)?.Material()
+    If readOwn == Null Then Panic("its mesh's material")
+    Expect(readOwn.Shader()?.Path() == "res://scene-shaders/flat.slang")
+    Expect(readOwn.Parameter(0) == Vec4(1, 2, 3, 4))
+    // The same text again: nothing's lost or added on the way.
+    Expect(Try Scene.Text(roots) == text, Try Scene.Text(roots))
+    // A material that isn't a pass's can't be one.
+    Local wrong = text.Replace("res://scene-shaders/inverts.slang",
+                               "res://scene-shaders/flat.slang")
+    Try File.WriteText(folder.Path / "wrong.scene", wrong)
+    Expect(ExpectThrows<IOError>(Scene.Load("res://scene-kept/wrong.scene")) != Null)
+    For root In roots
+        root.Free()
+    End For
+    camera.Free()
+    mesh.Free()
 End Function

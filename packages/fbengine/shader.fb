@@ -66,6 +66,16 @@ Public Final Class Shader Implements Asset
         Return Shader(made)
     End Method
 
+    /// The file it's from, as Assets loaded it, or Null for one that wasn't, as a scene names it by.
+    @MainThread @PanicsAtCaller
+    Public Method Path(): String?
+        Local found = ""
+        Unsafe
+            found = fbe_shader_path(Live("Path")).ToString()
+        End Unsafe
+        Return found != "" ? found : Null
+    End Method
+
     /// Takes the file `load` read in its place, for what draws with it from the next frame on, and
     /// gives True. One that isn't a shader throws as FromLoad does, which leaves it as it was.
     @MainThread

@@ -10868,6 +10868,24 @@ TEST_CASE("a camera holds its passes, and lets them go as it's freed", "[gpu][sc
     CHECK(!fbe_material_set_parameter(pass, 1, 1.0F, 2.0F, 3.0F, 4.0F));
 }
 
+TEST_CASE("a shader's path is its own, as the same bytes by another name are", "[gpu][scene]") {
+    const std::vector<std::uint8_t> bytes = cooked_shader(fbe::test_shaders::game_pass.code);
+    const std::uint64_t first =
+        fbe_shader_create(bytes.data(), static_cast<std::int64_t>(bytes.size()), "res://a.slang");
+    const std::uint64_t second =
+        fbe_shader_create(bytes.data(), static_cast<std::int64_t>(bytes.size()), "res://b.slang");
+    REQUIRE(first != 0);
+    REQUIRE(second != 0);
+    CHECK(std::string_view(fbe_shader_path(first)) == "res://a.slang");
+    CHECK(std::string_view(fbe_shader_path(second)) == "res://b.slang");
+    require(fbe_shader_replace(second, bytes.data(), static_cast<std::int64_t>(bytes.size()),
+                               "res://c.slang"));
+    CHECK(std::string_view(fbe_shader_path(second)) == "res://c.slang");
+    require(fbe_shader_release(first));
+    CHECK(std::string_view(fbe_shader_path(first)).empty());
+    require(fbe_shader_release(second));
+}
+
 TEST_CASE("a camera takes only a pass's shader, once, and what it's given back it lets go of",
           "[gpu][scene]") {
     const scene_t scene;

@@ -92,6 +92,9 @@ struct kept_code_t {
 struct shader_t {
     std::uint32_t references = 0;
     std::uint32_t code = 0;
+    /// The name it was made with, its own, as the same bytes are one code by whichever name came
+    /// first.
+    std::string path;
 };
 
 /// How many times refuse and not_a_pass have said something.
@@ -357,7 +360,7 @@ FBE_API uint64_t fbe_shader_create(const uint8_t* bytes, int64_t size, const cha
     if (slot == shaders.kept.size()) {
         shaders.kept.emplace_back();
     }
-    shaders.kept[slot] = { .references = 1, .code = code };
+    shaders.kept[slot] = { .references = 1, .code = code, .path = name != nullptr ? name : "" };
     return shaders.slots.handle(slot);
 } catch (const std::bad_alloc&) {
     fail("out of memory");
@@ -385,6 +388,11 @@ FBE_API bool fbe_shader_is_pass(uint64_t shader) {
     return fbe::shaders_own::pass_code_of(shader) != 0;
 }
 
+FBE_API const char* fbe_shader_path(uint64_t shader) {
+    const std::uint32_t slot = own::slot_of(shader);
+    return slot != none ? own::all().kept[slot].path.c_str() : "";
+}
+
 FBE_API bool fbe_shader_alive(uint64_t shader) {
     return own::all().slots.find(shader).has_value();
 }
@@ -404,6 +412,7 @@ FBE_API bool fbe_shader_replace(uint64_t shader, const uint8_t* bytes, int64_t s
         return false;
     }
     own::all().kept[slot].code = code;
+    own::all().kept[slot].path = name != nullptr ? name : "";
     return true;
 } catch (const std::bad_alloc&) {
     return fail("out of memory");

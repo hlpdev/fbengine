@@ -32,6 +32,9 @@ FBE_API bool fbe_shader_alive(uint64_t shader);
 // Whether a shader's a full-screen pass's, as fbe_camera_add_pass runs, and a material with it
 // draws as one with none does.
 FBE_API bool fbe_shader_is_pass(uint64_t shader);
+// The name it was made or last replaced with, a file's path as Assets loaded it, "" for a freed
+// shader; the text is the shader's until it's replaced or freed.
+FBE_API const char* fbe_shader_path(uint64_t shader);
 // Puts a cooked file's bytes in the shader's place, for what draws with it from the next frame on;
 // false, leaving it as it was, as fbe_shader_create gives 0.
 FBE_API bool fbe_shader_replace(uint64_t shader, const uint8_t* bytes, int64_t size,
