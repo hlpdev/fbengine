@@ -11,15 +11,15 @@
 extern "C" {
 #endif
 
-// Bakes `source`, a texture of the light all around, y up, +X at its middle and the sky along its
-// top, into an environment, in the frame's graph, so what's drawn after it reads it: its specular
-// light `size` texels across at no roughness, a power of 2 from 16 to 2048, each texel taking
-// `samples` samples, 1 to 4096. Mipmaps on `source` make few samples less noisy, and a small sun
-// count for what it should; it holds the source until it's baked, and its light past 8192 is read
-// as 8192. A big bake's submitted a part at a time, which it waits for, so the GPU's never kept
-// long. A frame that fails to run it runs it in the next. It starts the GPU if it hasn't; 0, with
-// fbe_error's why, if it can't be baked, for a source that isn't live, or a size or samples out of
-// range. Stopping the GPU loses what it baked: its calls then fail, until it's freed.
+// Bakes `source`, a texture of the light all around, y up, -Z at its middle as a sky has it, and
+// the sky along its top, into an environment, in the frame's graph, so what's drawn after it reads
+// it: its specular light `size` texels across at no roughness, a power of 2 from 16 to 2048, each
+// texel taking `samples` samples, 1 to 4096. Mipmaps on `source` make few samples less noisy, and a
+// small sun count for what it should; it holds the source until it's baked, and its light past 8192
+// is read as 8192. A big bake's submitted a part at a time, which it waits for, so the GPU's never
+// kept long. A frame that fails to run it runs it in the next. It starts the GPU if it hasn't; 0,
+// with fbe_error's why, if it can't be baked, for a source that isn't live, or a size or samples
+// out of range. Stopping the GPU loses what it baked: its calls then fail, until it's freed.
 FBE_API uint64_t fbe_environment_bake(uint64_t source, int32_t size, int32_t samples);
 // Frees an environment; false if the handle isn't one's.
 FBE_API bool fbe_environment_free(uint64_t environment);
