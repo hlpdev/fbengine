@@ -34,6 +34,7 @@ Import "./ground"
 Import "./island"
 Import "./map"
 Import "./res" As Res
+Import "./plants"
 Import "./screens"
 Import "./sky"
 Import "./soundscape"
@@ -244,6 +245,79 @@ Function SavedAs(island: Island, folder: Path, name: String): Image Throws Graph
     Return image
 End Function
 
+// How many pixels of the upper half of what the island shows change over 0.4 s from `from`.
+Function Swayed(island: Island, from: Float64): Int Throws GraphicsError, IOError
+    island.Update(from)
+    Local before = Try Shown(island)
+    island.Update(from + 0.4)
+    Local after = Try Shown(island)
+    Local moved = 0
+    For y = 0 Until 360
+        For x = 0 Until before.Width
+            If Abs(Brightness(before[x, y]) - Brightness(after[x, y])) > 40 Then moved += 1
+        End For
+    End For
+    Return moved
+End Function
+
+// What grows, saved to look at, and what it's for, by the pixels and where it is.
+Function SavePlants(folder: Path, camera: Camera, island: Island) Throws GraphicsError, IOError
+    Local grown = island.Grown()
+    Local eye = Vec3(MAIN_X - 24.0, GroundHeight(MAIN_X - 24.0, 18.0) + 1.7, 18.0)
+    camera.SetPosition(eye)
+    camera.PointAt(Vec3(MAIN_X, GroundHeight(MAIN_X, 0.0) + 1.0, 0.0))
+    Local with = Try SavedAs(island, folder, "plants")
+    grown.SetShown(False)
+    Local without = Try Shown(island)
+    grown.SetShown(True)
+    Local changed = 0
+    For y = 380 Until 720
+        For x = 0 Until with.Width
+            If Abs(Brightness(with[x, y]) - Brightness(without[x, y])) > 30 Then changed += 1
+        End For
+    End For
+    Checks("grass is drawn on the green", (changed As Float) / ((340 * with.Width) As Float) > 0.04)
+    Checks("in thousands of tufts", grown.TuftCount() > 2000)
+    Local levels, levelCount = grown.TuftLevels()
+    Checks("thinner as it's further off, and none at all past that",
+           levelCount == 3 && levels.Count == 4 && levels[0] > levels[1] && levels[1] > levels[2] &&
+           levels[2] > 0 && levels[3] == 0)
+
+    // None of it where it's kept clear: the mill and a meter round it, the road, and the parts.
+    Local clear = True
+    For place In TuftPlaces()
+        Local x = place.0.x
+        Local z = place.0.z
+        If OnRoad(x, z) || (x > MAIN_X - MILL_W - 2.2 && x < MAIN_X + 10.5 && Abs(z) < MILL_D + 2.2)
+            clear = False
+        End If
+        For spot In [GearSpot(), PaddleSpot(), BeltSpot(), DoorSpot()]
+            If Length(Vec2(x, z) - spot) < 1.5 Then clear = False
+        End For
+    End For
+    Checks("none of it where it's kept clear", clear)
+
+    Local trees = grown.Trees()
+    Local byTheMill = trees.Count == 3
+    For tree In trees
+        If Length(Vec2(tree.x - MAIN_X, tree.z)) > 30.0 || KeptClear(tree.x, tree.z) Then byTheMill = False
+    End For
+    Checks("three trees stand by the mill, clear of it", byTheMill)
+    Checks("and shrubs grow about it", grown.Shrubs().Count >= 5)
+
+    // They sway, and harder as the storm comes: what's seen of a tree against the sky changes more
+    // in the storm's wind than in the calm's, over as long.
+    Local tree = trees[0]
+    camera.SetPosition(tree + Vec3(7.0, 1.5, 7.0))
+    camera.PointAt(tree + Vec3(0.0, 3.6, 0.0))
+    Local calm = Try Swayed(island, 0.0)
+    Local stormy = Try Swayed(island, TIDE_IN_AT - 0.4)
+    island.Update(0.0)
+    Try SavedAs(island, folder, "tree")
+    Checks("trees sway in the wind", calm > 200)
+    Checks("harder in the storm", stormy > calm + calm / 2)
+End Function
+
 // The sea and the sky, saved to look at, and what each of them's for, by the pixels.
 Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws GraphicsError, IOError
     // Over the edge of the main rock, along its south shore.
@@ -441,6 +515,7 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
         Flip(False)
     End For
     Try SaveSeaAndSky(folder, camera, island)
+    Try SavePlants(folder, camera, island)
     // High tide, from the island's view.
     Local first = Views()[0]
     camera.SetPosition(first.1)

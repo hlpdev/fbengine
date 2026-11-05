@@ -1,0 +1,332 @@
+// What grows on the island: grass in tufts on the green, drawn as Instances, thinner as it's further
+// off; a few shrubs bent by the wind off the sea; and three small trees by the mill. All of it sways
+// with the weather's wind, by assets/plants.slang, which moves each vertex by how high up it is.
+
+Import std.core
+Import std.math
+Import fbengine
+Import "./ground"
+Import "./map"
+Import "./res" As Res
+
+/// How far apart tufts of grass are, on a grid each one's moved about in.
+Public Const TUFT_SPACING: Float = 0.55
+// How many groups of tufts sway on beats of their own, each its own Instances.
+Const BEATS: Int = 4
+// How many blades a tuft has, near, a little further, and further still; past that, none.
+Const BLADES: Int = 14
+Const FEWER_BLADES: Int = 5
+Const FEWEST_BLADES: Int = 2
+// How much of the view's height a tuft takes where it's drawn with fewer blades, fewest, or none.
+Const FEWER_FROM: Float = 0.02
+Const FEWEST_FROM: Float = 0.008
+Const NONE_FROM: Float = 0.003
+// Which way the wind goes, off the sea, as the waves do.
+Const WIND_X: Float = 0.92
+Const WIND_Z: Float = 0.39
+// How far a plant's top goes at its full bend, of its height.
+Const BENDS: Float = 0.22
+
+/// Whether the ground at (`x`, `z`) is the green, as the ground's cover paints it: where its green beats
+/// its red, and its blue by a tenth. TurfAt in ground.fb replaces this when it lands.
+Public Function OnTheGreen(x: Float, z: Float): Bool
+    Local height = GroundHeight(x, z)
+    Local dx = GroundHeight(x + 1.0, z) - GroundHeight(x - 1.0, z)
+    Local dz = GroundHeight(x, z + 1.0) - GroundHeight(x, z - 1.0)
+    Local cover, _ = CoverAt(x, z, height, Sqrt(dx * dx + dz * dz) / 2.0)
+    Return cover.y > cover.x && cover.y > cover.z + 0.1
+End Function
+
+/// Whether (`x`, `z`) is kept clear of plants: the mill, a meter past it all round, as Pip goes round
+/// it; the road; the parts' spots, and where the road's ends are landed on; and what's blocked.
+Public Function KeptClear(x: Float, z: Float): Bool
+    If x > MAIN_X - MILL_W - 2.2 && x < MAIN_X + 10.5 && Abs(z) < MILL_D + 2.2 Then Return True
+    If OnRoad(x, z) || Blocked(x, z) Then Return True
+    Local here = Vec2(x, z)
+    For spot In [GearSpot(), PaddleSpot(), BeltSpot(), Landing(False), Landing(True),
+                 PipLanding(False), PipLanding(True), DoorSpot()]
+        If Length(here - spot) < 1.5 Then Return True
+    End For
+    Return False
+End Function
+
+/// Where tufts of grass grow: on a grid TUFT_SPACING apart, each moved about in its square, on the
+/// green and not where it's kept clear; with how big each is, and which beat it sways on.
+Public Function TuftPlaces(): (Vec3, Float, Int)[]
+    Local random = Random(7101)
+    Local places: (Vec3, Float, Int)[] = []
+    Local half = (SIDE As Float) * 0.5
+    Local cells = Floor(SIDE As Float / TUFT_SPACING) As Int
+    For row = 0 Until cells
+        For column = 0 Until cells
+            Local x = -half + ((column As Float) + random.Float()) * TUFT_SPACING
+            Local z = -half + ((row As Float) + random.Float()) * TUFT_SPACING
+            Local size = random.Float(0.7, 1.25)
+            Local beat = random.Int(BEATS)
+            If OnTheGreen(x, z) && !KeptClear(x, z)
+                places.Add((Vec3(x, GroundHeight(x, z), z), size, beat))
+            End If
+        End For
+    End For
+    Return places
+End Function
+
+/// Where the trees by the mill stand: the first three spots round it, 20 to 26 meters off, that are
+/// on the green, not kept clear, and 8 meters from each other.
+Public Function TreePlaces(): Vec3[]
+    Local places: Vec3[] = []
+    For ring = 0 To 3
+        Local off = 20.0 + (ring As Float) * 2.0
+        For step = 0 Until 36
+            Local angle = (step As Float) / 36.0 * 6.2831853 + (ring As Float) * 0.3
+            Local x = MAIN_X + Cos(angle) * off
+            Local z = Sin(angle) * off
+            Local apart = True
+            For other In places
+                If Length(Vec2(other.x - x, other.z - z)) < 8.0 Then apart = False
+            End For
+            If apart && OnTheGreen(x, z) && !KeptClear(x, z) && places.Count < 3
+                places.Add(Vec3(x, GroundHeight(x, z), z))
+            End If
+        End For
+    End For
+    Return places
+End Function
+
+/// Where the shrubs grow: on the green near the mill's yard, in a ring past the trees, kept clear of
+/// what's kept clear and of the trees.
+Public Function ShrubPlaces(trees: Vec3[]): Vec3[]
+    Local random = Random(911)
+    Local places: Vec3[] = []
+    For tries = 0 Until 400
+        Local angle = random.Float(0.0, 6.2831853)
+        Local off = random.Float(16.0, 34.0)
+        Local x = MAIN_X + Cos(angle) * off
+        Local z = Sin(angle) * off
+        Local apart = True
+        For other In trees
+            If Length(Vec2(other.x - x, other.z - z)) < 4.0 Then apart = False
+        End For
+        For other In places
+            If Length(Vec2(other.x - x, other.z - z)) < 3.0 Then apart = False
+        End For
+        If apart && OnTheGreen(x, z) && !KeptClear(x, z) && places.Count < 8
+            places.Add(Vec3(x, GroundHeight(x, z), z))
+        End If
+    End For
+    Return places
+End Function
+
+/// A tuft of `count` blades, its base at 0 and up +Y, each blade's first UV across which it is and its
+/// second up it, darker at the root.
+Public Function Tuft(count: Int, seed: Int): Geometry
+    Local random = Random(seed)
+    Local made = Geometry()
+    Local surface = made.AddSurface()
+    For blade = 0 Until count
+        Local angle = random.Float(0.0, 6.2831853)
+        Local out = random.Float(0.0, 0.16)
+        Local tall = random.Float(0.2, 0.42)
+        Local wide = random.Float(0.035, 0.055)
+        Local lean = random.Float(0.08, 0.22)
+        Local baseX = Cos(angle) * out
+        Local baseZ = Sin(angle) * out
+        // Across the blade, square to how it leans out.
+        Local acrossX = -Sin(angle) * wide
+        Local acrossZ = Cos(angle) * wide
+        Local which = ((blade As Float) + 0.5) / (count As Float)
+        Local first = -1
+        For level = 0 To 2
+            Local up = (level As Float) / 2.0
+            Local x = baseX + Cos(angle) * lean * up * up
+            Local z = baseZ + Sin(angle) * lean * up * up
+            Local narrow = level == 2 ? 0.0 : 1.0 - up * 0.6
+            Local shade = Color(0.05 + 0.2 * up, 0.09 + 0.25 * up, 0.02 + 0.05 * up)
+            Local normal = Normalize(Vec3(Cos(angle) * 0.4, 1.0, Sin(angle) * 0.4))
+            Local left = surface.AddVertex(Vertex(Vec3(x - acrossX * narrow, tall * up,
+                                                       z - acrossZ * narrow),
+                                                  normal, Vec2(which, up), Vec2(which, up), shade))
+            If first < 0 Then first = left
+            If level < 2
+                surface.AddVertex(Vertex(Vec3(x + acrossX * narrow, tall * up,
+                                              z + acrossZ * narrow),
+                                         normal, Vec2(which, up), Vec2(which, up), shade))
+            End If
+        End For
+        surface.AddTriangle(first, first + 1, first + 2)
+        surface.AddTriangle(first + 1, first + 3, first + 2)
+        surface.AddTriangle(first + 2, first + 3, first + 4)
+    End For
+    Return made
+End Function
+
+// A tuft, with fewer blades as it's further off, and none past that; and how many triangles it's
+// drawn with at each.
+@MainThread
+Function TuftWithLevels(seed: Int): (Geometry, Int[])
+    Local near = Tuft(BLADES, seed)
+    Local fewer = Tuft(FEWER_BLADES, seed)
+    Local fewest = Tuft(FEWEST_BLADES, seed)
+    near.SetLod(0, fewer, FEWER_FROM)
+    near.SetLod(1, fewest, FEWEST_FROM)
+    near.SetLod(2, Null, NONE_FROM)
+    Return (near, [Triangles(near), Triangles(fewer), Triangles(fewest), 0])
+End Function
+
+// How many triangles a geometry has, over its surfaces.
+Function Triangles(geometry: Geometry): Int
+    Local count = 0
+    For surface In geometry.Surfaces()
+        count += surface.TriangleCount()
+    End For
+    Return count
+End Function
+
+/// A canopy, or a shrub: lumps of leaves, each a sphere, around a middle `high` up, `wide` across,
+/// leaning with the wind by `lean`, its base at 0.
+Public Function Leaves(high: Float, wide: Float, lean: Float, seed: Int): Geometry
+    Local random = Random(seed)
+    Local made = Geometry()
+    For lump = 0 Until 10
+        Local size = wide * random.Float(0.32, 0.5)
+        Local x = random.Float(-0.5, 0.5) * wide + WIND_X * lean
+        Local y = high + random.Float(-0.3, 0.3) * wide
+        Local z = random.Float(-0.5, 0.5) * wide + WIND_Z * lean
+        made.Add(Geometry.Sphere(8), Mat4.Translation(Vec3(x, y, z)) *
+                 Mat4.Scale(Vec3(size, size * 0.8, size)))
+    End For
+    Return made
+End Function
+
+/// What grows, and what it's drawn with.
+Public Final Class Plants
+    Field tufts: Instances[]
+    Field tuftCount: Int
+    Field trees: Vec3[]
+    Field shrubs: Vec3[]
+    Field swaying: Material[]
+    Field shown: Entity[]
+    Field levels: Int[] = []
+    Field levelCount: Int = 0
+
+    New(tufts: Instances[], tuftCount: Int, trees: Vec3[], shrubs: Vec3[], swaying: Material[],
+        shown: Entity[])
+        Self.tufts = tufts
+        Self.tuftCount = tuftCount
+        Self.trees = trees
+        Self.shrubs = shrubs
+        Self.swaying = swaying
+        Self.shown = shown
+        Update(0.0)
+    End New
+
+    /// Makes it all.
+    @MainThread
+    Public Static Method Make(): Plants Throws IOError
+        Local shader = Try Assets.Load<Shader>(Res.Plants)
+        Local swaying: Material[] = []
+        Local shown: Entity[] = []
+        Local sways = Function(color: Color, high: Float, beat: Float): Material
+            Local made = Material(color)
+            made.SetShader(shader)
+            made.SetParameter(1, Vec4(high, beat, high * BENDS, 0.0))
+            swaying.Add(made)
+            Return made
+        End Function
+        // The grass: each beat's tufts, of a tuft of its own.
+        Local byBeat: Instance[][] = []
+        For beat = 0 Until BEATS
+            byBeat.Add([])
+        End For
+        Local places = TuftPlaces()
+        For place In places
+            Local tint = 0.85 + 0.3 * Fract(place.0.x * 0.37 + place.0.z * 0.61)
+            byBeat[place.2].Add(Instance(Mat4.Translation(place.0) *
+                                         Mat4.Scale(Vec3(place.1, place.1, place.1)),
+                                         Color(tint, tint, tint * 0.9)))
+        End For
+        Local tufts: Instances[] = []
+        For beat = 0 Until BEATS
+            Local grass = sways(Color(1.0, 1.0, 1.0), 0.45, (beat As Float) * 1.7)
+            grass.SetVertexColors(True)
+            grass.SetTwoSided(True)
+            grass.SetMetalRough(0.0, 0.85)
+            Local tuft, counts = TuftWithLevels(500 + beat)
+            Local drawn = Instances(tuft)
+            drawn.SetMaterial(grass)
+            drawn.Set(byBeat[beat])
+            // A field of blades casting is a field's worth of shadow passes for little.
+            drawn.SetCastsShadows(False)
+            tufts.Add(drawn)
+            shown.Add(drawn)
+        End For
+
+        // The trees: a trunk and its leaves, each leaning a little with the wind.
+        Local trees = TreePlaces()
+        For at = 0 Until trees.Count
+            Local tall = 4.6 + (at As Float) * 0.6
+            Local bark = sways(Color(0.22, 0.16, 0.11), tall, (at As Float) * 2.3 + 0.5)
+            bark.SetMetalRough(0.0, 0.9)
+            Local trunk = Mesh(Geometry.Cylinder(8))
+            trunk.SetMaterial(bark)
+            // The cylinder's -1 to 1: up from 0, as the shader wants its base.
+            trunk.Geometry()?.Translate(Vec3(0.0, 1.0, 0.0))
+            trunk.SetScale(Vec3(0.2, tall * 0.5 * 0.62, 0.2))
+            trunk.SetPosition(trees[at] - Vec3(0.0, 0.2, 0.0))
+            shown.Add(trunk)
+            Local leaves = sways(Color(0.1, 0.2, 0.04), tall, (at As Float) * 2.3 + 0.5)
+            leaves.SetMetalRough(0.0, 0.8)
+            Local canopy = Mesh(Leaves(tall * 0.72, 3.4, 0.5, 300 + at))
+            canopy.SetMaterial(leaves)
+            canopy.SetPosition(trees[at])
+            shown.Add(canopy)
+        End For
+
+        // The shrubs, low and bent hard by the wind off the sea.
+        Local shrubs = ShrubPlaces(trees)
+        For at = 0 Until shrubs.Count
+            Local green = sways(Color(0.09, 0.17, 0.05), 1.1, (at As Float) * 1.1)
+            green.SetMetalRough(0.0, 0.85)
+            Local shrub = Mesh(Leaves(0.55, 1.3, 0.35, 700 + at))
+            shrub.SetMaterial(green)
+            shrub.SetPosition(shrubs[at])
+            shown.Add(shrub)
+        End For
+        Local made = Plants(tufts, places.Count, trees, shrubs, swaying, shown)
+        Local first = tufts[0].Geometry()
+        made.levelCount = first != Null ? first.LodCount() : 0
+        made.levels = TuftWithLevels(500).1
+        Return made
+    End Method
+
+    /// Sways it all as the wind is `clock` seconds in: harder as the storm comes.
+    @MainThread
+    Public Method Update(clock: Float64)
+        Local strength = 0.3 + 0.7 * StormAt(clock)
+        Local time = (clock % 3600.0) As Float
+        For material In swaying
+            material.SetParameter(0, Vec4(WIND_X, WIND_Z, strength, time))
+        End For
+    End Method
+
+    /// Hides it all, or shows it again, to see what it does.
+    @MainThread
+    Public Method SetShown(on: Bool)
+        For entity In shown
+            If on Then entity.Show() Else entity.Hide()
+        End For
+    End Method
+
+    /// How many triangles a tuft is drawn with, near and at each level of its detail further off, the
+    /// last none; and how many levels its geometry has.
+    @MainThread Public Method TuftLevels(): (Int[], Int) => (levels, levelCount)
+
+    /// How many tufts of grass there are.
+    @MainThread Public Method TuftCount(): Int => tuftCount
+
+    /// Where the trees are.
+    @MainThread Public Method Trees(): Vec3[] => trees
+
+    /// Where the shrubs are.
+    @MainThread Public Method Shrubs(): Vec3[] => shrubs
+End Class
