@@ -747,12 +747,12 @@ Function Checked(folder: Path) Throws GraphicsError, IOError
 End Function
 
 // Whether two folders' files are the same: every byte, but for PNGs, whose pixels are, as a PNG's
-// bytes are its zlib's.
+// bytes are its zlib's. A shader's kept but not made: it's written by hand, as code is.
 Function Matched(made: Path, kept: Path) Throws IOError
     Local same = True
     Local names: String[] = []
     For entry In Try Dir.Entries(kept)
-        names.Add(entry.Name())
+        If !entry.Name().EndsWith(".slang") Then names.Add(entry.Name())
     End For
     Local madeNames: String[] = []
     For entry In Try Dir.Entries(made)
