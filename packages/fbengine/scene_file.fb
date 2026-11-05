@@ -634,10 +634,21 @@ Class Reading
         Return made
     End Method
 
-    // The texture of the file at `path`, or if it can't be and that's allowed, one that says it's lost,
-    // of `format`.
+    // The texture of the file at `path`, or of the model's image it says, or if it can't be and that's
+    // allowed, one that says it's lost, of `format`.
     Method TextureOf(path: String, at: String,
                      format: TextureFormat = TextureFormat.RGBA8): Texture Throws IOError
+        Local file = ModelFileOf(path)
+        If file != Null
+            Try
+                Local model = Try ModelAt(file)
+                Local own = model.TextureFrom(path)
+                If own != Null Then Return own
+                Return Try LostTexture(path, at, "{file} has no image that's {path}", format)
+            Catch error As IOError
+                Return Try LostTexture(path, at, error.Message, format)
+            End Try
+        End If
         Try
             Return Try Assets.Load<Texture>(path)
         Catch error As IOError
@@ -654,6 +665,28 @@ Class Reading
         Catch lost As GraphicsError
             Throw Wrong("{at}: {lost.Message}")
         End Try
+    End Method
+
+    // The file a texture's of, if `path` says it's a model's image, as res://door.glb#2 or #2:1.
+    Method ModelFileOf(path: String): String?
+        Local marked = path.Split("#")
+        If marked.Count < 2 Then Return Null
+        Local which = marked[marked.Count - 1].Split(":")
+        If which.Count > 2 Then Return Null
+        For number In which
+            If Int.Parse(number) == Null Then Return Null
+        End For
+        marked.RemoveAt(marked.Count - 1)
+        Return marked.Join("#")
+    End Method
+
+    // The model of the file at `path`, once for all that's read of it.
+    Method ModelAt(path: String): Model Throws IOError
+        Local model = Models.Get(path)
+        If model != Null Then Return model
+        Local made = Try Assets.Load<Model>(path)
+        Models[path] = made
+        Return made
     End Method
 
     // The texture of the file at `path` as `map`, for what SetMap would panic at otherwise: a color,
@@ -745,17 +778,14 @@ Class Reading
         marked.RemoveAt(marked.Count - 1)
         Local path = marked.Join("#")
         If index == Null Then Throw Wrong("{at}: {source} says no mesh of its file")
-        Local model = Models.Get(path)
-        If model == Null
-            Try
-                model = Try Assets.Load<Model>(path)
-            Catch error As IOError
-                If !Tolerant Then Throw Wrong("{at}: {error.Message}")
-                Return Lost(source, at, error.Message)
-            End Try
-            Models[path] = model
-        End If
-        Local parts = model.Geometries()
+        Local model: Model? = Null
+        Try
+            model = Try ModelAt(path)
+        Catch error As IOError
+            If !Tolerant Then Throw Wrong("{at}: {error.Message}")
+            Return Lost(source, at, error.Message)
+        End Try
+        Local parts = model?.Geometries() ?? []
         If index < 0 || index >= parts.Count
             Local says = "{path} has {parts.Count} meshes, not one numbered {index}"
             If !Tolerant Then Throw Wrong("{at}: {says}")

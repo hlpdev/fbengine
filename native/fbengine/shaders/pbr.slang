@@ -16,7 +16,7 @@ static const float POLE = 1e-8;
 static const float DEGENERATE = 1e-8;
 
 /// What a surface is at a point, as glTF's metal-rough material says.
-public struct Surface
+public struct PbrSurface
 {
     public float3 baseColor;
     public float metallic;
@@ -92,7 +92,7 @@ public float4 tangentFromDerivatives(float3 normal, float3 place, float2 uv)
 
 /// How much of the light Fresnel reflects at normal incidence: 4% for a dielectric, its base color
 /// for a metal.
-float3 reflectanceOf(Surface surface)
+float3 reflectanceOf(PbrSurface surface)
 {
     return lerp(float3(0.04), surface.baseColor, surface.metallic);
 }
@@ -120,7 +120,7 @@ public float smithVisibility(float nDotL, float nDotV, float alpha)
 /// specular, Fresnel by Schlick, with Smith's height-correlated visibility, as Khronos's viewer has
 /// it, where its specification writes the separable form. A light straight against the view has no
 /// halfway, and takes the normal's.
-public float3 shadePunctual(Surface surface, float3 view, float3 toLight, float3 radiance)
+public float3 shadePunctual(PbrSurface surface, float3 view, float3 toLight, float3 radiance)
 {
     const float nDotL = saturate(dot(surface.normal, toLight));
     if (nDotL <= 0.0)
@@ -197,7 +197,7 @@ float3 octahedralAt(uint texture, uint sampler, float3 direction, float level)
 /// account: the split sum of its specular light, and its diffuse light, with the energy a single
 /// scatter loses given back, as Fdez-Agüera's approximation does, so a white furnace is white at any
 /// roughness.
-public float3 shadeEnvironment(Surface surface, float3 view, Environment environment)
+public float3 shadeEnvironment(PbrSurface surface, float3 view, Environment environment)
 {
     const float nDotV = saturate(dot(surface.normal, view));
     const float3 mirrored = reflect(-view, surface.normal);

@@ -86,3 +86,27 @@ End Function
 
 /// Whether a frame's cost means anything: a lost GPU says -1 for every frame, which is under any number.
 Public Function CostWasRead(lost: Bool, cost: Float): Bool => !lost && cost >= 0.0
+
+/// Whether `arguments` are a mode that draws with no person there, which ctest runs and a window never shows.
+Public Function DrawsWithoutAPerson(arguments: String[]): Bool
+    If arguments.Count == 0 Then Return False
+    Return ["--cooked", "--walk3d", "--end", "--hear", "--feel", "--frames"].Contains(arguments[0])
+End Function
+
+/// Whether such a mode may draw, with `devices` shown: not when it would pick one of several for itself.
+Public Function MayDrawOn(devices: Int): Bool => devices <= 1
+
+/// Whether `with` shows something `without` doesn't within 6 pixels of (`x`, `y`): by more than the
+/// little that a frame differs from another of the same thing.
+Public Function DiffersAround(with: Image, without: Image, x: Int, y: Int): Bool
+    For row = Max(y - 6, 0) To Min(y + 6, with.Height - 1)
+        For column = Max(x - 6, 0) To Min(x + 6, with.Width - 1)
+            Local one = with[column, row]
+            Local other = without[column, row]
+            Local change = Abs(((one.r As Int) + (one.g As Int) + (one.b As Int)) -
+                               ((other.r As Int) + (other.g As Int) + (other.b As Int)))
+            If change > 24 Then Return True
+        End For
+    End For
+    Return False
+End Function

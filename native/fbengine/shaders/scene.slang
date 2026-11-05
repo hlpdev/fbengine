@@ -31,6 +31,8 @@ import pbr;
 [vk::constant_id(9)] const uint inPrepass = 0;
 // Whether its camera draws in stored values: what's written goes into the target's bytes as it is.
 [vk::constant_id(10)] const uint storedValues = 0;
+// Whether this is the prepass's own fragment, for which what it goes on to make isn't there yet.
+static bool inThePrepass = false;
 
 static const uint shadingUnlit = 1;
 static const uint shadingVertex = 2;
@@ -243,6 +245,8 @@ struct Material
     uint noAlpha;
     uint spare;
     Layer layers[8];
+    // What a shader of its own reads, where its layers end.
+    float4 parameters[8];
     float metallic;
     float roughness;
     float normalScale;
@@ -367,8 +371,6 @@ struct Corner
     // Its tangent in the camera's view, w its bitangent's way; 0 in w for none.
     float4 tangent : TANGENT;
     nointerpolation uint draw : DRAW;
-    // Whether what's drawn mirrors its triangles where its pipeline can't say so, as one instance of
-    // many can: which side of them is its front is the other way.
 };
 
 // Whether this pipeline's the fixed-function look, in encoded values.
@@ -406,7 +408,7 @@ float3 whole(float3 normal)
 // KHR_lights_punctual has it, which ends at its range, as clusters need; per vertex, as
 // fixed-function hardware's did, whole within its range and falling as range over distance past it,
 // with no end, in encoded values.
-void lightAt(Light light, float3 place, out float3 way, out float3 color)
+void lightAt(Light light, float3 place, bool perVertex, out float3 way, out float3 color)
 {
     float falling = 1.0;
     if (light.type == int(lightDirectional))
@@ -419,7 +421,7 @@ void lightAt(Light light, float3 place, out float3 way, out float3 color)
         const float squared = dot(to, to);
         const float apart = sqrt(squared);
         way = apart > 0.0 ? to / apart : float3(0.0, 0.0, 1.0);
-        if (shading == shadingVertex)
+        if (perVertex)
         {
             falling = min(light.range / max(apart, 0.0001), 1.0);
         }
@@ -438,16 +440,18 @@ void lightAt(Light light, float3 place, out float3 way, out float3 color)
         }
     }
     const float3 linear = float3(light.color[0], light.color[1], light.color[2]);
-    color = (shading == shadingVertex ? toEncoded(linear) : linear) * falling;
+    color = (perVertex ? toEncoded(linear) : linear) * falling;
 }
 
-// What a light adds to a fixed-function vertex: what falls on it, and what its highlight adds.
-void addLight(Light light, float3 place, float3 normal, float3 eye, float shininess,
-              inout float3 diffuse, inout float3 highlight)
+// What a light adds to what's lit by a sum: what falls on it, and what its highlight adds, as much as
+// `reached` of it gets there, as a fixed-function vertex or a shader of its own asks.
+void addLight(Light light, float3 place, float3 normal, float3 eye, float shininess, float reached,
+              bool perVertex, inout float3 diffuse, inout float3 highlight)
 {
     float3 way;
     float3 color;
-    lightAt(light, place, way, color);
+    lightAt(light, place, perVertex, way, color);
+    color *= reached;
     const float facing = saturate(dot(normal, way));
     diffuse += color * facing;
     if (shininess > 0.0 && facing > 0.0)
@@ -509,6 +513,64 @@ float4x4 skinOf(Draw draw, float4x4* palette, uint index)
     return skin;
 }
 
+// A vertex morphed, as glTF has it first of all.
+void morphedVertex(Draw draw, uint index, inout float4 position, inout float3 normal)
+{
+    if (draw.drawnTargetCount != 0)
+    {
+        float3 morphed = normal;
+        for (uint i = 0; i < draw.drawnTargetCount; ++i)
+        {
+            const DrawnTarget drawn = drawnTargetAt(draw.drawnTargets, i);
+            const TargetVertex moved =
+                targetVertexAt(draw.targets, drawn.target * draw.targetVertices + index);
+            position.xyz += float3(moved.position[0], moved.position[1], moved.position[2]) *
+                            drawn.weight;
+            morphed += float3(moved.normal[0], moved.normal[1], moved.normal[2]) * drawn.weight;
+        }
+        // Length 1 here, so what's between vertices is as a morph has it, unless targets cancel it
+        // or send it past what a float holds: that leaves no way to face but the vertex's own.
+        const float squared = dot(morphed, morphed);
+        if (squared > smallestNormalSquared && !isInfinite(squared))
+        {
+            normal = morphed / sqrt(squared);
+        }
+    }
+}
+
+// A vertex in its mesh's space: morphed first, then skinned before its own matrix, as the palette
+// is.
+void posed(Draw draw, uint index, inout float4 position, inout float3 normal, inout float4 tangent)
+{
+    morphedVertex(draw, index, position, normal);
+    if (draw.jointCount != 0)
+    {
+        const float4x4 skin = skinOf(draw, draw.palette, index);
+        position = mul(skin, position);
+        normal = skinnedNormal(skin, normal);
+        // A bone that mirrors turns its bitangent with it, as it does its normal.
+        tangent = float4(mul(skin, float4(tangent.xyz, 0.0)).xyz, tangent.w * mirroring(skin));
+    }
+}
+
+#ifdef FBE_OWN_SHADER
+#include "own_shader.slang"
+#include "fbe_game_shader.slang"
+#endif
+
+// Where a shader of its own moves a vertex to, if it does.
+void movedByItsShader(Draw draw, Vertex vertex, inout float4 position, inout float3 normal)
+{
+#ifdef FBE_MOVES_VERTICES
+    MovingVertex moving = { float2(vertex.uv0[0], vertex.uv0[1]), float2(vertex.uv1[0], vertex.uv1[1]),
+                            float4(vertex.color[0], vertex.color[1], vertex.color[2], vertex.color[3]),
+                            draw.material };
+    float3 moved = position.xyz;
+    move(moved, normal, moving);
+    position = float4(moved, position.w);
+#endif
+}
+
 // A draw's corner, from where it is in its mesh's space and how it's turned there.
 Corner litCorner(Camera* camera, Draw draw, uint drawIndex, float4 position, float3 normal, Vertex vertex,
                  float4 color, float4 tangent)
@@ -542,71 +604,50 @@ Corner litCorner(Camera* camera, Draw draw, uint drawIndex, float4 position, flo
         for (uint i = 0; i < draw.lightCount; ++i)
         {
             addLight(camera.lights[camera.drawLights[draw.lightFirst + i]], place.xyz, unit, eye,
-                     shininess, diffuse, highlight);
+                     shininess, 1.0, true, diffuse, highlight);
         }
         corner.lit = saturate(diffuse + highlight);
     }
     return corner;
 }
 
-[shader("vertex")]
-Corner vertexMain(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInstanceID)
+// A draw's vertex, as it's drawn.
+Corner drawnCorner(uint index, uint instance)
 {
     Camera* camera = push.camera;
     const Draw draw = camera.draws[instance];
     const Vertex vertex = vertexAt(draw.vertices, index);
     float4 position = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
     float3 normal = float3(vertex.normal[0], vertex.normal[1], vertex.normal[2]);
-    const bool tangents = !fixedLook() && draw.hasTangents != 0;
     float4 tangent = float4(0.0, 0.0, 0.0, 0.0);
-    if (tangents)
+    if (!fixedLook() && draw.hasTangents != 0)
     {
         const Tangent stored = tangentAt(draw.tangents, index);
         tangent = float4(stored.xyzw[0], stored.xyzw[1], stored.xyzw[2], stored.xyzw[3]);
     }
-    // Morphed first, as glTF has it, then skinned.
-    if (draw.drawnTargetCount != 0)
-    {
-        float3 morphed = normal;
-        for (uint i = 0; i < draw.drawnTargetCount; ++i)
-        {
-            const DrawnTarget drawn = drawnTargetAt(draw.drawnTargets, i);
-            const TargetVertex moved =
-                targetVertexAt(draw.targets, drawn.target * draw.targetVertices + index);
-            position.xyz += float3(moved.position[0], moved.position[1], moved.position[2]) *
-                            drawn.weight;
-            morphed += float3(moved.normal[0], moved.normal[1], moved.normal[2]) * drawn.weight;
-        }
-        // Length 1 here, so what's between vertices is as a morph has it, unless targets cancel it
-        // or send it past what a float holds: that leaves no way to face but the vertex's own.
-        const float squared = dot(morphed, morphed);
-        if (squared > smallestNormalSquared && !isInfinite(squared))
-        {
-            normal = morphed / sqrt(squared);
-        }
-    }
-    // Skinned before its own matrix, in its mesh's space, as the palette is.
-    if (draw.jointCount != 0)
-    {
-        const float4x4 skin = skinOf(draw, draw.palette, index);
-        position = mul(skin, position);
-        normal = skinnedNormal(skin, normal);
-        // A bone that mirrors turns its bitangent with it, as it does its normal.
-        tangent = float4(mul(skin, float4(tangent.xyz, 0.0)).xyz, tangent.w * mirroring(skin));
-    }
+    posed(draw, index, position, normal, tangent);
+    movedByItsShader(draw, vertex, position, normal);
     const float4 color = float4(vertex.color[0], vertex.color[1], vertex.color[2], vertex.color[3]);
     return litCorner(camera, draw, instance, position, normal, vertex, color, tangent);
 }
 
-// An instance of an Instances entity: its vertex through its own matrix, then as any draw's.
 [shader("vertex")]
-Corner instanceVertex(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInstanceID)
+Corner vertexMain(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInstanceID)
+{
+    return drawnCorner(index, instance);
+}
+
+// An instance of an Instances entity: its vertex, as its shader moves it, through its own matrix,
+// then as any draw's.
+Corner drawnInstanceCorner(uint index, uint instance)
 {
     Camera* camera = push.camera;
     const Draw draw = camera.draws[push.draw];
     const Vertex vertex = vertexAt(draw.vertices, index);
     const Instance one = instanceAt(draw.instances, instance);
-    const float4 start = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
+    float4 start = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
+    float3 given = float3(vertex.normal[0], vertex.normal[1], vertex.normal[2]);
+    movedByItsShader(draw, vertex, start, given);
     const float4 position = float4(dot(one.rows[0], start), dot(one.rows[1], start),
                                    dot(one.rows[2], start), 1.0);
     // Its matrix's columns, whose cofactors turn a normal.
@@ -614,7 +655,6 @@ Corner instanceVertex(uint index : SV_VulkanVertexID, uint instance : SV_VulkanI
     const float3 b = float3(one.rows[0].y, one.rows[1].y, one.rows[2].y);
     const float3 c = float3(one.rows[0].z, one.rows[1].z, one.rows[2].z);
     const float3 x = cross(b, c);
-    const float3 given = float3(vertex.normal[0], vertex.normal[1], vertex.normal[2]);
     const float3 turned = x * given.x + cross(c, a) * given.y + cross(a, b) * given.z;
     const float3 normal = whole(dot(a, x) < 0.0 ? -turned : turned);
     const float4 color = float4(vertex.color[0], vertex.color[1], vertex.color[2], vertex.color[3]) *
@@ -629,6 +669,12 @@ Corner instanceVertex(uint index : SV_VulkanVertexID, uint instance : SV_VulkanI
                          stored.xyzw[3] * (dot(a, x) < 0.0 ? -1.0 : 1.0));
     }
     return litCorner(camera, draw, push.draw, position, normal, vertex, color, tangent);
+}
+
+[shader("vertex")]
+Corner instanceVertex(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInstanceID)
+{
+    return drawnInstanceCorner(index, instance);
 }
 
 // A quad's two triangles, from its corners' bits: x, then y.
@@ -855,6 +901,50 @@ uint clusterAlong(float part, uint count)
     return at > 0.0 ? uint(min(at, float(count - 1))) : 0;
 }
 
+// The cluster of the lights that can reach a pixel at a place.
+Cluster clusterAt(Camera* camera, float2 pixel, float3 place)
+{
+    float2 across = (pixel - camera.viewport.xy) / camera.viewport.zw;
+    if (camera.flipped != 0)
+    {
+        across.x = 1.0 - across.x;
+    }
+    const float depth = -place.z;
+    const float part = camera.perspective != 0 ? log(max(depth, 0.000001)) * camera.sliceScale +
+                                                     camera.sliceBias
+                                               : depth * camera.sliceScale + camera.sliceBias;
+    const uint column = clusterAlong(across.x, clustersAcross);
+    const uint row = clusterAlong(across.y, clustersUp);
+    const uint slice = clusterAlong(part, clustersDeep);
+    return camera.clusters[column + clustersAcross * (row + clustersUp * slice)];
+}
+
+#ifdef FBE_OWN_SHADER
+// The light that reaches a pixel on a normal, as a sum, for a shader of its own to ask: the ambient
+// light, every directional light, and its cluster's, per pixel and linear, whatever its shading.
+float3 pixelLit(Camera* camera, float2 pixel, float3 place, float3 normal, float shininess)
+{
+    const float3 eye = toEye(camera, place);
+    float3 diffuse = camera.ambient;
+    float3 highlight = float3(0.0, 0.0, 0.0);
+    const Cluster cluster = clusterAt(camera, pixel, place);
+    for (uint i = 0; i < cluster.count; ++i)
+    {
+        const Light light = camera.lights[camera.clusterLights[cluster.first + i]];
+        addLight(light, place, normal, eye, shininess, reachedBy(camera, light, place, normal), false,
+                 diffuse, highlight);
+    }
+    // The directional lights, which no cluster lists, come first in the lights.
+    for (uint i = 0; i < camera.directional; ++i)
+    {
+        const Light light = camera.lights[i];
+        addLight(light, place, normal, eye, shininess, reachedBy(camera, light, place, normal), false,
+                 diffuse, highlight);
+    }
+    return diffuse + highlight;
+}
+#endif
+
 // What a pixel looks like, shaded by pbr.slang: its base color by its environment and ambient light,
 // each directional light, and its cluster's, what it emits on top.
 float3 pixelShaded(Camera* camera, Material material, Corner corner, float3 baseColor, bool front)
@@ -870,7 +960,7 @@ float3 pixelShaded(Camera* camera, Material material, Corner corner, float3 base
     float roughness = material.roughness;
     float occlusion = 1.0;
     float3 emissive = material.emissive;
-    if (inPrepass != 0 && camera.ambientOcclusion > 0.0)
+    if (inPrepass != 0 && camera.ambientOcclusion > 0.0 && !inThePrepass)
     {
         const float open = loadTexel(push.occlusion, int2(corner.position.xy)).r;
         occlusion = pow(open, camera.ambientOcclusion);
@@ -910,32 +1000,20 @@ float3 pixelShaded(Camera* camera, Material material, Corner corner, float3 base
     {
         return color + emissive;
     }
-    Surface surface;
+    PbrSurface surface;
     surface.baseColor = reflecting;
     surface.metallic = saturate(metallic);
     surface.roughness = saturate(roughness);
     surface.normal = normal;
     surface.occlusion = occlusion;
     surface.emissive = emissive;
-    float2 across = (corner.position.xy - camera.viewport.xy) / camera.viewport.zw;
-    if (camera.flipped != 0)
-    {
-        across.x = 1.0 - across.x;
-    }
-    const float depth = -place.z;
-    const float part = camera.perspective != 0 ? log(max(depth, 0.000001)) * camera.sliceScale +
-                                                     camera.sliceBias
-                                               : depth * camera.sliceScale + camera.sliceBias;
-    const uint column = clusterAlong(across.x, clustersAcross);
-    const uint row = clusterAlong(across.y, clustersUp);
-    const uint slice = clusterAlong(part, clustersDeep);
-    const Cluster cluster = camera.clusters[column + clustersAcross * (row + clustersUp * slice)];
+    const Cluster cluster = clusterAt(camera, corner.position.xy, place);
     for (uint i = 0; i < cluster.count; ++i)
     {
         const Light light = camera.lights[camera.clusterLights[cluster.first + i]];
         float3 way;
         float3 reaching;
-        lightAt(light, place, way, reaching);
+        lightAt(light, place, false, way, reaching);
         color += shadePunctual(surface, eye, way,
                                reaching * reachedBy(camera, light, place, facingNormal));
     }
@@ -945,14 +1023,14 @@ float3 pixelShaded(Camera* camera, Material material, Corner corner, float3 base
         const Light light = camera.lights[i];
         float3 way;
         float3 reaching;
-        lightAt(light, place, way, reaching);
+        lightAt(light, place, false, way, reaching);
         color += shadePunctual(surface, eye, way,
                                reaching * reachedBy(camera, light, place, facingNormal));
     }
     if (camera.hasEnvironment != 0)
     {
         // An environment's directions are the world's, and a surface's the view's.
-        Surface inWorld = surface;
+        PbrSurface inWorld = surface;
         inWorld.normal = float3(dot(camera.worldRows[0].xyz, normal), dot(camera.worldRows[1].xyz, normal),
                                 dot(camera.worldRows[2].xyz, normal));
         const float3 eyeInWorld = float3(dot(camera.worldRows[0].xyz, eye), dot(camera.worldRows[1].xyz, eye),
@@ -1036,10 +1114,9 @@ float4 overLayers(Material material, float2 uv0, float2 uv1, float4 current)
     return current;
 }
 
-[shader("fragment")]
-float4 fragmentMain(Corner corner, bool front : SV_IsFrontFace) : SV_Target
+// What a draw's pixel comes to, up to and through its cutoff.
+float4 pixelUpToItsCutoff(Camera* camera, Corner corner, bool front)
 {
-    Camera* camera = push.camera;
     const Draw draw = camera.draws[corner.draw];
     const Material material = camera.materials[draw.material];
     const bool encoded = fixedLook();
@@ -1058,19 +1135,46 @@ float4 fragmentMain(Corner corner, bool front : SV_IsFrontFace) : SV_Target
         current.rgb *= corner.lit;
     }
     current = overLayers(material, corner.uv0, corner.uv1, current);
+#ifndef FBE_OWN_SHADER
     if (material.noAlpha != 0)
     {
         current.a = draw.color.a;
     }
+#endif
     // Before it's discarded, as maps' levels and a tangent's derivatives need their neighbors.
     if (!encoded)
     {
         current.rgb = pixelShaded(camera, material, corner, current.rgb, front);
     }
+#ifdef FBE_OWN_SHADER
+    float3 ownNormal = whole(corner.normal);
+    if (twoSided != 0 && !front)
+    {
+        ownNormal = -ownNormal;
+    }
+    Surface surface = { corner.place, ownNormal, corner.uv0, corner.uv1,
+                        encoded ? float4(toLinear(corner.color.rgb), corner.color.a) : corner.color,
+                        encoded ? float4(toLinear(saturate(current.rgb)), current.a) : current,
+                        corner.position.xy, draw.material };
+    current = shade(surface);
+    if (encoded)
+    {
+        current.rgb = toEncoded(current.rgb);
+    }
+#endif
     if (alphaTest != 0 && current.a < material.cutoff)
     {
         discard;
     }
+    return current;
+}
+
+[shader("fragment")]
+float4 fragmentMain(Corner corner, bool front : SV_IsFrontFace) : SV_Target
+{
+    Camera* camera = push.camera;
+    const bool encoded = fixedLook();
+    float4 current = pixelUpToItsCutoff(camera, corner, front);
     if (fog != 0)
     {
         const float depth = -corner.place.z;
@@ -1138,7 +1242,43 @@ struct PrepassCorner
     float2 uv1 : TEXCOORD1;
     float alpha : ALPHA;
     nointerpolation uint draw : DRAW;
+#ifdef FBE_OWN_SHADER
+    // What its shader's given, to cut it out as it's drawn.
+    float3 drawnPlace : DRAWN_PLACE;
+    float3 drawnNormal : DRAWN_NORMAL;
+    float4 drawnColor : DRAWN_COLOR;
+    float3 drawnLit : DRAWN_LIT;
+    float4 drawnTangent : DRAWN_TANGENT;
+#endif
 };
+
+#ifdef FBE_OWN_SHADER
+// A corner of the prepass with what its shader's given, from the corner it's drawn by.
+void takeDrawn(inout PrepassCorner corner, Corner drawn)
+{
+    corner.drawnPlace = drawn.place;
+    corner.drawnNormal = drawn.normal;
+    corner.drawnColor = drawn.color;
+    corner.drawnLit = drawn.lit;
+    corner.drawnTangent = drawn.tangent;
+}
+
+// The corner it's drawn by, from a corner of the prepass.
+Corner drawnFrom(PrepassCorner corner)
+{
+    Corner drawn;
+    drawn.position = corner.position;
+    drawn.place = corner.drawnPlace;
+    drawn.normal = corner.drawnNormal;
+    drawn.uv0 = corner.uv0;
+    drawn.uv1 = corner.uv1;
+    drawn.color = corner.drawnColor;
+    drawn.lit = corner.drawnLit;
+    drawn.tangent = corner.drawnTangent;
+    drawn.draw = corner.draw;
+    return drawn;
+}
+#endif
 
 // A corner of the prepass, from where it is in its mesh's space now, and then.
 PrepassCorner prepassCorner(Camera* camera, Draw draw, uint drawIndex, float4 now, float4 then,
@@ -1169,23 +1309,28 @@ PrepassCorner prepassVertex(uint index : SV_VulkanVertexID, uint instance : SV_V
     const Draw draw = camera.draws[instance];
     const Vertex vertex = vertexAt(draw.vertices, index);
     float4 position = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
-    for (uint i = 0; i < draw.drawnTargetCount; ++i)
-    {
-        const DrawnTarget drawn = drawnTargetAt(draw.drawnTargets, i);
-        const TargetVertex moved =
-            targetVertexAt(draw.targets, drawn.target * draw.targetVertices + index);
-        position.xyz += float3(moved.position[0], moved.position[1], moved.position[2]) * drawn.weight;
-    }
+    float3 normal = float3(vertex.normal[0], vertex.normal[1], vertex.normal[2]);
+    morphedVertex(draw, index, position, normal);
     float4 then = position;
+    float3 normalThen = normal;
     if (draw.jointCount != 0)
     {
         const float4x4 skin = skinOf(draw, draw.palette, index);
         const Previous previous = camera.previous[draw.previous];
         const bool hadSkin = camera.moving != 0 && previous.hasPalette != 0;
-        then = mul(hadSkin ? skinOf(draw, previous.palette, index) : skin, position);
+        const float4x4 skinThen = hadSkin ? skinOf(draw, previous.palette, index) : skin;
+        then = mul(skinThen, position);
+        normalThen = skinnedNormal(skinThen, normal);
         position = mul(skin, position);
+        normal = skinnedNormal(skin, normal);
     }
-    return prepassCorner(camera, draw, instance, position, then, vertex, vertex.color[3]);
+    movedByItsShader(draw, vertex, position, normal);
+    movedByItsShader(draw, vertex, then, normalThen);
+    PrepassCorner corner = prepassCorner(camera, draw, instance, position, then, vertex, vertex.color[3]);
+#ifdef FBE_OWN_SHADER
+    takeDrawn(corner, drawnCorner(index, instance));
+#endif
+    return corner;
 }
 
 [shader("vertex")]
@@ -1195,20 +1340,30 @@ PrepassCorner prepassInstanceVertex(uint index : SV_VulkanVertexID, uint instanc
     const Draw draw = camera.draws[push.draw];
     const Vertex vertex = vertexAt(draw.vertices, index);
     const Instance one = instanceAt(draw.instances, instance);
-    const float4 start = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
+    float4 start = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
+    float3 normal = float3(vertex.normal[0], vertex.normal[1], vertex.normal[2]);
+    movedByItsShader(draw, vertex, start, normal);
     const float4 position = float4(dot(one.rows[0], start), dot(one.rows[1], start),
                                    dot(one.rows[2], start), 1.0);
-    return prepassCorner(camera, draw, push.draw, position, position, vertex,
-                         vertex.color[3] * one.color.a);
+    PrepassCorner corner = prepassCorner(camera, draw, push.draw, position, position, vertex,
+                                         vertex.color[3] * one.color.a);
+#ifdef FBE_OWN_SHADER
+    takeDrawn(corner, drawnInstanceCorner(index, instance));
+#endif
+    return corner;
 }
 
 [shader("fragment")]
-float4 prepassFragment(PrepassCorner corner) : SV_Target
+float4 prepassFragment(PrepassCorner corner, bool front : SV_IsFrontFace) : SV_Target
 {
     if (alphaTest != 0)
     {
-        // Cut out as it's drawn, by the same alpha.
+        // Cut out as it's drawn, by the same alpha, which a shader of its own has the say in.
         Camera* camera = push.camera;
+#ifdef FBE_OWN_SHADER
+        inThePrepass = true;
+        pixelUpToItsCutoff(camera, drawnFrom(corner), front);
+#else
         const Draw draw = camera.draws[corner.draw];
         const Material material = camera.materials[draw.material];
         const float4 start = float4(1.0, 1.0, 1.0, startingAlpha(material, draw, corner.alpha));
@@ -1219,6 +1374,7 @@ float4 prepassFragment(PrepassCorner corner) : SV_Target
         {
             discard;
         }
+#endif
     }
     // Behind where it could have been, it has no motion to go by.
     const float2 moved = corner.then.z > 0.0
@@ -1250,33 +1406,10 @@ ShadowCorner shadowVertex(uint index : SV_VulkanVertexID, uint instance : SV_Vul
     const Draw draw = camera.draws[instance];
     const Vertex vertex = vertexAt(draw.vertices, index);
     float4 position = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
-    for (uint i = 0; i < draw.drawnTargetCount; ++i)
-    {
-        const DrawnTarget drawn = drawnTargetAt(draw.drawnTargets, i);
-        const TargetVertex moved =
-            targetVertexAt(draw.targets, drawn.target * draw.targetVertices + index);
-        position.xyz += float3(moved.position[0], moved.position[1], moved.position[2]) * drawn.weight;
-    }
-    if (draw.jointCount != 0)
-    {
-        const Joints joints = jointsAt(draw.joints, index);
-        float4x4 skin = float4x4(0.0);
-        for (uint joint = 0; joint < 4; ++joint)
-        {
-            const uint which = (joints.joints[joint / 2] >> (16 * (joint % 2))) & 0xFFFF;
-            const float weight = joints.weights[joint];
-            if (which == noBone)
-            {
-                skin += float4x4(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
-                                 0.0, 1.0) * weight;
-            }
-            else
-            {
-                skin += paletteAt(draw.palette, min(which, draw.jointCount - 1)) * weight;
-            }
-        }
-        position = mul(skin, position);
-    }
+    float3 normal = float3(vertex.normal[0], vertex.normal[1], vertex.normal[2]);
+    float4 tangent = float4(0.0, 0.0, 0.0, 0.0);
+    posed(draw, index, position, normal, tangent);
+    movedByItsShader(draw, vertex, position, normal);
     ShadowCorner corner;
     corner.position = mul(camera.projection, mul(draw.toView, position));
     corner.alpha = vertex.color[3];
@@ -1294,7 +1427,9 @@ ShadowCorner shadowInstanceVertex(uint index : SV_VulkanVertexID, uint instance 
     const Draw draw = camera.draws[push.draw];
     const Vertex vertex = vertexAt(draw.vertices, index);
     const Instance one = instanceAt(draw.instances, instance);
-    const float4 start = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
+    float4 start = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
+    float3 normal = float3(vertex.normal[0], vertex.normal[1], vertex.normal[2]);
+    movedByItsShader(draw, vertex, start, normal);
     const float4 position = float4(dot(one.rows[0], start), dot(one.rows[1], start),
                                    dot(one.rows[2], start), 1.0);
     ShadowCorner corner;

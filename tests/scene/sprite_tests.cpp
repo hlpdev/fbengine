@@ -7,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <cstdint>
+#include <numbers>
 
 namespace {
 
@@ -95,7 +96,28 @@ TEST_CASE("a sprite faces the camera as its view mode says", "[scene]") {
     REQUIRE(fbe_sprite_matrix(sprite, camera, &m));
     CHECK(near(corner(m, 0.0F, 1.0F), 0.0F, 1.0F, -5.0F));
     CHECK(near(corner(m, 1.0F, 0.0F), 1.0F, 0.0F, -5.0F));
-    CHECK_FALSE(fbe_sprite_set_view_mode(sprite, 3));
+    // UPRIGHT_YAW: its own turn and scale, then the camera's yaw alone, here a quarter to the left.
+    fbe_sprite_set_view_mode(sprite, FBE_SPRITE_UPRIGHT_YAW);
+    fbe_entity_set_scale(sprite, 2.0F, 3.0F, 1.0F, FBE_SPACE_WORLD);
+    const float half_turn = std::numbers::pi_v<float> * 0.25F;
+    fbe_entity_set_rotation(camera, 0.0F, std::sin(half_turn), 0.0F, std::cos(half_turn),
+                            FBE_SPACE_WORLD);
+    REQUIRE(fbe_sprite_matrix(sprite, camera, &m));
+    CHECK(near(corner(m, 0.0F, 0.0F), 0.0F, 0.0F, -5.0F));
+    CHECK(near(corner(m, 1.0F, 0.0F), 0.0F, 0.0F, -7.0F));
+    CHECK(near(corner(m, 0.0F, 1.0F), 0.0F, 3.0F, -5.0F));
+    // Pitched as well, the same: only its yaw counts.
+    const float tilt = 0.5F;
+    fbe_entity_turn(camera, std::sin(tilt), 0.0F, 0.0F, std::cos(tilt), FBE_SPACE_LOCAL);
+    REQUIRE(fbe_sprite_matrix(sprite, camera, &m));
+    CHECK(near(corner(m, 1.0F, 0.0F), 0.0F, 0.0F, -7.0F));
+    CHECK(near(corner(m, 0.0F, 1.0F), 0.0F, 3.0F, -5.0F));
+    // Its reach has its scale in it, as it's how far its corners go.
+    fbe_aabb_t reach{};
+    REQUIRE(fbe_entity_bounds(sprite, &reach));
+    CHECK(reach.max.y >= 3.0F);
+    fbe_entity_set_scale(sprite, 1.0F, 1.0F, 1.0F, FBE_SPACE_WORLD);
+    CHECK_FALSE(fbe_sprite_set_view_mode(sprite, 4));
     CHECK_FALSE(fbe_sprite_set_size(sprite, -1.0F, 1.0F));
 }
 
@@ -240,7 +262,11 @@ TEST_CASE("a billboard seen by a camera under a mirror isn't mirrored", "[scene]
     const std::uint64_t camera = fbe_entity_create(world.handle, mirror, FBE_ENTITY_CAMERA);
     const std::uint64_t sprite = fbe_entity_create(world.handle, 0, FBE_ENTITY_SPRITE);
     fbe_entity_set_position(sprite, 0.0F, 0.0F, -5.0F, FBE_SPACE_WORLD);
-    for (const std::int32_t mode : { FBE_SPRITE_BILLBOARD, FBE_SPRITE_UPRIGHT }) {
+    for (const std::int32_t mode : {
+             FBE_SPRITE_BILLBOARD,
+             FBE_SPRITE_UPRIGHT,
+             FBE_SPRITE_UPRIGHT_YAW,
+         }) {
         fbe_sprite_set_view_mode(sprite, mode);
         fbe_mat4_t m{};
         REQUIRE(fbe_sprite_matrix(sprite, camera, &m));

@@ -5,8 +5,9 @@
 //
 // fbengine differs from Blitz's here on purpose, each pinned below: targets are tested where they are
 // now, not where they were, so a door moved in the same frame stops the mover; 8 contacts a move by
-// default, not 10, which SetCollisionIterations changes; using them up settles the mover where it is;
-// and riding over an edge takes SetStepHeight.
+// default, not 10, which SetCollisionIterations changes; using them up settles the mover where it is,
+// so a move of the same length ends at another place by how many it's let have; and riding over an
+// edge takes SetStepHeight.
 
 Import std.core
 Import std.math
@@ -219,6 +220,26 @@ Function Contacts()
     world.Collide()
     Print("around a ring, 10 iterations: {Fine(ringed10.Position())}, touching {ringed10.Collisions().Count}")
     ringed10.Free()
+    world.SetCollisionIterations(8)
+
+    // Around a tighter one, of 128 short walls: more contacts than it's let have, so it stops where
+    // the last leaves it, further along with 10 than with 8.
+    For k = 0 To 127
+        Local angle = (k As Float) * (Pi / 64.0)
+        Local piece = Block(Vec3(70 + 5.5 * Cos(angle), 2, 5.5 * Sin(angle)), Vec3(1, 4, 0.3))
+        piece.Turn(0, -angle, 0)
+    End For
+    Local tight = Mover(world, Vec3(70 + 4.4, 1, 0), 0.5, 0.5)
+    tight.Translate(Vec3(0.5, 0, -8))
+    world.Collide()
+    Print("around a tight ring, 8 iterations: {Fine(tight.Position())}, touching {tight.Collisions().Count}")
+    tight.Free()
+    world.SetCollisionIterations(10)
+    Local tight10 = Mover(world, Vec3(70 + 4.4, 1, 0), 0.5, 0.5)
+    tight10.Translate(Vec3(0.5, 0, -8))
+    world.Collide()
+    Print("around a tight ring, 10 iterations: {Fine(tight10.Position())}, touching {tight10.Collisions().Count}")
+    tight10.Free()
     world.SetCollisionIterations(8)
 
     // A mover against a mover: touched where its last move ended, each by its own sweep.

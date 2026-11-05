@@ -14,6 +14,7 @@
 #include "scene/camera.hpp"
 #include "scene/math.hpp"
 #include "scene/scene.hpp"
+#include "shader/shader.hpp"
 #include "skin/skin.hpp"
 #include "texture/texture.hpp"
 
@@ -188,10 +189,12 @@ struct caster_t {
 };
 
 /// The key of a caster's pipeline, as fbe_render.h lays its bits out: only what the shadow pass
-/// goes by, which a cut-out's alpha is: its cutoff, vertex colors, and layers, as it draws by them.
+/// goes by, which is its shader of its own, as that can move its vertices, and a cut-out's alpha:
+/// its cutoff, vertex colors, and layers, as it draws by them.
 std::uint64_t caster_key(const scene::material_t& material) {
     std::uint64_t key = (static_cast<std::uint64_t>(FBE_BLEND_OPAQUE) << 2U) |
-                        (static_cast<std::uint64_t>(FBE_DEPTH_TEST_AND_WRITE) << 10U);
+                        (static_cast<std::uint64_t>(FBE_DEPTH_TEST_AND_WRITE) << 10U) |
+                        (static_cast<std::uint64_t>(shaders_own::code_of(material.shader)) << 52U);
     if (material.alpha_cutoff <= 0.0F) {
         return key;
     }
@@ -230,8 +233,8 @@ gathered_t& gathered() {
 }
 
 /// Every mesh surface and terrain of a world that casts, sorted so what can go together does. A
-/// material's only there for a cut-out, which is all that reads one. A mesh with levels of detail
-/// casts what the camera draws of it, so those aren't kept between cameras.
+/// material's only there for a cut-out or a shader of its own, which is all that reads one. A mesh
+/// with levels of detail casts what the camera draws of it, so those aren't kept between cameras.
 bool gather_casters(const scene::camera_t& camera, const scene::view_t& view, std::uint32_t world,
                     const scene::tweened_t& tweened) {
     gathered_t& found = gathered();
@@ -251,7 +254,7 @@ bool gather_casters(const scene::camera_t& camera, const scene::view_t& view, st
     std::unordered_map<std::uint32_t, std::pair<VkDeviceAddress, std::uint32_t>> palettes;
     const scene::material_t standard;
     const auto index_of = [&](std::uint32_t material, const scene::material_t& own) {
-        if (own.alpha_cutoff <= 0.0F) {
+        if (own.alpha_cutoff <= 0.0F && own.shader == 0) {
             return 0U;
         }
         const auto [at, added] =
@@ -275,11 +278,15 @@ bool gather_casters(const scene::camera_t& camera, const scene::view_t& view, st
         if (drawn == none) {
             continue;
         }
-        vec3_t low;
-        vec3_t high;
-        scene::geometry_bounds(mesh.geometry, low, high);
+        const scene::geometry_t& whole = s.geometries[mesh.geometry];
+        // Its cull box, if its geometry has one, else its bounds, as what's drawn goes by.
+        vec3_t low = whole.cull_min;
+        vec3_t high = whole.cull_max;
         const std::span<const float> weights = anim::morph_weights(mesh.entity, tweened.tween());
-        anim::grow_by_targets(mesh.geometry, weights, low, high);
+        if (!whole.has_cull_box) {
+            scene::geometry_bounds(mesh.geometry, low, high);
+            anim::grow_by_targets(mesh.geometry, weights, low, high);
+        }
         const vec3_t both = low + high;
         const vec3_t middle = scene::transform_point(matrix, both * 0.5F);
         const float scale =
@@ -290,7 +297,8 @@ bool gather_casters(const scene::camera_t& camera, const scene::view_t& view, st
         vec3_t joints_low;
         vec3_t joints_high;
         vec3_t center = middle;
-        if (anim::skin_joints_box(mesh.entity, tweened, joints_low, joints_high)) {
+        if (!whole.has_cull_box &&
+            anim::skin_joints_box(mesh.entity, tweened, joints_low, joints_high)) {
             const vec3_t both_joints = joints_low + joints_high;
             center = both_joints * 0.5F;
             radius += (scene::length(joints_high - joints_low) * 0.5F) + radius;
@@ -887,6 +895,8 @@ bool draw_shadows(const scene::camera_t& camera, std::span<const scene::view_t> 
             data.projection = tile.to_clip.m;
             data.draws = gathered().draws;
             data.materials = gathered().materials;
+            // What a cut-out's cut by is biased as what it draws is.
+            data.lod_bias = gpu::lod_bias_left();
             const std::array one_camera{ data };
             view_batches_t view_batches;
             view_batches.camera = in_ring<camera_data_t>(one_camera, failed).address;
