@@ -232,8 +232,8 @@ def corners(doc, data, node_index, time, weights):
 
 
 def lit_corners(doc, data, node_index, time, weights):
-    """Every triangle corner's place in the world, its normal there, and its primitive's material,
-    or None for a material it can't work out, as one with a texture is."""
+    """Every triangle corner's place in the world, its normal there, and its primitive's material
+    without its texture, which main.fb takes off to draw the frame again for its light."""
     parts = pose(doc, data, time)
     world = worlds(doc, parts)
     node = doc["nodes"][node_index]
@@ -249,9 +249,7 @@ def lit_corners(doc, data, node_index, time, weights):
     for primitive in mesh["primitives"]:
         positions = read(doc, data, primitive["attributes"]["POSITION"])
         indices = [i[0] for i in read(doc, data, primitive["indices"])]
-        material = material_of(doc, primitive)
-        if "baseColorTexture" in material:
-            material = None
+        material = {k: v for k, v in material_of(doc, primitive).items() if k != "baseColorTexture"}
         # A file's normals by its vertices; flat ones by the corners, as they take them apart.
         has_normals = "NORMAL" in primitive["attributes"]
         normals = [list(n) for n in read(doc, data, primitive["attributes"]["NORMAL"])] if has_normals else None
@@ -379,8 +377,6 @@ def lit(placed, camera, look, intensity):
     nearest = {}
     for t in range(0, len(placed), 3):
         three = placed[t:t + 3]
-        if three[0][2] is None:
-            continue
         seen = []
         for place, _, _ in three:
             d = [a - c for a, c in zip(place, camera)]

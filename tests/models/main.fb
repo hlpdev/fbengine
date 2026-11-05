@@ -7,8 +7,8 @@
 //
 // The light's pinned too: at a few pixels a frame, the color glTF's BRDF gives them, worked out by
 // reference.py from the specification, within 2 levels; the golden images then hold the rest of
-// the frame. MorphPrimitivesTest's material has a texture, which reference.py doesn't read, so its
-// frames have no pixels pinned.
+// the frame. A material's texture, as MorphPrimitivesTest's has, reference.py doesn't read, so such
+// a frame's drawn again with its textures off for its light.
 
 Import std.collections
 Import std.core
@@ -95,7 +95,8 @@ Function OnLavapipe(): Bool Throws GraphicsError
 End Function
 
 // Compares a frame with what was worked out, saying so of whatever differs; gives whether it agrees.
-Function Agrees(frame: Worked, corners: Vec3[], pixels: UInt8[], masks: UInt8[], exact: Bool): Bool
+Function Agrees(frame: Worked, corners: Vec3[], pixels: UInt8[], lit: UInt8[], masks: UInt8[],
+                exact: Bool): Bool
     Local low = corners[0]
     Local high = corners[0]
     Local sum = Vec3(0, 0, 0)
@@ -128,8 +129,8 @@ Function Agrees(frame: Worked, corners: Vec3[], pixels: UInt8[], masks: UInt8[],
         Local y = frame.Lit[at * 5 + 1]
         Local byte = (y * SIZE + x) * 4
         For k = 0 To 2
-            If Abs((pixels[byte + k] As Int) - frame.Lit[at * 5 + 2 + k]) > 2
-                Print("{name} at {x}, {y} is {pixels[byte]}, {pixels[byte + 1]}, {pixels[byte + 2]}, not {frame.Lit[at * 5 + 2]}, {frame.Lit[at * 5 + 3]}, {frame.Lit[at * 5 + 4]}")
+            If Abs((lit[byte + k] As Int) - frame.Lit[at * 5 + 2 + k]) > 2
+                Print("{name} at {x}, {y} is {lit[byte]}, {lit[byte + 1]}, {lit[byte + 2]}, not {frame.Lit[at * 5 + 2]}, {frame.Lit[at * 5 + 3]}, {frame.Lit[at * 5 + 4]}")
                 agrees = False
                 Break
             End If
@@ -181,7 +182,25 @@ Function Run(saving: String?) Throws GraphicsError, IOError
         RenderWorld()
         exact = Try OnLavapipe()
         Local pixels = target.ReadPixels()
-        If Agrees(frame, Corners(mesh), pixels, masks, exact) Then good += 1
+        // Its textures off, for its light, as reference.py works that out without them.
+        Local lit = pixels
+        Local textured = False
+        Local geometry = mesh.Geometry()
+        If geometry != Null
+            Local none: Texture? = Null
+            For s = 0 Until geometry.SurfaceCount()
+                Local material = geometry.Surface(s).Material()
+                If material != Null && material.Texture(0) != Null
+                    material.SetTexture(0, none)
+                    textured = True
+                End If
+            End For
+        End If
+        If textured
+            RenderWorld()
+            lit = target.ReadPixels()
+        End If
+        If Agrees(frame, Corners(mesh), pixels, lit, masks, exact) Then good += 1
         If saving != Null Then Try Saved(saving, "model_{frame.Folder}_{frame.Index}", pixels)
         Flip(False)
         model.Free()

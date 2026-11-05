@@ -118,15 +118,18 @@ Package Function WorkedOut(): Worked[]
     frames.Add(Worked("MorphPrimitivesTest", "mesh", 0, -1, -1, Vec3(0, 1.2, 1.2), Vec3(0, 0, 0),
                       Vec3(-0.5, 0, -0.5), Vec3(0.5, 0.1, 0.5),
                       Vec3(0, 0.0563, 0), 5940, 193, 15,
-                      [] As Int[]))
+                      [115, 174, 171, 4, 4, 156, 174, 172, 5, 5, 75, 174, 170, 4, 4, 139, 156, 172,
+                       5, 5, 100, 155, 171, 4, 4] As Int[]))
     frames.Add(Worked("MorphPrimitivesTest", "mesh", 1, -1, 1, Vec3(0, 1.2, 1.2), Vec3(0, 0, 0),
                       Vec3(-0.5, 0, -0.5), Vec3(0.5, 0.2, 0.5),
                       Vec3(0, 0.1125, 0), 6326, 199, 15,
-                      [] As Int[]))
+                      [155, 172, 172, 5, 5, 114, 172, 171, 4, 4, 73, 172, 170, 4, 4, 100, 147, 171,
+                       5, 5, 141, 147, 172, 5, 5] As Int[]))
     frames.Add(Worked("MorphPrimitivesTest", "mesh", 2, -1, 0, Vec3(0, 1.2, 1.2), Vec3(0, 0, 0),
                       Vec3(-0.5, 0, -0.5), Vec3(0.5, 0, 0.5),
                       Vec3(0, 0, 0), 6724, 193, 15,
-                      [] As Int[]))
+                      [195, 175, 173, 5, 5, 156, 175, 172, 5, 5, 117, 175, 171, 4, 4, 176, 164, 173,
+                       5, 5, 77, 176, 170, 4, 4] As Int[]))
     frames.Add(Worked("AnimatedMorphCube", "AnimatedMorphCube", 0, 0, -1, Vec3(3, 2.5, 4),
                       Vec3(0, 0, 0),
                       Vec3(-1, -1, -1), Vec3(1, 1, 1),
