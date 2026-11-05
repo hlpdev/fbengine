@@ -364,6 +364,77 @@ TEST_CASE("a layer reads the UV set it says, through what turns them", "[gpu][sc
     fbe_material_release(material);
 }
 
+namespace {
+
+std::uint64_t game_shader();
+
+} // namespace
+
+// With its samplers biasing or not, as Metal's can't through MoltenVK, a layer's mipmaps are biased
+// the same: at 7 texels a pixel, a checker's mipmap is all gray; biased sharper, its own texels;
+// blurrier, gray again. So too for what a game's shader reads of a layer.
+TEST_CASE("the LOD bias reaches a layer through its samplers, or its shader", "[gpu][scene]") {
+    const bool samplers_can = GENERATE(true, false);
+    const bool by_its_own_shader = GENERATE(false, true);
+    if (!samplers_can) {
+        fbe::gpu::inject(fbe::gpu::fault_t::NO_LOD_BIAS);
+    }
+    const scene_t scene;
+    if (samplers_can && fbe::gpu::device()->max_lod_bias == 0.0F) {
+        // A GPU whose samplers haven't any is the other case already.
+        return;
+    }
+    CHECK(fbe::gpu::lod_bias_left() == 0.0F);
+    const std::uint64_t material = unlit(1.0F, 1.0F, 1.0F);
+    const std::uint64_t texture = fbe_texture_create(64, 64, FBE_TEXTURE_RGBA8, true);
+    std::vector<std::uint8_t> pixels;
+    for (int y = 0; y < 64; ++y) {
+        for (int x = 0; x < 64; ++x) {
+            const std::uint8_t level = ((x + y) % 2) == 0 ? 255 : 0;
+            pixels.insert(pixels.end(), { level, level, level, 255 });
+        }
+    }
+    require(fbe_texture_write(texture, 0, 0, 64, 64, pixels.data(), 64 * 4));
+    require(fbe_texture_set_filter(texture, FBE_TEXTURE_LINEAR));
+    require(fbe_material_set_texture(material, 0, texture));
+    wall(scene.world, -1.0F, 2.0F, material);
+    // The wall's 4 across, the view's 1.15, so 0.2875 of its UVs show.
+    const float texels = 0.2875F * 64.0F;
+    const float scale = texels / (static_cast<float>(frame_size) * 7.0F);
+    require(fbe_material_set_layer_uv(material, 0, scale, scale, 0.0F, 0.0F, 0.0F));
+    if (by_its_own_shader) {
+        const std::uint64_t shader = game_shader();
+        require(shader != 0);
+        require(fbe_material_set_shader(material, shader));
+        require(fbe_shader_release(shader));
+        require(fbe_material_set_parameter(material, 0, 8.0F, 0.0F, 0.0F, 0.0F));
+        require(fbe_material_set_parameter(material, 3, 0.0F, scale, 0.0F, 0.0F));
+    }
+    const auto spread = [&scene] {
+        const fbe::golden::frame_t frame = scene.drawn();
+        int lowest = 255;
+        int highest = 0;
+        for (std::uint32_t y = 0; y < 8; ++y) {
+            for (std::uint32_t x = 0; x < 8; ++x) {
+                const rgba_t found = pixel(frame, (frame_size / 2) + x, (frame_size / 2) + y);
+                lowest = std::min<int>(lowest, found[0]);
+                highest = std::max<int>(highest, found[0]);
+            }
+        }
+        return highest - lowest;
+    };
+    CHECK(spread() <= 8);
+    require(fbe_gpu_set_lod_bias(-3.0F));
+    CHECK((fbe::gpu::lod_bias_left() != 0.0F) == !samplers_can);
+    CHECK(spread() > 16);
+    require(fbe_gpu_set_lod_bias(3.0F));
+    CHECK(spread() <= 8);
+    require(fbe_gpu_set_lod_bias(0.0F));
+    CHECK(spread() <= 8);
+    fbe_texture_release(texture);
+    fbe_material_release(material);
+}
+
 TEST_CASE("a bump layer shifts the next layer's UVs and scales its light", "[gpu][scene]") {
     const scene_t scene;
     const std::uint64_t material = unlit(1.0F, 1.0F, 1.0F);
@@ -10578,6 +10649,28 @@ fbe_instance_t turned_instance_at(float x, float y, float z) {
     return made;
 }
 
+/// The light an sRGB byte stores.
+float light_of(std::uint8_t stored) {
+    const float value = static_cast<float>(stored) / 255.0F;
+    return value <= 0.04045F ? value / 12.92F : std::pow((value + 0.055F) / 1.055F, 2.4F);
+}
+
+/// Whether what's in the middle comes to `linear` drawn in linear light, `stored` in stored values,
+/// and `linear` again after, as a camera can go either way between frames.
+void check_both_ways(const scene_t& scene, std::array<std::uint8_t, 3> linear,
+                     std::array<std::uint8_t, 3> stored, int within = 1) {
+    CHECK(near(middle(scene.drawn()), linear, within));
+    require(fbe_camera_set_stored_values(scene.camera, true));
+    CHECK(fbe_camera_stored_values(scene.camera));
+    const rgba_t drawn = middle(scene.drawn());
+    CAPTURE(int{ drawn[0] }, int{ drawn[1] }, int{ drawn[2] });
+    CHECK(near(drawn, stored, within));
+    require(fbe_camera_set_stored_values(scene.camera, false));
+    CHECK_FALSE(fbe_camera_stored_values(scene.camera));
+    CHECK(near(middle(scene.drawn()), linear, within));
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
 } // namespace
 
 TEST_CASE("a shader of its own draws an Instances, each moved in its own space", "[gpu][scene]") {
@@ -10782,5 +10875,426 @@ TEST_CASE("a shader of its own reaches the prepass: what it moves, and what it c
     CHECK(fbe_gpu_validation_errors() == 0);
     fbe_material_release(placed);
     fbe_material_release(moved);
+}
+
+TEST_CASE("a camera in stored values blends with what's stored, as DirectX 7 did", "[gpu][scene]") {
+    const scene_t scene;
+    CHECK_FALSE(fbe_camera_stored_values(scene.camera));
+    const float behind = light_of(100);
+    SECTION("half white over black is 128, and 188 in light") {
+        require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+        const std::uint64_t pane = unlit(1.0F, 1.0F, 1.0F, 0.5F);
+        require(fbe_material_set_blend(pane, FBE_BLEND_ALPHA));
+        wall(scene.world, -3.0F, 10.0F, pane);
+        check_both_ways(scene, { 188, 188, 188 }, { 128, 128, 128 });
+        fbe_material_release(pane);
+    }
+    SECTION("half green over half red over black is 64, 128, 0, and 137, 188, 0 in light") {
+        require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+        const std::uint64_t red = unlit(1.0F, 0.0F, 0.0F, 0.5F);
+        const std::uint64_t green = unlit(0.0F, 1.0F, 0.0F, 0.5F);
+        require(fbe_material_set_blend(red, FBE_BLEND_ALPHA));
+        require(fbe_material_set_blend(green, FBE_BLEND_ALPHA));
+        wall(scene.world, -3.0F, 10.0F, green);
+        wall(scene.world, -6.0F, 20.0F, red);
+        check_both_ways(scene, { 137, 188, 0 }, { 64, 128, 0 });
+        fbe_material_release(red);
+        fbe_material_release(green);
+    }
+    SECTION("100 with half of itself added is 150, and 121 in light") {
+        require(fbe_camera_set_clear_color(scene.camera, behind, behind, behind, 1.0F));
+        const std::uint64_t pane = unlit(behind, behind, behind, 128.0F / 255.0F);
+        require(fbe_material_set_blend(pane, FBE_BLEND_ADD));
+        wall(scene.world, -3.0F, 10.0F, pane);
+        check_both_ways(scene, { 121, 121, 121 }, { 150, 150, 150 });
+        fbe_material_release(pane);
+    }
+    SECTION("100 multiplied by 128 is 50, and 46 in light") {
+        require(fbe_camera_set_clear_color(scene.camera, behind, behind, behind, 1.0F));
+        const float by = light_of(128);
+        const std::uint64_t pane = unlit(by, by, by);
+        require(fbe_material_set_blend(pane, FBE_BLEND_MULTIPLY));
+        wall(scene.world, -3.0F, 10.0F, pane);
+        check_both_ways(scene, { 46, 46, 46 }, { 50, 50, 50 });
+        fbe_material_release(pane);
+    }
+}
+
+TEST_CASE("what's opaque comes to the same bytes in stored values, the sky and clear too",
+          "[gpu][scene]") {
+    const scene_t scene;
+    SECTION("its clear color") {
+        const float light = light_of(100);
+        require(fbe_camera_set_clear_color(scene.camera, light, light / 2.0F, 0.0F, 1.0F));
+        const std::uint8_t green = srgb(light / 2.0F);
+        check_both_ways(scene, { 100, green, 0 }, { 100, green, 0 });
+    }
+    SECTION("a clear of part of its target, and nothing past it") {
+        const float light = light_of(100);
+        require(fbe_camera_set_clear_color(scene.camera, light, light, light, 1.0F));
+        require(fbe_camera_set_viewport(scene.camera, 32.0F, 32.0F, 64.0F, 64.0F));
+        check_both_ways(scene, { 100, 100, 100 }, { 100, 100, 100 });
+        require(fbe_camera_set_stored_values(scene.camera, true));
+        CHECK(near(pixel(scene.drawn(), 4, 4), { 0, 0, 0 }, 0));
+    }
+    SECTION("a clear color past white is white") {
+        require(fbe_camera_set_clear_color(scene.camera, 3.0F, 0.0F, -1.0F, 1.0F));
+        check_both_ways(scene, { 255, 0, 0 }, { 255, 0, 0 });
+    }
+    SECTION("layers, what's doubled and added on what's stored") {
+        const std::uint64_t material = unlit(1.0F, 1.0F, 1.0F);
+        const std::uint64_t fifty = flat_texture(50, 50, 50, 255);
+        const std::uint64_t added = flat_texture(60, 40, 30, 255);
+        require(fbe_material_set_texture(material, 0, fifty));
+        require(fbe_material_set_layer(material, 0, FBE_LAYER_MULTIPLY_2, 0));
+        require(fbe_material_set_texture(material, 1, added));
+        require(fbe_material_set_layer(material, 1, FBE_LAYER_ADD, 0));
+        wall(scene.world, -3.0F, 10.0F, material);
+        check_both_ways(scene, { 160, 140, 130 }, { 160, 140, 130 });
+        fbe_material_release(material);
+        fbe_texture_release(fifty);
+        fbe_texture_release(added);
+    }
+    SECTION("VERTEX's ambient, half of what's stored") {
+        const std::uint64_t material = fbe_material_create();
+        require(fbe_material_set_shading(material, FBE_SHADING_VERTEX));
+        require(fbe_world_set_ambient(scene.world, 0.214F, 0.214F, 0.214F));
+        wall(scene.world, -3.0F, 10.0F, material);
+        check_both_ways(scene, { 128, 128, 128 }, { 128, 128, 128 });
+        fbe_material_release(material);
+    }
+    SECTION("fog half way, on what's stored") {
+        const std::uint64_t material = unlit(1.0F, 1.0F, 1.0F);
+        wall(scene.world, -5.0F, 30.0F, material);
+        require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+        require(fbe_camera_set_fog_mode(scene.camera, FBE_FOG_LINEAR));
+        require(fbe_camera_set_fog_color(scene.camera, 0.0F, 0.0F, 0.0F));
+        require(fbe_camera_set_fog_range(scene.camera, 0.0F, 10.0F));
+        check_both_ways(scene, { 128, 128, 128 }, { 128, 128, 128 });
+        fbe_material_release(material);
+    }
+    SECTION("the sky, by its light as stored") {
+        const std::uint64_t texture = flat_texture(100, 50, 200, 255);
+        require(fbe_world_set_sky_texture(scene.world, texture, 1.0F));
+        check_both_ways(scene, { 100, 50, 200 }, { 100, 50, 200 });
+        fbe_texture_release(texture);
+    }
+    SECTION("the sky's light past white is white") {
+        const std::uint64_t texture = flat_texture(255, 100, 0, 255);
+        require(fbe_world_set_sky_texture(scene.world, texture, 2.0F));
+        check_both_ways(scene, { 255, srgb(light_of(100) * 2.0F), 0 },
+                        { 255, srgb(light_of(100) * 2.0F), 0 });
+        fbe_texture_release(texture);
+    }
+    SECTION("PBR, shaded in light, and only what it ends with encoded") {
+        const std::uint64_t material = fbe_material_create();
+        require(fbe_material_set_shading(material, FBE_SHADING_PBR));
+        require(fbe_material_set_color(material, 0.5F, 0.25F, 0.1F, 1.0F));
+        wall(scene.world, -3.0F, 10.0F, material);
+        light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+        const rgba_t lit = middle(scene.drawn());
+        CHECK(lit[0] > 40);
+        check_both_ways(scene, { lit[0], lit[1], lit[2] }, { lit[0], lit[1], lit[2] });
+        fbe_material_release(material);
+    }
+    SECTION("PBR past white is white") {
+        const std::uint64_t material = fbe_material_create();
+        require(fbe_material_set_shading(material, FBE_SHADING_PBR));
+        wall(scene.world, -3.0F, 10.0F, material);
+        const std::uint64_t sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+        require(fbe_light_set_intensity(sun, 100.0F));
+        check_both_ways(scene, { 255, 255, 255 }, { 255, 255, 255 });
+        fbe_material_release(material);
+    }
+}
+
+TEST_CASE("PBR that blends in stored values blends what it's encoded as", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t material = fbe_material_create();
+    require(fbe_material_set_shading(material, FBE_SHADING_PBR));
+    wall(scene.world, -3.0F, 10.0F, material);
+    light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+    const rgba_t whole = middle(scene.drawn());
+    REQUIRE(whole[0] > 100);
+    require(fbe_material_set_blend(material, FBE_BLEND_ALPHA));
+    require(fbe_material_set_color(material, 1.0F, 1.0F, 1.0F, 0.5F));
+    const auto half = static_cast<std::uint8_t>(std::lround(static_cast<float>(whole[0]) * 0.5F));
+    const std::uint8_t in_light = srgb(light_of(whole[0]) * 0.5F);
+    check_both_ways(scene, { in_light, in_light, in_light }, { half, half, half });
+    fbe_material_release(material);
+}
+
+TEST_CASE("an HDR camera refuses stored values, and stored values HDR", "[gpu][scene]") {
+    const scene_t scene;
+    SECTION("an HDR camera stays one") {
+        require(fbe_camera_set_hdr(scene.camera, true));
+        CHECK_FALSE(fbe_camera_set_stored_values(scene.camera, true));
+        CHECK(std::string_view(fbe_error()).contains("HDR"));
+        CHECK_FALSE(fbe_camera_stored_values(scene.camera));
+        CHECK(fbe_camera_hdr(scene.camera));
+        // Saying it doesn't is no refusal.
+        CHECK(fbe_camera_set_stored_values(scene.camera, false));
+        require(fbe_camera_set_hdr(scene.camera, false));
+        CHECK(fbe_camera_set_stored_values(scene.camera, true));
+    }
+    SECTION("stored values stay") {
+        require(fbe_camera_set_stored_values(scene.camera, true));
+        CHECK_FALSE(fbe_camera_set_hdr(scene.camera, true));
+        CHECK(std::string_view(fbe_error()).contains("stored values"));
+        CHECK_FALSE(fbe_camera_hdr(scene.camera));
+        CHECK(fbe_camera_stored_values(scene.camera));
+        CHECK(fbe_camera_set_hdr(scene.camera, false));
+        require(fbe_camera_set_stored_values(scene.camera, false));
+        CHECK(fbe_camera_set_hdr(scene.camera, true));
+    }
+    SECTION("what isn't a camera has none") {
+        CHECK_FALSE(fbe_camera_set_stored_values(scene.world, true));
+        CHECK_FALSE(fbe_camera_stored_values(scene.world));
+    }
+}
+
+TEST_CASE("stored values have no passes of their own, and antialiasing over frames does nothing",
+          "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t pane = unlit(1.0F, 1.0F, 1.0F, 0.5F);
+    require(fbe_material_set_blend(pane, FBE_BLEND_ALPHA));
+    wall(scene.world, -3.0F, 10.0F, pane);
+    const std::vector<std::string_view> off = passes_of(scene);
+    require(fbe_camera_set_stored_values(scene.camera, true));
+    CHECK(passes_of(scene) == off);
+    require(fbe_camera_set_temporal_aa(scene.camera, true));
+    CHECK(passes_of(scene) == off);
+    fbe_material_release(pane);
+}
+
+TEST_CASE("a target of linear bytes takes stored values too", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t target =
+        fbe_texture_create_target(32, 32, FBE_TEXTURE_RGBA8_LINEAR, 1, true);
+    REQUIRE(target != 0);
+    require(fbe_camera_set_target(scene.camera, target));
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const float gray = light_of(100);
+    const std::uint64_t material = unlit(gray, gray, gray);
+    wall(scene.world, -3.0F, 10.0F, material);
+    const auto drawn = [&] {
+        require(fbe_render_world(scene.world, 1.0F));
+        const fbe::golden::frame_t frame = scene_t::read(target);
+        fbe_frame_flip(false);
+        return middle(frame);
+    };
+    // Light as it is, in linear bytes, or what's stored.
+    CHECK(near(drawn(), { 32, 32, 32 }, 1));
+    require(fbe_camera_set_stored_values(scene.camera, true));
+    CHECK(near(drawn(), { 100, 100, 100 }, 0));
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_material_release(material);
+    require(fbe_camera_set_target(scene.camera, scene.target));
+    fbe_texture_release(target);
+}
+
+TEST_CASE("a target of floats holds stored values, and nothing past white", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t target = fbe_texture_create_target(4, 4, FBE_TEXTURE_RGBA16F, 1, true);
+    REQUIRE(target != 0);
+    require(fbe_camera_set_target(scene.camera, target));
+    require(fbe_camera_set_stored_values(scene.camera, true));
+    const auto red_of_a_pixel = [&] {
+        require(fbe_render_world(scene.world, 1.0F));
+        std::array<std::uint8_t, 128> bytes{};
+        require(fbe_texture_read(target, 0, bytes.data(), bytes.size()));
+        fbe_frame_flip(false);
+        // A half float's exponent and part: this one's positive, and not tiny.
+        const std::uint32_t red = bytes[0] + (std::uint32_t{ bytes[1] } << 8U);
+        return std::ldexp(1.0F + (static_cast<float>(red & 1023U) / 1024.0F),
+                          static_cast<int>((red >> 10U) & 31U) - 15);
+    };
+    require(fbe_camera_set_clear_color(scene.camera, 3.0F, 0.0F, 0.0F, 1.0F));
+    CHECK(red_of_a_pixel() == Catch::Approx(1.0F).margin(0.001F));
+    require(fbe_camera_set_clear_color(scene.camera, light_of(100), 0.0F, 0.0F, 1.0F));
+    CHECK(red_of_a_pixel() == Catch::Approx(100.0F / 255.0F).margin(0.001F));
+    CHECK(fbe_gpu_validation_errors() == 0);
+    require(fbe_camera_set_target(scene.camera, scene.target));
+    fbe_texture_release(target);
+}
+
+TEST_CASE("multisampling in stored values averages what's stored", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t target = fbe_texture_create_target(32, 32, FBE_TEXTURE_RGBA8, 4, true);
+    REQUIRE(target != 0);
+    require(fbe_camera_set_target(scene.camera, target));
+    require(fbe_camera_set_projection(scene.camera, FBE_PROJECTION_ORTHOGRAPHIC));
+    require(fbe_camera_set_orthographic_height(scene.camera, 32.0F));
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t material = unlit(1.0F, 1.0F, 1.0F);
+    // White from the middle of pixel 16 on, so two of its four samples.
+    const std::uint64_t made = wall(scene.world, -3.0F, 100.0F, material);
+    require(fbe_entity_set_position(made, 100.5F, 0.0F, -3.0F, FBE_SPACE_WORLD));
+    const auto drawn = [&] {
+        require(fbe_render_world(scene.world, 1.0F));
+        const fbe::golden::frame_t frame = scene_t::read(target);
+        fbe_frame_flip(false);
+        return pixel(frame, 16, 16);
+    };
+    CHECK(near(drawn(), { 188, 188, 188 }, 1));
+    require(fbe_camera_set_stored_values(scene.camera, true));
+    CHECK(near(drawn(), { 128, 128, 128 }, 1));
+    SECTION("and what blends, all four samples of it") {
+        require(fbe_material_set_blend(material, FBE_BLEND_ALPHA));
+        require(fbe_material_set_color(material, 1.0F, 1.0F, 1.0F, 0.5F));
+        require(fbe_entity_set_position(made, 0.0F, 0.0F, -3.0F, FBE_SPACE_WORLD));
+        CHECK(near(drawn(), { 128, 128, 128 }, 1));
+    }
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_material_release(material);
+    require(fbe_camera_set_target(scene.camera, scene.target));
+    fbe_texture_release(target);
+}
+
+TEST_CASE("what's drawn in stored values is those bytes to whatever reads it", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t pane = unlit(1.0F, 1.0F, 1.0F, 0.5F);
+    require(fbe_material_set_blend(pane, FBE_BLEND_ALPHA));
+    const std::uint64_t seen = wall(scene.world, -3.0F, 10.0F, pane);
+    require(fbe_camera_set_stored_values(scene.camera, true));
+    CHECK(near(middle(scene.drawn()), { 128, 128, 128 }, 1));
+    // A camera in light, UNLIT, draws what its texture's bytes are, whatever drew them.
+    const std::uint64_t shows = unlit(1.0F, 1.0F, 1.0F);
+    require(fbe_material_set_texture(shows, 0, scene.target));
+    const std::uint64_t other_target =
+        fbe_texture_create_target(32, 32, FBE_TEXTURE_RGBA8, 1, true);
+    REQUIRE(other_target != 0);
+    const std::uint64_t other = fbe_entity_create(scene.world, 0, FBE_ENTITY_CAMERA);
+    require(fbe_camera_set_target(other, other_target));
+    require(fbe_camera_set_order(other, 1));
+    require(fbe_entity_set_position(other, 100.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+    const std::uint64_t shown = wall(scene.world, -3.0F, 10.0F, shows);
+    require(fbe_entity_set_position(shown, 100.0F, 0.0F, -3.0F, FBE_SPACE_WORLD));
+    require(fbe_render_world(scene.world, 1.0F));
+    const fbe::golden::frame_t frame = scene_t::read(other_target);
+    fbe_frame_flip(false);
+    CHECK(near(middle(frame), { 128, 128, 128 }, 1));
+    CHECK(fbe_gpu_validation_errors() == 0);
+    (void)seen;
+    fbe_material_release(pane);
+    fbe_material_release(shows);
+    fbe_texture_release(other_target);
+}
+
+TEST_CASE("between a texture's texels, one in sRGB filters by light, one linear by what's stored",
+          "[gpu][scene]") {
+    const scene_t scene;
+    const std::int32_t format = GENERATE(FBE_TEXTURE_RGBA8, FBE_TEXTURE_RGBA8_LINEAR);
+    const std::uint64_t texture = fbe_texture_create(2, 1, format, false);
+    REQUIRE(texture != 0);
+    const std::array<std::uint8_t, 8> pixels{ 0, 0, 0, 255, 255, 255, 255, 255 };
+    require(fbe_texture_write(texture, 0, 0, 2, 1, pixels.data(), 8));
+    require(fbe_texture_set_filter(texture, FBE_TEXTURE_LINEAR));
+    require(fbe_texture_set_wrap(texture, FBE_TEXTURE_CLAMP, FBE_TEXTURE_CLAMP));
+    const std::uint64_t material = unlit(1.0F, 1.0F, 1.0F);
+    require(fbe_material_set_texture(material, 0, texture));
+    wall(scene.world, -3.0F, 10.0F, material);
+    require(fbe_camera_set_stored_values(scene.camera, true));
+    const std::uint8_t between = format == FBE_TEXTURE_RGBA8 ? 188 : 128;
+    CHECK(near(middle(scene.drawn()), { between, between, between }, 3));
+    fbe_material_release(material);
+    fbe_texture_release(texture);
+}
+
+TEST_CASE("ambient occlusion in stored values is what it is in light, and only on PBR",
+          "[gpu][scene]") {
+    const scene_t scene;
+    const cornered_t cornered(scene);
+    require(fbe_camera_set_ambient_occlusion(scene.camera, 1.0F));
+    const fbe::golden::frame_t in_light = scene.drawn();
+    require(fbe_camera_set_stored_values(scene.camera, true));
+    const fbe::golden::frame_t stored = scene.drawn();
+    const rgba_t open_one = pixel(stored, open_wall[0], open_wall[1]);
+    const rgba_t beside = pixel(stored, beside_block[0], beside_block[1]);
+    CAPTURE(int{ open_one[0] }, int{ beside[0] });
+    CHECK(beside[0] + 8 < open_one[0]);
+    CHECK(fbe::golden::compare(in_light, stored, 1).pixels == 0);
+    SECTION("UNLIT has none") {
+        const std::uint64_t flat = unlit(0.5F, 0.5F, 0.5F);
+        require(fbe_mesh_set_material(cornered.back, flat));
+        require(fbe_mesh_set_material(cornered.block, flat));
+        const fbe::golden::frame_t drawn = scene.drawn();
+        CHECK(near(pixel(drawn, beside_block[0], beside_block[1]), { 188, 188, 188 }, 1));
+        fbe_material_release(flat);
+    }
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+TEST_CASE("fxaa in stored values softens by what's stored", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t paint = unlit(1.0F, 1.0F, 1.0F);
+    edge_wall(scene, paint);
+    require(fbe_camera_set_stored_values(scene.camera, true));
+    require(fbe_camera_set_fxaa(scene.camera, true));
+    CHECK(std::ranges::count(passes_of(scene), std::string_view("fxaa")) == 1);
+    const fbe::golden::frame_t soft = scene.drawn();
+    const float part = fxaa_small_part();
+    const auto dark = static_cast<std::uint8_t>(std::lround(part * 255.0F));
+    const auto light = static_cast<std::uint8_t>(std::lround((1.0F - part) * 255.0F));
+    CAPTURE(int{ pixel(soft, 63, 64)[0] }, int{ pixel(soft, 64, 64)[0] }, int{ dark });
+    CHECK(near(pixel(soft, 63, 64), { dark, dark, dark }, 3));
+    CHECK(near(pixel(soft, 64, 64), { light, light, light }, 3));
+    CHECK(pixel(soft, 62, 64)[0] == 0);
+    CHECK(pixel(soft, 65, 64)[0] == 255);
+    SECTION("its least contrast is of what's stored") {
+        // 200 by 255 is 0.216 apart, over its least, an eighth of the brightest; their square
+        // roots, as light's looks are measured, would be 0.115.
+        const float behind = light_of(200);
+        require(fbe_camera_set_clear_color(scene.camera, behind, behind, behind, 1.0F));
+        const fbe::golden::frame_t bright = scene.drawn();
+        CAPTURE(int{ pixel(bright, 63, 64)[0] });
+        CHECK(pixel(bright, 62, 64)[0] == 200);
+        CHECK(pixel(bright, 63, 64)[0] >= 202);
+    }
+    CHECK(fbe_gpu_validation_errors() == 0);
     fbe_material_release(paint);
+}
+
+// What it returns is in light whichever way the camera draws, so half white over black is 128
+// stored and 188 in light, as a material's own is.
+TEST_CASE("a shader of its own blends with what's stored, in stored values", "[gpu][scene]") {
+    const scene_t scene;
+    const std::int32_t shading = GENERATE(FBE_SHADING_PBR, FBE_SHADING_UNLIT);
+    CAPTURE(shading);
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t material = by_game_shader();
+    require(fbe_material_set_shading(material, shading));
+    require(fbe_material_set_parameter(material, 2, 1.0F, 1.0F, 1.0F, 0.5F));
+    require(fbe_material_set_blend(material, FBE_BLEND_ALPHA));
+    wall(scene.world, -3.0F, 10.0F, material);
+    check_both_ways(scene, { 188, 188, 188 }, { 128, 128, 128 });
+    fbe_material_release(material);
+}
+
+// In stored values from its first frame, as what it falls back to goes the camera's way too.
+TEST_CASE("a shader no pipeline can be made of draws as the scene's own, in stored values",
+          "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_stored_values(scene.camera, true));
+    // Bytes of its own, so it's a code of its own, by its name.
+    std::vector<std::uint32_t> words(fbe::test_shaders::game_shader.code.begin(),
+                                     fbe::test_shaders::game_shader.code.end());
+    words.push_back(2U << 16U);
+    const std::vector<std::uint8_t> bytes = cooked_shader(words);
+    const std::uint64_t shader = fbe_shader_create(
+        bytes.data(), static_cast<std::int64_t>(bytes.size()), "res://refused_stored.slang");
+    REQUIRE(shader != 0);
+    fbe::gpu::refuse_pipelines_of("res://refused_stored.slang");
+    const std::uint64_t material = unlit(0.5F, 0.5F, 0.5F);
+    require(fbe_material_set_shader(material, shader));
+    wall(scene.world, -3.0F, 1.0F, material);
+    // Half light, encoded: 188, where linear would write 128 to these bytes.
+    CHECK(near(middle(scene.drawn()), { 188, 188, 188 }));
+    CHECK(fbe::gpu::pipelines_refused() == 1);
+    fbe::gpu::refuse_pipelines_of("");
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_shader_release(shader);
+    fbe_material_release(material);
 }

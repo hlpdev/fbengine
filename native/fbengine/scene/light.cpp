@@ -462,6 +462,10 @@ FBE_API bool fbe_camera_set_hdr(uint64_t camera, bool hdr) {
     if (found == nullptr) {
         return false;
     }
+    if (hdr && found->stored_values) {
+        return fbe::fail("a camera that draws in stored values isn't HDR, as they have no light "
+                         "past white to tonemap");
+    }
     found->hdr = hdr;
     return true;
 }

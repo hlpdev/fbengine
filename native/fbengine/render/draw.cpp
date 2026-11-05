@@ -60,7 +60,7 @@ gpu::blend_t blend_of(std::uint64_t key) {
 
 /// The scene shader's pipeline for a key, as fbe_render.h lays its bits out, into a target.
 gpu::pipeline_desc_t desc_of(std::uint64_t key, VkFormat format, VkSampleCountFlagBits samples,
-                             bool flipped, bool shadows, bool prepass) {
+                             bool flipped, bool shadows, bool prepass, bool stored) {
     const auto depth_mode = static_cast<std::int32_t>((key >> 10U) & 3U);
     const bool two_sided = ((key >> 7U) & 1U) != 0;
     const bool mirrored = ((key >> 12U) & 1U) != 0;
@@ -110,21 +110,24 @@ gpu::pipeline_desc_t desc_of(std::uint64_t key, VkFormat format, VkSampleCountFl
             sets,
             // What's in the prepass, as its ambient occlusion is of.
             depth_mode == FBE_DEPTH_TEST_AND_WRITE && !particles ? 1U : 0U,
+            stored ? 1U : 0U,
         },
-        .constant_count = 10,
+        .constant_count = 11,
     };
     return desc;
 }
 
 /// The sky's pipeline, into a target: only what's still at the far plane takes it, and it writes no
 /// depth.
-gpu::pipeline_desc_t sky_desc(VkFormat format, VkSampleCountFlagBits samples) {
+gpu::pipeline_desc_t sky_desc(VkFormat format, VkSampleCountFlagBits samples, bool stored) {
     return {
         .shader = &shaders::sky,
         .color = format,
         .depth = texture::depth_format,
         .samples = samples,
         .depth_test = true,
+        .constants = { stored ? 1U : 0U },
+        .constant_count = 1,
     };
 }
 
@@ -176,9 +179,9 @@ void record_pass(VkCommandBuffer commands, const recorded_pass_t& pass) {
             if (bound != batch.key) {
                 bound = batch.key;
                 VkPipeline made = gpu::pipeline(
-                    batch.sky != 0 ? sky_desc(pass.format, pass.samples)
+                    batch.sky != 0 ? sky_desc(pass.format, pass.samples, pass.stored)
                                    : desc_of(batch.key, pass.format, pass.samples, view.flipped,
-                                             pass.shadows, pass.prepass));
+                                             pass.shadows, pass.prepass, pass.stored));
                 const auto code = static_cast<std::uint32_t>(batch.key >> 52U);
                 // A game's shader no pipeline can be made of isn't tried again: its draws go on as
                 // the scene's own, under the same key.
@@ -186,7 +189,7 @@ void record_pass(VkCommandBuffer commands, const recorded_pass_t& pass) {
                     shaders_own::shader_of(code) != nullptr) {
                     shaders_own::refuse(code);
                     made = gpu::pipeline(desc_of(batch.key, pass.format, pass.samples, view.flipped,
-                                                 pass.shadows, pass.prepass));
+                                                 pass.shadows, pass.prepass, pass.stored));
                 }
                 usable = made != VK_NULL_HANDLE;
                 if (usable) {
@@ -259,7 +262,7 @@ layer_data_t layer_data(const scene::layer_t& layer, std::uint64_t target,
     const float down = 1.0F / layer.uv_scale[1];
     const float cosine = std::cos(-layer.uv_angle);
     const float sine = std::sin(-layer.uv_angle);
-    const bool decodes = image != nullptr && image->format == FBE_TEXTURE_RGBA8;
+    const bool decodes = image != nullptr && fbe_texture_srgb(layer.texture);
     const float neutral = image != nullptr ? 0.0F : 1.0F;
     out.uv_across = { across * cosine, down * sine, -layer.uv_offset[0], decodes ? 1.0F : 0.0F };
     out.uv_down = { -across * sine, down * cosine, -layer.uv_offset[1], neutral };
@@ -815,6 +818,7 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
         const auto first = firsts.find(light.light);
         light.shadow = first != firsts.end() ? static_cast<std::int32_t>(first->second) : -1;
     }
+    data.lod_bias = gpu::lod_bias_left();
     data.lights = in_ring<fbe_draw_light_t>(lights, failed).address;
     data.clusters = in_ring<fbe_cluster_t>(lists.clusters, failed).address;
     data.cluster_lights = in_ring<std::uint32_t>(lists.cluster_lights, failed).address;
@@ -841,6 +845,20 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
     const std::array one{ data };
     out.camera = in_ring<camera_data_t>(one, failed).address;
     return !failed;
+}
+
+/// What a camera clears to, in what it draws: its color's light, or, in stored values, the bytes
+/// that would be, so a color's the same on any camera.
+std::array<float, 4> cleared_with(const scene::camera_t& camera) {
+    std::array<float, 4> color = camera.clear_color;
+    if (camera.stored_values) {
+        for (std::size_t channel = 0; channel < 3; ++channel) {
+            const float light = std::clamp(color[channel], 0.0F, 1.0F);
+            color[channel] = light <= 0.0031308F ? light * 12.92F
+                                                 : (1.055F * std::pow(light, 1.0F / 2.4F)) - 0.055F;
+        }
+    }
+    return color;
 }
 
 /// A view as a mirror's plane reflects it: the eye, and its turn as a whole camera has it, its
@@ -886,10 +904,14 @@ bool draw_camera(std::uint32_t slot, float tween) {
     const auto width = static_cast<float>(found->width);
     const auto height = static_cast<float>(found->height);
     const VkFormat target_format = found->vk_format;
+    // Stored values go into a target's bytes as they are.
+    const VkFormat drawn_format = camera.stored_values && found->stored_view != VK_NULL_HANDLE
+                                      ? VK_FORMAT_R8G8B8A8_UNORM
+                                      : target_format;
     // FXAA reads what's done, so it goes through an image of its own, as near the target as there
     // is.
     const bool srgb_target =
-        target_format == VK_FORMAT_R8G8B8A8_SRGB || target_format == VK_FORMAT_B8G8R8A8_SRGB;
+        drawn_format == VK_FORMAT_R8G8B8A8_SRGB || drawn_format == VK_FORMAT_B8G8R8A8_SRGB;
     const bool float_target = target_format == VK_FORMAT_R16G16B16A16_SFLOAT;
     std::int32_t picture_format = srgb_target ? FBE_TEXTURE_RGBA8 : FBE_TEXTURE_RGBA8_LINEAR;
     VkFormat picture_vk_format = srgb_target ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
@@ -898,7 +920,7 @@ bool draw_camera(std::uint32_t slot, float tween) {
         picture_vk_format = VK_FORMAT_R16G16B16A16_SFLOAT;
     }
     const bool aside = camera.hdr || camera.fxaa;
-    VkFormat format = target_format;
+    VkFormat format = drawn_format;
     if (aside) {
         format = camera.hdr ? VK_FORMAT_R16G16B16A16_SFLOAT : picture_vk_format;
     }
@@ -1013,9 +1035,10 @@ bool draw_camera(std::uint32_t slot, float tween) {
     }
     pass->format = format;
     pass->samples = samples;
+    pass->stored = camera.stored_values;
     const bool whole = from_x == 0 && from_y == 0 && pass->scissor.extent.width == target_width &&
                        pass->scissor.extent.height == target_height;
-    const std::array<float, 4> clear_rgba = camera.clear_color;
+    const std::array<float, 4> clear_rgba = cleared_with(camera);
     // An HDR image is all the camera's, so all of it's cleared: to nothing, if what's in its target
     // shows through.
     pass->clear_color = camera.clears_color && !whole && !aside;
@@ -1070,6 +1093,7 @@ bool draw_camera(std::uint32_t slot, float tween) {
             .target = image,
             .clear = aside || (camera.clears_color && whole),
             .rgba = camera.clears_color ? clear_rgba : std::array<float, 4>{},
+            .stored = camera.stored_values,
         }, },
         .depth = into,
         .clear_depth = camera.clears_depth && whole,
@@ -1080,7 +1104,7 @@ bool draw_camera(std::uint32_t slot, float tween) {
         return drawn;
     }
     if (!camera.hdr) {
-        return add_fxaa(camera, image, into, full_size, target_format, samples, pass->scissor);
+        return add_fxaa(camera, image, into, full_size, drawn_format, samples, pass->scissor);
     }
     const gpu::resource_t resolved =
         temporal ? add_resolve(*history, camera, view, image, prepass, *pass) : image;

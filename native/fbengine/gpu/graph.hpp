@@ -55,6 +55,8 @@ struct color_t {
     resource_t target = no_resource;
     bool clear = false;
     std::array<float, 4> rgba{};
+    /// Whether it's drawn through its target's view of its stored bytes, if it has one.
+    bool stored = false;
 };
 
 /// A pass: the targets it draws into, if it draws, and the one whose depth it tests and writes,

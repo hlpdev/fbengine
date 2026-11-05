@@ -18,7 +18,8 @@
 // so the same.
 //
 // Whatever `shade` returns goes on as the scene's own color does: its alpha to the material's cutoff,
-// then fog and blend. Colors are in linear light, whatever the material's shading. A material's blend
+// then fog and blend. Colors are in linear light, whatever the material's shading and whichever way
+// its camera draws: one in stored values stores what they encode to. A material's blend
 // doesn't look at what `shade` returns: BLEND AUTO goes by the material's color and textures, so a
 // shader whose alpha is to blend sets BLEND ALPHA on it. A shadow's cut out by the material's own
 // alpha, as `shade` can light what it draws, and a shadow's pass has no lights. A camera's prepass,
@@ -63,7 +64,7 @@ struct Surface
             return float4(1.0, 1.0, 1.0, 1.0);
         }
         const Layer layer = push.camera.materials[material].layers[index];
-        return sampleTexture(layer.texture, layer.sampler, uv);
+        return sampleTextureBiased(layer.texture, layer.sampler, uv, push.camera.lodBias);
     }
 
     // The light that reaches here on a normal, per pixel and in linear light, whatever the material's

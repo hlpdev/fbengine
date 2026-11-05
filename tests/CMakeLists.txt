@@ -400,6 +400,23 @@ if(FBENGINE_FB_TESTS)
                      "the screen's 320 by 180, its own True"
                      "shown in 640 by 360 of the window"
                      "the window's again 640 by 360, True")
+  # A real display's modes, and a switch to one, which opens a window, so it's only ever made where
+  # FBENGINE_REAL_DISPLAY is set, as CI's runners do, and never on a person's machine; without it, the
+  # program refuses, opening nothing.
+  add_test(NAME proof.display_modes_refuses
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/proof/display_modes"
+                   -- --real-display)
+  set_tests_properties(proof.display_modes_refuses PROPERTIES TIMEOUT 300
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;FBENGINE_REAL_DISPLAY="
+                       PASS_REGULAR_EXPRESSION "--real-display opens a window: it's for CI")
+  if(DEFINED ENV{FBENGINE_REAL_DISPLAY} AND "$ENV{FBENGINE_REAL_DISPLAY}" STREQUAL "1")
+    add_test(NAME proof.display_modes_real
+             COMMAND "${FBENGINE_FB}" --color never run
+                     "${PROJECT_SOURCE_DIR}/examples/proof/display_modes" -- --real-display)
+    set_tests_properties(proof.display_modes_real PROPERTIES TIMEOUT 300
+                         ENVIRONMENT "FBENGINE_REAL_DISPLAY=1;${fbengine_vulkan_environment}"
+                         PASS_REGULAR_EXPRESSION "the real display's modes are real True")
+  endif()
   fbengine_add_proof(text_input
                      "off, typed \"\""
                      "on, typed \"a\", in order TEXT, PRESS"
@@ -443,11 +460,21 @@ if(FBENGINE_FB_TESTS)
                      "alpha in its pixels True"
                      "alpha in a whole one False"
                      "clamped CLAMP, CLAMP"
+                     "clamped across alone CLAMP, REPEAT"
+                     "clamped down alone REPEAT, CLAMP"
+                     "across alone, past its right green, past its bottom red"
+                     "down alone, past its right red, past its bottom blue"
+                     "both, past its right green, past its bottom blue"
+                     "neither, past its right red, past its bottom red"
                      "a strip of 4 frames"
                      "frame 0 [(]255, 0, 0, 255[)]"
                      "frame 1 [(]0, 255, 0, 255[)]"
                      "frame 2 [(]0, 0, 255, 255[)]"
                      "frame 3 [(]255, 255, 255, 255[)]"
+                     "on a 3D material's layer, frame 0 red"
+                     "on a 3D material's layer, frame 1 green"
+                     "on a 3D material's layer, frame 2 blue"
+                     "on a 3D material's layer, frame 3 white"
                      "a JPEG 8 across, its red over 250 True"
                      "a BMP [(]255, 128, 0, 255[)]"
                      "a [.]pt [(]255, 0, 255, 255[)], by a path of backslashes"
@@ -555,6 +582,20 @@ if(FBENGINE_FB_TESTS)
                        "can't read its files: [^\n]*is of 0[.]0[.]1, and this game's of ")
   if(APPLE)
     slack_water_shipped(shipped_bundle -DBUNDLE=ON)
+  endif()
+  # What a frame costs, as the program's own timing says; on a software GPU it's no more than that it
+  # runs. The program refuses a real GPU unless SLACK_WATER_REAL_GPU=1 and it's the only device shown.
+  # A Mac's Vulkan is MoltenVK, on its real GPU, its only one, so there that's what this measures, and
+  # nowhere else does anything here set it.
+  add_test(NAME examples.slack_water.frame_cost
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                   -- --fps 0 15)
+  set_tests_properties(examples.slack_water.frame_cost PROPERTIES RESOURCE_LOCK slack_water
+                       ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION "the GPU's not lost, and its time was read True"
+                       SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
+  if(APPLE)
+    set_property(TEST examples.slack_water.frame_cost APPEND PROPERTY ENVIRONMENT "SLACK_WATER_REAL_GPU=1")
   endif()
   add_test(NAME examples.slack_water.hear
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
@@ -905,6 +946,11 @@ if(FBENGINE_FB_TESTS)
                            "behind by depth: [(]255, 0, 0, 255[)]"
                            "later by its order: [(]0, 255, 0, 255[)]"
                            "sorted far to near: [(]137, 188, 0, 255[)]"
+                           "in stored values, sorted far to near: [(]64, 128, 0, 255[)]"
+                           "forced alpha: [(]128, 128, 128, 255[)]"
+                           "blended by the texture's alpha: [(]128, 128, 128, 255[)]"
+                           "a room's stages, as they were: [(]120, 120, 120, 255[)]"
+                           "and in linear light again, forced alpha: [(]188, 188, 188, 255[)]"
                            "a sprite BILLBOARD, 32 across"
                            "a sprite FIXED, [56] across"
                            "a sprite UPRIGHT, 32 across"
@@ -945,7 +991,11 @@ if(FBENGINE_FB_TESTS)
                            "drawn into: [(]200, 100, 50, 255[)]"
                            "a part copied: [(]200, 100, 50, 255[)]"
                            "beside it: [(]0, 0, 0, 0[)]"
-                           "over itself: [(]200, 100, 50, 255[)]")
+                           "over itself: [(]200, 100, 50, 255[)]"
+                           "drawn back at half, on what's stored: [(]128, 0, 0, 255[)]"
+                           "the monitor in stored values, on the screen: [(]128, 0, 0, 255[)]"
+                           "and half of it, in linear light: [(]92, 0, 0, 255[)]"
+                           "and in stored values: [(]64, 0, 0, 255[)]")
   fbengine_add_drawn_proof(bump
                            "a flat map's left: [(]255, 0, 0, 255[)]"
                            "its right: [(]0, 255, 0, 255[)]"
@@ -955,16 +1005,10 @@ if(FBENGINE_FB_TESTS)
                            "half its light, by its blue: [(]0, 128, 0, 255[)]"
                            "all of it, offset by half: [(]0, 255, 0, 255[)]"
                            "its matrix moves a texel or so back True")
-  # A Mac's samplers have no LOD bias.
-  if(APPLE)
-    set(fbengine_lod_bias False)
-  else()
-    set(fbengine_lod_bias True)
-  endif()
   fbengine_add_drawn_proof(render_settings
                            "by itself, its pixels are within 8 of each other True"
                            "the bias -3"
-                           "sharper, they're apart by over 64 ${fbengine_lod_bias}"
+                           "sharper, they're apart by over 64 True"
                            "blurrier, within 8 True"
                            "1 sample, between 0"
                            "4 samples 4, between over 10 True"
@@ -985,7 +1029,11 @@ if(FBENGINE_FB_TESTS)
                            "white comes to the gray: [(]128, 128, 128, 255[)]"
                            "by a curve: [(]160, 160, 160, 255[)]"
                            "its ends stay: [(]0, 0, 0, 255[)]"
-                           "and the other: [(]255, 255, 255, 255[)]")
+                           "and the other: [(]255, 255, 255, 255[)]"
+                           "on what's stored, brighter: [(]150, 150, 150, 255[)]"
+                           "white stays: [(]255, 255, 255, 255[)]"
+                           "on what's stored, darker: [(]50, 50, 50, 255[)]"
+                           "white comes to the gray: [(]128, 128, 128, 255[)]")
   fbengine_add_drawn_proof(seeded_random
                            "at first its state 4660"
                            "its first numbers 0[.]35565948, 0[.]7478714, 0[.]31705475, 0[.]40476227, 0[.]5803604"
@@ -1323,6 +1371,8 @@ if(FBENGINE_FB_TESTS)
       "grade-freed=Grade on a Camera that was freed"
       "exposure-negative=SetExposure on a Camera: a camera's exposure is 0 or more, not -1"
       "gamma-zero=SetGamma on a Camera: a camera's gamma is above 0, not 0"
+      "stored-on-hdr=SetStoredValues on a Camera: an HDR camera doesn't draw in stored values"
+      "hdr-on-stored=SetHdr on a Camera: a camera that draws in stored values isn't HDR"
       "tonemap-range=the value isn't one of Tonemap's"
       "exposure-freed=SetExposure on a Camera that was freed"
       "light-freed=SetColor on a Light that was freed"

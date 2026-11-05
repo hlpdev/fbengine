@@ -8,7 +8,9 @@
 // VERTEX are the fixed-function look, which worked on what was
 // stored: their colors, textures, adds, doublings, and fog are all in encoded values, sRGB's, each
 // stage clamped to 0 to 1, as its stages were, and only the color they end with is made linear for
-// the target. A room's 50 doubled is 100, as it was, not linear light's 71.
+// the target. A room's 50 doubled is 100, as it was, not linear light's 71. A camera that draws in
+// stored values leaves that last step out, so what blends blends with what's stored, and has what
+// PBR ends with encoded instead.
 
 import bindless;
 import pbr;
@@ -27,6 +29,8 @@ import pbr;
 [vk::constant_id(7)] const uint layerBlends = 0;
 [vk::constant_id(8)] const uint layerSets = 0;
 [vk::constant_id(9)] const uint inPrepass = 0;
+// Whether its camera draws in stored values: what's written goes into the target's bytes as it is.
+[vk::constant_id(10)] const uint storedValues = 0;
 // Whether this is the prepass's own fragment, for which what it goes on to make isn't there yet.
 static bool inThePrepass = false;
 
@@ -328,7 +332,8 @@ struct Camera
     uint* drawLights;
     Shadow* shadows;
     uint shadowAtlas;
-    uint shadowSpare;
+    // What's left of the LOD bias, which the samplers couldn't take, as Metal's can't.
+    float lodBias;
     // The rows of what turns its view's directions into the world's.
     float4 worldRows[3];
     Environment environment;
@@ -872,7 +877,7 @@ float2 mapUv(Layer map, Corner corner)
 
 float4 mapTexel(Layer map, Corner corner)
 {
-    return sampleTexture(map.texture, map.sampler, mapUv(map, corner));
+    return sampleTextureBiased(map.texture, map.sampler, mapUv(map, corner), push.camera->lodBias);
 }
 
 // A surface's own tangent as a normal map's UVs go, which what turns them makes another: what its
@@ -1051,7 +1056,7 @@ float4 overLayers(Material material, float2 uv0, float2 uv1, float4 current)
         const float2 raw = ((layerSets >> i) & 1) != 0 ? uv1 : uv0;
         const float3 uv = float3(raw, 1.0);
         const float2 turned = float2(dot(layer.uvAcross.xyz, uv), dot(layer.uvDown.xyz, uv)) + shift;
-        float4 texel = sampleTexture(layer.texture, layer.sampler, turned);
+        float4 texel = sampleTextureBiased(layer.texture, layer.sampler, turned, push.camera->lodBias);
         // A map's offsets and every fixed-function color are what's stored.
         if (layer.uvAcross.w != 0.0 && (fixedLook() || kind == layerBump))
         {
@@ -1202,7 +1207,11 @@ float4 fragmentMain(Corner corner, bool front : SV_IsFrontFace) : SV_Target
         // Scaled by its alpha: none of it leaves what's behind as it is.
         current.rgb = lerp(float3(1.0, 1.0, 1.0), current.rgb, current.a);
     }
-    if (encoded)
+    if (storedValues != 0)
+    {
+        current.rgb = encoded ? saturate(current.rgb) : toEncoded(saturate(current.rgb));
+    }
+    else if (encoded)
     {
         current.rgb = toLinear(saturate(current.rgb));
     }

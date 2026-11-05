@@ -230,6 +230,27 @@ jobs:
           if [ "$RUNNER_OS" = Windows ]; then set -- -E '\.panics\.|^gpu\.ends\.(panics|exits)$|^examples\.slack_water\.(cooked_not|cooked_other_walk)$'; fi
           DYLD_FALLBACK_LIBRARY_PATH="${VULKAN_LIBRARIES:-}" ctest --test-dir build --output-on-failure "$@"
 
+      # A real display's modes, and a switch to one: no offscreen driver here, and on Linux a display
+      # of Xvfb's. It's registered only by a configure that has FBENGINE_REAL_DISPLAY, and that's never
+      # on a person's machine, as it opens a window.
+      - name: A real display's modes
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+          FBENGINE_ENDS_AT_ONCE: '8'
+          FBENGINE_REAL_DISPLAY: '1'
+        run: |
+          cmake -S . -B build
+          # It's registered, or this would pass having run nothing.
+          ctest --test-dir build -N -R '^proof\.display_modes_real$' --no-tests=error > /dev/null
+          unset SDL_VIDEO_DRIVER
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get install -y xvfb
+            set -- xvfb-run -a -s "-screen 0 1280x1024x24"
+          fi
+          DYLD_FALLBACK_LIBRARY_PATH="${VULKAN_LIBRARIES:-}" "$@" ctest --test-dir build \
+            --output-on-failure --no-tests=error -R '^proof\.display_modes_real$'
+
   format:
     name: format
     runs-on: ubuntu-24.04

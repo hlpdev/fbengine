@@ -41,5 +41,10 @@ float4 shade(Surface surface)
         // Cut by how it's lit.
         return float4(surface.parameter(2).rgb, surface.color.r > 0.2 ? 1.0 : 0.0);
     }
+    if (which == 8.0)
+    {
+        // Its first layer, at a UV of its own: its fourth parameter's y of the surface's.
+        return surface.texture(0, surface.uv0 * surface.parameter(3).y);
+    }
     return surface.parameter(2);
 }

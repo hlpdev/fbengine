@@ -47,11 +47,7 @@ Public Final Class Game
         flow = Flow(say)
         told = [False, False, False]
         camera = Camera()
-        camera.SetClearColor(SKY)
-        camera.SetRange(0.1, 4000.0)
-        camera.SetFogMode(FogMode.LINEAR)
-        camera.SetFogColor(SKY)
-        camera.SetFogRange(200.0, 1400.0)
+        Looked(camera)
         Local start = island.PlaceOf(Spot.INSIDE)
         x = start.x
         z = start.y
@@ -145,6 +141,7 @@ Public Final Class Game
         Seat()
         PlacePip(seconds)
         island.Update(flow.Clock())
+        camera.SetGrade(StormGrade(StormAt(flow.Clock())))
         Sync()
         TellWhatLies()
         // The wheel turns once the water's back to it, and the lamp's lit by how it ended.

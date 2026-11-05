@@ -62,6 +62,8 @@ Public Interface Maker
     Method Height(x: Float, y: Float): Float
     Method Albedo(x: Float, y: Float, height: Float): (Float, Float, Float)
     Method Roughness(x: Float, y: Float, height: Float): Float
+    // How much of a metal it is, where it can be one at all, by what its material says.
+    Method Metalness(x: Float, y: Float, height: Float): Float
 End Interface
 
 Final Class Rock Implements Maker
@@ -75,8 +77,10 @@ Final Class Rock Implements Maker
 
     // Wet in its low places, as what the tide left is.
     Method Roughness(x: Float, y: Float, height: Float): Float
-        Return Clamp(0.25 + (height - 0.35) * 1.4, 0.2, 0.9)
+        Return Clamp(0.6 + (height - 0.35) * 0.9, 0.45, 0.95)
     End Method
+
+    Method Metalness(x: Float, y: Float, height: Float): Float => 0.0
 End Class
 
 Final Class Sand Implements Maker
@@ -90,6 +94,8 @@ Final Class Sand Implements Maker
     End Method
 
     Method Roughness(x: Float, y: Float, height: Float): Float => 0.85
+
+    Method Metalness(x: Float, y: Float, height: Float): Float => 0.0
 End Class
 
 Final Class Wood Implements Maker
@@ -105,7 +111,9 @@ Final Class Wood Implements Maker
         Return (shade * 1.2, shade * 0.8, shade * 0.45)
     End Method
 
-    Method Roughness(x: Float, y: Float, height: Float): Float => 0.5 + (1.0 - height) * 0.2
+    Method Roughness(x: Float, y: Float, height: Float): Float => 0.6 + (1.0 - height) * 0.3
+
+    Method Metalness(x: Float, y: Float, height: Float): Float => 0.0
 End Class
 
 Final Class Brass Implements Maker
@@ -119,6 +127,8 @@ Final Class Brass Implements Maker
     Method Roughness(x: Float, y: Float, height: Float): Float
         Return 0.25 + Layered(x, y, 5, 3, 42) * 0.3
     End Method
+
+    Method Metalness(x: Float, y: Float, height: Float): Float => 1.0
 End Class
 
 Final Class Iron Implements Maker
@@ -127,17 +137,22 @@ Final Class Iron Implements Maker
     // Rust where it's pitted.
     Method Albedo(x: Float, y: Float, height: Float): (Float, Float, Float)
         Local rust = Clamp((Layered(x, y, 4, 4, 52) - 0.5) * 4.0, 0.0, 1.0)
-        Return (0.3 + rust * 0.2, 0.3 - rust * 0.12, 0.31 - rust * 0.2)
+        Return (0.34 + rust * 0.08, 0.34 - rust * 0.12, 0.35 - rust * 0.22)
     End Method
 
     Method Roughness(x: Float, y: Float, height: Float): Float
         Return 0.4 + Clamp((Layered(x, y, 4, 4, 52) - 0.5) * 4.0, 0.0, 1.0) * 0.5
     End Method
+
+    // Rust's no metal.
+    Method Metalness(x: Float, y: Float, height: Float): Float
+        Return 1.0 - Clamp((Layered(x, y, 4, 4, 52) - 0.5) * 4.0, 0.0, 1.0)
+    End Method
 End Class
 
 /// A material's name, how many pixels across it is, what makes it, and how strong its normals are.
 Public Function Materials(): (String, Int, Maker, Float)[]
-    Return [("rock", 256, Rock() As Maker, 12.0), ("sand", 256, Sand() As Maker, 3.0),
+    Return [("rock", 256, Rock() As Maker, 6.0), ("sand", 256, Sand() As Maker, 3.0),
             ("wood", 128, Wood() As Maker, 5.0), ("brass", 128, Brass() As Maker, 2.0),
             ("iron", 128, Iron() As Maker, 4.0)]
 End Function
@@ -178,8 +193,9 @@ Function WriteMaterial(folder: Path, name: String, side: Int, maker: Maker,
             Local length = Sqrt(nx * nx + ny * ny + 1.0)
             normal[x, y] = Color32(Byte(nx / length * 0.5 + 0.5), Byte(ny / length * 0.5 + 0.5),
                                    Byte(1.0 / length * 0.5 + 0.5), 255)
-            // glTF's: roughness in green, and metalness, in blue, left for its material to say.
-            rough[x, y] = Color32(255, Byte(maker.Roughness(u, v, height)), 255, 255)
+            // glTF's: roughness in green, and metalness in blue.
+            rough[x, y] = Color32(255, Byte(maker.Roughness(u, v, height)),
+                                  Byte(maker.Metalness(u, v, height)), 255)
         End For
     End For
     Try File.WriteBytes(folder / "{name}_albedo.png", Png.Encode(albedo))

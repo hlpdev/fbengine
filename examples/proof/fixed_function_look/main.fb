@@ -3,8 +3,9 @@
 // vertices, by range over distance, with the ambient light and eight lights at most; linear fog;
 // vertex colors, full bright, no fog, two sided, and forced alpha; a texture's alpha settling a blend;
 // orders; what blends sorted far to near; and sprites by each of their view modes, which are Blitz's
-// 1 to 4: 1 BILLBOARD, 2 FIXED, 3 UPRIGHT, 4 UPRIGHT_YAW. It prints each pixel it reads, against what
-// the sums come to; with --watch, a window of them turning.
+// 1 to 4: 1 BILLBOARD, 2 FIXED, 3 UPRIGHT, 4 UPRIGHT_YAW. What blends is in linear light, and then in
+// stored values, as DirectX 7 blended it. It prints each pixel it reads, against what the sums come
+// to; with --watch, a window of them turning.
 
 Import std.collections
 Import std.core
@@ -255,8 +256,22 @@ Function Proved() Throws GraphicsError
     far.SetPosition(Vec3(0, 0, -8))
     camera.Render()
     Check("sorted far to near", target.ToImage()[16, 16], Color32(137, 188, 0, 255))
+
+    // In stored values, what blends blends with what's stored: half of 255 is 128, not 188, and half
+    // green over that is half of it again, and half of 255. What's opaque comes to what it did.
+    camera.SetStoredValues(True)
+    camera.Render()
+    Check("in stored values, sorted far to near", target.ToImage()[16, 16],
+          Color32(64, 128, 0, 255))
     near.Free()
     far.Free()
+    Check("forced alpha", Drawn(camera, forced)[16, 16], Gray(128))
+    Check("blended by the texture's alpha", Drawn(camera, auto)[16, 16], Gray(128))
+    Check("a room's stages, as they were",
+          Drawn(camera, room, Square(second: Vec2(0.25, 0.5)))[24, 16],
+          Gray(120))
+    camera.SetStoredValues(False)
+    Check("and in linear light again, forced alpha", Drawn(camera, forced)[16, 16], Gray(188))
 
     // A sprite by its view mode, the camera seeing it from a quarter turn round, a little off its
     // face: parallel to the view it's whole; as it's turned, seen edge on, it's narrow; upright

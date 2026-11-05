@@ -501,6 +501,8 @@ FBE_API bool fbe_world_ambient(uint64_t world, fbe_color_t* color);
 // sRGB then encodes it. It's blended by its alpha over what's in a target it doesn't clear; what
 // multiplies what's behind it, which isn't in its image, draws nothing there.
 //
+// False for a camera that draws in stored values.
+//
 // All it draws goes through this: UNLIT's and VERTEX's fixed-function look, which then isn't what's
 // stored, and its clear color. White's 0.869 through NEUTRAL, 0.673 through ACES, and 0.5 through
 // REINHARD, so what has to stay white wants NONE, or its own camera; and an exposure of 0 clears to
@@ -531,6 +533,17 @@ FBE_API float fbe_camera_ambient_occlusion_radius(uint64_t camera);
 // a camera that doesn't clear, draws nothing. It softens what's sharp in the picture, text too.
 FBE_API bool fbe_camera_set_fxaa(uint64_t camera, bool on);
 FBE_API bool fbe_camera_fxaa(uint64_t camera);
+// Whether a camera draws in stored values, as DirectX 7 blended them, rather than in linear light,
+// as it doesn't at first: UNLIT and VERTEX materials, already in encoded values, write what they
+// come to into its target's bytes as they are, and what blends blends with those bytes, so half
+// white over black is 128, not 188. An sRGB texture decodes as it's sampled, so what's filtered
+// between its texels is by their light; one made linear filters what's stored. PBR materials are
+// shaded in linear light, ambient occlusion on them too, and the color they end with is encoded.
+// Its clear color's what it is on any camera, and its sky. There's no tonemap, and false for an
+// HDR camera, so temporal antialiasing, which is an HDR camera's, does nothing. Into a target of
+// sRGB bytes, the screen too, or of linear ones, those bytes are what it draws.
+FBE_API bool fbe_camera_set_stored_values(uint64_t camera, bool on);
+FBE_API bool fbe_camera_stored_values(uint64_t camera);
 FBE_API bool fbe_camera_set_temporal_aa(uint64_t camera, bool on);
 FBE_API bool fbe_camera_temporal_aa(uint64_t camera);
 FBE_API bool fbe_camera_reset_history(uint64_t camera);
