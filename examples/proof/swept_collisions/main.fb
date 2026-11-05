@@ -10,6 +10,7 @@
 // edge takes SetStepHeight.
 
 Import std.core
+Import std.image.image
 Import std.math
 Import fbengine
 Import std.collections
@@ -65,16 +66,21 @@ Function Asked(arguments: String[]): Int
     Return Int.Parse(arguments[at + 1]) ?? 0
 End Function
 
-// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
-Function Drew(): Bool Throws GraphicsError
-    Local image = Try Screen.ToImage()
-    Local behind = image[0, 0]
-    For y = 0 To image.Height - 1
-        For x = 0 To image.Width - 1
-            If image[x, y] != behind Then Return True
-        End For
-    End For
-    Return False
+// Whether two colors are within 2 of each other in each channel, as a GPU's rounding of what's
+// encoded leaves them.
+Function Near(got: Color32, wanted: Color32): Bool
+    Return Abs((got.r As Int) - (wanted.r As Int)) <= 2 &&
+           Abs((got.g As Int) - (wanted.g As Int)) <= 2 &&
+           Abs((got.b As Int) - (wanted.b As Int)) <= 2
+End Function
+
+// `wanted` if `got` is near it, else `got`, to print.
+Function Shown(got: Color32, wanted: Color32): Color32 => Near(got, wanted) ? wanted : got
+
+// What's drawn where `camera` sees `place`.
+Function Seen(camera: Camera, image: Image, place: Vec3): Color32
+    Local at = camera.Project(place) ?? Vec3(0, 0, 0)
+    Return image[at.x As Int, at.y As Int]
 End Function
 
 // A material of no lighting.
@@ -120,7 +126,7 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     Local ball = Mesh(Geometry.Sphere(), mover)
     ball.SetScale(Vec3(0.8, 0.8, 0.8))
     ball.SetMaterial(Painted(Color(0.2, 0.7, 0.9)))
-    Watching(Vec3(0, 18, 14), Vec3(0, 0, 0))
+    Local camera = Watching(Vec3(0, 18, 14), Vec3(0, 0, 0))
     Local time: Float = 0.0
     Local count = 0
     While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
@@ -140,7 +146,26 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
         End For
         RenderWorld()
     End While
-    Print("drew {Try Drew()}")
+    If count == frames
+        // The ball where it went, inside its walls, and each wall lit just while it's touched, as sRGB
+        // stores their colors: 0.2, 0.7, 0.9 is 124, 218, 242; 0.4, 0.4, 0.5 is 170, 170, 188; and
+        // 0.9, 0.5, 0.1 is 242, 188, 89.
+        Local shown = Try Screen.ToImage()
+        Local at = mover.Position()
+        Print("the ball's inside {Abs(at.x) < 9.2 && Abs(at.z) < 9.2}, drawn {Shown(Seen(camera, shown, at + Vec3(0, 0.7, 0)), Color32(124, 218, 242, 255))}")
+        Local touched = 0
+        Local right = True
+        For wall In walls
+            Local lit = False
+            For hit In mover.Collisions()
+                If RefEquals(hit.Other, wall) Then lit = True
+            End For
+            If lit Then touched += 1
+            Local wanted = lit ? Color32(242, 188, 89, 255) : Color32(170, 170, 188, 255)
+            If !Near(Seen(camera, shown, wall.Position() + Vec3(0, 1, 0)), wanted) Then right = False
+        End For
+        Print("its walls, {touched} touched, each its color {right}")
+    End If
     Print("watched {count} frames")
 End Function
 
@@ -293,7 +318,7 @@ Function Contacts()
     through.Free()
 
     // Once a step, by UpdateWorld.
-    Local floor = Block(Vec3(0, -0.5, 0), Vec3(100, 1, 100))
+    Block(Vec3(0, -0.5, 0), Vec3(100, 1, 100))
     Local dropped = Mover(world, Vec3(0, 3, 0), 0.5, 0.5)
     dropped.Translate(Vec3(0, -10, 0))
     UpdateWorld()

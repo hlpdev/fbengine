@@ -95,6 +95,8 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     End For
     Local count = 0
     Local time: Float = 0.0
+    Local route: Int[] = []
+    Local shut: Int[] = []
     While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
         Flip()
         count += 1
@@ -107,6 +109,8 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
             If y != gap Then closed.Add(y * 32 + 16)
         End For
         Local path = grid.Path(0, 17 * 32 + 31, closed)
+        route = path?.Nodes ?? []
+        shut = closed
         If Screen.Texture() == Null Then Continue
         Local canvas = Screen.Canvas()
         canvas.SetColor(Color32(24, 28, 36, 255))
@@ -122,9 +126,20 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
             End For
         End If
     End While
-    // Its route's start, in its color, and a wall's middle in its.
-    Local shown = Try Screen.ToImage()
-    Print("drew {shown[12, 12] == Color32(80, 200, 120, 255) && shown[16 * 25 + 12, 18 * 25 - 12] != Color32(24, 28, 36, 255) || count < 3}")
+    If count == frames
+        // Each square of its way, and of its wall, in its color; its way goes through the wall's gap,
+        // corner to corner, so it's 32 + 18 - 1 squares at the least.
+        Local shown = Try Screen.ToImage()
+        Local right = True
+        For each In route
+            If shown[(each % 32) * 25 + 12, (each / 32) * 25 + 12] != Color32(80, 200, 120, 255) Then right = False
+        End For
+        For each In shut
+            If shown[(each % 32) * 25 + 12, (each / 32) * 25 + 12] != Color32(200, 60, 60, 255) Then right = False
+            If route.Contains(each) Then right = False
+        End For
+        Print("its way {route.Count} squares from {route[0]} to {route[route.Count - 1]}, by a wall of {shut.Count}, each its color {right}")
+    End If
     Print("watched {count} frames")
 End Function
 

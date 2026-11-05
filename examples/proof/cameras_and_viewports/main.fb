@@ -208,7 +208,6 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     Local badge = Mesh(Square())
     badge.SetMaterial(Plain(Color(1, 0.8, 0)))
     badge.SetPosition(Vec3(-7, 3.5, -5))
-    Local drew = False
     Local time: Float = 0.0
     Local count = 0
     While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
@@ -220,13 +219,21 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
         badge.SetRotation(Quat.FromEuler(0.0, 0.0, time))
         World.SetCurrent(world)
         RenderWorld()
-        // The first frame's scene, with nothing yet over it to find instead.
-        If frames > 0 && count == 1 Then drew = Try Drew()
         World.SetCurrent(overlay)
         RenderWorld()
     End While
     World.SetCurrent(world)
-    Print("drew {drew}")
+    If count == frames
+        // Each camera's own clear, stored: 0.02, 0.02, 0.1 is 39, 39, 89, and 0.02, 0.1, 0.02 is 39, 89,
+        // 39. The cube's 0.8, 0.2, 0.1, stored 231, 124, 89, on the left; on the right fogged toward
+        // 0.4's stored 170, so nearer gray by what's between, red less and blue more. The overlay's
+        // badge, 1, 0.8, 0, stored 255, 231, 0, is 1/16 across and 1/9 down over what's already there.
+        Local shown = Try Screen.ToImage()
+        Print("its clears: {shown[390, 440]}, {shown[790, 440]}")
+        Local fogged = shown[600, 225]
+        Print("the cube on the left {shown[200, 225]}, on the right fogged {fogged.r < 231 && fogged.b > 89}")
+        Print("the badge over them {shown[50, 50]}")
+    End If
     Print("watched {count} frames")
 End Function
 
@@ -244,18 +251,6 @@ Function Asked(arguments: String[]): Int
     Local at = arguments.IndexOf("--frames")
     If at == Null || at + 1 >= arguments.Count Then Return 0
     Return Int.Parse(arguments[at + 1]) ?? 0
-End Function
-
-// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
-Function Drew(): Bool Throws GraphicsError
-    Local image = Try Screen.ToImage()
-    Local behind = image[0, 0]
-    For y = 0 To image.Height - 1
-        For x = 0 To image.Width - 1
-            If image[x, y] != behind Then Return True
-        End For
-    End For
-    Return False
 End Function
 
 Local arguments = Process.Arguments()

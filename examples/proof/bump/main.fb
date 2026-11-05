@@ -188,6 +188,7 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     mesh.SetPosition(Vec3(0, 0, -3))
     Local time: Float = 0.0
     Local count = 0
+    Local earlier: Image? = Null
     While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
         Flip()
         count += 1
@@ -196,8 +197,24 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
         Local shift = Sin(time) * 0.03
         wall.SetLayerBump(0, BumpShift(shift, shift, shift, -shift, 1.0, 0.5))
         RenderWorld()
+        If count == frames / 2 Then earlier = Try Screen.ToImage()
     End While
-    Print("drew {Try Drew()}")
+    If count == frames && earlier != Null
+        // Its bump's shift goes back and forth, so its bricks' edges aren't where they were; and every
+        // pixel of the wall's a brick's color, scaled by the same amount, as light by its blue.
+        Local shown = Try Screen.ToImage()
+        Local moved = 0
+        Local right = True
+        For y = 150 To 300
+            For x = 330 To 470
+                If shown[x, y] != earlier[x, y] Then moved += 1
+                Local warm = shown[x, y].r > shown[x, y].b
+                If warm && shown[x, y].r < shown[x, y].g Then right = False
+            End For
+        End For
+        Print(
+            "its bricks moved {moved > 500}, each a brick's {right}, the middle {shown[400, 225]}")
+    End If
     Print("watched {count} frames")
 End Function
 
@@ -215,18 +232,6 @@ Function Asked(arguments: String[]): Int
     Local at = arguments.IndexOf("--frames")
     If at == Null || at + 1 >= arguments.Count Then Return 0
     Return Int.Parse(arguments[at + 1]) ?? 0
-End Function
-
-// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
-Function Drew(): Bool Throws GraphicsError
-    Local image = Try Screen.ToImage()
-    Local behind = image[0, 0]
-    For y = 0 To image.Height - 1
-        For x = 0 To image.Width - 1
-            If image[x, y] != behind Then Return True
-        End For
-    End For
-    Return False
 End Function
 
 Local arguments = Process.Arguments()

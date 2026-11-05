@@ -188,6 +188,28 @@ Function Proved() Throws GraphicsError
     Print("validation errors {Gpu.ValidationErrors()}")
 End Function
 
+// How far apart the lightest and darkest of a row of the floor, far off, are.
+Function FarSpread(image: Image): Int
+    Local lowest = 255
+    Local highest = 0
+    For x = 300 To 500
+        lowest = Min(lowest, image[x, 300].g As Int)
+        highest = Max(highest, image[x, 300].g As Int)
+    End For
+    Return highest - lowest
+End Function
+
+// How many of a frame's pixels are the cube's, 0.8, 0.3, 0.1's stored 231, 149, 89.
+Function OfTheCube(image: Image): Int
+    Local found = 0
+    For y = 0 To image.Height - 1
+        For x = 0 To image.Width - 1
+            If image[x, y] == Color32(231, 149, 89, 255) Then found += 1
+        End For
+    End For
+    Return found
+End Function
+
 // A window of a checkered floor and a turning cube: 1, 2, 3 its LOD bias, M its samples, W wireframe;
 // or `frames` frames offscreen, which press each.
 Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
@@ -215,7 +237,9 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     cube.SetPosition(Vec3(0, 1.5, -5))
     Local font = Font.BuiltIn(18.0)
     Local script = [Key.DIGIT_1, Key.DIGIT_3, Key.DIGIT_2, Key.M, Key.W, Key.M]
-    Local drew = False
+    Local sharper = 0
+    Local blurrier = 0
+    Local solid = 0
     Local time: Float = 0.0
     Local count = 0
     While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
@@ -231,8 +255,11 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
         time += frames > 0 ? 0.1 : Frame.Delta() As Float
         cube.SetRotation(Quat.FromEuler(time * 0.5, time, 0.0))
         RenderWorld()
-        // The first frame's scene, with nothing yet over it to find instead.
-        If frames > 0 && count == 1 Then drew = Try Drew()
+        // Its LOD bias by the floor's far checks, as a key pressed the frame before set it; its
+        // wireframe by how much of the cube there is, before it's pressed.
+        If frames > 0 && count == 2 Then sharper = FarSpread(Try Screen.ToImage())
+        If frames > 0 && count == 3 Then blurrier = FarSpread(Try Screen.ToImage())
+        If frames > 0 && count == 4 Then solid = OfTheCube(Try Screen.ToImage())
         Local canvas = Screen.Canvas()
         canvas.SetColor(Color32(230, 232, 235, 255))
         canvas.DrawText(
@@ -240,7 +267,11 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
             16, 16)
     End While
     If frames > 0 Then Print("by its keys: bias {Gpu.LodBias()}, samples {Screen.Samples()}, wireframe {shown.Wireframe()}")
-    Print("drew {drew}")
+    If count == frames
+        Print("the floor's far checks sharper at -2 than 2 {sharper > blurrier}, by {sharper} and {blurrier}")
+        Local wire = OfTheCube(Try Screen.ToImage())
+        Print("the cube's pixels fewer in wireframe {wire * 2 < solid && wire > 0}")
+    End If
     Print("watched {count} frames")
 End Function
 
@@ -258,18 +289,6 @@ Function Asked(arguments: String[]): Int
     Local at = arguments.IndexOf("--frames")
     If at == Null || at + 1 >= arguments.Count Then Return 0
     Return Int.Parse(arguments[at + 1]) ?? 0
-End Function
-
-// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
-Function Drew(): Bool Throws GraphicsError
-    Local image = Try Screen.ToImage()
-    Local behind = image[0, 0]
-    For y = 0 To image.Height - 1
-        For x = 0 To image.Width - 1
-            If image[x, y] != behind Then Return True
-        End For
-    End For
-    Return False
 End Function
 
 Local arguments = Process.Arguments()

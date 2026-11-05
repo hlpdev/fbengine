@@ -4,6 +4,7 @@
 
 Import std.collections
 Import std.core
+Import std.image.image
 Import std.math
 Import std.os
 Import std.text
@@ -117,9 +118,11 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     Local count = 0
     Local script = "Cabin 7 save"
     Local typed = 0
+    Local before: Image? = Null
     While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
         Step(ui)
         count += 1
+        If count == 2 Then before = Try Screen.ToImage()
         Try Driven(arguments, count)
         // Types for itself until a key's pressed, a letter every so often.
         If KeysHit().Count > 0 Then typed = script.Length
@@ -132,6 +135,17 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
             line.SetText("")
         End If
     End While
+    If count == frames && before != Null
+        // A letter each 8 frames, 5 by the 40th, and what it typed shown, where nothing was.
+        Local shown = Try Screen.ToImage()
+        Local changed = 0
+        For down = 0 To shown.Height - 1
+            For across = 0 To shown.Width - 1
+                If shown[across, down] != before[across, down] Then changed += 1
+            End For
+        End For
+        Print("typed \"{name.Text()}\", shown {changed > 30}")
+    End If
     Print("watched {count} frames")
 End Function
 
