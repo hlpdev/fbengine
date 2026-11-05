@@ -635,6 +635,34 @@ FBE_API bool fbe_material_set_map(uint64_t material, int32_t map, uint64_t textu
     return true;
 }
 
+FBE_API bool fbe_material_replace_texture(uint64_t from, uint64_t to) {
+    if (fbe_texture_format(to) < 0) {
+        return fbe::fail("a material can't read what isn't a texture");
+    }
+    const auto replaced = [&](layer_t& layer) {
+        fbe_texture_retain(to);
+        fbe::scene::release_texture(layer.texture);
+        layer.texture = to;
+    };
+    for (material_t& material : fbe::scene::scene().materials) {
+        if (material.references == 0) {
+            continue;
+        }
+        for (layer_t& layer : material.layers) {
+            if (layer.texture == from) {
+                replaced(layer);
+            }
+        }
+        for (std::size_t map = 0; map < material.maps.size(); ++map) {
+            if (material.maps[map].texture == from &&
+                fbe::scene::map_takes(static_cast<std::int32_t>(map), to)) {
+                replaced(material.maps[map]);
+            }
+        }
+    }
+    return true;
+}
+
 FBE_API bool fbe_material_map_takes(int32_t map, uint64_t texture) {
     return fbe_texture_format(texture) >= 0 && fbe::scene::map_takes(map, texture);
 }

@@ -765,6 +765,11 @@ FBE_API bool fbe_material_set_layer(uint64_t material, int32_t layer, int32_t bl
 FBE_API int32_t fbe_material_layer_blend(uint64_t material, int32_t layer);
 FBE_API int32_t fbe_material_layer_uv_set(uint64_t material, int32_t layer);
 
+// Every material reading `from` reads `to` instead, in its layers, and in its maps where `to` is what
+// that map can read, as Model's reload does for what's held of a file that's changed. False if `to`
+// isn't a texture.
+FBE_API bool fbe_material_replace_texture(uint64_t from, uint64_t to);
+
 // What an FBE_SHADING_PBR material is beyond its color, which with its layers is its base color:
 // how much of a metal it is and how rough, each 0 to 1, a dielectric as rough as can be at first;
 // what it emits, linear, any finite color 0 or more, none at first; how far its normal map's X and

@@ -898,3 +898,76 @@ Function ItsTexturesAreSavedAsItsImages() Throws IOError, GraphicsError
     Expect(model.Freed(), "a scene read of it still holds it")
     Expect(again.Texture(0)?.Path() == "res://kept/it.gltf#1", "it's lost what it draws")
 End Function
+
+// `file`, its second image as `color`.
+Function Painted(file: UInt8[], color: Color32): UInt8[]
+    Local text = String.FromUtf8(file) ?? ""
+    Return text.Replace(Picture(Color32(0, 255, 0, 255)), Picture(color)).Bytes
+End Function
+
+// A material read from a scene follows its model's file as it changes, in what it draws.
+@Test
+Function WhatsReadOfItsTexturesFollowsItsFile() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local material =
+        "{{\"pbrMetallicRoughness\":{{\"baseColorTexture\":{{\"index\":0}}}}," +
+        "\"normalTexture\":{{\"index\":0}}}}"
+    Local textures = "{{\"source\":1,\"sampler\":0}},{{\"source\":1,\"sampler\":1}}"
+    Local samplers = "{{\"wrapS\":33071,\"wrapT\":33071}},{{\"magFilter\":9728,\"wrapS\":33648}}"
+    Local file = Dressed(material, textures, samplers)
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "it.gltf", file)
+    Assets.MountFolder("res://hot-paint", folder.Path)
+    Defer Assets.Unmount("res://hot-paint")
+    Try Assets.WatchFolders()
+    Defer Assets.StopWatching()
+    Local world = World()
+    Defer world.Free()
+    Local model = Try Assets.Load<Model>("res://hot-paint/it.gltf")
+    Defer model.Free()
+    Local mesh = Mesh(model.Geometries()[0])
+    mesh.SetName("door")
+    mesh.SetMaterial(model.Materials()[0])
+    Local text = Try Scene.Text([mesh])
+    mesh.Free()
+    Local read = (Try Scene.FromText(text))[0] As? Mesh
+    Defer read?.Free()
+    Local paint = read?.Material()
+    If paint == Null Then Panic("its material")
+    Local was = paint.Texture(0)
+    Expect(was?.ReadPixel(0, 0) == Color32(0, 255, 0, 255))
+    Local count = Texture.Count()
+    Try WatcherStarted(folder.Path, "res://hot-paint")
+
+    Local old = model.Geometries()[0]
+    Try File.WriteBytesAtomic(folder.Path / "it.gltf", Painted(file, Color32(255, 255, 0, 255)))
+    FlipUntil(Function(): Bool => !RefEquals(model.Geometries()[0], old))
+    Local color = paint.Texture(0)
+    Expect(color?.Path() == "res://hot-paint/it.gltf#1", color?.Path() ?? "no path")
+    Expect(color?.ReadPixel(0, 0) == Color32(255, 255, 0, 255))
+    Local isItsOwn = color != Null && RefEquals(color, model.Textures()[1])
+    Expect(isItsOwn, "it's not the model's now")
+    Local map = paint.Map(MaterialMap.NORMAL)
+    Expect(map?.Path() == "res://hot-paint/it.gltf#1:1", map?.Path() ?? "no path")
+    Local mapIsItsOwn = map != Null && RefEquals(map, model.TextureOf(0, ModelMap.NORMAL))
+    Expect(mapIsItsOwn, "its map's not the model's now")
+    // What it read has gone, so nothing's kept but what's read.
+    Expect(Texture.Count() == count, "{Texture.Count()} textures, not {count}")
+
+    // What's the same image, but can't be that map now, as #1:1 is now read as a color, stays.
+    Local otherwise =
+        "{{\"pbrMetallicRoughness\":{{\"baseColorTexture\":{{\"index\":0}}}}," +
+        "\"emissiveTexture\":{{\"index\":1}},\"emissiveFactor\":[1,1,1]}}"
+    old = model.Geometries()[0]
+    Try File.WriteBytesAtomic(folder.Path / "it.gltf", Dressed(otherwise, textures, samplers))
+    FlipUntil(Function(): Bool => !RefEquals(model.Geometries()[0], old))
+    Local emits = model.TextureOf(0, ModelMap.EMISSIVE)
+    Expect(emits?.Path() == "res://hot-paint/it.gltf#1:1" && emits?.Format() == TextureFormat.RGBA8,
+           emits?.Path() ?? "no path")
+    Local stays = paint.Map(MaterialMap.NORMAL)
+    Expect(stays?.Path() == "res://hot-paint/it.gltf#1:1", stays?.Path() ?? "no path")
+    Expect(stays?.Format() == TextureFormat.RGBA8_LINEAR)
+    Expect(paint.Texture(0)?.ReadPixel(0, 0) == Color32(0, 255, 0, 255))
+End Function

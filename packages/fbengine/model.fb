@@ -149,6 +149,7 @@ Public Final Class Model Implements Asset
             Local player = PlayerOn(root)
             If player != Null Then player.ReplaceClips(before.clips, taken)
         End For
+        Followed(before)
         before.FreeParts()
         If failure != Null Then Throw failure
         Return True
@@ -237,6 +238,24 @@ Public Final Class Model Implements Asset
     Public Method Clips(): Clip[]
         Live("Clips")
         Return clips.Clone()
+    End Method
+
+    // What's read of `before`'s textures by a material of anyone's, a scene's read of them or a game's,
+    // reads this one's of the same image now. One the file no longer has stays as it was.
+    @MainThread
+    Method Followed(before: Model)
+        Local old: Texture[] = before.others.Clone()
+        For texture In before.textures
+            If texture != Null Then old.Add(texture)
+        End For
+        For texture In old
+            Local source = texture.Path()
+            Local now = source != Null ? TextureFrom(source) : Null
+            If now != Null &&
+               !fbe_material_replace_texture(texture.Live("Reload"), now.Live("Reload"))
+                Panic(LastError())
+            End If
+        End For
     End Method
 
     // Which of its Textures, its own or another of an image, has `source` for its Path, or Null.
