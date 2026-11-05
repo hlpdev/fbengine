@@ -229,6 +229,62 @@ Public Function FloorStep(seed: UInt32): Float[]
     Return Leveled(made, 0.7)
 End Function
 
+// A part fitted: iron struck on iron, a few partials that aren't harmonics, ringing down, and a
+// ratchet's clicks as it's seated.
+Public Function Fit(): Float[]
+    Local hiss = Hiss(18)
+    Local made: Float[] = []
+    For at = 0 Until Samples(0.7)
+        Local t = (at As Float) / (RATE As Float)
+        Local ring = Sine(t * TAU * 523.0) * Decay(-t * 7.0) +
+                     0.6 * Sine(t * TAU * 1307.0) * Decay(-t * 11.0) +
+                     0.35 * Sine(t * TAU * 2291.0) * Decay(-t * 16.0)
+        Local click = t > 0.25 && Fract((t - 0.25) *
+                                        18.0) < 0.12 && t < 0.5 ? hiss.Next() * 0.5 : 0.0
+        made.Add(ring * Min(t / 0.002, 1.0) + click)
+    End For
+    Return Leveled(made, 0.6)
+End Function
+
+// The sluice opened: its wood groaning as it's raised, a low tone in stutters that rises, then the
+// water let into the race, rushing louder.
+Public Function Sluice(): Float[]
+    Local hiss = Hiss(19)
+    Local low = Smooth()
+    Local made: Float[] = []
+    Local phase = 0.0
+    For at = 0 Until Samples(2.2)
+        Local t = (at As Float) / (RATE As Float)
+        phase += (70.0 + t * 40.0) * TAU / (RATE As Float)
+        Local raised = Clamp(1.0 - t / 0.9, 0.0, 1.0)
+        Local stutter = Fract(t * 14.0) < 0.4 ? 1.0 : 0.2
+        Local groan = (Sine(phase) + 0.5 * Sine(phase * 2.0)) * stutter * raised *
+                      Min(t / 0.05, 1.0)
+        Local rush = low.Next(hiss.Next(), 0.08 + 0.15 * Clamp((t - 0.5) / 1.0, 0.0, 1.0)) *
+                     Clamp((t - 0.4) / 0.8, 0.0, 1.0) * Clamp((2.2 - t) / 0.4, 0.0, 1.0) * 2.5
+        made.Add(groan * 0.6 + rush)
+    End For
+    Return Leveled(made, 0.7)
+End Function
+
+// The mill's works, driven: a gear's teeth clicking twelve times a second, a shaft's low hum, and the
+// knock of each turn of the great wheel, two seconds of it, which loop.
+Public Function Works(): Float[]
+    Local hiss = Hiss(20)
+    Local low = Smooth()
+    Local made: Float[] = []
+    For at = 0 Until Samples(2.25)
+        Local t = (at As Float) / (RATE As Float)
+        Local tooth = Fract(t * 12.0)
+        Local click = low.Next(hiss.Next(), 0.3) * Decay(-tooth * 60.0)
+        Local hum = Sine(t * TAU * 45.0) * (0.6 + 0.4 * Sine(t * TAU * 0.5))
+        Local turn = Fract(t * 0.5)
+        Local knock = Sine(turn * TAU * 60.0) * Decay(-turn * 25.0)
+        made.Add(click * 0.8 + hum * 0.3 + knock * 0.5)
+    End For
+    Return Leveled(Looped(made, 0.25), 0.6)
+End Function
+
 // A step on sand: grains giving way, a crunch of noise in short bursts, darker as it settles, a seed for
 // each of two.
 Public Function SandStep(seed: UInt32): Float[]
@@ -308,4 +364,7 @@ Public Function WriteSounds(folder: Path) Throws IOError
     Try WriteWav(folder / "sand_2.wav", SandStep(14))
     Try WriteWav(folder / "turf_1.wav", TurfStep(15))
     Try WriteWav(folder / "turf_2.wav", TurfStep(16))
+    Try WriteWav(folder / "fit.wav", Fit())
+    Try WriteWav(folder / "sluice.wav", Sluice())
+    Try WriteWav(folder / "works.wav", Works())
 End Function

@@ -25,9 +25,6 @@ Function Count(cues: Cue[], cue: Cue): Int
     Return count
 End Function
 
-// Whether a cue's a step.
-Function IsStep(cue: Cue): Bool => cue != Cue.GULL && cue != Cue.CREAK && cue != Cue.SPLASH
-
 @Test
 Function StepsAreByHowFarYouWalkNeverTheSameTwice()
     Local cues = Cues()
@@ -245,6 +242,58 @@ Function TheWindGustsAndTheSurfRoarsWithTheStorm()
     Expect(SurfLevel(TIDE_IN_AT, True) < SurfLevel(TIDE_IN_AT, False))
 End Function
 
+// Each part fitted clanks, once, and the sluice opening's heard once, when they happen, in a walk to
+// the bright ending; and the works run only once the wheel turns, louder the faster.
+@Test
+Function TheMillsPartsAndSluiceAreHeardOnceEach()
+    Local flow = Quiet()
+    Local cues = Cues()
+    Local steps = WalkOf("bright") ?? []
+    Local next = 0
+    Local fits = 0
+    Local sluices = 0
+    Local fittedWhenHeard = 0
+    While flow.Ended() == Ending.NONE
+        If next < steps.Count && WalkReady(flow, steps[next])
+            Select steps[next]
+                Case "W"
+                    flow.GoOut()
+                Case "S"
+                    flow.GoBack()
+                Case "E"
+                    flow.Use()
+                Case "Q"
+                    flow.Hand()
+            End Select
+            next += 1
+        End If
+        flow.Step(0.1)
+        For cue In cues.Step(flow, 0.0, 0.1, Surface.ROCK, False)
+            If cue == Cue.FIT
+                fits += 1
+                fittedWhenHeard = 0
+                For part In [Part.GEAR, Part.PADDLE, Part.BELT]
+                    If flow.Fitted(part) Then fittedWhenHeard += 1
+                End For
+                Expect(fittedWhenHeard == fits)
+            End If
+            If cue == Cue.SLUICE
+                sluices += 1
+                Expect(flow.SluiceOpen())
+            End If
+        End For
+    End While
+    Expect(fits == 3)
+    Expect(sluices == 1)
+    For tick = 1 To 50
+        For cue In cues.Step(flow, 0.0, 0.1, Surface.ROCK, False)
+            Expect(cue != Cue.FIT && cue != Cue.SLUICE)
+        End For
+    End For
+    Expect(WorksLevel(0.0) == 0.0)
+    Expect(WorksLevel(0.6) > 0.0 && WorksLevel(0.6) < WorksLevel(1.0))
+End Function
+
 // What can sound at once, each at the tools' peak, doesn't clip: to the end, and at the flood.
 @Test
 Function NothingAtOnceClips()
@@ -254,8 +303,8 @@ Function NothingAtOnceClips()
         loudestBeds = Max(loudestBeds, WindLevel(clock, False) + SeaLevel(clock, False) +
                           SurfLevel(clock, False))
     End For
-    Local toTheEnd = loudestBeds * 0.7 + WheelLevel(1.0) * 0.7 + CueLevel(Cue.STEP_1) * 0.7 +
-                     CueLevel(Cue.CREAK) * 0.6
+    Local toTheEnd = loudestBeds * 0.7 + WheelLevel(1.0) * 0.7 + WorksLevel(1.0) * 0.6 +
+                     CueLevel(Cue.STEP_1) * 0.7 + CueLevel(Cue.CREAK) * 0.6
     Expect(toTheEnd < 1.0)
     Local atTheFlood = (WindLevel(FLOOD_AT, False) + SeaLevel(FLOOD_AT, False) +
                         SurfLevel(FLOOD_AT, False)) * 0.7 +

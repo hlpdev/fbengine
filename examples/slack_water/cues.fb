@@ -23,10 +23,14 @@ Public Enum Cue
     SAND_2 = 11
     TURF_1 = 12
     TURF_2 = 13
+    /// A part fitted to the mill's works.
+    FIT = 14
+    /// The sluice opened, and the water let into the race.
+    SLUICE = 15
 End Enum
 
 /// How many cues there are.
-Public Const CUES: Int = 14
+Public Const CUES: Int = 16
 
 /// What you're walking on: bare rock, the tidal road's stones, the mill's boards, the shallows, sand,
 /// and turf, which trodden ground sounds as.
@@ -59,8 +63,10 @@ Const GULL_TRIES: Int = 16
 
 // How much of the mix what's all around you takes, and the wheel, so that with everything at its
 // loudest at once, it doesn't clip.
-Const AMBIENCE: Float = 0.27
+Const AMBIENCE: Float = 0.24
 Const WHEEL: Float = 0.2
+// The mill's works, running, heard from inside, where they are.
+Const WORKS: Float = 0.12
 // How far a gust takes the wind over its level, in the storm at its height, and how much higher the
 // wind's pitched then.
 Const GUSTS: Float = 0.3
@@ -81,6 +87,8 @@ Public Function CueLevel(cue: Cue): Float
         Case Cue.CREAK
             Return 0.2
         Case Cue.SPLASH
+            Return 0.3
+        Case Cue.SLUICE
             Return 0.3
         Default
             Return 0.25
@@ -149,6 +157,9 @@ End Function
 /// How loud the wheel is, turning at `speed`.
 Public Function WheelLevel(speed: Float): Float => (0.3 + 0.7 * speed) * WHEEL
 
+/// How loud the mill's works are, driven by the wheel turning at `speed`: nothing until it turns.
+Public Function WorksLevel(speed: Float): Float => speed > 0.0 ? (0.4 + 0.6 * speed) * WORKS : 0.0
+
 /// What you're on at (`x`, `z`), `inside` the mill or not, with the sea at `sea`: what the ground's
 /// painted with there, as CoverParts has it.
 Public Function SurfaceAt(x: Float, z: Float, inside: Bool, sea: Float): Surface
@@ -164,6 +175,12 @@ End Function
 
 /// How high a surface's steps play.
 Public Function StepPitch(surface: Surface): Float => surface == Surface.ROAD ? 0.85 : 1.0
+
+/// Whether `cue` is one of your steps.
+Public Function IsStep(cue: Cue): Bool
+    Return cue != Cue.GULL && cue != Cue.CREAK && cue != Cue.SPLASH && cue != Cue.FIT &&
+           cue != Cue.SLUICE
+End Function
 
 // The steps that a surface can be.
 Function StepsOn(surface: Surface): Cue[]
@@ -183,7 +200,7 @@ End Function
 
 /// What's to be played, as the game goes on: steps by how far you've walked, by what you're on, never
 /// the same one twice running; gulls until the flood; creaks inside the mill, or from the turning
-/// wheel; and the splash of the flood.
+/// wheel; the splash of the flood; a clank for each part fitted; and the sluice, once, as it opens.
 Public Final Class Cues
     Field state: UInt32 = 2463534242
     Field walked: Float = 0.0
@@ -191,6 +208,8 @@ Public Final Class Cues
     Field untilGull: Float
     Field untilCreak: Float
     Field flooded: Bool = False
+    Field fitted: Int = 0
+    Field opened: Bool = False
 
     Public New()
         untilGull = GULL_AT_LEAST + Random() * GULL_MORE
@@ -224,6 +243,18 @@ Public Final Class Cues
         If !flooded && flow.Flooded()
             flooded = True
             cues.Add(Cue.SPLASH)
+        End If
+        Local nowFitted = 0
+        For part In [Part.GEAR, Part.PADDLE, Part.BELT]
+            If flow.Fitted(part) Then nowFitted += 1
+        End For
+        While fitted < nowFitted
+            fitted += 1
+            cues.Add(Cue.FIT)
+        End While
+        If !opened && flow.SluiceOpen()
+            opened = True
+            cues.Add(Cue.SLUICE)
         End If
         Return cues
     End Method

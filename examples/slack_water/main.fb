@@ -834,6 +834,16 @@ Function Heard(scape: Soundscape, flow: Flow, loudest: Float)
            scape.Played(Cue.SAND_1) + scape.Played(Cue.SAND_2) > 0 &&
            scape.Played(Cue.FLOOR_1) + scape.Played(Cue.FLOOR_2) > 0)
     Checks("the flood splashes, once", scape.Played(Cue.SPLASH) == 1)
+    // A clank for each part fitted, and the sluice once, as how it ended says.
+    Local fitted = 0
+    For part In [Part.GEAR, Part.PADDLE, Part.BELT]
+        If flow.Fitted(part) Then fitted += 1
+    End For
+    Checks("each part fitted's heard, and the sluice if it opened",
+           scape.Played(Cue.FIT) == fitted &&
+           scape.Played(Cue.SLUICE) == (flow.SluiceOpen() ? 1 : 0))
+    Checks("the works run at the wheel's speed",
+           IsClose(scape.WorksPitch(), WheelSpeed(flow.Ended()), 0.001))
     Checks("the wheel's pitch is its speed",
            IsClose(scape.WheelPitch(), WheelSpeed(flow.Ended()), 0.001))
     Print("its loudest was {loudest}")
@@ -886,7 +896,7 @@ Function Listened() Throws GraphicsError, IOError, AudioError
     Local road = scape.SplashAt()
     For cue In [Cue.STEP_1, Cue.STEP_2, Cue.STEP_3, Cue.FLOOR_1, Cue.FLOOR_2, Cue.WADE_1,
                 Cue.WADE_2, Cue.SAND_1, Cue.SAND_2, Cue.TURF_1, Cue.TURF_2,
-                Cue.CREAK, Cue.SPLASH]
+                Cue.CREAK, Cue.SPLASH, Cue.FIT, Cue.SLUICE]
         Local near = cue == Cue.SPLASH ? road : mill
         Listener.SetPosition(Vec3(near.x, near.y, near.z + 1.0))
         scape.Play(cue, door)
