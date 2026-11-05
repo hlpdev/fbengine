@@ -1073,7 +1073,30 @@ Function Listened() Throws GraphicsError, IOError, AudioError
     Audio.Mix(rate)
     Audio.Mix(rate)
     Checks("with the beds at nothing, it's silent", PeakOf(Audio.Mix(1024)) < 0.0005)
-    // Each cue, by itself, in its band, from nearby.
+    // The mill's room: what's in it is on its bus, whose ring's heard; your steps ring there, after
+    // they've ended, and not outside; and it's muffled from out, as the outside is from in.
+    Checks("what's in the mill is in its room, which rings", scape.MillOnItsBus())
+    For step = 1 To 60
+        scape.Surroundings(0.0, True, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    scape.Play(Cue.FLOOR_1, door)
+    Audio.Mix(rate / 5)
+    Local ringing = RmsOf(Audio.Mix(rate * 2 / 5))
+    For step = 1 To 60
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Audio.Mix(rate)
+    scape.Play(Cue.STEP_1, door)
+    Audio.Mix(rate / 5)
+    Local dry = RmsOf(Audio.Mix(rate * 2 / 5))
+    Print("a step's ring, inside {ringing}, and out {dry}")
+    Checks("your steps ring in the mill, and not outside", ringing > 0.0005 && ringing > 10.0 * dry)
+    Checks("the mill's muffled from outside", scape.MillNow() == OutsideCutoff(True))
+    Audio.Mix(rate)
+    // Each cue, by itself, in its band, from nearby: the splash on the road, from outside, and the
+    // rest at the mill's works, from inside it, where they are.
     Local mill = scape.MillAt()
     Local road = scape.SplashAt()
     For cue In [Cue.STEP_1, Cue.STEP_2, Cue.STEP_3, Cue.FLOOR_1, Cue.FLOOR_2, Cue.WADE_1,
@@ -1081,6 +1104,10 @@ Function Listened() Throws GraphicsError, IOError, AudioError
                 Cue.CREAK, Cue.SPLASH, Cue.FIT, Cue.SLUICE]
         Local near = cue == Cue.SPLASH ? road : mill
         Listener.SetPosition(Vec3(near.x, near.y, near.z + 1.0))
+        For step = 1 To 30
+            scape.Surroundings(0.0, cue != Cue.SPLASH, 1.0 / 60.0)
+            Audio.Mix(735)
+        End For
         scape.Play(cue, door)
         Local peak = PeakOf(Audio.Mix(rate))
         Checks("cue {cue As Int} reaches the mix", peak > 0.05 && peak < 0.5)

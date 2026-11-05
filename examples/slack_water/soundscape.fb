@@ -2,7 +2,8 @@
 // wind gusting and the surf roaring from the flood, muffled from inside the mill; gulls over the water,
 // creaks at the mill, the wheel at the wheel, the flood's splash on the road, the mill's parts fitted,
 // its sluice, and its works once the wheel turns; and your own steps, on sand, rock, turf, the road,
-// the mill's boards, or the shallows, as its Cues say.
+// the mill's boards, or the shallows, as its Cues say. What's in the mill rings in its room, your steps
+// too while you're in it, and is muffled from outside, as the outside is from in.
 
 Import std.core
 Import std.math
@@ -26,6 +27,12 @@ Const GULL_HIGH: Float = 12.0
 // How long the wheel takes to be heard.
 Const WHEEL_FADE: Float64 = 1.0
 
+/// The mill's room: stone and boards, middling, its highs soaked up a little, and its ring under what
+/// rings it.
+Public Function MillReverb(): Reverb
+    Return Reverb(RoomSize: 0.55, Damping: 0.45, Width: 0.8, Wet: 0.28, Dry: 1.0)
+End Function
+
 /// What's playing, for a Game, from the Listener at your eyes.
 Public Final Class Soundscape
     Field cues: Cues
@@ -43,6 +50,11 @@ Public Final Class Soundscape
     // What's outside the mill: the wind, the sea, gulls, the wheel, and the splash.
     Field outside: Bus
     Field cutoff: Float
+    // What's in the mill, in its room: creaks, parts fitted, the sluice, the works, and your steps while
+    // you're in it; and its low-pass, which muffles it from outside.
+    Field mill: Bus
+    Field millCutoff: Float
+    Field inMill: Bool = False
     Field atMill: Emitter
     Field atWheel: Emitter
     Field onRoad: Emitter
@@ -82,6 +94,14 @@ Public Final Class Soundscape
         outside = Bus()
         cutoff = OutsideCutoff(False)
         outside.SetLowPass(cutoff)
+        mill = Bus()
+        mill.SetReverb(MillReverb())
+        millCutoff = OutsideCutoff(True)
+        mill.SetLowPass(millCutoff)
+        works.SetBus(mill)
+        For cue In [Cue.CREAK, Cue.FIT, Cue.SLUICE]
+            sounds[cue As Int].SetBus(mill)
+        End For
         wind.SetBus(outside)
         sea.SetBus(outside)
         surf.SetBus(outside)
@@ -275,7 +295,25 @@ Public Final Class Soundscape
         windPlays.SetPitch(WindPitch(clock))
         cutoff = CutoffToward(cutoff, OutsideCutoff(inside), seconds)
         outside.SetLowPass(cutoff)
+        // The mill's room, the other way round: open from inside, muffled from out.
+        millCutoff = CutoffToward(millCutoff, OutsideCutoff(!inside), seconds)
+        mill.SetLowPass(millCutoff)
+        inMill = inside
     End Method
+
+    /// Whether what's in the mill goes through its room, and its ring's heard.
+    @MainThread
+    Public Method MillOnItsBus(): Bool
+        Local all = [works, sounds[Cue.CREAK As Int], sounds[Cue.FIT As Int],
+                     sounds[Cue.SLUICE As Int]]
+        For sound In all
+            If sound.Bus() != mill Then Return False
+        End For
+        Return mill.ReverbHeard()
+    End Method
+
+    /// The low-pass on what's in the mill, now.
+    @MainThread Public Method MillNow(): Float => mill.LowPass()
 
     /// Plays a cue where it happens: steps at you, a gull out over the water, a creak at the mill, and
     /// the splash on the road.
@@ -293,6 +331,8 @@ Public Final Class Soundscape
             Case Cue.SPLASH
                 onRoad.Play(sound)
             Default
+                // Your steps, in the mill's room while you're in it.
+                sound.SetBus(inMill ? mill : Null)
                 sound.Play()
         End Select
     End Method
@@ -321,5 +361,6 @@ Public Final Class Soundscape
         wheel.Free()
         works.Free()
         outside.Free()
+        mill.Free()
     End Method
 End Class
