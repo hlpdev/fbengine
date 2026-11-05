@@ -887,6 +887,8 @@ bool draw_shadows(const scene::camera_t& camera, std::span<const scene::view_t> 
             data.projection = tile.to_clip.m;
             data.draws = gathered().draws;
             data.materials = gathered().materials;
+            // What a cut-out's cut by is biased as what it draws is.
+            data.lod_bias = gpu::lod_bias_left();
             const std::array one_camera{ data };
             view_batches_t view_batches;
             view_batches.camera = in_ring<camera_data_t>(one_camera, failed).address;

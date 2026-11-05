@@ -2479,14 +2479,14 @@ std::uint64_t grid_floor(std::uint64_t world, float y, int cells, float cell,
 
 /// A wall whose vertices all have this alpha.
 std::uint64_t alpha_wall(std::uint64_t world, float x, float z, float half, float alpha,
-                         std::uint64_t material) {
+                         std::uint64_t material, float uv_across = 0.0F) {
     const std::uint64_t geometry = fbe_geometry_create();
     const std::int32_t surface = fbe_geometry_add_surface(geometry);
     const auto corner = [&](float across, float up) {
         return fbe_vertex_t{
             .position = { .x = across * half, .y = up * half, .z = 0.0F },
             .normal = { .x = 0.0F, .y = 0.0F, .z = 1.0F },
-            .uv0 = { .x = 0.0F, .y = 0.0F },
+            .uv0 = { .x = (across + 1.0F) * 0.5F * uv_across, .y = (up + 1.0F) * 0.5F * uv_across },
             .uv1 = { .x = 0.0F, .y = 0.0F },
             .color = { .r = 1.0F, .g = 1.0F, .b = 1.0F, .a = alpha },
         };
@@ -2842,6 +2842,83 @@ TEST_CASE("a mirror's reflection has shadows of its own, outside the camera's ca
     };
     CHECK(seen(false)[0] > 100);
     CHECK(seen(true)[0] == 0);
+}
+
+TEST_CASE("the LOD bias reaches what a cut-out's cut by in its shadow", "[gpu][scene]") {
+    const bool samplers_can = GENERATE(true, false);
+    if (!samplers_can) {
+        fbe::gpu::inject(fbe::gpu::fault_t::NO_LOD_BIAS);
+    }
+    const scene_t scene;
+    if (samplers_can && fbe::gpu::device()->max_lod_bias == 0.0F) {
+        return;
+    }
+    const std::uint64_t paint = fbe_material_create();
+    wall(scene.world, -10.0F, 30.0F, paint);
+    sun_from_right(scene.world);
+    // Whole in its middle, so a shadow; a quarter whole by its last level, which the cutoff cuts. A
+    // bias is on a level found from how UVs change, so they have to.
+    const std::uint64_t texture = fbe_texture_create(8, 8, FBE_TEXTURE_RGBA8, true);
+    std::vector<std::uint8_t> pixels;
+    for (int y = 0; y < 8; ++y) {
+        for (int x = 0; x < 8; ++x) {
+            const bool whole = x >= 2 && x < 6 && y >= 2 && y < 6;
+            pixels.insert(pixels.end(),
+                          { 255, 255, 255, static_cast<std::uint8_t>(whole ? 255 : 0) });
+        }
+    }
+    require(fbe_texture_write(texture, 0, 0, 8, 8, pixels.data(), 8 * 4));
+    const std::uint64_t caster = fbe_material_create();
+    require(fbe_material_set_alpha_cutoff(caster, 0.5F));
+    require(fbe_material_set_texture(caster, 0, texture));
+    alpha_wall(scene.world, 5.0F, -5.0F, 3.0F, 1.0F, caster, 1.0F);
+    CHECK(middle(scene.drawn())[0] == 0);
+    require(fbe_gpu_set_lod_bias(16.0F));
+    CHECK(middle(scene.drawn())[0] > 0);
+    require(fbe_gpu_set_lod_bias(0.0F));
+    fbe_texture_release(texture);
+    fbe_material_release(caster);
+    fbe_material_release(paint);
+}
+
+TEST_CASE("the LOD bias leaves a sky's texture at its first level", "[gpu][scene]") {
+    const bool samplers_can = GENERATE(true, false);
+    if (!samplers_can) {
+        fbe::gpu::inject(fbe::gpu::fault_t::NO_LOD_BIAS);
+    }
+    const scene_t scene;
+    if (samplers_can && fbe::gpu::device()->max_lod_bias == 0.0F) {
+        return;
+    }
+    const std::uint64_t texture = fbe_texture_create(64, 64, FBE_TEXTURE_RGBA8, true);
+    std::vector<std::uint8_t> pixels;
+    for (int y = 0; y < 64; ++y) {
+        for (int x = 0; x < 64; ++x) {
+            const std::uint8_t level = ((x + y) % 2) == 0 ? 255 : 0;
+            pixels.insert(pixels.end(), { level, level, level, 255 });
+        }
+    }
+    require(fbe_texture_write(texture, 0, 0, 64, 64, pixels.data(), 64 * 4));
+    require(fbe_texture_set_filter(texture, FBE_TEXTURE_NEAREST));
+    require(fbe_world_set_sky_texture(scene.world, texture, 1.0F));
+    const auto spread = [&scene] {
+        const fbe::golden::frame_t frame = scene.drawn();
+        int lowest = 255;
+        int highest = 0;
+        for (std::uint32_t y = 0; y < frame_size; ++y) {
+            const rgba_t found = pixel(frame, frame_size / 2, y);
+            lowest = std::min<int>(lowest, found[0]);
+            highest = std::max<int>(highest, found[0]);
+        }
+        return highest - lowest;
+    };
+    CHECK(spread() > 128);
+    for (const float bias : { 8.0F, -8.0F }) {
+        require(fbe_gpu_set_lod_bias(bias));
+        CHECK(spread() > 128);
+    }
+    require(fbe_gpu_set_lod_bias(0.0F));
+    fbe_texture_release(texture);
 }
 
 TEST_CASE("a cut-out casts as it's drawn", "[gpu][scene]") {

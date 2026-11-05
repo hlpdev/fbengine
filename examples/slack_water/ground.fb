@@ -193,3 +193,11 @@ Public Function SunAt(clock: Float64): (Float, Float)
     Local through = Min(clock / TIDE_IN_AT, 1.0) As Float
     Return (0.66 - 0.36 * through, 0.52 - 0.8 * through)
 End Function
+
+/// How the ground's painted (`x`, `z`) meters from its corner, 128 leaving it as it is: large patches,
+/// lighter and darker, that have nothing to do with where its maps repeat.
+Public Function PaintAt(x: Float, z: Float): UInt8
+    Local patches = Noise(x * 0.021 + 7.0, z * 0.021 + 3.0) * 0.6 +
+                    Noise(x * 0.067 + 2.0, z * 0.067 + 9.0) * 0.4
+    Return (Clamp(128.0 + (patches - 0.5) * 300.0, 50.0, 220.0)) As UInt8
+End Function
