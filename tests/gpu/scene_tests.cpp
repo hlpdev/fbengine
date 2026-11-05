@@ -10837,7 +10837,7 @@ TEST_CASE("a pass is after an HDR camera's tonemap and grade, on any camera", "[
     wall(scene.world, -3.0F, 10.0F, paint);
     // Graded down to a half first, or it'd come to 0: the pass inverts what the grade made.
     const std::array<float, 10> halved{
-        0.5F, 0.5F, 0.5F, 0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 1.0F
+        0.5F, 0.5F, 0.5F, 0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 1.0F,
     };
     require(fbe_camera_set_grade(scene.camera, halved.data()));
     CHECK(near(middle(scene.drawn()), { srgb(0.5F), srgb(0.5F), srgb(0.5F) }));
@@ -10845,8 +10845,9 @@ TEST_CASE("a pass is after an HDR camera's tonemap and grade, on any camera", "[
     require(fbe_camera_add_pass(scene.camera, pass));
     CHECK(near(middle(scene.drawn()), { srgb(0.5F), srgb(0.5F), srgb(0.5F) }));
     // Inverted past a quarter, so the two can't be told apart by chance.
-    const std::array<float, 10> quartered{ 0.25F, 0.25F, 0.25F, 0.0F, 0.0F,
-                                           0.0F,  1.0F,  1.0F,  1.0F, 1.0F };
+    const std::array<float, 10> quartered{
+        0.25F, 0.25F, 0.25F, 0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 1.0F,
+    };
     require(fbe_camera_set_grade(scene.camera, quartered.data()));
     CHECK(near(middle(scene.drawn()), { srgb(0.75F), srgb(0.75F), srgb(0.75F) }));
     fbe_material_release(pass);
@@ -10902,8 +10903,9 @@ TEST_CASE("a pass reads what antialiasing over frames resolved", "[gpu][scene]")
     require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
     const std::uint64_t paint = unlit(1.0F, 1.0F, 1.0F);
     wall(scene.world, -3.0F, 10.0F, paint);
-    const std::array<float, 10> quartered{ 0.25F, 0.25F, 0.25F, 0.0F, 0.0F,
-                                           0.0F,  1.0F,  1.0F,  1.0F, 1.0F };
+    const std::array<float, 10> quartered{
+        0.25F, 0.25F, 0.25F, 0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 1.0F,
+    };
     require(fbe_camera_set_grade(scene.camera, quartered.data()));
     const std::uint64_t pass = game_pass(pass_inverts);
     require(fbe_camera_add_pass(scene.camera, pass));

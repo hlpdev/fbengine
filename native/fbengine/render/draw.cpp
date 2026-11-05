@@ -909,10 +909,9 @@ bool draw_camera(std::uint32_t slot, float tween) {
     }
     // The last of a game's passes goes into the target, or what FXAA reads.
     const std::vector<game_pass_t> passes =
-        camera.passes.empty()
-            ? std::vector<game_pass_t>{}
-            : game_passes(camera, camera.fxaa ? picture.format : target_format,
-                          camera.fxaa ? VK_SAMPLE_COUNT_1_BIT : samples);
+        camera.passes.empty() ? std::vector<game_pass_t>{}
+                              : game_passes(camera, camera.fxaa ? picture.format : target_format,
+                                            camera.fxaa ? VK_SAMPLE_COUNT_1_BIT : samples);
     const bool read_after = !passes.empty() || camera.fxaa;
     const bool aside = camera.hdr || read_after;
     VkFormat format = target_format;
