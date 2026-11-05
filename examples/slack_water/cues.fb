@@ -19,15 +19,28 @@ Public Enum Cue
     FLOOR_2 = 7
     WADE_1 = 8
     WADE_2 = 9
+    SAND_1 = 10
+    SAND_2 = 11
+    TURF_1 = 12
+    TURF_2 = 13
 End Enum
 
-/// What you're walking on.
+/// How many cues there are.
+Public Const CUES: Int = 14
+
+/// What you're walking on: bare rock, the tidal road's stones, the mill's boards, the shallows, sand,
+/// and turf, which trodden ground sounds as.
 Public Enum Surface
     ROCK = 0
     ROAD = 1
     FLOOR = 2
     SHALLOWS = 3
+    SAND = 4
+    TURF = 5
 End Enum
+
+// How much of a cover the ground has to be for your steps to be on it.
+Const UNDERFOOT: Float = 0.5
 
 // How far you walk to a step, in meters, and how far a move can be before it's the water carrying you.
 Const STRIDE: Float = 1.8
@@ -108,11 +121,17 @@ End Function
 /// How loud the wheel is, turning at `speed`.
 Public Function WheelLevel(speed: Float): Float => (0.3 + 0.7 * speed) * WHEEL
 
-/// What you're on at (`x`, `z`), `inside` the mill or not, with the sea at `sea`.
+/// What you're on at (`x`, `z`), `inside` the mill or not, with the sea at `sea`: what the ground's
+/// painted with there, as CoverParts has it.
 Public Function SurfaceAt(x: Float, z: Float, inside: Bool, sea: Float): Surface
     If inside Then Return Surface.FLOOR
-    If GroundHeight(x, z) < sea Then Return Surface.SHALLOWS
-    Return OnRoad(x, z) ? Surface.ROAD : Surface.ROCK
+    Local height = GroundHeight(x, z)
+    If height < sea Then Return Surface.SHALLOWS
+    If OnRoad(x, z) Then Return Surface.ROAD
+    Local parts = CoverParts(x, z, height, SlopeAt(x, z))
+    If parts.0 >= UNDERFOOT Then Return Surface.SAND
+    If parts.1 >= UNDERFOOT || parts.2 >= UNDERFOOT Then Return Surface.TURF
+    Return Surface.ROCK
 End Function
 
 /// How high a surface's steps play.
@@ -125,6 +144,10 @@ Function StepsOn(surface: Surface): Cue[]
             Return [Cue.FLOOR_1, Cue.FLOOR_2]
         Case Surface.SHALLOWS
             Return [Cue.WADE_1, Cue.WADE_2]
+        Case Surface.SAND
+            Return [Cue.SAND_1, Cue.SAND_2]
+        Case Surface.TURF
+            Return [Cue.TURF_1, Cue.TURF_2]
         Default
             Return [Cue.STEP_1, Cue.STEP_2, Cue.STEP_3]
     End Select

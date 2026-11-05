@@ -1,5 +1,5 @@
-// The game's sounds, synthesized: wind and sea from filtered noise, gulls, creaks, the wheel, steps,
-// and a splash, as mono 16-bit WAVs of 22050 samples a second.
+// The game's sounds, synthesized: wind and sea from filtered noise, gulls, creaks, the wheel, steps on
+// each surface, and a splash, as mono 16-bit WAVs of 22050 samples a second.
 
 Import std.collections
 Import std.core
@@ -208,6 +208,37 @@ Public Function FloorStep(seed: UInt32): Float[]
     Return Leveled(made, 0.7)
 End Function
 
+// A step on sand: grains giving way, a crunch of noise in short bursts, darker as it settles, a seed for
+// each of two.
+Public Function SandStep(seed: UInt32): Float[]
+    Local hiss = Hiss(seed)
+    Local low = Smooth()
+    Local made: Float[] = []
+    For at = 0 Until Samples(0.22)
+        Local t = (at As Float) / (RATE As Float)
+        // Grains: the noise let through in bursts, more of them at first.
+        Local grain = hiss.Next()
+        Local through = Abs(grain) > 0.55 + t * 2.0 ? 1.0 : 0.25
+        Local swell = Sine(Min(t / 0.03, 1.0) * TAU / 4.0) * Decay(-t * 14.0)
+        made.Add(low.Next(grain * through, 0.45 - t) * swell)
+    End For
+    Return Leveled(made, 0.6)
+End Function
+
+// A step on turf: a soft, low thud, and the grass brushed, a seed for each of two.
+Public Function TurfStep(seed: UInt32): Float[]
+    Local hiss = Hiss(seed)
+    Local low = Smooth()
+    Local made: Float[] = []
+    For at = 0 Until Samples(0.2)
+        Local t = (at As Float) / (RATE As Float)
+        Local thud = Sine(t * TAU * 75.0) * Decay(-t * 25.0)
+        Local brush = low.Next(hiss.Next(), 0.12) * Sine(Min(t / 0.2, 1.0) * TAU / 2.0) * 0.6
+        made.Add(thud + brush)
+    End For
+    Return Leveled(made, 0.6)
+End Function
+
 // A step in the shallows: a wash of noise, a seed for each of two.
 Public Function Wade(seed: UInt32): Float[]
     Local hiss = Hiss(seed)
@@ -250,4 +281,8 @@ Public Function WriteSounds(folder: Path) Throws IOError
     Try WriteWav(folder / "wade_1.wav", Wade(11))
     Try WriteWav(folder / "wade_2.wav", Wade(12))
     Try WriteWav(folder / "splash.wav", Splash())
+    Try WriteWav(folder / "sand_1.wav", SandStep(13))
+    Try WriteWav(folder / "sand_2.wav", SandStep(14))
+    Try WriteWav(folder / "turf_1.wav", TurfStep(15))
+    Try WriteWav(folder / "turf_2.wav", TurfStep(16))
 End Function

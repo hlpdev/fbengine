@@ -1,9 +1,9 @@
 // The game's sounds in its world: streamed wind and sea all around, rising with the tide, muffled from
 // inside the mill; gulls over the water, creaks at the mill, the wheel at the wheel, the flood's splash
-// on the road, and your own steps, by what you're on, as its Cues say.
+// on the road, and your own steps, on sand, rock, turf, the road, the mill's boards, or the shallows,
+// as its Cues say.
 
 Import std.core
-Import std.io
 Import std.math
 Import fbengine
 Import fbengine_audio
@@ -56,7 +56,10 @@ Public Final Class Soundscape
         Self.sea = sea
         Self.wheel = wheel
         cues = Cues()
-        played = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        played = []
+        For number = 0 Until CUES
+            played.Add(0)
+        End For
         For number = 0 Until sounds.Count
             sounds[number].SetVolume(CueLevel(number As Cue))
         End For
@@ -109,7 +112,9 @@ Public Final Class Soundscape
                         Try Assets.Load<Sound>(Res.Step3), Try Assets.Load<Sound>(Res.Gull),
                         Try Assets.Load<Sound>(Res.Creak), Try Assets.Load<Sound>(Res.Splash),
                         Try Assets.Load<Sound>(Res.Floor1), Try Assets.Load<Sound>(Res.Floor2),
-                        Try Assets.Load<Sound>(Res.Wade1), Try Assets.Load<Sound>(Res.Wade2)]
+                        Try Assets.Load<Sound>(Res.Wade1), Try Assets.Load<Sound>(Res.Wade2),
+                        Try Assets.Load<Sound>(Res.Sand1), Try Assets.Load<Sound>(Res.Sand2),
+                        Try Assets.Load<Sound>(Res.Turf1), Try Assets.Load<Sound>(Res.Turf2)]
         Return Soundscape(sounds, Try Assets.Load<Sound>(Res.Wind), Try Assets.Load<Sound>(Res.Sea),
                           Try Assets.Load<Sound>(Res.Wheel), game, island)
     End Method
@@ -198,12 +203,12 @@ Public Final Class Soundscape
         Local goal = inside ? 1.0 : 0.0
         Local most = seconds * 5.0
         indoors += Clamp(goal - indoors, -most, most)
-        Local wind = WindLevel(clock, False) +
-                     (WindLevel(clock, True) - WindLevel(clock, False)) * indoors
-        Local sea = SeaLevel(clock, False) +
-                    (SeaLevel(clock, True) - SeaLevel(clock, False)) * indoors
-        windPlays.SetVolume(wind * beds)
-        seaPlays.SetVolume(sea * beds)
+        Local windAt = WindLevel(clock, False) +
+                       (WindLevel(clock, True) - WindLevel(clock, False)) * indoors
+        Local seaAt = SeaLevel(clock, False) +
+                      (SeaLevel(clock, True) - SeaLevel(clock, False)) * indoors
+        windPlays.SetVolume(windAt * beds)
+        seaPlays.SetVolume(seaAt * beds)
         cutoff = CutoffToward(cutoff, OutsideCutoff(inside), seconds)
         outside.SetLowPass(cutoff)
     End Method

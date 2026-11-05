@@ -643,7 +643,7 @@ if(FBENGINE_FB_TESTS)
                    -- "${PROJECT_BINARY_DIR}/example-frames/slack_water_made")
   set_tests_properties(examples.slack_water.tools PROPERTIES
                        FIXTURES_SETUP slack_water_made TIMEOUT 300
-                       PASS_REGULAR_EXPRESSION "18 textures\r?\n13 sounds\r?\n8 joints in Pip\r?\n$")
+                       PASS_REGULAR_EXPRESSION "18 textures\r?\n17 sounds\r?\n8 joints in Pip\r?\n$")
   foreach(checked IN ITEMS "made=${PROJECT_BINARY_DIR}/example-frames/slack_water_made"
                            "kept=${PROJECT_SOURCE_DIR}/examples/slack_water/assets")
     string(FIND "${checked}" "=" split)

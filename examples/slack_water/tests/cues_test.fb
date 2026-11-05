@@ -62,13 +62,14 @@ End Function
 Function StepsAreByTheSurface()
     Expect(SurfaceAt(MAIN_X, 0.0, True, 0.0) == Surface.FLOOR)
     Expect(SurfaceAt(PaddleSpot().x, PaddleSpot().y, False, 0.0) == Surface.ROAD)
-    Expect(SurfaceAt(MAIN_X, 12.0, False, 0.0) == Surface.ROCK)
     Expect(SurfaceAt(PaddleSpot().x, PaddleSpot().y, False, 0.6) == Surface.SHALLOWS)
     Expect(StepPitch(Surface.ROAD) < StepPitch(Surface.ROCK))
     Local banks = [(Surface.FLOOR, [Cue.FLOOR_1, Cue.FLOOR_2]),
                    (Surface.SHALLOWS, [Cue.WADE_1, Cue.WADE_2]),
                    (Surface.ROCK, [Cue.STEP_1, Cue.STEP_2, Cue.STEP_3]),
-                   (Surface.ROAD, [Cue.STEP_1, Cue.STEP_2, Cue.STEP_3])]
+                   (Surface.ROAD, [Cue.STEP_1, Cue.STEP_2, Cue.STEP_3]),
+                   (Surface.SAND, [Cue.SAND_1, Cue.SAND_2]),
+                   (Surface.TURF, [Cue.TURF_1, Cue.TURF_2])]
     For pair In banks
         Local cues = Cues()
         Local flow = Quiet()
@@ -78,6 +79,31 @@ Function StepsAreByTheSurface()
             End For
         End For
     End For
+End Function
+
+// Outside, off the road and above the sea, your steps are on what the ground's painted with there: sand
+// on the beaches, turf and trodden ground, and bare rock where it's neither; and the island has each.
+@Test
+Function StepsAreOnWhatsPaintedThere()
+    Local found = [0, 0, 0]
+    For row = -50 To 50
+        For column = -50 To 50
+            Local x = MAIN_X + (column As Float) * 2.0
+            Local z = (row As Float) * 2.0
+            Local height = GroundHeight(x, z)
+            If height < 0.0 || OnRoad(x, z) Then Continue
+            Local parts = CoverParts(x, z, height, SlopeAt(x, z))
+            Local wanted = Surface.ROCK
+            If parts.1 >= 0.5 || parts.2 >= 0.5 Then wanted = Surface.TURF
+            If parts.0 >= 0.5 Then wanted = Surface.SAND
+            Expect(SurfaceAt(x, z, False, 0.0) == wanted)
+            found[wanted == Surface.SAND ? 0 : wanted == Surface.TURF ? 1 : 2] += 1
+        End For
+    End For
+    Expect(found[0] > 20 && found[1] > 20 && found[2] > 20)
+    // The mill's door is trodden ground, and the sea's edge at slack water sand or rock.
+    Local door = DoorSpot()
+    Expect(SurfaceAt(door.x, door.y + 2.0, False, 0.0) == Surface.TURF)
 End Function
 
 // The water carrying you isn't walking.

@@ -822,8 +822,11 @@ End Function
 // flood; the wheel by how it ended; and a mix that's not silent, and doesn't clip.
 Function Heard(scape: Soundscape, flow: Flow, loudest: Float)
     Checks("the wind and sea are streamed, and playing", scape.AroundYou())
-    Checks("your steps are heard", scape.Played(Cue.STEP_1) > 0 && scape.Played(Cue.STEP_2) > 0 &&
-           scape.Played(Cue.STEP_3) > 0)
+    // On rock, sand, and the mill's boards, each a walk crosses.
+    Checks("your steps are heard on rock, sand, and boards",
+           scape.Played(Cue.STEP_1) + scape.Played(Cue.STEP_2) + scape.Played(Cue.STEP_3) > 0 &&
+           scape.Played(Cue.SAND_1) + scape.Played(Cue.SAND_2) > 0 &&
+           scape.Played(Cue.FLOOR_1) + scape.Played(Cue.FLOOR_2) > 0)
     Checks("the flood splashes, once", scape.Played(Cue.SPLASH) == 1)
     Checks("the wheel's pitch is its speed",
            IsClose(scape.WheelPitch(), WheelSpeed(flow.Ended()), 0.001))
@@ -869,7 +872,7 @@ Function Listened() Throws GraphicsError, IOError, AudioError
     Local mill = scape.MillAt()
     Local road = scape.SplashAt()
     For cue In [Cue.STEP_1, Cue.STEP_2, Cue.STEP_3, Cue.FLOOR_1, Cue.FLOOR_2, Cue.WADE_1,
-                Cue.WADE_2,
+                Cue.WADE_2, Cue.SAND_1, Cue.SAND_2, Cue.TURF_1, Cue.TURF_2,
                 Cue.CREAK, Cue.SPLASH]
         Local near = cue == Cue.SPLASH ? road : mill
         Listener.SetPosition(Vec3(near.x, near.y, near.z + 1.0))
