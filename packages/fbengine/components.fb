@@ -6,6 +6,7 @@ Import std.core
 Import std.data
 Import std.io
 Import std.os
+Import std.test
 Import std.text
 Import "./attributes"
 Import "./entity"
@@ -42,16 +43,30 @@ Public Struct ComponentKind
     Public Field Fields: ComponentField[]
 End Struct
 
+// What a kind's Class is, to tell one from another by.
+Class ClassMark
+End Class
+
+Class ClassMarkOf<T: Class> Extends ClassMark
+End Class
+
 // A kind of component, and how to put one on an entity from what's saved: what went wrong, or Null.
 Class Registered
     Field kind: ComponentKind
+    Field mark: ClassMark
     Field attach: Func(Entity, Value): String?
 
-    New(kind: ComponentKind, attach: Func(Entity, Value): String?)
+    New(kind: ComponentKind, mark: ClassMark, attach: Func(Entity, Value): String?)
         Self.kind = kind
+        Self.mark = mark
         Self.attach = attach
     End New
 End Class
+
+// What no @Limits says: anything, as a Field's own type takes it.
+Const NO_LIMIT: Float = 340282350000000000000000000000000000000.0
+
+Function Unlimited(): Limits => Limits(-NO_LIMIT, NO_LIMIT)
 
 Global registered: Registered[] = []
 
@@ -88,7 +103,7 @@ Function IsEnum<E>(): Bool
     End Try
 End Function
 
-// What an integer type's values go between, as Load takes them, unless it says otherwise.
+// What an integer type's values go between, as Load takes them, if they're few enough to find.
 Function WholeBounds<F>(): Limits
     Local high: Int64 = 0
     For top In [127 As Int64, 255, 32767, 65535]
@@ -99,7 +114,7 @@ Function WholeBounds<F>(): Limits
             Break
         End Try
     End For
-    If high == 0 Then Return Limits()
+    If high == 0 Then Return Unlimited()
     Try
         Try Load<F>(Value(-1 As Int64))
         Return Limits(-(high As Float) - 1, high As Float)
@@ -108,8 +123,10 @@ Function WholeBounds<F>(): Limits
     End Try
 End Function
 
-// What's wrong with `value` for `field`, or Null: a number past what it takes, or one of an Object's.
+// What's wrong with `value` for `field`, or Null: a number past what it takes, or one of an Object's or
+// an array's.
 Function OutOfLimits(field: ComponentField, value: Value): String?
+    If field.Low == -NO_LIMIT && field.High == NO_LIMIT Then Return Null
     Local bounds = Limits(field.Low, field.High, field.Above)
     Local number = value.AsDouble()
     If number != Null && value.IsNumber
@@ -117,6 +134,14 @@ Function OutOfLimits(field: ComponentField, value: Value): String?
         Local takes = (bounds.Above ? float > bounds.Low : float >= bounds.Low) &&
                       float <= bounds.High
         Return takes ? Null : "{field.Name} can't be {number}"
+    End If
+    Local items = value.AsArray()
+    If items != Null
+        For item In items
+            Local said = OutOfLimits(field, item)
+            If said != Null Then Return said
+        End For
+        Return Null
     End If
     If !value.IsObject Then Return Null
     For key In value.Keys()
@@ -148,7 +173,7 @@ Function Described<T: Class>(name: String): ComponentKind
                 members.Add(Save(member).AsString() ?? "")
             End For
         End If
-        Local limits = f.Attribute(Limits) ?? (first.IsInteger ? WholeBounds<F>() : Limits())
+        Local limits = f.Attribute(Limits) ?? (first.IsInteger ? WholeBounds<F>() : Unlimited())
         // By the key Save and Load know it by.
         Local key = f.Attribute(Rename)?.Name ?? f.Name
         fields.Add(ComponentField(key, first, named, members, limits.Low, limits.High,
@@ -157,22 +182,36 @@ Function Described<T: Class>(name: String): ComponentKind
     Return ComponentKind(name, fields)
 End Function
 
+// Why `T` can't be added as `name`, or Null: an entity has one of each Class, so a Class under two names
+// would lose one.
+Function Taken<T: Class>(name: String): String?
+    For each In registered
+        If each.kind.Name == name Then Return "there's a {name} already"
+        If (each.mark As? ClassMarkOf<T>) != Null
+            Return "{name}'s Class is {each.kind.Name}'s already"
+        End If
+    End For
+    Return Null
+End Function
+
 /// The kinds of component a game has. A game's program adds each at its start, and Attach makes one
 /// from what's saved, as a scene loading does. So the editor, which can't run a game's code in itself,
 /// knows them, a game's small program, its components/main.fb, adds them and ends with Describe.
 ///
 /// A component is a Class Load can make from nothing, each Public Field a value it can Save, what
 /// Load leaves it at being what a new one has. `@Skip` leaves a Field out; `@Limits` and
-/// `@ShownInDegrees` on a Field say what they say on a setter.
+/// `@ShownInDegrees` on a Field say what they say on a setter, a `@Limits` of each number of a Field
+/// of many. A Field set to Null is left out of a scene, which has no null, so it's read back as what
+/// a new one has. A kind's own New is the game's code, so a panic in it, as Add or a Load makes one,
+/// ends the program.
 Public Final Class Components
-    /// Adds `T` as the kind called `name`. Panics for a name that's there, or if Load can't make one
-    /// from nothing.
+    /// Adds `T` as the kind called `name`. Panics for a name that's there, for a `T` that's there under
+    /// another, as an entity has one of each Class, or if Load can't make one from nothing.
     @MainThread @PanicsAtCaller
     Public Static Method Add<T: Class>(name: String)
-        For each In registered
-            If each.kind.Name == name Then Panic("Components.Add: there's a {name} already")
-        End For
-        registered.Add(Registered(Described<T>(name),
+        Local taken = Taken<T>(name)
+        If taken != Null Then Panic("Components.Add: {taken}")
+        registered.Add(Registered(Described<T>(name), ClassMarkOf<T>(),
                                   Function(entity: Entity, values: Value): String?
             Try
                 entity.SetData<T>(Try Load<T>(values))
@@ -228,3 +267,19 @@ Public Final Class Components
         End If
     End Method
 End Class
+
+Class TakenFirst
+End Class
+
+Class TakenSecond
+End Class
+
+@Test
+Function OneClassHasOneNameAndOneNameOneClass()
+    Components.Clear()
+    Defer Components.Clear()
+    Components.Add<TakenFirst>("first")
+    Expect(Taken<TakenFirst>("other") == "other's Class is first's already")
+    Expect(Taken<TakenSecond>("first") == "there's a first already")
+    Expect(Taken<TakenSecond>("second") == Null)
+End Function

@@ -43,6 +43,7 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_window_set_resizable(resizable: Bool)
     Function fbe_window_resizable(): Bool
     Function fbe_window_closed(): Bool
+    Function fbe_window_keep_open()
     Function fbe_window_focused(): Bool
     Function fbe_window_minimized(): Bool
     Function fbe_window_simulate(event: Int32): Bool

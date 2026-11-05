@@ -13,6 +13,8 @@ Import std.test
 Import std.text
 Import fbengine
 
+Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
+
 Function Fresh(): World
     Local world = World()
     World.SetCurrent(world)
@@ -640,6 +642,326 @@ Function OpeningASceneAttachesNothing() Throws IOError
     Expect(known.Roots[0].Child(0).Data<Door>() == Null)
     Expect(known.Roots[0].Child(0).Component("Door")?.Path("Speed")?.AsDouble() == 4)
 End Function
+
+// What the file format holds of how each is lit and drawn, each away from what it is at first.
+@Test
+Function WhatsLitAndDrawnIsKept() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local camera = Camera()
+    camera.SetName("view")
+    camera.SetHdr(True)
+    camera.SetExposure(1.5)
+    camera.SetTonemap(Tonemap.ACES)
+    camera.SetGamma(2.2)
+    camera.SetBloom(0.5, 2)
+    camera.SetGrade(ColorGrade(Vec3(1, 0.5, 2), Vec3(0.25, 0, -0.25), Vec3(2, 1, 0.5), 0.75))
+    camera.SetOcclusion(False)
+    camera.SetAmbientOcclusion(0.5)
+    camera.SetAmbientOcclusionRadius(2)
+    camera.SetFxaa(True)
+    camera.SetTemporalAA(True)
+    Local light = Light(LightType.DIRECTIONAL)
+    light.SetName("sun")
+    light.SetShadows(True)
+    light.SetShadowSize(512)
+    light.SetShadowBias(0.5, 2)
+    light.SetCascades(2)
+    light.SetShadowDistance(40)
+    Local wall = Mesh(Geometry.Cube())
+    wall.SetName("wall")
+    wall.SetOccluder(True)
+    wall.SetCastsShadows(False)
+    Local paint = Material()
+    paint.SetMetalRough(0.25, 0.5)
+    paint.SetEmissive(Color(2, 0.5, 0))
+    paint.SetNormalScale(-0.5)
+    paint.SetOcclusionStrength(0.75)
+    paint.SetMapUv(MaterialMap.NORMAL, UvTurn(Vec2(2, 3), 0.5, Vec2(0.25, 0.75)))
+    paint.SetMap(MaterialMap.EMISSIVE, Null, 1)
+    wall.SetMaterial(paint)
+    Local text = Try Scene.Text([camera, light, wall])
+    Local again = Fresh()
+    Defer again.Free()
+    Local read = Try Scene.FromText(text)
+    Local seen = read[0] As? Camera
+    If seen == Null Then Panic("its camera")
+    Expect(seen.Hdr() && seen.Exposure() == 1.5 && seen.Tonemap() == Tonemap.ACES)
+    Expect(seen.Gamma() == 2.2 && seen.BloomIntensity() == 0.5 && seen.BloomThreshold() == 2)
+    Local grade = seen.Grade()
+    Expect(grade.Slope == Vec3(1, 0.5, 2) && grade.Offset == Vec3(0.25, 0, -0.25))
+    Expect(grade.Power == Vec3(2, 1, 0.5) && grade.Saturation == 0.75)
+    Expect(!seen.Occlusion() && seen.AmbientOcclusion() == 0.5 &&
+           seen.AmbientOcclusionRadius() == 2)
+    Expect(seen.Fxaa() && seen.TemporalAA())
+    Local sun = read[1] As? Light
+    If sun == Null Then Panic("its light")
+    Expect(sun.Shadows() && sun.ShadowSize() == 512 && sun.Cascades() == 2)
+    Expect(sun.ShadowBias() == 0.5 && sun.ShadowNormalBias() == 2 && sun.ShadowDistance() == 40)
+    Expect(read[2].Occluder() && !read[2].CastsShadows())
+    Local kept = (read[2] As? Mesh)?.Material()
+    If kept == Null Then Panic("its material")
+    Expect(kept.Metallic() == 0.25 && kept.Roughness() == 0.5)
+    Expect(kept.Emissive() == Color(2, 0.5, 0) && kept.NormalScale() == -0.5)
+    Expect(kept.OcclusionStrength() == 0.75 && kept.MapUvSet(MaterialMap.EMISSIVE) == 1)
+    Expect(kept.MapUv(MaterialMap.NORMAL) == UvTurn(Vec2(2, 3), 0.5, Vec2(0.25, 0.75)))
+    Expect((Try Scene.Text(read)) == text, "written again, it changed")
+End Function
+
+// What a new one has isn't written, so a file says only what's been changed.
+@Test
+Function WhatsAsItWasAtFirstIsntWritten() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local mesh = Mesh(Geometry.Cube())
+    mesh.SetMaterial(Material())
+    Local text = Try Scene.Text([mesh, Light(LightType.POINT), Camera()])
+    For key In ["occluder", "casts_shadows", "metallic", "roughness", "emissive", "normal_scale",
+                "occlusion_strength", "maps", "shadows", "shadow_size", "shadow_bias", "cascades",
+                "shadow_distance", "hdr", "exposure", "tonemap", "gamma", "bloom", "grade",
+                "occlusion", "ambient_occlusion", "fxaa", "temporal_aa"]
+        Expect(!text.Contains("\n{key} ") && !text.Contains("{key}]"), "it says {key}\n{text}")
+    End For
+End Function
+
+// A map's file: a color can't be one, which is refused, or for an editor, stands in saying so; its own
+// numbers can, and its reference is kept.
+@Test
+Function AMapIsKeptByItsFile() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local world = Fresh()
+    Defer world.Free()
+    Local folder = Try TempDir()
+    Local pixel = Image(1, 1)
+    pixel[0, 0] = Color32(128, 128, 255, 255)
+    Try File.WriteBytes(folder.Path / "bumps.png", Png.Encode(pixel))
+    Try File.WriteText(folder.Path / "bumps.png.toml", "srgb = false\n")
+    Try File.WriteBytes(folder.Path / "wall.png", Png.Encode(pixel))
+    Assets.MountFolder("res://maps", folder.Path)
+    Defer Assets.Unmount("res://maps")
+    Local paint = Material()
+    paint.SetMap(MaterialMap.NORMAL, Try Assets.Load<Texture>("res://maps/bumps.png"), 1)
+    paint.SetMap(MaterialMap.EMISSIVE, Try Assets.Load<Texture>("res://maps/wall.png"))
+    Local mesh = Mesh(Geometry.Cube())
+    mesh.SetName("wall")
+    mesh.SetMaterial(paint)
+    Local text = Try Scene.Text([mesh])
+    Expect(text.Contains(
+        "[[material.maps]]\nmap = \"NORMAL\"\ntexture = \"res://maps/bumps.png\"\nuv_set = 1\n"),
+           text)
+    Local again = Fresh()
+    Defer again.Free()
+    Local read = (Try Scene.FromText(text))[0] As? Mesh
+    Local kept = read?.Material()
+    If kept == Null Then Panic("its material")
+    Expect(kept.Map(MaterialMap.NORMAL)?.Path() == "res://maps/bumps.png" &&
+           kept.MapUvSet(MaterialMap.NORMAL) == 1)
+    Expect(kept.Map(MaterialMap.EMISSIVE)?.Path() == "res://maps/wall.png")
+    Expect(kept.Map(MaterialMap.OCCLUSION) == Null)
+    // A color as a normal map.
+    Local wrong = text.Replace("res://maps/bumps.png", "res://maps/wall.png")
+    Local error = ExpectThrows<IOError>(Scene.FromText(wrong))
+    Expect((error?.Message ?? "").Contains("isn't sRGB"), error?.Message ?? "")
+    Try File.WriteText(folder.Path / "wrong.scene", wrong)
+    Local opened = Try Scene.Open("res://maps/wrong.scene")
+    Expect(opened.Problems.Count == 1 && opened.Problems[0].Contains("isn't sRGB"))
+    Local lost = (opened.Roots[0] As? Mesh)?.Material()?.Map(MaterialMap.NORMAL)
+    Expect(lost?.Path() == "res://maps/wall.png", "its reference")
+    // Gone altogether, it stands in as what a normal map can be.
+    Try File.WriteText(folder.Path / "gone.scene",
+                       text.Replace("res://maps/bumps.png", "res://maps/none.png"))
+    Local gone = Try Scene.Open("res://maps/gone.scene")
+    Expect(gone.Problems.Count == 1)
+    Expect((gone.Roots[0] As? Mesh)?.Material()?.Map(MaterialMap.NORMAL)?.Path() ==
+           "res://maps/none.png")
+    Expect(ExpectThrows<IOError>(Scene.FromText(text.Replace("res://maps/bumps.png",
+                                                             "res://maps/none.png"))) != Null)
+End Function
+
+// What a setter would panic at is refused, as all the rest of a file is.
+@Test
+Function WhatsLitAndDrawnIsRefusedWhenItCantBe()
+    Local world = Fresh()
+    Defer world.Free()
+    For wrong In [("CAMERA", "exposure = -1.0"), ("CAMERA", "gamma = 0.0"),
+                  ("CAMERA", "tonemap = \"NO\""),
+                  ("CAMERA", "bloom = [-1.0, 1.0]"), ("CAMERA", "bloom = [1.0, -1.0]"),
+                  ("CAMERA", "grade = [-1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]"),
+                  ("CAMERA", "grade = [1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0]"),
+                  ("CAMERA", "grade = [1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, -1.0]"),
+                  ("CAMERA", "grade = [1.0]"), ("CAMERA", "ambient_occlusion = -1.0"),
+                  ("CAMERA", "ambient_occlusion_radius = 0.0"),
+                  ("LIGHT", "shadow_size = 8"), ("LIGHT", "shadow_size = 9000"),
+                  ("LIGHT", "cascades = 0"), ("LIGHT", "cascades = 5"),
+                  ("LIGHT", "shadow_bias = [-1.0, 1.0]"), ("LIGHT", "shadow_bias = [1.0, -1.0]"),
+                  ("LIGHT", "shadow_distance = 0.0")]
+        Local kind, line = wrong
+        Local text = "format = 1\n[[entity]]\npath = \"it\"\nkind = \"{kind}\"\n{line}\n"
+        Expect(ExpectThrows<IOError>(Scene.FromText(text))?.Kind == IOErrorKind.INVALID_DATA, line)
+        Expect(world.Roots().Count == 0, line)
+    End For
+    For line In ["metallic = 2.0", "metallic = -1.0", "roughness = 2.0", "roughness = -1.0",
+                 "emissive = [-1.0, 0.0, 0.0]", "emissive = [0.0, -1.0, 0.0]",
+                 "emissive = [0.0, 0.0, -1.0]", "emissive = [1.0]", "occlusion_strength = 2.0",
+                 "occlusion_strength = -1.0", "strays = 1", "maps = 3"]
+        Local text = "format = 1\n[[material]]\nid = \"m\"\n{line}\n[[entity]]\npath = \"it\"\nkind = \"MESH\"\nmaterial = \"m\"\n"
+        Expect(ExpectThrows<IOError>(Scene.FromText(text))?.Kind == IOErrorKind.INVALID_DATA, line)
+    End For
+    For line In ["map = \"NO\"", "uv_set = 2", "stray = 1", "uv_set = 1",
+                 "map = \"NORMAL\"\nuv_set = 2", "map = \"NORMAL\"\nuv = [0.0, 1.0, 0.0, 0.0, 0.0]",
+                 "map = \"NORMAL\"\nuv = [1.0, 0.0, 0.0, 0.0, 0.0]"]
+        Local text = "format = 1\n[[material]]\nid = \"m\"\n[[material.maps]]\n{line}\n[[entity]]\npath = \"it\"\nkind = \"MESH\"\nmaterial = \"m\"\n"
+        Expect(ExpectThrows<IOError>(Scene.FromText(text))?.Kind == IOErrorKind.INVALID_DATA, line)
+    End For
+End Function
+
+Class Hashed
+    Public Field Hash: UInt64 = 18446744073709551615
+End Class
+
+Class Slotted
+    Public Field Slots: String?[]
+
+    New()
+        Slots = [Null]
+    End New
+End Class
+
+// What TOML can't write is an error naming it, where it'd panic, and the work's still there.
+@Test
+Function WhatTomlCantWriteIsRefusedByName() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local path = Try TempDir()
+    Local file = path.Path / "kept.scene"
+    Try File.WriteText(file, "as it was")
+    Local deep = Value.Array()
+    For at = 1 To 300
+        Local around = Value.Array()
+        around.Add(deep)
+        deep = around
+    End For
+    Local nested = Value.Object()
+    nested["Inner"] = Save(Slotted())
+    For wrong In [(Save(Hashed()), "Odd.Hash is 18446744073709551615"),
+                  (Save(Slotted()), "Odd.Slots[0] is Null"),
+                  (nested, "Odd.Inner.Slots[0] is Null"), (deep, "Odd[0]")]
+        Local values, says = wrong
+        Local entity = Pivot()
+        entity.SetName("it")
+        entity.SetComponent("Odd", values)
+        Local error = ExpectThrows<IOError>(Scene.Save(file, [entity]))
+        Expect(error?.Kind == IOErrorKind.INVALID_DATA)
+        Expect((error?.Message ?? "").Contains("it: its {says}"), error?.Message ?? "")
+        Expect((Try File.ReadText(file)) == "as it was")
+        entity.Free()
+    End For
+    // An Object's Null is only left out.
+    Local holding = Value.Object()
+    holding["Gone"] = Value()
+    holding["Kept"] = Value(1 As Int64)
+    Local entity = Pivot()
+    entity.SetComponent("Fine", holding)
+    Local text = Try Scene.Text([entity])
+    Expect(text.Contains("Kept = 1") && !text.Contains("Gone"), text)
+End Function
+
+Class Seeded
+    Public Field Seed: Int64 = 4000000000
+    Public Field Far: Double = 0
+    @Limits(0, 10)
+    Public Field Few: Float[] = []
+    Public Field Name: String? = "first"
+    Public Field At: Vec3
+    @Limits(0, 10)
+    Public Field Near: Vec3
+End Class
+
+// No bound but what @Limits says: a number a Field's type takes, as what it has at first, comes back.
+@Test
+Function WhatsNotLimitedTakesWhatItsTypeDoes() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Components.Clear()
+    Defer Components.Clear()
+    Components.Add<Seeded>("Seeded")
+    Local entity = Pivot()
+    Local wide = Value.Object()
+    wide["Seed"] = Value(9000000000000 As Int64)
+    Expect(Components.Attach(entity, "Seeded", wide) == Null)
+    Expect(entity.Data<Seeded>()?.Seed == 9000000000000)
+    // Past what a Float32 holds, too.
+    Local far = Value.Object()
+    far["Far"] = Value(1.0e300)
+    Expect(Components.Attach(entity, "Seeded", far) == Null)
+    Expect(entity.Data<Seeded>()?.Far == 1.0e300)
+    // Through a file, a Struct's Fields too, as a Field's own Load has them.
+    Local table = Value.Object()
+    table["At"] = Save(Vec3(4, 5, 2000000000))
+    table["Seed"] = Value(4000000000 As Int64)
+    entity.SetComponent("Seeded", table)
+    Local text = Try Scene.Text([entity])
+    Local read = Try Scene.FromText(text)
+    Local kept = read[0].Data<Seeded>()
+    If kept == Null Then Panic("its component")
+    Expect(kept.At == Vec3(4, 5, 2000000000) && kept.Seed == 4000000000)
+End Function
+
+// @Limits is of each number of a Field of many, in a list or a Struct.
+@Test
+Function LimitsAreOfEachOfMany()
+    Local world = Fresh()
+    Defer world.Free()
+    Components.Clear()
+    Defer Components.Clear()
+    Components.Add<Seeded>("Seeded")
+    Local entity = Pivot()
+    Local list = Value.Object()
+    list["Few"] = Save([1.0, 99.0] As Float[])
+    Expect((Components.Attach(entity, "Seeded", list) ?? "").Contains("Few can't be 99"))
+    Local place = Value.Object()
+    place["Near"] = Save(Vec3(1, 2, 99))
+    Expect((Components.Attach(entity, "Seeded", place) ?? "").Contains("Near can't be 99"))
+    Local fine = Value.Object()
+    fine["Few"] = Save([1.0, 9.0] As Float[])
+    Expect(Components.Attach(entity, "Seeded", fine) == Null)
+End Function
+
+// A Field set to Null is left out of a file, so it's read back as what a new one has.
+@Test
+Function ANullOverADefaultReadsBackAsTheDefault() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Components.Clear()
+    Defer Components.Clear()
+    Components.Add<Seeded>("Seeded")
+    Local entity = Pivot()
+    Local table = Value.Object()
+    table["Name"] = Value()
+    entity.SetComponent("Seeded", table)
+    Local read = Try Scene.FromText(Try Scene.Text([entity]))
+    Expect(read[0].Data<Seeded>()?.Name == "first")
+End Function
+
+// A scene's example in the docs: its component's only taken where a game's added its kind.
+@Test
+Function TheDocsComponentNeedsItsKind() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Components.Clear()
+    Defer Components.Clear()
+    Local text = "format = 1\n[[entity]]\npath = \"room\"\nkind = \"PIVOT\"\nname = \"room\"\n[entity.components.body]\nmass = 2.5\n"
+    Local error = ExpectThrows<IOError>(Scene.FromText(text))
+    Expect((error?.Message ?? "").Contains("no kind of component called body"),
+           error?.Message ?? "")
+    Components.Add<Body>("body")
+    Local read = Try Scene.FromText(text)
+    Expect(read[0].Data<Body>()?.mass == 2.5)
+End Function
+
+Class Body
+    Public Field mass: Float = 1
+End Class
 
 // What's been left out, each away from what it is at first.
 @Test

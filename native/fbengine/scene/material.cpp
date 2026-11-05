@@ -635,6 +635,10 @@ FBE_API bool fbe_material_set_map(uint64_t material, int32_t map, uint64_t textu
     return true;
 }
 
+FBE_API bool fbe_material_map_takes(int32_t map, uint64_t texture) {
+    return fbe_texture_format(texture) >= 0 && fbe::scene::map_takes(map, texture);
+}
+
 FBE_API uint64_t fbe_material_map(uint64_t material, int32_t map) {
     const layer_t* found = fbe::scene::map_of(material, map);
     return found != nullptr ? found->texture : 0;

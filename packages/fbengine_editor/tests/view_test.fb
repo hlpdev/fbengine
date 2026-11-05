@@ -643,6 +643,7 @@ Function ANewProjectsAFreshScene() Throws IOError, GraphicsError
     Local editor = Try Started(settings, games)
     Local cube = Cube(editor, Vec3(0, 1, 0))
     Local before = editor.Edited
+    editor.Edits.MarkSaved()
     Expect(editor.Actions.Run("file.close"))
     editor.Step()
     Expect(!RefEquals(editor.Edited, before) && before.Stage.Freed() && cube.Freed())

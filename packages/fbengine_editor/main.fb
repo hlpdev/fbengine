@@ -10,6 +10,7 @@ Import std.io
 Import std.math
 Import std.os
 Import fbengine
+Import fbengine_ui.controls
 Import "./browser"
 Import "./commands"
 Import "./component"
@@ -56,9 +57,18 @@ Function Demonstrating(folder: Path, headless: Bool): Editor Throws IOError, Gra
     Return editor
 End Function
 
+// Clicks what's called `name` in the list that's open.
+Function Picked(editor: Editor, name: String)
+    Local popups = editor.Shown.Popups()
+    If popups.Count == 0 Then Panic("there's no list open")
+    Local item = popups[0].Find(name) As? Button
+    If item == Null Then Panic("its list has no {name}")
+    item.Click()
+End Function
+
 // What a person would do, one each second or so, around and around.
 Function Doing(editor: Editor, scene: DemoScene, turn: Int)
-    Select turn % 16
+    Select turn % 18
         Case 0
             editor.Edited.SelectOnly(scene.Crate)
         Case 1
@@ -83,12 +93,15 @@ Function Doing(editor: Editor, scene: DemoScene, turn: Int)
             editor.Actions.Run("edit.undo")
         Case 11
             editor.Edited.SelectOnly(scene.Hinge)
-            editor.Edits.Commit(AddComponentEdit([scene.Hinge], editor.Kinds.Kinds()[0]))
         Case 12
-            editor.Actions.Run("edit.undo")
+            editor.Actions.Run("component.add")
         Case 13
-            editor.Actions.Run("view.assets")
+            Picked(editor, "inspector.kind.Door")
         Case 14
+            editor.Actions.Run("edit.undo")
+        Case 15
+            editor.Actions.Run("view.assets")
+        Case 16
             editor.Actions.Run("view.output")
         Default
             editor.Edited.SelectOnly(Null)
@@ -110,8 +123,11 @@ Function Watched(arguments: String[]) Throws IOError, GraphicsError
     Local count = 0
     While !editor.Quitting() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
         // By the frame, however fast, so each is seen; a test's are all it has.
-        If count % (frames > 0 ? 2 : 60) == 0 Then Doing(editor, scene,
-                                                         count / (frames > 0 ? 2 : 60))
+        If count % (frames > 0 ? 2 : 60) == 0
+            Doing(editor, scene, count / (frames > 0 ? 2 : 60))
+            // There's nothing to keep, so closing it asks nothing.
+            editor.Edits.MarkSaved()
+        End If
         If count == Asked(arguments, "--press-at") && count > 0 Then Try Simulate.PressKey(Key.ESCAPE)
         If count == Asked(arguments, "--close-at") && count > 0 Then Try Simulate.CloseWindow()
         editor.Step()
@@ -181,11 +197,29 @@ Function Saving(to: String) Throws IOError, GraphicsError
     editor.Docked.Show("inspector")
     editor.Docked.Hide("assets")
     editor.Docked.Hide("output")
-    editor.Edits.Commit(AddComponentEdit([scene.Hinge], editor.Kinds.Kinds()[0]))
     editor.Edited.SelectOnly(scene.Hinge)
+    editor.Step()
+    editor.Step()
+    editor.Actions.Run("component.add")
+    editor.Step()
+    Picked(editor, "inspector.kind.Door")
     Try Saved(editor, to, "inspector")
     editor.Edited.SelectOnly(scene.Crate)
     Try Saved(editor, to, "inspector_mesh")
+    // A material's rows past its color, scrolled to.
+    editor.Inspector.ShowRow("EmissiveMap")
+    Try Saved(editor, to, "inspector_material")
+    editor.Edited.SelectOnly(scene.Lamp)
+    Try Saved(editor, to, "inspector_light")
+    // What a list of a row looks like, of an Enum's.
+    Local kind = editor.Inspector.RowOf("LightType")?.Find("inspector.LightType.button") As? Button
+    If kind == Null Then Panic("there's no LightType")
+    kind.Click()
+    Try Saved(editor, to, "choice_list")
+    Try Simulate.PressKey(Key.ESCAPE)
+    editor.Step()
+    editor.Edited.SelectOnly(scene.Lens)
+    Try Saved(editor, to, "inspector_camera")
     editor.Docked.Hide("inspector")
     editor.Docked.Show("assets")
     editor.Edited.SelectOnly(Null)
@@ -217,18 +251,47 @@ Function Saving(to: String) Throws IOError, GraphicsError
     editor.Shown.Focus(Null)
     Try Saved(editor, to, "tree_found")
     editor.Tree.FindField().SetText("")
+    editor.Step()
+    // A tab's own menu, and where a tab being dragged would go.
+    Local tab = editor.Shown.Root().Find("tab.tree")
+    If tab == Null Then Panic("there's no tree tab")
+    Local grabbed = tab.Box().Center
+    Try Simulate.MoveMouse(grabbed.x, grabbed.y)
+    editor.Step()
+    Try Simulate.Click(MouseButton.RIGHT)
+    Try Saved(editor, to, "tab_menu")
+    Try Simulate.PressKey(Key.ESCAPE)
+    editor.Step()
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    editor.Step()
+    Local over = editor.View.Box().Center
+    Try Simulate.MoveMouse(over.x, over.y)
+    editor.Step()
+    Try Saved(editor, to, "dock_hint")
+    Try Simulate.MoveMouse(grabbed.x, grabbed.y)
+    editor.Step()
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    editor.Step()
+    editor.Actions.Run("view.reset")
+    Try Simulate.MoveMouse(640, 700)
+    editor.Step()
     // The files, a picture's thumbnail come.
     editor.Docked.Activate("assets")
     editor.Files.SetOpen("res://levels", True)
     Local waited = 0
     While !editor.Files.ThumbDone("res://checks.png") ||
-          editor.Files.ThumbOf("res://checks.png") == Null
+          editor.Files.ThumbOf("res://checks.png") == Null ||
+          !editor.Files.ThumbDone("res://blade.gltf") ||
+          editor.Files.ThumbOf("res://blade.gltf") == Null
         waited += 1
         If waited > 1000 Then Panic("the picture's thumbnail never came")
         editor.Step()
     End While
     editor.Files.Choose("res://notes.txt")
     Try Saved(editor, to, "assets")
+    // A picture chosen, with what it's imported as.
+    editor.Files.Choose("res://checks.png")
+    Try Saved(editor, to, "assets_image")
     // What a run says, of one that can't start, so nothing's left over.
     editor.Docked.Activate("output")
     Local open = editor.Current()

@@ -421,6 +421,7 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_material_set_map(material: UInt64, map: Int32, texture: UInt64,
                                   uv_set: Int32): Bool
     Function fbe_material_map(material: UInt64, map: Int32): UInt64
+    Function fbe_material_map_takes(map: Int32, texture: UInt64): Bool
     Function fbe_material_map_uv_set(material: UInt64, map: Int32): Int32
     Function fbe_material_set_map_uv(material: UInt64, map: Int32, scale_u: Float32,
                                      scale_v: Float32, angle: Float32, offset_u: Float32,

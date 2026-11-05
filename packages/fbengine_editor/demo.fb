@@ -10,6 +10,8 @@ Import "./component"
 Import "./editor"
 Import "./handles"
 
+Const TRIANGLE = "{{\"asset\":{{\"version\":\"2.0\"}},\"scene\":0,\"scenes\":[{{\"nodes\":[0]}}],\"nodes\":[{{\"name\":\"blade\",\"mesh\":0}}],\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":0}}}}]}}],\"accessors\":[{{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\",\"min\":[0,0,0],\"max\":[1,0,1]}}],\"bufferViews\":[{{\"buffer\":0,\"byteLength\":36}}],\"buffers\":[{{\"byteLength\":36,\"uri\":\"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAIA/AACAPwAAAAAAAAAA\"}}]}}"
+
 // A door, as a game's own program would say one is.
 Enum DemoSwing
     INWARD
@@ -53,6 +55,7 @@ Public Function MakeDemoProject(folder: Path) Throws IOError
     End For
     Try File.WriteBytes(folder / "assets" / "checks.png", Png.Encode(checks))
     Try File.WriteText(folder / "assets" / "notes.txt", "what's left to do\n")
+    Try File.WriteText(folder / "assets" / "blade.gltf", TRIANGLE)
     Try File.WriteText(folder / "assets" / "levels" / "first.scene", "format = 1\n")
 End Function
 

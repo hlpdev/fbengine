@@ -97,10 +97,17 @@ TEST_CASE("the editor's frames match their golden images", "[.example]") {
              "scale",
              "inspector",
              "inspector_mesh",
+             "inspector_material",
+             "inspector_light",
+             "choice_list",
+             "inspector_camera",
              "menu",
              "dialog",
              "tree_found",
+             "tab_menu",
+             "dock_hint",
              "assets",
+             "assets_image",
              "output",
          }) {
         INFO("frame " << frame);
