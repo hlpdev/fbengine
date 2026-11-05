@@ -10963,6 +10963,25 @@ TEST_CASE("a pass keeps to its camera's viewport, and over what it doesn't clear
     fbe_material_release(pass);
 }
 
+// What FXAA reads starts as nothing each frame, whatever a pass left in it the frame before.
+TEST_CASE("a pass's alpha lets what's there through FXAA", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t pass = game_pass(pass_draws_a_parameter);
+    require(fbe_material_set_parameter(pass, 1, 1.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t over = fbe_entity_create(scene.world, 0, FBE_ENTITY_CAMERA);
+    require(fbe_camera_set_target(over, scene.target));
+    require(fbe_camera_set_clear(over, false, false));
+    require(fbe_camera_set_fxaa(over, true));
+    require(fbe_camera_add_pass(over, pass));
+    CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
+    require(fbe_material_set_parameter(pass, 1, 0.0F, 0.0F, 0.0F, 0.0F));
+    CHECK(near(middle(scene.drawn()), { 0, 0, 255 }));
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_entity_free(over);
+    fbe_material_release(pass);
+}
+
 TEST_CASE("a pass runs on the screen as on a target", "[gpu][scene]") {
     REQUIRE(fbe_window_set_headless(true));
     fbe_gpu_set_pipeline_cache("");
@@ -10978,7 +10997,15 @@ TEST_CASE("a pass runs on the screen as on a target", "[gpu][scene]") {
         const fbe::golden::frame_t frame = scene_t::read(fbe_gpu_screen());
         fbe_frame_flip(false);
         CHECK(near(middle(frame), { srgb(0.5F), srgb(0.5F), srgb(0.5F) }));
+        // With one between them, whose format isn't the screen's.
+        const std::uint64_t again = game_pass(pass_halves);
+        require(fbe_camera_add_pass(camera, again));
+        require(fbe_render_world(world, 1.0F));
+        const fbe::golden::frame_t twice = scene_t::read(fbe_gpu_screen());
+        fbe_frame_flip(false);
+        CHECK(near(middle(twice), { srgb(0.25F), srgb(0.25F), srgb(0.25F) }));
         CHECK(fbe_gpu_validation_errors() == 0);
+        fbe_material_release(again);
         fbe_material_release(pass);
         fbe_world_free(world);
         std::array<std::uint64_t, 64> some{};
