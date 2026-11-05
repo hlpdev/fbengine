@@ -10732,7 +10732,7 @@ TEST_CASE("a shader of its own reaches the prepass: what it moves, and what it c
           "[gpu][scene]") {
     const scene_t scene;
     const std::uint64_t paint = fbe_material_create();
-    wall(scene.world, -10.0F, 30.0F, paint);
+    const std::uint64_t back = wall(scene.world, -10.0F, 30.0F, paint);
     require(fbe_world_set_ambient(scene.world, 0.25F, 0.25F, 0.25F));
     require(fbe_camera_set_ambient_occlusion_radius(scene.camera, 3.0F));
     require(fbe_camera_set_ambient_occlusion(scene.camera, 1.0F));
@@ -10853,6 +10853,22 @@ TEST_CASE("a shader of its own reaches the prepass: what it moves, and what it c
         cube(scene.world, 0.0F, 0.0F, -9.0F, moved);
         CHECK(darkened(scene.drawn()));
     }
+    SECTION(
+        "what it cuts by its color, in its prepass, isn't by the occlusion of the frame before") {
+        // The wall, 0.25 by its ambient light, cut where its occlusion takes it under 0.2, which is
+        // only known after its prepass: what that's cut by is its color with none, the same each
+        // frame, so its occlusion is too.
+        require(fbe_material_set_alpha_cutoff(moved, 0.5F));
+        require(fbe_material_set_parameter(moved, 0, 7.0F, 0.0F, 0.0F, 0.0F));
+        require(fbe_mesh_set_material(back, moved));
+        cube(scene.world, 0.0F, 0.0F, -9.0F, placed);
+        const fbe::golden::frame_t first = scene.drawn();
+        const fbe::golden::frame_t second = scene.drawn();
+        const fbe::golden::frame_t third = scene.drawn();
+        CHECK(pixel(third, 64 + 16, 64) != pixel(third, 4, 4));
+        CHECK(same(first, second));
+        CHECK(same(second, third));
+    }
     SECTION("its motion's from where it's moved to, then and now") {
         require(fbe_entity_set_position(scene.camera, 0.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
         require(fbe_camera_set_ambient_occlusion(scene.camera, 0.0F));
@@ -10878,6 +10894,68 @@ TEST_CASE("a shader of its own reaches the prepass: what it moves, and what it c
         CHECK(value > 0.4F);
         CHECK(value < 0.9F);
         fbe_material_release(white);
+    }
+    SECTION("a mesh's, or a skinned one's, motion is that of what's placed where it's moved to") {
+        // Each above the middle by what's placed there, below it by what its shader moves, going
+        // across together two pixels a frame, so a row of each ends the same only if what the frame
+        // before had of each is from the same place.
+        require(fbe_entity_set_position(scene.camera, 0.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+        require(fbe_camera_set_ambient_occlusion(scene.camera, 0.0F));
+        require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+        require(fbe_camera_set_hdr(scene.camera, true));
+        require(fbe_camera_set_temporal_aa(scene.camera, true));
+        const float tangent = std::tan(std::numbers::pi_v<float> / 6.0F);
+        const auto alike = [&](float depth, auto&& move_to) {
+            const float across = tangent * depth / 64.0F;
+            fbe::golden::frame_t last;
+            for (int frame = 0; frame <= 24; ++frame) {
+                move_to((0.5F + static_cast<float>(frame - 24) * 2.0F) * across);
+                last = scene.drawn();
+            }
+            // Each one's middle row, a mirror of the other about the view's middle.
+            const auto row = static_cast<std::uint32_t>(64.0F - (2.0F / (depth * tangent) * 64.0F));
+            int differing = 0;
+            for (std::uint32_t x = 0; x < frame_size; ++x) {
+                for (std::size_t k = 0; k < 3; ++k) {
+                    if (std::abs(pixel(last, x, row)[k] - pixel(last, x, frame_size - 1 - row)[k]) >
+                        2) {
+                        ++differing;
+                    }
+                }
+            }
+            return differing;
+        };
+        SECTION("a mesh") {
+            require(fbe_material_set_parameter(moved, 1, 3.0F, 0.0F, 0.0F, 0.0F));
+            const std::uint64_t there = cube(scene.world, 0.0F, 2.0F, -10.0F, placed);
+            const std::uint64_t from = cube(scene.world, 0.0F, -2.0F, -10.0F, moved);
+            CHECK(alike(10.0F, [&](float x) {
+                      require(
+                          fbe_entity_set_position(there, x + 3.0F, 2.0F, -10.0F, FBE_SPACE_WORLD));
+                      require(fbe_entity_set_position(from, x, -2.0F, -10.0F, FBE_SPACE_WORLD));
+                  }) == 0);
+        }
+        SECTION("a skinned mesh, along a normal its joint turns") {
+            // Turned 30 degrees about up, so 3 along its normal is 1.5 across and 2.6 nearer.
+            const float half_turn = std::numbers::pi_v<float> / 12.0F;
+            const float away = 3.0F * std::sin(2.0F * half_turn);
+            const float toward = 3.0F * std::cos(2.0F * half_turn);
+            require(fbe_material_set_parameter(moved, 3, 3.0F, 0.0F, 0.0F, 0.0F));
+            const skinned_wall_t skinned = skinned_wall(scene.world, moved, -10.0F, 1.0F);
+            all_on(skinned.geometry, 0, 1.0F);
+            require(fbe_entity_set_rotation(skinned.still, 0.0F, std::sin(half_turn), 0.0F,
+                                            std::cos(half_turn), FBE_SPACE_WORLD));
+            const std::uint64_t there = wall(scene.world, -10.0F, 1.0F, placed);
+            require(fbe_entity_set_rotation(there, 0.0F, std::sin(half_turn), 0.0F,
+                                            std::cos(half_turn), FBE_SPACE_WORLD));
+            CHECK(alike(10.0F - toward, [&](float x) {
+                      require(fbe_entity_set_position(there, x + away, 2.0F, -10.0F + toward,
+                                                      FBE_SPACE_WORLD));
+                      require(fbe_entity_set_position(skinned.still, x, -2.0F, -10.0F,
+                                                      FBE_SPACE_WORLD));
+                  }) == 0);
+            fbe_skin_release(skinned.skin);
+        }
     }
     CHECK(fbe_gpu_validation_errors() == 0);
     fbe_material_release(placed);
@@ -11264,8 +11342,8 @@ TEST_CASE("fxaa in stored values softens by what's stored", "[gpu][scene]") {
     fbe_material_release(paint);
 }
 
-// What it returns is in light whichever way the camera draws, so half white over black is 128
-// stored and 188 in light, as a material's own is.
+// What it returns is in light whichever way the camera draws, so half of 0.5 over black is 0.25 in
+// light, stored 137, and half of 0.5's stored 188 in stored values, 94, as a material's own is.
 TEST_CASE("a shader of its own blends with what's stored, in stored values", "[gpu][scene]") {
     const scene_t scene;
     const std::int32_t shading = GENERATE(FBE_SHADING_PBR, FBE_SHADING_UNLIT);
@@ -11273,10 +11351,10 @@ TEST_CASE("a shader of its own blends with what's stored, in stored values", "[g
     require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
     const std::uint64_t material = by_game_shader();
     require(fbe_material_set_shading(material, shading));
-    require(fbe_material_set_parameter(material, 2, 1.0F, 1.0F, 1.0F, 0.5F));
+    require(fbe_material_set_parameter(material, 2, 0.5F, 0.5F, 0.5F, 0.5F));
     require(fbe_material_set_blend(material, FBE_BLEND_ALPHA));
     wall(scene.world, -3.0F, 10.0F, material);
-    check_both_ways(scene, { 188, 188, 188 }, { 128, 128, 128 });
+    check_both_ways(scene, { 137, 137, 137 }, { 94, 94, 94 });
     fbe_material_release(material);
 }
 
