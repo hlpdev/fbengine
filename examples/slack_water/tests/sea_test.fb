@@ -110,6 +110,25 @@ Function NoCloudIsBelowTheHorizon()
 End Function
 
 @Test
+Function CloudsAreLitOnTheirSunsSideAndDarkOnTheOther()
+    Local brightest: Float = 0.0
+    Local darkest: Float = 1.0
+    For along = 0 Until 60
+        For across = 0 Until 60
+            Local x = (across As Float) / 30.0 - 1.0
+            Local z = (along As Float) / 30.0 - 1.0
+            Local cloud, lit = CloudAt(x, 0.5, z)
+            If cloud > 0.5
+                brightest = Max(brightest, lit)
+                darkest = Min(darkest, lit)
+            End If
+        End For
+    End For
+    Expect(brightest > 0.95)
+    Expect(darkest < 0.5)
+End Function
+
+@Test
 Function TheSkyHasCloudAndNoneAndIsWhole()
     Local image = SkyImage()
     Expect(image.Width == 1024)
