@@ -10638,6 +10638,9 @@ constexpr float pass_draws_a_layer = 4.0F;
 constexpr float pass_draws_its_uv = 5.0F;
 constexpr float pass_reads_beside_it = 6.0F;
 constexpr float pass_makes_an_edge = 7.0F;
+constexpr float pass_reads_between_pixels = 8.0F;
+constexpr float pass_draws_a_parameter_past_the_last = 9.0F;
+constexpr float pass_draws_a_layer_past_the_last = 10.0F;
 
 /// A material for fbe_camera_add_pass, of gpu/shaders/own/fbe_game_pass.slang, doing what `which`
 /// says by the x of its first parameter.
@@ -10736,6 +10739,67 @@ TEST_CASE("a camera holds its passes, and lets them go as it's freed", "[gpu][sc
     CHECK(!fbe_material_set_parameter(pass, 1, 1.0F, 2.0F, 3.0F, 4.0F));
 }
 
+TEST_CASE("a camera takes only a pass's shader, once, and what it's given back it lets go of",
+          "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t pass = game_pass();
+    require(fbe_camera_add_pass(scene.camera, pass));
+    CHECK_FALSE(fbe_camera_add_pass(scene.camera, pass));
+    CHECK(fbe_camera_pass_count(scene.camera) == 1);
+    const std::uint64_t plain = fbe_material_create();
+    CHECK_FALSE(fbe_camera_add_pass(scene.camera, plain));
+    const std::uint64_t shader = game_shader();
+    const std::uint64_t own = fbe_material_create();
+    require(fbe_material_set_shader(own, shader));
+    CHECK_FALSE(fbe_camera_add_pass(scene.camera, own));
+    CHECK(fbe_camera_pass_count(scene.camera) == 1);
+    CHECK_FALSE(fbe_camera_remove_pass(scene.camera, plain));
+    require(fbe_camera_remove_pass(scene.camera, pass));
+    CHECK_FALSE(fbe_camera_remove_pass(scene.camera, pass));
+    // The game's is the only hold left, so it goes with that.
+    require(fbe_material_release(pass));
+    CHECK_FALSE(fbe_material_set_parameter(pass, 1, 1.0F, 2.0F, 3.0F, 4.0F));
+    fbe_material_release(own);
+    fbe_material_release(plain);
+    fbe_shader_release(shader);
+}
+
+// What's between two passes is a format of its own, as near the target as there are, with one
+// sample a pixel, whatever the target's.
+TEST_CASE("a pass runs on a target of any format and samples", "[gpu][scene]") {
+    const auto [format, channels, stored] =
+        GENERATE(table<std::int32_t, std::size_t, std::uint8_t>({
+            { FBE_TEXTURE_RGBA8, 4, srgb(0.375F) },
+            { FBE_TEXTURE_RGBA8_LINEAR, 4, 96 },
+            { FBE_TEXTURE_R8, 1, 96 },
+        }));
+    const std::int32_t samples = GENERATE(1, 4);
+    CAPTURE(format, samples);
+    const scene_t scene;
+    const std::uint64_t target =
+        fbe_texture_create_target(frame_size, frame_size, format, samples, true);
+    REQUIRE(target != 0);
+    require(fbe_camera_set_target(scene.camera, target));
+    require(fbe_camera_set_clear_color(scene.camera, 0.25F, 0.25F, 0.25F, 1.0F));
+    const std::uint64_t inverting = game_pass(pass_inverts);
+    const std::uint64_t halving = game_pass(pass_halves);
+    require(fbe_camera_add_pass(scene.camera, inverting));
+    require(fbe_camera_add_pass(scene.camera, halving));
+    require(fbe_render_world(scene.world, 1.0F));
+    std::vector<std::uint8_t> pixels(std::size_t{ frame_size } * frame_size * channels);
+    require(fbe_texture_read(target, 0, pixels.data(), static_cast<std::int64_t>(pixels.size())));
+    fbe_frame_flip(false);
+    const std::size_t at =
+        ((std::size_t{ frame_size / 2 } * frame_size) + (frame_size / 2)) * channels;
+    CAPTURE(int{ pixels[at] });
+    CHECK(std::abs(int{ pixels[at] } - int{ stored }) <= 2);
+    CHECK(fbe_gpu_validation_errors() == 0);
+    require(fbe_camera_set_target(scene.camera, scene.target));
+    fbe_material_release(inverting);
+    fbe_material_release(halving);
+    fbe_texture_release(target);
+}
+
 TEST_CASE("a material with a pass's shader draws as one with none does", "[gpu][scene]") {
     const scene_t scene;
     const std::uint64_t paint = game_pass();
@@ -10780,6 +10844,69 @@ TEST_CASE("a pass reads its camera's real depth, in meters", "[gpu][scene]") {
     fbe_texture_release(target);
 }
 
+// Near and far close enough that what's stored isn't near plain 1 over distance, which a far past
+// everything would have it.
+TEST_CASE("a pass's depth is in meters by a far that's near", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_range(scene.camera, 1.0F, 4.0F));
+    const std::uint64_t paint = unlit(1.0F, 1.0F, 1.0F);
+    wall(scene.world, -3.0F, 10.0F, paint);
+    const std::uint64_t pass = game_pass(pass_draws_its_depth);
+    require(fbe_camera_add_pass(scene.camera, pass));
+    CHECK(near(middle(scene.drawn()), { srgb(0.3F), 0, 0 }));
+    fbe_material_release(pass);
+    fbe_material_release(paint);
+}
+
+TEST_CASE("a target's depth a pass read goes with it", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t target =
+        fbe_texture_create_target(frame_size, frame_size, FBE_TEXTURE_RGBA8, 1, true);
+    REQUIRE(target != 0);
+    const std::uint64_t read = fbe::texture::depth_read_of(target);
+    REQUIRE(read != 0);
+    CHECK(fbe::texture::find(read) != nullptr);
+    fbe_texture_release(target);
+    CHECK(fbe::texture::find(read) == nullptr);
+}
+
+// All of it's by the viewport, not what it's a part of: where its UV starts, how far a pixel is,
+// and where what's drawn is, in color and in depth.
+TEST_CASE("a pass's UV and what it reads are across its viewport", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    require(fbe_camera_set_viewport(scene.camera, 64.0F, 32.0F, 64.0F, 64.0F));
+    // A white wall over the right of the viewport, with its edge down the viewport's middle.
+    const std::uint64_t paint = unlit(1.0F, 1.0F, 1.0F);
+    const std::uint64_t mesh = wall(scene.world, -3.0F, 10.0F, paint);
+    require(fbe_entity_set_position(mesh, 10.0F, 0.0F, -3.0F, FBE_SPACE_WORLD));
+    const fbe::golden::frame_t plain = scene.drawn();
+    std::uint32_t first = 64;
+    while (first < frame_size && pixel(plain, first, 64)[0] == 0) {
+        ++first;
+    }
+    REQUIRE(first > 64 + 8);
+    REQUIRE(first < frame_size - 8);
+    const std::uint64_t pass = game_pass(pass_draws_its_uv);
+    require(fbe_camera_add_pass(scene.camera, pass));
+    const fbe::golden::frame_t uv = scene.drawn();
+    CHECK(near(pixel(uv, 64 + 16, 32 + 48), { srgb(16.5F / 64.0F), srgb(48.5F / 64.0F), 0 }));
+    require(fbe_material_set_parameter(pass, 0, pass_reads_beside_it, 0.0F, 0.0F, 0.0F));
+    const fbe::golden::frame_t beside = scene.drawn();
+    CHECK(pixel(beside, first - 7, 64)[0] > 250);
+    CHECK(pixel(beside, first - 9, 64)[0] < 5);
+    require(fbe_material_set_parameter(pass, 0, pass_reads_between_pixels, 0.0F, 0.0F, 0.0F));
+    // Half the white next to it, in linear light, as a filter of an sRGB image has it.
+    CHECK(near(pixel(scene.drawn(), first - 1, 64), { srgb(0.5F), srgb(0.5F), srgb(0.5F) }, 4));
+    require(fbe_material_set_parameter(pass, 0, pass_draws_its_depth, 0.0F, 0.0F, 0.0F));
+    const fbe::golden::frame_t depth = scene.drawn();
+    CHECK(near(pixel(depth, first + 4, 64), { srgb(0.3F), 0, 0 }));
+    CHECK(near(pixel(depth, first - 4, 64), { 255, 0, 0 }));
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_material_release(pass);
+    fbe_material_release(paint);
+}
+
 TEST_CASE("a pass reads its parameters and its material's layers", "[gpu][scene]") {
     const scene_t scene;
     const std::uint64_t pass = game_pass(pass_draws_a_parameter);
@@ -10801,6 +10928,22 @@ TEST_CASE("a pass reads its parameters and its material's layers", "[gpu][scene]
     const float near_the_start = 32.5F / static_cast<float>(frame_size);
     const float further = 96.5F / static_cast<float>(frame_size);
     CHECK(near(pixel(frame, 32, 96), { srgb(near_the_start), srgb(further), 0 }));
+    // A parameter past the last is the last, and a layer past the last is white.
+    require(fbe_material_set_parameter(pass, 7, 0.0F, 0.0F, 1.0F, 1.0F));
+    require(fbe_material_set_parameter(pass, 0, pass_draws_a_parameter_past_the_last, 0.0F, 0.0F,
+                                       0.0F));
+    CHECK(near(middle(scene.drawn()), { 0, 0, 255 }));
+    require(
+        fbe_material_set_parameter(pass, 0, pass_draws_a_layer_past_the_last, 0.0F, 0.0F, 0.0F));
+    CHECK(near(middle(scene.drawn()), { 255, 255, 255 }));
+    // What it's drawing into isn't a layer it can read, so it's one it hasn't.
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    require(fbe_material_set_parameter(pass, 0, pass_draws_a_parameter, 0.0F, 0.0F, 0.0F));
+    require(fbe_material_set_parameter(pass, 1, 0.0F, 0.0F, 0.0F, 1.0F));
+    (void)scene.drawn();
+    require(fbe_material_set_texture(pass, 0, scene.target));
+    require(fbe_material_set_parameter(pass, 0, pass_draws_a_layer, 0.0F, 0.0F, 0.0F));
+    CHECK(near(middle(scene.drawn()), { 255, 255, 255 }));
     CHECK(fbe_gpu_validation_errors() == 0);
     fbe_material_release(pass);
     fbe_texture_release(texture);

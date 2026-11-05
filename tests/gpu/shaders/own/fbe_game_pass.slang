@@ -34,5 +34,18 @@ float4 pass(float2 uv, float4 color, float depth)
         // A hard edge down its middle, whatever's drawn, for what softens one after it.
         return uv.x < 0.5 ? float4(0.0, 0.0, 0.0, 1.0) : float4(1.0, 1.0, 1.0, 1.0);
     }
+    if (which == 8.0)
+    {
+        // Half a pixel over: between it and the next.
+        return colorAt(uv + float2(pixelSize().x * 0.5, 0.0));
+    }
+    if (which == 9.0)
+    {
+        return parameter(8);
+    }
+    if (which == 10.0)
+    {
+        return layer(8, uv);
+    }
     return float4(1.0 - color.rgb, color.a);
 }
