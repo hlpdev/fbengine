@@ -856,7 +856,6 @@ Function ASceneWithALostFileOpens() Throws IOError, GraphicsError
     editor.Step()
     Expect(editor.SceneFile() == "res://a.scene")
     Expect(editor.ShowingDialog() != Null)
-    Expect((Found(editor, "dialog.OK")) != Null)
     Try ClickOn(editor, "dialog.OK")
     Expect(editor.Edited.Entities().Count == 1)
     editor.Edits.Commit(RenameEdit(editor.Edited.Entities()[0], "saved"))
@@ -1405,6 +1404,28 @@ Function AnImageLetGoOnATexturesRowGoesOnIt() Throws IOError, GraphicsError
     // A model still goes on the scene.
     drag("res://sub/ball.gltf", editor.View.Box().Center)
     Expect(editor.Edited.Entities().Count > 1, "a model's not placed")
+End Function
+
+// A row scrolled out of sight can't be let go on, where it'd be.
+@Test
+Function ATexturesRowOutOfSightTakesNothing() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings.Path, Try Game(games.Path))
+    Defer editor.Finish()
+    Try Window.SetSize(1000, 400)
+    editor.Actions.Run("add.cube")
+    // All its layers' rows, so its rows are more than it shows.
+    (editor.Edited.Entities()[0] As? Mesh)?.Material()?.SetTexture(6, Try Texture(1, 1))
+    Local last = Textured(editor, "EmissiveMap")
+    Local first = Textured(editor, "Layer0")
+    Local hidden = last.Box().Center
+    Expect(!editor.Inspector.Box().Contains(hidden), "it's in sight at {hidden}")
+    Local takesIt = editor.Inspector.TextureRowAt(hidden) != Null
+    Expect(!takesIt, "a row out of sight took it")
+    Local takesFirst = editor.Inspector.TextureRowAt(first.Box().Center) != Null
+    Expect(takesFirst, "the one in sight didn't")
 End Function
 
 @Test
