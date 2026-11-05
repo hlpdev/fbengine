@@ -100,7 +100,7 @@ struct sky_data_t {
     float level;
     float spare;
 };
-static_assert(sizeof(sky_data_t) == 112, "the sky shader reads a sky of 104 bytes");
+static_assert(sizeof(sky_data_t) == 112, "the sky shader reads a sky of 112 bytes");
 
 /// A layer as the scene shader reads it: its texture's and sampler's indices in the bindless set,
 /// how a bump layer scales the next layer's light, what turns its UVs, by rows, with in their last
@@ -254,6 +254,8 @@ struct recorded_pass_t {
     bool shadows = false;
     /// Whether it's a camera's prepass, by the same shader's for that.
     bool prepass = false;
+    /// Whether its camera draws in stored values.
+    bool stored = false;
     /// What it reads as its camera's ambient occlusion.
     gpu::resource_t occlusion = gpu::no_resource;
 };

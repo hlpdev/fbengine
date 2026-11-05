@@ -255,6 +255,9 @@ def check_metal(build):
     step("the shaders' Metal")
     if run([sys.executable, str(ROOT / "tools" / "check_msl.py"), str(build)]) != 0:
         fail("a shader comes out as Metal that doesn't compile")
+    step("the shaders' SPIR-V")
+    if run([sys.executable, str(ROOT / "tools" / "check_spirv.py"), str(build)]) != 0:
+        fail("a shader does what a real GPU leaves undefined")
 
 
 def check_format():

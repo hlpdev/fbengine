@@ -136,6 +136,23 @@ float3 atmosphere(Sky* sky, float3 way)
     return (rayleigh * rayleighScatter * phaseR + mie * mieScatter * phaseM) * sky.brightness;
 }
 
+// Whether its camera draws in stored values.
+[vk::constant_id(0)] const uint storedValues = 0;
+
+// Light as its camera draws it: as it is, or, in stored values, as sRGB stores it.
+float3 toTarget(float3 light)
+{
+    if (storedValues == 0)
+    {
+        return light;
+    }
+    const float3 positive = saturate(light);
+    const float3 low = positive * 12.92;
+    const float3 high = 1.055 * pow(positive, float3(1.0 / 2.4, 1.0 / 2.4, 1.0 / 2.4)) - 0.055;
+    return float3(positive.r <= 0.0031308 ? low.r : high.r, positive.g <= 0.0031308 ? low.g : high.g,
+                  positive.b <= 0.0031308 ? low.b : high.b);
+}
+
 [shader("fragment")]
 float4 fragmentMain(Corner corner) : SV_Target
 {
@@ -180,7 +197,7 @@ float4 fragmentMain(Corner corner) : SV_Target
         // By its first level alone: a derivative across the seam at the back of the world would take
         // a far coarser one for its pixels' row.
         const float3 color = sampleTextureLevel(sky.texture, sky.sampler, float2(longitude, latitude), sky.level).rgb;
-        return float4(color * sky.brightness, 1.0);
+        return float4(toTarget(color * sky.brightness), 1.0);
     }
-    return float4(atmosphere(sky, way), 1.0);
+    return float4(toTarget(atmosphere(sky, way)), 1.0);
 }
