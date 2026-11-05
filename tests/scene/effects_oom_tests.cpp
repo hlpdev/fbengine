@@ -219,6 +219,18 @@ TEST_CASE("one of an Instances set out of memory is set, and worked out with the
     }
 }
 
+TEST_CASE("one coming to mirror out of memory stays as it was", "[scene][oom]") {
+    sweep([](const rig_t& rig) {
+        fbe_instance_t mirrored = instance_at(5.0F);
+        mirrored.matrix.m[0] = -1.0F;
+        const bool done = fbe_instances_set_one(rig.instances, 1, &mirrored);
+        fbe_instance_t got{};
+        CHECK(fbe_instances_get(rig.instances, 1, &got));
+        CHECK((got.matrix.m[0] == -1.0F) == done);
+        return done;
+    });
+}
+
 TEST_CASE("a level of detail out of memory says so", "[scene][oom]") {
     sweep(
         [](const rig_t& rig) { return fbe_geometry_set_lod(rig.geometry, 0, rig.coarser, 0.5F); });

@@ -28,8 +28,9 @@ End Struct
 
 /// An entity that draws a Geometry many times over, each Instance with its own matrix and color.
 /// Those out of view go a cluster at a time, near each other as they're set, so the CPU's cost is
-/// far below an entity each. A matrix mustn't mirror: it'd show its back. A Geometry with a skin or
-/// morph targets draws as its vertices are; what blends isn't sorted among itself. Its Geometry's
+/// far below an entity each. A matrix that mirrors draws as a Mesh's does, with those like it; one
+/// set to mirror where it didn't, or not where it did, puts them all in order again. A Geometry
+/// with a skin or morph targets draws as its vertices are; what blends isn't sorted among itself. Its Geometry's
 /// levels of detail go by each cluster, as big as the biggest of it where it's nearest. It's drawn
 /// and it casts, but it's one thing to the rest of the World: a collision's automatic shape is an
 /// ellipsoid at the entity's place, a mesh pick finds none of it, and only its entity's picked by

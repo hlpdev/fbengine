@@ -1,6 +1,8 @@
 // Instances: one entity drawing a geometry many times over, each with a matrix and a color of its
 // own, in bulk: grass, debris, crowds' props, where an entity each would cost too much. Kept in an
-// order where those near each other are together, so what's out of view goes a cluster at a time.
+// order where those near each other are together, so what's out of view goes a cluster at a time;
+// those whose matrices mirror come after the rest, drawn by the other front face, so nothing per
+// instance goes in what shades them.
 
 #include "core/engine.hpp"
 #include "fbengine.h"
@@ -36,8 +38,27 @@ vec3_t place_of(const fbe_instance_t& instance) {
     return { instance.matrix.m[12], instance.matrix.m[13], instance.matrix.m[14] };
 }
 
-/// Puts instances in an order where those near each other are together: along a curve through
-/// their places, as Morton's goes through a grid.
+/// Whether a matrix turns what it's given inside out, as the shader's normals go by.
+bool instance_mirrors(const fbe_instance_t& instance) {
+    const float* m = instance.matrix.m;
+    const vec3_t a(m[0], m[1], m[2]);
+    const vec3_t b(m[4], m[5], m[6]);
+    const vec3_t c(m[8], m[9], m[10]);
+    return dot(a, cross(b, c)) < 0.0F;
+}
+
+/// Which cluster a place in the order's in: the unmirrored's first, then the mirrored's, each from
+/// its own start.
+std::uint32_t cluster_at(const instances_t& found, std::uint32_t place) {
+    const auto unmirrored = static_cast<std::uint32_t>(found.mirrored_first);
+    if (place < unmirrored) {
+        return place / cluster_size;
+    }
+    return ((unmirrored + cluster_size - 1) / cluster_size) + ((place - unmirrored) / cluster_size);
+}
+
+/// Puts instances in an order where those that mirror are after those that don't, and those near
+/// each other are together: along a curve through their places, as Morton's goes through a grid.
 void put_in_order(instances_t& found, const fbe_instance_t* given, std::size_t count) {
     std::vector<fbe_instance_t> items(count);
     std::vector<std::uint32_t> slots(count);
@@ -64,15 +85,18 @@ void put_in_order(instances_t& found, const fbe_instance_t* given, std::size_t c
     std::vector<std::pair<std::uint32_t, std::uint32_t>> order(count);
     for (std::size_t i = 0; i < count; ++i) {
         const vec3_t place = place_of(given[i]);
-        order[i] = { spread_bits(part(place.x, low.x, high.x)) |
+        order[i] = { (instance_mirrors(given[i]) ? 0x80000000U : 0U) |
+                         spread_bits(part(place.x, low.x, high.x)) |
                          (spread_bits(part(place.y, low.y, high.y)) << 1U) |
                          (spread_bits(part(place.z, low.z, high.z)) << 2U),
                      static_cast<std::uint32_t>(i) };
     }
     std::ranges::sort(order);
     std::size_t faded = 0;
+    std::size_t unmirrored = 0;
     for (std::size_t at = 0; at < count; ++at) {
         const std::uint32_t index = order[at].second;
+        unmirrored += order[at].first < 0x80000000U ? 1U : 0U;
         items[at] = given[index];
         slots[index] = static_cast<std::uint32_t>(at);
         indices[at] = index;
@@ -82,6 +106,7 @@ void put_in_order(instances_t& found, const fbe_instance_t* given, std::size_t c
     found.slots.swap(slots);
     found.indices.swap(indices);
     found.faded = faded;
+    found.mirrored_first = unmirrored;
 }
 
 /// A cluster's box and biggest, from its instances and its geometry's box's middle and half.
@@ -192,14 +217,20 @@ const std::vector<instance_cluster_t>& instance_clusters(instances_t& found) {
     std::vector<instance_cluster_t> clusters;
     if (found.geometry != none) {
         const auto count = static_cast<std::uint32_t>(found.items.size());
-        clusters.reserve((count / cluster_size) + 1);
-        for (std::uint32_t first = 0; first < count; first += cluster_size) {
-            instance_cluster_t cluster;
-            cluster.first = first;
-            cluster.count = std::min(cluster_size, count - first);
-            work_out_cluster(found, cluster, middle, reach);
-            clusters.push_back(cluster);
-        }
+        const auto unmirrored = static_cast<std::uint32_t>(found.mirrored_first);
+        clusters.reserve((count / cluster_size) + 2);
+        const auto add_run = [&](std::uint32_t from, std::uint32_t to, bool mirrored) {
+            for (std::uint32_t first = from; first < to; first += cluster_size) {
+                instance_cluster_t cluster;
+                cluster.first = first;
+                cluster.count = std::min(cluster_size, to - first);
+                cluster.mirrored = mirrored;
+                work_out_cluster(found, cluster, middle, reach);
+                clusters.push_back(cluster);
+            }
+        };
+        add_run(0, unmirrored, false);
+        add_run(unmirrored, count, true);
     }
     found.clusters.swap(clusters);
     found.clusters_stale = false;
@@ -224,15 +255,19 @@ std::uint32_t cluster_lod(const instances_t& found, const instance_cluster_t& cl
                   half_height);
 }
 
-std::vector<std::uint32_t> instances_levels(instances_t& found, const mat4_t& matrix,
-                                            const camera_t& camera, vec3_t eye, float half_height) {
-    if (scene().geometries[found.geometry].lods.empty()) {
-        return { found.geometry };
-    }
-    std::vector<std::uint32_t> levels;
+std::vector<instance_level_t> instances_levels(instances_t& found, const mat4_t& matrix,
+                                               const camera_t& camera, vec3_t eye,
+                                               float half_height) {
+    std::vector<instance_level_t> levels;
     for (const instance_cluster_t& cluster : instance_clusters(found)) {
-        const std::uint32_t level = cluster_lod(found, cluster, matrix, camera, eye, half_height);
-        if (level != none && std::ranges::find(levels, level) == levels.end()) {
+        const instance_level_t level{
+            .level = cluster_lod(found, cluster, matrix, camera, eye, half_height),
+            .mirrored = cluster.mirrored,
+        };
+        const bool known = std::ranges::any_of(levels, [&level](const instance_level_t& other) {
+            return other.level == level.level && other.mirrored == level.mirrored;
+        });
+        if (level.level != none && !known) {
             levels.push_back(level);
         }
     }
@@ -339,7 +374,8 @@ FBE_API int32_t fbe_instances_count(uint64_t instances) {
     return found != nullptr ? static_cast<std::int32_t>(found->items.size()) : -1;
 }
 
-FBE_API bool fbe_instances_set_one(uint64_t instances, int32_t index, const fbe_instance_t* one) {
+FBE_API bool fbe_instances_set_one(uint64_t instances, int32_t index,
+                                   const fbe_instance_t* one) try {
     instances_t* found = fbe::scene::instances_of(instances);
     if (found == nullptr) {
         return false;
@@ -349,6 +385,20 @@ FBE_API bool fbe_instances_set_one(uint64_t instances, int32_t index, const fbe_
             std::format("an Instances has {} of them, not one at {}", found->items.size(), index));
     }
     const std::uint32_t place = found->slots[static_cast<std::size_t>(index)];
+    // Coming to mirror, or not, it goes with those it now draws with, which moves them all.
+    if (fbe::scene::instance_mirrors(*one) != fbe::scene::instance_mirrors(found->items[place])) {
+        std::vector<fbe_instance_t> all(found->items.size());
+        for (std::size_t at = 0; at < all.size(); ++at) {
+            all[found->indices[at]] = found->items[at];
+        }
+        all[static_cast<std::size_t>(index)] = *one;
+        fbe::scene::put_in_order(*found, all.data(), all.size());
+        found->clusters_stale = true;
+        found->all_changed = true;
+        found->changed.clear();
+        ++found->version;
+        return true;
+    }
     found->faded -= found->items[place].color.a < 1.0F ? 1U : 0U;
     found->faded += one->color.a < 1.0F ? 1U : 0U;
     found->items[place] = *one;
@@ -368,7 +418,7 @@ FBE_API bool fbe_instances_set_one(uint64_t instances, int32_t index, const fbe_
         }
     }
     if (!found->clusters_stale) {
-        const std::uint32_t cluster = place / fbe::scene::cluster_size;
+        const std::uint32_t cluster = fbe::scene::cluster_at(*found, place);
         if (found->stale_clusters.empty() || found->stale_clusters.back() != cluster) {
             try {
                 found->stale_clusters.push_back(cluster);
@@ -378,6 +428,8 @@ FBE_API bool fbe_instances_set_one(uint64_t instances, int32_t index, const fbe_
         }
     }
     return true;
+} catch (const std::bad_alloc&) {
+    return fbe::fail("out of memory");
 }
 
 FBE_API bool fbe_instances_get(uint64_t instances, int32_t index, fbe_instance_t* one) {

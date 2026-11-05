@@ -59,6 +59,15 @@ def check_no_error_dialogs(verify):
         assert int(done.stdout) & 0x8003 == 0x8003, f"{command[0]} started a program that can show a dialog"
 
 
+def check_vulkan_driver(verify):
+    """What CMake wrote is what verify gives the tests, and a build folder without it gives none, for
+    check_tests to refuse."""
+    with tempfile.TemporaryDirectory() as folder:
+        assert verify.vulkan_driver(folder) == "", "a folder CMake hasn't written has no driver"
+        (pathlib.Path(folder) / "tests-vulkan-driver.txt").write_text("lavapipe.json")
+        assert verify.vulkan_driver(folder) == "lavapipe.json", "verify doesn't read CMake's driver"
+
+
 def main():
     show_finds_what_has_a_watch()
     verify = load()
@@ -70,6 +79,7 @@ def main():
     assert other_process_takes(name), "a lock let go of couldn't be taken"
     assert len(set(verify.TURNS)) == 4, "four verifies at a time take four locks"
     check_no_error_dialogs(verify)
+    check_vulkan_driver(verify)
     print("verify's locks hold")
 
 
