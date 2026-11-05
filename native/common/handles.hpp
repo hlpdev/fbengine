@@ -27,6 +27,7 @@ enum handle_kind_t : std::uint8_t {
     CLIP_KIND = 20,
     SKIN_KIND = 21,
     PLAYER_KIND = 22,
+    SHADER_KIND = 23,
     // fbengine_audio, 64 to 95.
     // fbengine_physics, 96 to 127.
     PHYSICS_WORLD_KIND = 96,

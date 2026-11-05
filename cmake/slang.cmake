@@ -30,12 +30,29 @@ FetchContent_MakeAvailable(slang)
 find_program(FBENGINE_SLANGC slangc PATHS "${slang_SOURCE_DIR}/bin" NO_DEFAULT_PATH REQUIRED
              DOC "Slang's compiler, the pinned release's")
 
+# What a game's shader is compiled with, as one hash: Slang's release, and the sources it's compiled
+# against, whose layouts can change with no new version of the engine. Line ends are left out, which
+# a checkout changes, so a shader cooked on one machine loads on another.
+set(fbengine_shader_sources
+    "${PROJECT_SOURCE_DIR}/native/fbengine/shaders/scene.slang"
+    "${PROJECT_SOURCE_DIR}/native/fbengine/shaders/own_shader.slang"
+    "${PROJECT_SOURCE_DIR}/native/fbengine/shaders/bindless.slang"
+    "${PROJECT_SOURCE_DIR}/native/fbengine/shaders/pbr.slang")
+set(fbengine_shader_stamped "${fbengine_slang_version}")
+foreach(source IN LISTS fbengine_shader_sources)
+  file(READ "${source}" text)
+  string(REPLACE "\r\n" "\n" text "${text}")
+  string(APPEND fbengine_shader_stamped "${text}")
+  set_property(DIRECTORY "${PROJECT_SOURCE_DIR}" APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${source}")
+endforeach()
+string(SHA256 fbengine_shader_stamp "${fbengine_shader_stamped}")
+
 # Compiles .slang files to SPIR-V as the engine builds and embeds them in each of TARGETS, which
 # share the one compile: HEADER, which a target includes by its name, declares a fbe::gpu::shader_t
 # for each file, named as the file is, in NAMESPACE.
 #
 #   fbengine_add_shaders(TARGETS <target>... NAMESPACE <namespace> HEADER <name.hpp>
-#                        SHADERS <file.slang>...)
+#                        SHADERS <file.slang>... [INCLUDES <folder>...])
 #
 # Every entry point a file has is in its SPIR-V, by its own name; matrices are column-major, as
 # std.math's are; a file can import the engine's modules, as bindless.slang; and a warning is an
@@ -43,7 +60,12 @@ find_program(FBENGINE_SLANGC slangc PATHS "${slang_SOURCE_DIR}/bin" NO_DEFAULT_P
 # which emits nothing the SPIR-V doesn't use. A new slangc, or a new release of it, compiles them
 # all again.
 function(fbengine_add_shaders)
-  cmake_parse_arguments(PARSE_ARGV 0 arg "" "NAMESPACE;HEADER" "TARGETS;SHADERS")
+  cmake_parse_arguments(PARSE_ARGV 0 arg "" "NAMESPACE;HEADER" "TARGETS;SHADERS;INCLUDES")
+  set(includes "")
+  foreach(include IN LISTS arg_INCLUDES)
+    cmake_path(ABSOLUTE_PATH include NORMALIZE)
+    list(APPEND includes -I "${include}")
+  endforeach()
   cmake_path(GET arg_HEADER STEM stem)
   set(folder "${CMAKE_CURRENT_BINARY_DIR}/${stem}")
   # slangc makes no folder for what it writes, and only Ninja makes one for a command's output.
@@ -58,7 +80,7 @@ function(fbengine_add_shaders)
       OUTPUT "${spirv}"
       COMMAND "${FBENGINE_SLANGC}" "${source}" -target spirv -profile spirv_1_5
               -fvk-use-entrypoint-name -matrix-layout-column-major -O2 -warnings-as-errors all
-              -warnings-disable 41012 -I "${PROJECT_SOURCE_DIR}/native/fbengine/shaders"
+              -warnings-disable 41012 -I "${PROJECT_SOURCE_DIR}/native/fbengine/shaders" ${includes}
               "-DFBENGINE_SLANG=${fbengine_slang_version}" -o "${spirv}" -depfile "${spirv}.d"
       DEPENDS "${source}" "${FBENGINE_SLANGC}"
       DEPFILE "${spirv}.d"

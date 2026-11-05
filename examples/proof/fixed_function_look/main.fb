@@ -2,9 +2,10 @@
 // stage clamped, as a room's (2 x ambient x vertex + lightmap) x diffuse is; lighting worked out at the
 // vertices, by range over distance, with the ambient light and eight lights at most; linear fog;
 // vertex colors, full bright, no fog, two sided, and forced alpha; a texture's alpha settling a blend;
-// orders; what blends sorted far to near; and sprites by each of their view modes. What blends is in
-// linear light, and then in stored values, as DirectX 7 blended it. It prints each pixel it reads,
-// against what the sums come to; with --watch, a window of them turning.
+// orders; what blends sorted far to near; and sprites by each of their view modes, which are Blitz's
+// 1 to 4: 1 BILLBOARD, 2 FIXED, 3 UPRIGHT, 4 UPRIGHT_YAW. What blends is in linear light, and then in
+// stored values, as DirectX 7 blended it. It prints each pixel it reads, against what the sums come
+// to; with --watch, a window of them turning.
 
 Import std.collections
 Import std.core
@@ -111,6 +112,25 @@ Function Proved() Throws GraphicsError
     room.SetTexture(0, Try Row([Gray(200)]))
     Check("a stage's clamped", Drawn(camera, room, Square(second: Vec2(0.25, 0.5)))[24, 16],
           Gray(120))
+
+    // A fourth, over vertex colors and vertex lighting: stored 128 lit by an ambient of 128 is 64.25,
+    // doubled through 100 is 50.4, plus the lightmap's 40 in red, by 200, by 128: 36, 20, 20.
+    Local gray = Color32(128, 128, 128, 255).ToColor()
+    world.SetAmbientLight(gray)
+    Local four = Material()
+    four.SetShading(Shading.VERTEX)
+    four.SetVertexColors(True)
+    four.SetTexture(0, Try Row([Gray(100)]))
+    four.SetLayer(0, LayerBlend.MULTIPLY_2)
+    four.SetTexture(1, Try Row([Color32(40, 0, 0, 255)]))
+    four.SetLayer(1, LayerBlend.ADD, 1)
+    four.SetTexture(2, Try Row([Gray(200)]))
+    four.SetLayer(2, LayerBlend.MULTIPLY)
+    four.SetTexture(3, Try Row([Gray(128)]))
+    four.SetLayer(3, LayerBlend.MULTIPLY)
+    Check("four layers, over vertex colors and light", Drawn(camera, four, Square(gray))[16, 16],
+          Color32(36, 20, 20, 255))
+    world.SetAmbientLight(Color(0, 0, 0))
 
     // A layer over them by its alpha.
     Local over = Plain(Color(1, 0, 0))
@@ -259,12 +279,37 @@ Function Proved() Throws GraphicsError
     Local sprite = Sprite(Plain(Color(0, 0, 1)))
     sprite.SetPosition(Vec3(0, 0, -5))
     sprite.SetRotation(Quat.FromEuler(0.0, Deg(80), 0.0))
-    For mode In [SpriteViewMode.BILLBOARD, SpriteViewMode.FIXED, SpriteViewMode.UPRIGHT]
+    For mode In [SpriteViewMode.BILLBOARD, SpriteViewMode.FIXED, SpriteViewMode.UPRIGHT,
+                 SpriteViewMode.UPRIGHT_YAW]
         sprite.SetViewMode(mode)
         camera.Render()
         Print("a sprite {mode}, {Across(target.ToImage())} across")
     End For
+    // The four told apart: a camera a quarter turn round and looking 60 degrees down, and an entity
+    // scaled to a half. In a view 16 pixels to a unit, a sprite's 32 across and high whole, a half
+    // that scaled, and a half again by the cosine of 60 degrees when it's looked down on.
+    sprite.SetRotation(Quat.FromEuler(0.0, 0.0, 0.0))
+    sprite.SetScale(Vec3(0.5, 0.5, 1))
+    camera.SetRotation(Quat.FromAxisAngle(Vec3(0, 1, 0), Deg(90)) *
+                       Quat.FromAxisAngle(Vec3(1, 0, 0), Deg(-60)))
+    camera.SetPosition(sprite.Position() - camera.Forward() * 10)
+    For mode In [SpriteViewMode.BILLBOARD, SpriteViewMode.FIXED, SpriteViewMode.UPRIGHT,
+                 SpriteViewMode.UPRIGHT_YAW]
+        sprite.SetViewMode(mode)
+        camera.Render()
+        Local seen = target.ToImage()
+        Print("{mode} from above and aside: {Across(seen)} across, {Down(seen)} high")
+    End For
     sprite.Free()
+End Function
+
+// How many pixels of the middle column aren't black.
+Function Down(image: Image): Int
+    Local count = 0
+    For y = 0 To image.Height - 1
+        If image[16, y] != Gray(0) Then count += 1
+    End For
+    Return count
 End Function
 
 // How many pixels of the middle row aren't black.
