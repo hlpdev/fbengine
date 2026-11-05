@@ -1,6 +1,14 @@
 // What's asked of it is its first parameter: its x picks what it draws; its second parameter is how
-// far it moves its vertices, and its fourth's x how far along their normals.
+// far it moves its vertices, and its fourth's x how far along their normals; its sixth, with a w,
+// the normal it bends a PBR one to, in tangent space, and with none, the one it has.
 #define FBE_MOVES_VERTICES
+#define FBE_BENDS_NORMALS
+
+float3 bend(Surface surface)
+{
+    const float4 to = surface.parameter(5);
+    return to.w != 0.0 ? to.xyz : float3(0.0, 0.0, 1.0);
+}
 
 void move(inout float3 position, inout float3 normal, MovingVertex vertex)
 {

@@ -137,6 +137,12 @@ Public Final Class Cooker
     /// moved in its own space, before its matrix. A shadow's cut out by the material's own alpha, not what
     /// `shade` returns.
     ///
+    /// For normals of its own, a PBR material's, it says `#define FBE_BENDS_NORMALS` first and writes
+    /// `float3 bend(Surface surface)`: a normal, -1 to 1 and +Z out, in tangent space as a normal map
+    /// holds it, in place of the material's map's, through the tangents that would go by, or those
+    /// its first UVs make if it has none. The lights, the environment, and `surface.color` take it;
+    /// its `surface` has no color.
+    ///
     /// It reads only those: a texture of its own, or a global that isn't `static`, which the scene's
     /// pipelines don't bind, throws one of INVALID_DATA.
     @MainThread
@@ -223,6 +229,9 @@ Public Final Class Cooker
     Static Method Unwritten(said: String): String
         If said.Contains("undefined identifier 'shade'")
             Return "it has no `float4 shade(Surface surface)`: "
+        End If
+        If said.Contains("undefined identifier 'bend'")
+            Return "it says FBE_BENDS_NORMALS, and has no `float3 bend(Surface surface)`: "
         End If
         If said.Contains("undefined identifier 'move'")
             Return "it says FBE_MOVES_VERTICES, and has no `void move(inout float3 position, " +

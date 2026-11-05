@@ -10835,6 +10835,43 @@ void check_both_ways(const scene_t& scene, std::array<std::uint8_t, 3> linear,
 
 } // namespace
 
+// What a shader bends a PBR material's normal to is what a normal map of that normal would give: as
+// lit by the sun, toward it and away, and in what the shader's given as the material's color.
+TEST_CASE("a shader of its own bends a normal as a normal map would", "[gpu][scene]") {
+    const scene_t scene;
+    sun_from_right(scene.world);
+    const std::uint64_t material = by_game_shader(5.0F);
+    require(fbe_material_set_metal_rough(material, 0.0F, 0.4F));
+    const std::uint64_t mesh = wall(scene.world, -4.0F, 10.0F, material);
+    const auto bent_to = [&](float x, float y, float z) {
+        require(fbe_material_set_parameter(material, 5, x, y, z, 1.0F));
+        return middle(scene.drawn());
+    };
+    const rgba_t straight = middle(scene.drawn());
+    CHECK(near(bent_to(0.0F, 0.0F, 1.0F), { straight[0], straight[1], straight[2] }, 1));
+    const rgba_t toward = bent_to(0.6F, 0.0F, 0.8F);
+    const rgba_t away = bent_to(-0.6F, 0.0F, 0.8F);
+    INFO(int{ straight[0] } << " " << int{ toward[0] } << " " << int{ away[0] });
+    CHECK(toward[0] > straight[0] + 10);
+    CHECK(away[0] + 10 < straight[0]);
+
+    // The same normal from a map, with no shader of its own.
+    const std::uint64_t mapped = fbe_material_create();
+    require(fbe_material_set_metal_rough(mapped, 0.0F, 0.4F));
+    const std::uint64_t normals = fbe_texture_create(1, 1, FBE_TEXTURE_RGBA8_LINEAR, false);
+    REQUIRE(normals != 0);
+    const std::array<std::uint8_t, 4> texel{ 204, 128, 230, 255 };
+    require(fbe_texture_write(normals, 0, 0, 1, 1, texel.data(), 4));
+    require(fbe_material_set_map(mapped, FBE_MAP_NORMAL, normals, 0));
+    require(fbe_mesh_set_material(mesh, mapped));
+    const rgba_t by_map = middle(scene.drawn());
+    CHECK(near(by_map, { toward[0], toward[1], toward[2] }, 3));
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_texture_release(normals);
+    fbe_material_release(mapped);
+    fbe_material_release(material);
+}
+
 TEST_CASE("a shader of its own draws an Instances, each moved in its own space", "[gpu][scene]") {
     const scene_t scene;
     const std::uint64_t material = by_game_shader();

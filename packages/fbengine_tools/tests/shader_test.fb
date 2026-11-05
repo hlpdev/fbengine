@@ -154,6 +154,21 @@ Function AShaderThatSaysItMovesAndDoesntSaysSo() Throws IOError
 End Function
 
 @Test
+Function AShaderThatSaysItBendsAndDoesntSaysSo() Throws IOError
+    If NoSlangc() Then Skip("no slangc here")
+    Local folder = Try TempDir()
+    Local from = folder.Path / "straight.slang"
+    Try File.WriteText(from, "#define FBE_BENDS_NORMALS\n" + FLAT)
+    Try
+        Try Cooker.CookShader(from, folder.Path / "out")
+        Expect(False)
+    Catch e As IOError
+        Expect(e.Kind == IOErrorKind.INVALID_DATA)
+        Expect(e.Message.Contains("float3 bend("))
+    End Try
+End Function
+
+@Test
 Function WhatSlangSaysOfTheScratchFolderDoesntSayIt()
     Local said =
         Cooker.SlangSaid("C:/temp/here/scene.slang:3: warning\nC:\\temp\\here\\own.slang\n",

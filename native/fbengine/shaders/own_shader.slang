@@ -17,6 +17,16 @@
 // Instances is culled by where each of its instances is, moved in its own space before its matrix,
 // so the same.
 //
+// For normals of its own, it says `#define FBE_BENDS_NORMALS` first and writes
+//
+//     float3 bend(Surface surface)
+//
+// which gives a PBR material's normal, -1 to 1 and +Z out, in tangent space as a normal map holds
+// it, in place of its map's: through the tangents a map would go by, or those its first UVs make if
+// it has none, and its normal scale. What it's given has the surface's own normal, and no color.
+// The lights, the environment, and `surface.color` take what it gives; `surface.normal` in `shade`
+// is the surface's own, and the shadow and the prepass's normals are too.
+//
 // Whatever `shade` returns goes on as the scene's own color does: its alpha to the material's cutoff,
 // then fog and blend. Colors are in linear light, whatever the material's shading and whichever way
 // its camera draws: one in stored values stores what they encode to. A material's blend

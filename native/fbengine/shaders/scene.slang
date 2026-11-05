@@ -980,7 +980,25 @@ float3 pixelShaded(Camera* camera, Material material, Corner corner, float3 base
     {
         emissive *= mapTexel(material.mapLayers[mapEmissive], corner).rgb;
     }
-    if (hasNormal && (material.maps & (1 << mapNormal)) != 0)
+    const bool mapped = (material.maps & (1 << mapNormal)) != 0;
+#ifdef FBE_BENDS_NORMALS
+    // A shader's own normal, in place of a map's, in the frame its first UVs make if it has none.
+    if (hasNormal)
+    {
+        const Layer map = material.mapLayers[mapNormal];
+        const float4 tangent = !mapped ? tangentFromDerivatives(normal, place, corner.uv0)
+                               : corner.tangent.w != 0.0 && map.bump.x == 0.0
+                                   ? tangentThrough(map, normal, corner.tangent)
+                                   : tangentFromDerivatives(normal, place, mapUv(map, corner));
+        const Surface bending = { place, normal, corner.uv0, corner.uv1, corner.color,
+                                  float4(0.0, 0.0, 0.0, 0.0), corner.position.xy,
+                                  camera.draws[corner.draw].material };
+        const float3 bent = bend(bending);
+        normal = normalFromMap(normal, tangent, bent * 0.5 + float3(0.5, 0.5, 0.5),
+                               material.normalScale);
+    }
+#else
+    if (hasNormal && mapped)
     {
         const Layer map = material.mapLayers[mapNormal];
         // A surface's own tangents are its first UV set's.
@@ -989,6 +1007,7 @@ float3 pixelShaded(Camera* camera, Material material, Corner corner, float3 base
                                    : tangentFromDerivatives(normal, place, mapUv(map, corner));
         normal = normalFromMap(normal, tangent, mapTexel(map, corner).rgb, material.normalScale);
     }
+#endif
     // Seen from behind, the whole frame's turned around, as its map says of its front.
     if (twoSided != 0 && !front)
     {
