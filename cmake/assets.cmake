@@ -77,6 +77,22 @@ FetchContent_Declare(
   EXCLUDE_FROM_ALL
 )
 FetchContent_MakeAvailable(stb KTX fastgltf)
+# The fetched simdjson's headers, ahead of every other folder of what includes them: an Intel Mac's
+# Homebrew puts its own in /usr/local/include, which other dependencies' folders reach first. Its
+# version, which gltf.cpp holds the header it gets to, so one from elsewhere fails the build; what
+# builds gltf.cpp calls fbengine_use_fetched_simdjson.
+set(fbengine_simdjson_folder "${fastgltf_SOURCE_DIR}/deps/simdjson")
+file(STRINGS "${fbengine_simdjson_folder}/simdjson.h" fbengine_simdjson_line
+     REGEX "^#define SIMDJSON_VERSION \"[0-9.]+\"")
+string(REGEX MATCH "[0-9.]+" fbengine_simdjson_version "${fbengine_simdjson_line}")
+if(NOT fbengine_simdjson_version)
+  message(FATAL_ERROR "fastgltf's simdjson.h says no version")
+endif()
+target_include_directories(fastgltf BEFORE PRIVATE "${fbengine_simdjson_folder}")
+function(fbengine_use_fetched_simdjson target)
+  target_include_directories(${target} BEFORE PRIVATE "${fbengine_simdjson_folder}")
+  target_compile_definitions(${target} PRIVATE FBE_SIMDJSON_VERSION="${fbengine_simdjson_version}")
+endfunction()
 
 
 # stb_image is patched where a PNG whose first IDAT is empty has stbi__getn copy none of it from
