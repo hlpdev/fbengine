@@ -175,6 +175,26 @@ Function PixelOf(camera: Camera, image: Image, place: Vec3): Color32?
     Return image[x, y]
 End Function
 
+// The least and most bright, of 765, the sea `depth` deep along the shore's south side is, by what
+// `image` shows from `camera`, with the sea at 0.
+Function BrightnessAlong(camera: Camera, image: Image, depth: Float): (Float, Float)
+    Local least: Float = 1000.0
+    Local most: Float = 0.0
+    For across = -20 To 20
+        Local x = MAIN_X + (across As Float)
+        Local z: Float = 0.0
+        While -GroundHeight(x, z) < depth && z < 100.0
+            z += 0.05
+        End While
+        Local pixel = PixelOf(camera, image, Vec3(x, 0.0, z))
+        If pixel != Null
+            least = Min(least, Brightness(pixel) As Float)
+            most = Max(most, Brightness(pixel) As Float)
+        End If
+    End For
+    Return (least, most)
+End Function
+
 // The color of where the sea's `depth` deep along the shore's south side, from beside the main rock,
 // by what `image` shows of it from `camera`, with the sea at `height`, its channels' bytes summed
 // over how many were seen; and how many.
@@ -272,6 +292,14 @@ Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws Grap
     island.Update(0.0)
     Checks("its foam rolls in", most > least + 40.0)
 
+    // At the very edge, its foam's broken up along the shore, not a band.
+    Local edgeShown = Try Shown(island)
+    Local dimmest, brightest = BrightnessAlong(camera, edgeShown, 0.06)
+    Checks("its foam's broken up along the shore", brightest > dimmest + 100.0)
+    // A meter deep, the shallows' own green, which the deep hasn't.
+    Local shallow, _ = ColorAtDepth(camera, edgeShown, 0.0, 1.0)
+    Checks("the shallows are their own color", shallow.y - shallow.x > 45.0)
+
     // Its normals move, out at sea, where there's no foam: and nothing but them does.
     camera.SetPosition(Vec3(MAIN_X, 12.0, 90.0))
     camera.PointAt(Vec3(MAIN_X, 0.0, 300.0))
@@ -289,6 +317,25 @@ Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws Grap
         Return (count As Float) / (((to - from) * before.Width) As Float)
     End Function
     Checks("the sea's waves move", moved(420, 720) > 0.2)
+
+    // Its waves don't repeat by a tile of them, as two tiles across each other don't: seen from straight
+    // above, the sea a tile along isn't what it was.
+    camera.SetProjection(Projection.ORTHOGRAPHIC)
+    camera.SetOrthographicHeight(40.0)
+    camera.SetPosition(Vec3(0.0, 60.0, 400.0))
+    camera.PointAt(Vec3(0.0, 0.0, 400.001))
+    Local overhead = Try Shown(island)
+    camera.SetPosition(Vec3(48.0, 60.0, 400.0))
+    camera.PointAt(Vec3(48.0, 0.0, 400.001))
+    Local alongATile = Try Shown(island)
+    camera.SetProjection(Projection.PERSPECTIVE)
+    Local apart: Float = 0.0
+    For y = 100 Until 620
+        For x = 200 Until 1080
+            apart += Abs(Brightness(overhead[x, y]) - Brightness(alongATile[x, y])) As Float
+        End For
+    End For
+    Checks("its waves don't repeat by a tile", apart / (520.0 * 880.0) > 1.5)
     Checks("and the sky doesn't", moved(0, 100) < 0.01)
 
     // Out to sea, into the sun, which is where its light's from.
