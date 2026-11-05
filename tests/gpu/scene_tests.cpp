@@ -10704,6 +10704,11 @@ constexpr float pass_reads_between_pixels = 8.0F;
 constexpr float pass_draws_a_parameter_past_the_last = 9.0F;
 constexpr float pass_draws_a_layer_past_the_last = 10.0F;
 
+/// A camera's grade that scales what's drawn by `by`.
+std::array<float, 10> graded_by(float by) {
+    return { by, by, by, 0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 1.0F };
+}
+
 /// A material for fbe_camera_add_pass, of gpu/shaders/own/fbe_game_pass.slang, doing what `which`
 /// says by the x of its first parameter.
 std::uint64_t game_pass(float which = pass_inverts) {
@@ -11057,17 +11062,14 @@ TEST_CASE("a pass is after an HDR camera's tonemap and grade, on any camera", "[
     const std::uint64_t paint = unlit(1.0F, 1.0F, 1.0F);
     wall(scene.world, -3.0F, 10.0F, paint);
     // Graded down to a half first, or it'd come to 0: the pass inverts what the grade made.
-    const std::array<float, 10> halved{
-        0.5F, 0.5F, 0.5F, 0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 1.0F
-    };
+    const std::array<float, 10> halved = graded_by(0.5F);
     require(fbe_camera_set_grade(scene.camera, halved.data()));
     CHECK(near(middle(scene.drawn()), { srgb(0.5F), srgb(0.5F), srgb(0.5F) }));
     const std::uint64_t pass = game_pass(pass_inverts);
     require(fbe_camera_add_pass(scene.camera, pass));
     CHECK(near(middle(scene.drawn()), { srgb(0.5F), srgb(0.5F), srgb(0.5F) }));
     // Inverted past a quarter, so the two can't be told apart by chance.
-    const std::array<float, 10> quartered{ 0.25F, 0.25F, 0.25F, 0.0F, 0.0F,
-                                           0.0F,  1.0F,  1.0F,  1.0F, 1.0F };
+    const std::array<float, 10> quartered = graded_by(0.25F);
     require(fbe_camera_set_grade(scene.camera, quartered.data()));
     CHECK(near(middle(scene.drawn()), { srgb(0.75F), srgb(0.75F), srgb(0.75F) }));
     fbe_material_release(pass);
@@ -11123,8 +11125,7 @@ TEST_CASE("a pass reads what antialiasing over frames resolved", "[gpu][scene]")
     require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
     const std::uint64_t paint = unlit(1.0F, 1.0F, 1.0F);
     wall(scene.world, -3.0F, 10.0F, paint);
-    const std::array<float, 10> quartered{ 0.25F, 0.25F, 0.25F, 0.0F, 0.0F,
-                                           0.0F,  1.0F,  1.0F,  1.0F, 1.0F };
+    const std::array<float, 10> quartered = graded_by(0.25F);
     require(fbe_camera_set_grade(scene.camera, quartered.data()));
     const std::uint64_t pass = game_pass(pass_inverts);
     require(fbe_camera_add_pass(scene.camera, pass));
@@ -11256,8 +11257,8 @@ TEST_CASE("a pass on a camera in stored values has what's stored, as it is", "[g
         require(
             fbe_texture_read(target, 0, pixels.data(), static_cast<std::int64_t>(pixels.size())));
         fbe_frame_flip(false);
-        return int{ pixels.at(((std::size_t{ frame_size / 2 } * frame_size) + (frame_size / 2)) *
-                              4) };
+        const std::size_t row = std::size_t{ frame_size / 2 } * frame_size;
+        return int{ pixels.at((row + (frame_size / 2)) * 4) };
     };
     CHECK(std::abs(byte() - 73) <= 1);
     require(fbe_camera_set_stored_values(scene.camera, true));
