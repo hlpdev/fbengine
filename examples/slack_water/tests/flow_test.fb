@@ -958,3 +958,20 @@ Function APartIsSeenByWhatItChangesNearIt()
     Expect(!DiffersAround(with, without, 33, 8))
     Expect(!DiffersAround(with, without, 32, 7))
 End Function
+
+@Test
+Function APersonPlaysHighOrLow()
+    Expect(PlaysLow([]) == False)
+    Expect(PlaysLow(["--low"]) == True)
+    Expect(PlaysLow(["--low", "x"]) == Null)
+    Expect(PlaysLow(["--frames", "x"]) == Null)
+    Expect(PlaysLow(["--fps"]) == Null)
+End Function
+
+@Test
+Function HowBrightAnImageIsIsItsChannelsMean()
+    Local image = Image(2, 1)
+    image[0, 0] = Color32(30, 60, 90, 255)
+    image[1, 0] = Color32(0, 0, 0, 0)
+    Expect(MeanBrightness(image) == 30.0)
+End Function

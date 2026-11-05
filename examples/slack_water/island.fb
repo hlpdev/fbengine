@@ -33,6 +33,10 @@ Const LAMP_GLOW: Float = 4.0
 Const LANTERN_LIGHT: Float = 30.0
 /// How high the mill's ceiling is, from its floor.
 Public Const CEILING: Float = 4.97
+// How strong ambient occlusion is, and how far it reaches, in meters: a person's size, so the mill's
+// corners, Pip's joints, and the rocks' folds darken.
+Const OCCLUSION: Float = 1.0
+Const OCCLUSION_RADIUS: Float = 1.5
 /// How many meters of ground each repeat of the rock's maps takes.
 Public Const GROUND_REPEAT: Float = 12.0
 // How many meters the ground's finer grit takes to repeat, which goes evenly into nothing the other does.
@@ -197,9 +201,10 @@ Public Function SkyImage(): HdrImage
 End Function
 
 /// Sets `camera` to see as the game does: into an HDR image, its light past white rolled off, bloom on
-/// what's brightest, and its far edge into the haze.
+/// what's brightest, and its far edge into the haze; with ambient occlusion and antialiasing over
+/// frames, or, `low`, for what a low GPU can spend, antialiasing from the picture alone.
 @MainThread
-Public Function Looked(camera: Camera)
+Public Function Looked(camera: Camera, low: Bool = False)
     camera.SetClearColor(SKY)
     camera.SetRange(0.1, 4000.0)
     camera.SetFogMode(FogMode.LINEAR)
@@ -209,6 +214,10 @@ Public Function Looked(camera: Camera)
     camera.SetTonemap(Tonemap.ACES)
     camera.SetExposure(EXPOSURE)
     camera.SetBloom(BLOOM, BLOOM_FROM)
+    camera.SetAmbientOcclusion(low ? 0.0 : OCCLUSION)
+    camera.SetAmbientOcclusionRadius(OCCLUSION_RADIUS)
+    camera.SetTemporalAA(!low)
+    camera.SetFxaa(low)
 End Function
 
 /// What the storm does to what's seen: `storm`, from 0 to 1, greys it, cools it, and darkens it.
@@ -474,6 +483,14 @@ Public Final Class Island
     Public Method Update(clock: Float64)
         sea.SetPosition(Vec3(0.0, SeaHeight(clock), 0.0))
         TurnSun(clock)
+    End Method
+
+    /// Draws what `camera` sees afresh, for a still: what the frames before had there, which
+    /// antialiasing over frames blends in, forgotten, as at a cut.
+    @MainThread
+    Public Method Drawn(camera: Camera)
+        camera.ResetHistory()
+        scene.Render()
     End Method
 
     /// What the ground's drawn with.

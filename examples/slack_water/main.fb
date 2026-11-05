@@ -186,12 +186,21 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     Defer island.Free()
     Local camera = Camera()
     Looked(camera)
+    Checks("it's drawn with ambient occlusion, antialiasing over frames, and bloom",
+           camera.AmbientOcclusion() > 0.0 && camera.TemporalAA() && !camera.Fxaa() &&
+           camera.BloomIntensity() > 0.0)
+    Local low = Camera()
+    Looked(low, True)
+    Checks("and low, with antialiasing from the picture alone, and bloom",
+           low.AmbientOcclusion() == 0.0 && !low.TemporalAA() && low.Fxaa() &&
+           low.BloomIntensity() > 0.0)
+    low.Free()
     Local saved = 0
     Local images = Map<String, Image>()
     For view In Views()
         camera.SetPosition(view.1)
         camera.PointAt(view.2)
-        island.Scene().Render()
+        island.Drawn(camera)
         Try Screen.Save(folder / "{view.0}.png")
         images[view.0] = Try Screen.ToImage()
         saved += 1
@@ -202,7 +211,7 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     camera.SetPosition(first.1)
     camera.PointAt(first.2)
     island.Update(TIDE_IN_AT)
-    island.Scene().Render()
+    island.Drawn(camera)
     Try Screen.Save(folder / "island_high_tide.png")
     Local high = Try Screen.ToImage()
     saved += 1
@@ -258,11 +267,11 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     Local pipView = Views()[2]
     camera.SetPosition(pipView.1)
     camera.PointAt(pipView.2)
-    island.Scene().Render()
+    island.Drawn(camera)
     Local lit = Try Screen.ToImage()
     Flip(False)
     island.SetAround(False)
-    island.Scene().Render()
+    island.Drawn(camera)
     Local unlit = Try Screen.ToImage()
     Flip(False)
     island.SetAround(True)
@@ -270,7 +279,7 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
            Brightness(lit[640, 360]) > Brightness(unlit[640, 360]) + 30)
     Checks("the camera's in HDR, and tonemapped", camera.Hdr() && camera.Tonemap() == Tonemap.ACES)
     camera.SetHdr(False)
-    island.Scene().Render()
+    island.Drawn(camera)
     Local flat = Try Screen.ToImage()
     Flip(False)
     camera.SetHdr(True)
@@ -280,19 +289,19 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     camera.SetPosition(yardView.1)
     camera.PointAt(yardView.2)
     Local early = island.SunTurned()
-    island.Scene().Render()
+    island.Drawn(camera)
     Local yardEarly = Try Screen.ToImage()
     Flip(False)
     // The sun alone, as the sea's height would change the picture too.
     island.TurnSun(TIDE_IN_AT)
     Checks("the sun moves by the clock", island.SunTurned() != early)
-    island.Scene().Render()
+    island.Drawn(camera)
     Local yardLate = Try Screen.ToImage()
     Flip(False)
     Checks("and what's lit with it", Different(yardEarly, yardLate) > 0.1)
     // The mill's shadow, on the yard.
     island.SetSunShadows(False)
-    island.Scene().Render()
+    island.Drawn(camera)
     Local unshadowed = Try Screen.ToImage()
     Flip(False)
     island.SetSunShadows(True)
@@ -301,7 +310,7 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     Local highView = Views()[0]
     camera.SetPosition(highView.1)
     camera.PointAt(highView.2)
-    island.Scene().Render()
+    island.Drawn(camera)
     Local fromFar = Try Screen.ToImage()
     Flip(False)
     Checks("the ground's repeats don't show from far off",
@@ -316,11 +325,11 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     Local insideView = Views()[3]
     camera.SetPosition(insideView.1)
     camera.PointAt(insideView.2)
-    island.Scene().Render()
+    island.Drawn(camera)
     Local byLantern = Try Screen.ToImage()
     Flip(False)
     island.SetLantern(False)
-    island.Scene().Render()
+    island.Drawn(camera)
     Local noLantern = Try Screen.ToImage()
     Flip(False)
     island.SetLantern(True)
@@ -330,11 +339,11 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     camera.PointAt(yardView.2)
     // The storm's grade: greyer, by its saturation, and darker.
     camera.SetGrade(StormGrade(0.0))
-    island.Scene().Render()
+    island.Drawn(camera)
     Local clear = Try Screen.ToImage()
     Flip(False)
     camera.SetGrade(StormGrade(1.0))
-    island.Scene().Render()
+    island.Drawn(camera)
     Local stormy = Try Screen.ToImage()
     Flip(False)
     Try Screen.Save(folder / "storm.png")
@@ -345,17 +354,38 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     camera.SetPosition(pipView.1)
     camera.PointAt(pipView.2)
     camera.SetGrade(StormGrade(0.0))
-    island.Scene().Render()
+    island.Drawn(camera)
     Local brassy = Try Screen.ToImage()
     Flip(False)
     Local body = island.PipBody()
     island.SetPipBody(Material(Color(0.0, 1.0, 0.0)))
-    island.Scene().Render()
+    island.Drawn(camera)
     Local green = Try Screen.ToImage()
     Flip(False)
     island.SetPipBody(body)
     Checks("and what's set on its surface is what's drawn",
            (green[640, 360].g As Int) > (brassy[640, 360].g As Int) + 20)
+    // A still's drawn afresh: the yard, drawn after the dark mill, as it is drawn after itself, with
+    // nothing of the mill blended into it.
+    camera.SetPosition(yardView.1)
+    camera.PointAt(yardView.2)
+    island.Drawn(camera)
+    Local yardAgain = Try Screen.ToImage()
+    Flip(False)
+    island.SetLantern(False)
+    camera.SetPosition(insideView.1)
+    camera.PointAt(insideView.2)
+    island.Drawn(camera)
+    Flip(False)
+    island.SetLantern(True)
+    camera.SetPosition(yardView.1)
+    camera.PointAt(yardView.2)
+    island.Drawn(camera)
+    Local yardAfterDark = Try Screen.ToImage()
+    Flip(False)
+    // By how bright it is, as the sea moves between them, and their pixels move by a part of one.
+    Checks("a still's drawn afresh, with nothing of the view before it",
+           Abs(MeanBrightness(yardAgain) - MeanBrightness(yardAfterDark)) < AFRESH)
 End Function
 
 // How much of two images of a size differ, by more than a little, from 0 to 1.
@@ -1072,6 +1102,9 @@ End Function
 Const CEILING_SKY: Float = 12.0
 Const SKY_BLOOM: Int = 1
 Const GROUND_APART: Float = 10.0
+// How much brighter or darker a still may be than the same drawn after itself: the yard after the dark
+// mill, with the mill's frame blended in, was 2.5 darker, and afresh, 0.13.
+Const AFRESH: Float = 0.8
 
 Function Luma(pixel: Color32): Float
     Return 0.2126 * (pixel.r As Float) + 0.7152 * (pixel.g As Float) + 0.0722 * (pixel.b As Float)
@@ -1091,7 +1124,7 @@ Function SaveWalk(folder: Path) Throws GraphicsError, IOError, AudioError
     Local failure = ""
     Local save = Function(game: Game, name: String): Image?
         game.View().SetRenderTarget(Null)
-        island.Scene().Render()
+        island.Drawn(game.View())
         Try
             Try Screen.Save(folder / "{name}.png")
             saved += 1
@@ -1107,7 +1140,7 @@ Function SaveWalk(folder: Path) Throws GraphicsError, IOError, AudioError
     Local isSeen = Function(game: Game, image: Image?, part: Part, what: String)
         Local thing = island.PartEntity(part)
         thing.Hide()
-        island.Scene().Render()
+        island.Drawn(game.View())
         Try
             Local without = Try Screen.ToImage()
             Flip(False)
@@ -1157,17 +1190,17 @@ Function SaveWalk(folder: Path) Throws GraphicsError, IOError, AudioError
                 Checks("the wheel's seen", wheel != Null && (wheel.r As Int) > (wheel.b As Int) + 4)
                 Local lamp = PixelOf(game.View(), lit, island.LampAt())
                 island.LightLamp(False)
-                island.Scene().Render()
+                island.Drawn(game.View())
                 Try
                     Local dim = PixelOf(game.View(), Try Screen.ToImage(), island.LampAt())
                     Checks("the lamp's brighter lit than dim", lamp != Null && dim != Null &&
                            Brightness(lamp) > Brightness(dim))
                     // Its bloom: the sky just beside it's lighter with it than without.
                     island.LightLamp(True)
-                    island.Scene().Render()
+                    island.Drawn(game.View())
                     Local bloomed = Try Screen.ToImage()
                     game.View().SetBloom(0.0, 1.0)
-                    island.Scene().Render()
+                    island.Drawn(game.View())
                     Local plain = Try Screen.ToImage()
                     Looked(game.View())
                     // And the sky's past where bloom starts, far from the lamp.
@@ -1447,9 +1480,12 @@ Final Class Session
     Field left: Bool = False
     // Whether the mouse is free, to point at the end screen.
     Field pointing: Bool = False
+    // Whether it's drawn as a low GPU can.
+    Field low: Bool
 
-    New(island: Island, last: String[], game: Game, scape: Soundscape)
+    New(island: Island, last: String[], game: Game, scape: Soundscape, low: Bool)
         Self.island = island
+        Self.low = low
         Self.last = last
         controls = Controls()
         Self.game = game
@@ -1458,15 +1494,15 @@ Final Class Session
         font = Font.BuiltIn(20.0)
     End New
 
-    // One at its first moment, on `island`, with the audio started.
+    // One at its first moment, on `island`, with the audio started, drawn as a `low` GPU can, if it's one.
     @MainThread
-    Static Method Make(island: Island): Session Throws IOError, InputError
+    Static Method Make(island: Island, low: Bool): Session Throws IOError, InputError
         Try SetMouseRelative(True)
         Local last = [""]
         Local game = Game(island, Function(line: String)
             last[0] = line
-        End Function)
-        Return Session(island, last, game, Try Soundscape.Make(game, island))
+        End Function, low)
+        Return Session(island, last, game, Try Soundscape.Make(game, island), low)
     End Method
 
     // Moves it all on `seconds`, whether the window's in front or not. With the end screen shown, the
@@ -1484,7 +1520,7 @@ Final Class Session
             said[0] = ""
             game = Game(island, Function(line: String)
                 said[0] = line
-            End Function)
+            End Function, low)
             scape = Try Soundscape.Make(game, island)
             ending.Update(game.Story(), 0.0)
         End If
@@ -1591,7 +1627,7 @@ Function EndShown(folder: Path) Throws GraphicsError, IOError, AudioError, Input
     Defer island.Free()
     Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
     Defer Audio.Stop()
-    Local session = Try Session.Make(island)
+    Local session = Try Session.Make(island, False)
     Defer session.Free()
     Try Simulate.FocusWindow()
     Flip(False)
@@ -1699,7 +1735,7 @@ Function CookedWalk(kept: Path, folder: Path) Throws GraphicsError, IOError, Aud
 End Function
 
 // The game, in a window, for a person: WASD and the mouse, E, Q, and Escape.
-Function Played() Throws GraphicsError, IOError, InputError, AudioError
+Function Played(low: Bool) Throws GraphicsError, IOError, InputError, AudioError
     // Its files first, so a game missing them says so, with no window.
     Try
         Try Res.Mount()
@@ -1723,7 +1759,7 @@ Function Played() Throws GraphicsError, IOError, InputError, AudioError
         Try Audio.Start(AudioDevice.SILENT)
     End Try
     Defer Audio.Stop()
-    Local session = Try Session.Make(island)
+    Local session = Try Session.Make(island, low)
     Defer session.Free()
     While !Window.Closed() && !KeyHit(Key.ESCAPE) && !session.left
         Flip()
@@ -1735,14 +1771,14 @@ Function Played() Throws GraphicsError, IOError, InputError, AudioError
 End Function
 
 Local arguments = Process.Arguments()
-Const USAGE = "usage: slack_water [--walk <bright|dim|dark> [<kept>] | --walk3d " +
+Const USAGE = "usage: slack_water [--low | --walk <bright|dim|dark> [<kept>] | --walk3d " +
               "<bright|dim|dark|cut|swept|wing|far_end> [<kept>] | --feel | --hear | " +
               "--end <folder> | --cooked <kept> <folder> | " +
               "--frames <folder> | --check <folder> | --match <made> <kept>]"
 // What's for its tests only, so a game on a player's machine can't be made to write anywhere else.
 Local checking = Env.Get("SLACK_WATER_CHECKS") == "1"
-If arguments.Count == 0
-    Try Played()
+If PlaysLow(arguments) != Null
+    Try Played(PlaysLow(arguments) == True)
 ElseIf DrawsWithoutAPerson(arguments) && Env.Get("FBENGINE_NO_GPU") != "1" &&
        !MayDrawOn(DevicesShown())
     // By hand it would reach the best GPU there is, which has already taken a machine down.

@@ -40,14 +40,15 @@ Public Final Class Game
     // Which parts it's said lie here, by their numbers.
     Field told: Bool[]
 
-    /// A game from its first moment, inside the mill, saying what happens through `say`.
+    /// A game from its first moment, inside the mill, saying what happens through `say`, drawn as a
+    /// `low` GPU can, if it's one.
     @MainThread
-    Public New(island: Island, say: Func(String))
+    Public New(island: Island, say: Func(String), low: Bool = False)
         Self.island = island
         flow = Flow(say)
         told = [False, False, False]
         camera = Camera()
-        Looked(camera)
+        Looked(camera, low)
         Local start = island.PlaceOf(Spot.INSIDE)
         x = start.x
         z = start.y

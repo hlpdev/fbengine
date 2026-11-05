@@ -89,8 +89,15 @@ instead); saves; depth of field.
   and offers playing again or leaving, by the mouse, the keyboard, or a gamepad.
 - **The look.** PBR throughout, rock, wood, brass, and iron with their albedo, normal, and roughness maps; a sky of its
   own, baked for the light around, which is what brass reflects; a sun with shadows, lowering by the
-  clock; HDR, ACES, and bloom on the lamp; a grade as the storm comes, by the clock. Depth of field,
-  the first the design said to cut if it's long, isn't in.
+  clock; HDR, ACES, and bloom on the lamp; a grade as the storm comes, by the clock. The ground: a
+  headland of crags, and a far rock's, by ridged noise, under a cover baked from height and slope (sand,
+  wet shore, a tide line, rock where it's steep, turf, a path), and grit at two scales. Ambient
+  occlusion and antialiasing over frames; `--low` has FXAA in their place. Depth of field, the first the
+  design said to cut if it's long, isn't in.
+- **The budget for 60 fps at 1080p**, 16.6 ms a frame on a mid-range GPU, as it's spent: the scene with
+  its shadows 10 ms, ambient occlusion 2, antialiasing over frames 1, bloom and the tonemap 1, the canvas
+  0.5, and 2 kept back; `--low`'s FXAA is 0.5 in place of the 3 that occlusion and TAA take. It's a
+  budget: no real GPU's measured it yet.
 - **The number for 60 fps at 1080p.** On 2026-11-04, Slack Water lost the AMD integrated GPU of the
   machine it's made on within its first frames, each run, and the machine froze and reset. So `--fps`
   refuses a real GPU unless SLACK_WATER_REAL_GPU=1 and that GPU's the only device the loader shows,

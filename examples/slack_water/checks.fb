@@ -97,3 +97,23 @@ Public Function DiffersAround(with: Image, without: Image, x: Int, y: Int): Bool
     End For
     Return False
 End Function
+
+/// Whether `arguments` play the game, as a person does, drawn as a low GPU can or not; Null for any other
+/// mode.
+Public Function PlaysLow(arguments: String[]): Bool?
+    If arguments.Count == 0 Then Return False
+    If arguments.Count == 1 && arguments[0] == "--low" Then Return True
+    Return Null
+End Function
+
+/// How bright `image` is, the mean of its pixels' channels, from 0 to 255.
+Public Function MeanBrightness(image: Image): Float
+    Local sum = 0.0
+    For y = 0 Until image.Height
+        For x = 0 Until image.Width
+            Local pixel = image[x, y]
+            sum += ((pixel.r As Int) + (pixel.g As Int) + (pixel.b As Int)) As Float
+        End For
+    End For
+    Return sum / (3.0 * ((image.Width * image.Height) As Float))
+End Function
