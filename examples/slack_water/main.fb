@@ -296,6 +296,17 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     Flip(False)
     island.SetSunShadows(True)
     Checks("the sun casts shadows", Different(yardLate, unshadowed) > 0.0005)
+    // The ground's repeats, from high up.
+    Local highView = Views()[0]
+    camera.SetPosition(highView.1)
+    camera.PointAt(highView.2)
+    island.Update(0.0)
+    island.Scene().Render()
+    Local fromFar = Try Screen.ToImage()
+    Flip(False)
+    island.Update(TIDE_IN_AT)
+    Checks("the ground's repeats don't show from far off",
+           RepeatShows(camera, fromFar) > GROUND_APART)
     // The lantern, in the mill.
     Local insideView = Views()[3]
     camera.SetPosition(insideView.1)
@@ -309,6 +320,7 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     Flip(False)
     island.SetLantern(True)
     Checks("the lantern lights the mill", Different(byLantern, noLantern) > 0.2)
+    Checks("no sky's reflected in the ceiling", SkyInCeiling(camera, noLantern) < CEILING_SKY)
     camera.SetPosition(yardView.1)
     camera.PointAt(yardView.2)
     // The storm's grade: greyer, by its saturation, and darker.
@@ -989,7 +1001,54 @@ Function WarmNear(camera: Camera, image: Image, place: Vec3): Bool
     Return False
 End Function
 
+// How bright the mill's ceiling is, as `camera` sees it in `image`, drawn with no lantern, so by nothing
+// but the light around: which it can't see, the roof being over it.
+Function SkyInCeiling(camera: Camera, image: Image): Float
+    Local seen = 0
+    Local sum = 0.0
+    Local y = GroundHeight(MAIN_X, 0.0) + CEILING - 0.03
+    For across = -22 To 22
+        For along = -18 To 18
+            Local pixel = PixelOf(camera, image,
+                                  Vec3(MAIN_X + (across As Float) * 0.25, y,
+                                       (along As Float) * 0.25))
+            If pixel != Null
+                seen += 1
+                sum += Luma(pixel)
+            End If
+        End For
+    End For
+    Return seen > 0 ? sum / (seen As Float) : 255.0
+End Function
+
+// How different the main rock is, from `camera`, in `image`, from itself a repeat of its maps along: the
+// mean, in how bright it looks. Near 0, and its pattern shows.
+Function RepeatShows(camera: Camera, image: Image): Float
+    Local sum = 0.0
+    Local count = 0
+    For across = -6 To 6
+        For along = -6 To 6
+            Local x = MAIN_X + (across As Float) * 2.5
+            Local z = 12.0 + (along As Float) * 2.5
+            Local here = PixelOf(camera, image, Vec3(x, GroundHeight(x, z), z))
+            Local there = PixelOf(camera, image,
+                                  Vec3(x + GROUND_REPEAT, GroundHeight(x + GROUND_REPEAT, z), z))
+            If here != Null && there != Null
+                sum += Abs(Luma(here) - Luma(there))
+                count += 1
+            End If
+        End For
+    End For
+    Return count > 0 ? sum / (count As Float) : 0.0
+End Function
+
 // How bright a color looks.
+// How bright the ceiling's let be by the light around alone, how much the sky's let bloom, and how
+// different the ground's let be from itself a repeat along: each between what's drawn and what's not fixed.
+Const CEILING_SKY: Float = 12.0
+Const SKY_BLOOM: Int = 1
+Const GROUND_APART: Float = 10.0
+
 Function Luma(pixel: Color32): Float
     Return 0.2126 * (pixel.r As Float) + 0.7152 * (pixel.g As Float) + 0.0722 * (pixel.b As Float)
 End Function
@@ -1076,6 +1135,21 @@ Function SaveWalk(folder: Path) Throws GraphicsError, IOError, AudioError
                     island.Scene().Render()
                     Local plain = Try Screen.ToImage()
                     Looked(game.View())
+                    // And the sky's past where bloom starts, far from the lamp.
+                    Print(
+                        "look metric sky {Brightness(bloomed[40, 40]) - Brightness(plain[40, 40])}")
+                    Checks("the sky doesn't bloom",
+                           Brightness(bloomed[40, 40]) <= Brightness(plain[40, 40]) + SKY_BLOOM)
+                    Local core = PixelOf(game.View(), bloomed, island.LampAt())
+                    Checks("the lit lamp's warm, not white",
+                           core != Null && (core.r As Int) > (core.b As Int) + 30)
+                    Local wider = game.View().Project(island.LampAt() + Vec3(0.0, 1.6, 0.0))
+                    If wider != Null
+                        Local x = wider.x As Int
+                        Local y = wider.y As Int
+                        Checks("and its bloom reaches past it",
+                               Brightness(bloomed[x, y]) > Brightness(plain[x, y]) + 1)
+                    End If
                     Local beside = game.View().Project(island.LampAt() + Vec3(0.0, 0.9, 0.0))
                     If beside != Null
                         Local x = beside.x As Int

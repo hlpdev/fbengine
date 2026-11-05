@@ -854,3 +854,24 @@ Function ALostGpusCostIsNoCost()
     Expect(!CostWasRead(False, -1.0))
     Expect(!CostWasRead(True, 0.5))
 End Function
+
+// The ground's paint: as much lighter as darker, in patches that go from one to the other.
+@Test
+Function TheGroundsPaintIsPatchesAboutNeutral()
+    Local lowest = 255
+    Local highest = 0
+    Local sum = 0
+    Local count = 0
+    For z = 0 Until 48
+        For x = 0 Until 48
+            Local paint = PaintAt((x As Float) * 5.0, (z As Float) * 5.0) As Int
+            lowest = Min(lowest, paint)
+            highest = Max(highest, paint)
+            sum += paint
+            count += 1
+        End For
+    End For
+    Expect(lowest < 100)
+    Expect(highest > 156)
+    Expect(Abs(sum / count - 128) < 20)
+End Function

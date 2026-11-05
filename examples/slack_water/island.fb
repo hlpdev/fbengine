@@ -4,6 +4,7 @@
 
 Import std.core
 Import std.image.hdr
+Import std.image.image
 Import std.math
 Import fbengine
 Import "./flow"
@@ -25,10 +26,17 @@ Const SKY_LIGHT: Float = 1.2
 Const AROUND_LIGHT: Float = 0.45
 Const SUN_LIGHT: Float = 4.5
 Const EXPOSURE: Float = 0.8
-Const BLOOM: Float = 0.5
-Const BLOOM_FROM: Float = 1.5
+Const BLOOM: Float = 1.4
+// From past the sky's brightness, as it fades in from half of this.
+Const BLOOM_FROM: Float = 2.2
 Const LAMP_GLOW: Float = 4.0
 Const LANTERN_LIGHT: Float = 30.0
+/// How high the mill's ceiling is, from its floor.
+Public Const CEILING: Float = 4.97
+/// How many meters of ground each repeat of the rock's maps takes.
+Public Const GROUND_REPEAT: Float = 12.0
+/// How much of the light around still gets indoors, past the walls that the light around knows nothing of.
+Const INDOORS: UInt8 = 50
 
 /// Places on the island a game goes to, and walks through.
 Public Enum Spot
@@ -69,6 +77,33 @@ End Function
 @MainThread
 Function Rock(held: Texture[], color: Color, size: Float): Material Throws IOError
     Return Try Surfaced(held, Res.RockAlbedo, Res.RockNormal, Res.RockRough, 0.0, color, size)
+End Function
+
+// The ground: rock, painted over the whole of it by the island's own noise, lighter and darker, so its
+// maps' repeats, each 12 m across, don't show from far off.
+@MainThread
+Function Ground(held: Texture[]): Material Throws IOError, GraphicsError
+    Local paint = Try Texture.FromImage(GroundPaint(), True, TextureFormat.RGBA8_LINEAR)
+    held.Add(paint)
+    Local material = Try Rock(held, Color(1.0, 1.0, 1.0), GROUND_REPEAT)
+    material.SetTexture(1, paint)
+    material.SetLayer(1, LayerBlend.MULTIPLY_2)
+    material.SetLayerUv(1, UvTurn(Vec2(SIDE As Float, SIDE As Float), 0.0, Vec2(0.0, 0.0)))
+    Return material
+End Function
+
+/// How the ground's painted: numbers, 128 being as it is, which the layer doubles and multiplies by.
+Public Function GroundPaint(): Image
+    Local side = 128
+    Local image = Image(side, side)
+    Local across = (SIDE As Float) / (side As Float)
+    For y = 0 Until side
+        For x = 0 Until side
+            Local paint = PaintAt((x As Float) * across, (y As Float) * across)
+            image[x, y] = Color32(paint, paint, paint, 255)
+        End For
+    End For
+    Return image
 End Function
 
 @MainThread
@@ -133,6 +168,19 @@ Public Function StormGrade(storm: Float): ColorGrade
                       Vec3(0.0, 0.0, 0.0), Vec3(1.0, 1.0, 1.0), 1.0 - 0.35 * storm)
 End Function
 
+// `material`, indoors: the light around's for what can see the sky.
+@MainThread
+Function Indoors(material: Material, held: Texture[]): Material Throws GraphicsError
+    Local image = Image(1, 1)
+    image[0, 0] = Color32(INDOORS, INDOORS, INDOORS, 255)
+    Local shut = Try Texture.FromImage(image, False, TextureFormat.RGBA8_LINEAR)
+    held.Add(shut)
+    Local inside = material.Clone()
+    inside.SetMap(MaterialMap.OCCLUSION, shut)
+    inside.SetOcclusionStrength(1.0)
+    Return inside
+End Function
+
 // A box, its middle at (`x`, `y`, `z`) from the mill's floor, half `w`, `h`, and `d` across.
 @MainThread
 Function Box(parent: Entity, material: Material, x: Float, y: Float, z: Float, w: Float, h: Float,
@@ -146,7 +194,7 @@ End Function
 // The mill, blocked out: walls with a door in the south one, a floor, a roof, the wheel by its east
 // wall, and the lamp on top; gives its pivot, its wheel, and its lamp.
 @MainThread
-Function BuildMill(held: Texture[]): (Pivot, Mesh, Mesh, Light) Throws IOError
+Function BuildMill(held: Texture[]): (Pivot, Mesh, Mesh, Light) Throws IOError, GraphicsError
     Local wood = Try Wood(held)
     Local iron = Try Iron(held, Color(1.0, 1.0, 1.0))
     Local stone = Try Rock(held, Color(0.8, 0.8, 0.82), 0.5)
@@ -154,7 +202,7 @@ Function BuildMill(held: Texture[]): (Pivot, Mesh, Mesh, Light) Throws IOError
     Local mill = Pivot()
     mill.SetPosition(Vec3(MAIN_X, GroundHeight(MAIN_X, 0.0), 0.0))
     // Its floor, a little above the yard, so they don't fight.
-    Box(mill, stone, 0.0, 0.0, 0.0, 6.0, FLOOR, 5.0)
+    Box(mill, Try Indoors(stone, held), 0.0, 0.0, 0.0, 6.0, FLOOR, 5.0)
     Box(mill, stone, 0.0, 2.5, -5.0, 6.0, 2.5, 0.3)
     Box(mill, stone, -6.0, 2.5, 0.0, 0.3, 2.5, 5.0)
     Box(mill, stone, 6.0, 2.5, 0.0, 0.3, 2.5, 5.0)
@@ -162,6 +210,8 @@ Function BuildMill(held: Texture[]): (Pivot, Mesh, Mesh, Light) Throws IOError
     Box(mill, stone, 4.0, 2.5, 5.0, 2.0, 2.5, 0.3)
     Box(mill, stone, 0.0, 4.2, 5.0, 2.0, 0.8, 0.3)
     Box(mill, wood, 0.0, 5.3, 0.0, 6.6, 0.3, 5.6)
+    // The ceiling, under the roof, whose wood would reflect the sky.
+    Box(mill, Try Indoors(wood, held), 0.0, CEILING, 0.0, 5.7, 0.02, 4.7)
     // What the parts go on, inside.
     Box(mill, iron, 3.5, 1.0, -3.0, 1.2, 1.0, 1.2)
     // The wheel, on its axle, by the east wall.
@@ -277,7 +327,7 @@ Public Final Class Island
             End For
         End For
         ground.SetHeights(heights)
-        ground.SetMaterial(Try Rock(held, Color(1.0, 1.0, 1.0), 12.0))
+        ground.SetMaterial(Try Ground(held))
 
         Local sea = Mesh(Geometry.Plane(1))
         sea.SetScale(Vec3(3000.0, 1.0, 3000.0))
@@ -427,7 +477,8 @@ Public Final Class Island
     /// Lights the lamp, bright, or dimmer.
     @MainThread
     Public Method LightLamp(bright: Bool)
-        Local glow = bright ? Color(3.0, 2.6, 1.6) : Color(1.4, 1.1, 0.6)
+        // Red past white, its blue short of it, so it stays warm as it rolls off.
+        Local glow = bright ? Color(1.2, 0.55, 0.08) : Color(0.55, 0.28, 0.05)
         // Brighter than white, which is what bloom's for.
         Local material = Material(Color(0.0, 0.0, 0.0))
         material.SetEmissive(Color(glow.r * LAMP_GLOW, glow.g * LAMP_GLOW, glow.b * LAMP_GLOW))
