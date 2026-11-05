@@ -146,12 +146,12 @@ void release_material(std::uint32_t material) {
             release_texture(layer.texture);
             layer.texture = 0;
         }
+        fbe::shaders_own::release(scene().materials[material].shader);
+        scene().materials[material].shader = 0;
         for (layer_t& map : scene().materials[material].maps) {
             release_texture(map.texture);
             map.texture = 0;
         }
-        fbe::shaders_own::release(scene().materials[material].shader);
-        scene().materials[material].shader = 0;
         scene().material_slots.free(material);
     }
 }
@@ -248,12 +248,12 @@ FBE_API uint64_t fbe_material_clone(uint64_t material) {
             fbe_texture_retain(layer.texture);
         }
     }
+    fbe::shaders_own::retain(original.shader);
     for (const fbe::scene::layer_t& map : original.maps) {
         if (map.texture != 0) {
             fbe_texture_retain(map.texture);
         }
     }
-    fbe::shaders_own::retain(original.shader);
     return scene().material_slots.handle(copy);
 }
 

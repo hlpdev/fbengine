@@ -82,6 +82,21 @@ mat4_t sprite_matrix(std::uint32_t entity, const mat4_t& own, vec3_t eye_x, vec3
         y = direction(own.axis(1), vec3_t(0.0F, 1.0F, 0.0F));
         z = direction(eye_z - y * dot(eye_z, y), direction(own.axis(2), vec3_t(0.0F, 0.0F, 1.0F)));
         x = cross(y, z);
+    } else if (sprite.view_mode == FBE_SPRITE_UPRIGHT_YAW) {
+        // The camera's yaw, from where it looks across the ground, or, looking straight up or down,
+        // from its side; then its own turn and scale.
+        vec3_t facing = vec3_t(eye_z.x, 0.0F, eye_z.z);
+        if (dot(facing, facing) < 0.000001F) {
+            facing = vec3_t(-eye_x.z, 0.0F, eye_x.x);
+        }
+        facing = direction(facing, vec3_t(0.0F, 0.0F, 1.0F));
+        const auto yawed = [&](vec3_t axis) {
+            return vec3_t((facing.z * axis.x) + (facing.x * axis.z), axis.y,
+                          (facing.z * axis.z) - (facing.x * axis.x));
+        };
+        x = yawed(own.axis(0));
+        y = yawed(own.axis(1));
+        z = yawed(own.axis(2));
     } else {
         // Parallel to the camera's view, whatever the entity's own turn and scale: the camera's
         // turn alone, as its view has it, so a mirror above the camera doesn't mirror it.
@@ -123,8 +138,11 @@ void sprite_bounds(std::uint32_t entity, const mat4_t& own, vec3_t& min, vec3_t&
         return;
     }
     // However it turns, its corners are no further than this from its place.
-    const float wide = (std::fabs(sprite.handle_x) + 1.0F) * sprite.size_x;
-    const float high = (std::fabs(sprite.handle_y) + 1.0F) * sprite.size_y;
+    const bool scaled = sprite.view_mode == FBE_SPRITE_UPRIGHT_YAW;
+    const float wide =
+        (std::fabs(sprite.handle_x) + 1.0F) * sprite.size_x * (scaled ? length(own.axis(0)) : 1.0F);
+    const float high =
+        (std::fabs(sprite.handle_y) + 1.0F) * sprite.size_y * (scaled ? length(own.axis(1)) : 1.0F);
     const float reach = std::sqrt((wide * wide) + (high * high));
     const vec3_t place = own.axis(3);
     min = place - vec3_t(reach, reach, reach);
@@ -145,9 +163,9 @@ FBE_API bool fbe_sprite_set_view_mode(uint64_t sprite, int32_t mode) {
     if (found == nullptr) {
         return false;
     }
-    if (mode < FBE_SPRITE_BILLBOARD || mode > FBE_SPRITE_UPRIGHT) {
-        return fbe::fail(
-            std::format("a view mode is FBE_SPRITE_BILLBOARD to FBE_SPRITE_UPRIGHT, not {}", mode));
+    if (mode < FBE_SPRITE_BILLBOARD || mode > FBE_SPRITE_UPRIGHT_YAW) {
+        return fbe::fail(std::format(
+            "a view mode is FBE_SPRITE_BILLBOARD to FBE_SPRITE_UPRIGHT_YAW, not {}", mode));
     }
     found->view_mode = mode;
     return true;

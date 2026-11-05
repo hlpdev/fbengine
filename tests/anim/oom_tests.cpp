@@ -229,7 +229,7 @@ TEST_CASE("players' calls that run out of memory say so, and leave things workin
 TEST_CASE("shaders' calls that run out of memory say so, and leave things working") {
     // SPIR-V's header, and the scene's entry points.
     std::vector<std::uint32_t> words{ 0x07230203, 0x00010500, 0, 1, 0 };
-    for (const auto& [model, name] : std::array<std::pair<std::uint32_t, std::string_view>, 7>{
+    for (const auto& [model, name] : std::array<std::pair<std::uint32_t, std::string_view>, 10>{
              {
                  { 0, "vertexMain" },
                  { 4, "fragmentMain" },
@@ -238,6 +238,9 @@ TEST_CASE("shaders' calls that run out of memory say so, and leave things workin
                  { 4, "shadowFragment" },
                  { 0, "instanceVertex" },
                  { 0, "shadowInstanceVertex" },
+                 { 0, "prepassVertex" },
+                 { 0, "prepassInstanceVertex" },
+                 { 4, "prepassFragment" },
              },
          }) {
         const std::size_t name_words = (name.size() / 4) + 1;

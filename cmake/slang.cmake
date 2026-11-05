@@ -37,8 +37,8 @@ set(fbengine_shader_sources
     "${PROJECT_SOURCE_DIR}/native/fbengine/shaders/scene.slang"
     "${PROJECT_SOURCE_DIR}/native/fbengine/shaders/own_shader.slang"
     "${PROJECT_SOURCE_DIR}/native/fbengine/shaders/pass.slang"
-    "${PROJECT_SOURCE_DIR}/native/fbengine/shaders/pbr.slang"
-    "${PROJECT_SOURCE_DIR}/native/fbengine/shaders/bindless.slang")
+    "${PROJECT_SOURCE_DIR}/native/fbengine/shaders/bindless.slang"
+    "${PROJECT_SOURCE_DIR}/native/fbengine/shaders/pbr.slang")
 set(fbengine_shader_stamped "${fbengine_slang_version}")
 foreach(source IN LISTS fbengine_shader_sources)
   file(READ "${source}" text)

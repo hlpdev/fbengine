@@ -27,6 +27,9 @@ struct Sky
     float4* mirrors;
     uint mirrorCount;
     uint ownMirror;
+    // The level that's its first, through a sampler whose LOD bias is added to whatever's asked for.
+    float level;
+    float spare;
 };
 
 struct Push
@@ -193,8 +196,7 @@ float4 fragmentMain(Corner corner) : SV_Target
         const float latitude = 0.5 - asin(clamp(way.y, -1.0, 1.0)) / pi;
         // By its first level alone: a derivative across the seam at the back of the world would take
         // a far coarser one for its pixels' row.
-        const float3 color = sampleTextureGrad(sky.texture, sky.sampler, float2(longitude, latitude),
-                                               float2(0.0, 0.0), float2(0.0, 0.0)).rgb;
+        const float3 color = sampleTextureLevel(sky.texture, sky.sampler, float2(longitude, latitude), sky.level).rgb;
         return float4(toTarget(color * sky.brightness), 1.0);
     }
     return float4(toTarget(atmosphere(sky, way)), 1.0);

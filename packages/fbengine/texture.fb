@@ -122,8 +122,16 @@ Public Final Class Texture Implements Asset
         Return made
     End Method
 
+    // Says it's of `source`, which Path gives.
+    @MainThread
+    Package Method SetSource(source: String)
+        If !fbe_texture_set_path(Live("Path"), source) Then Panic(LastError())
+    End Method
+
     /// The file it was loaded from, as Load was given it, or Null for one that wasn't, as a game
-    /// finds what a surface is made of by its texture's name.
+    /// finds what a surface is made of by its texture's name. A Model's own says that model's file
+    /// and which of its images, as res://door.glb#2, with :1 and on after that for each other Texture
+    /// of the image, read another way than Textures' is.
     @MainThread @PanicsAtCaller
     Public Method Path(): String?
         Local found = ""

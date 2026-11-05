@@ -82,8 +82,7 @@ gpu::pipeline_desc_t desc_of(std::uint64_t key, VkFormat format, VkSampleCountFl
     const std::string_view scene_vertex = prepass ? prepass_vertex : lit_vertex;
     const std::string_view scene_fragment = prepass ? "prepassFragment" : "fragmentMain";
     gpu::pipeline_desc_t desc{
-        // A shader of its own isn't in the prepass, which has no way to its vertices or its alpha.
-        .shader = own != nullptr && !prepass ? own : &shaders::scene,
+        .shader = own != nullptr ? own : &shaders::scene,
         .vertex = shadows ? cast_vertex : scene_vertex,
         .fragment = shadows ? "shadowFragment" : scene_fragment,
         .color = format,
@@ -462,6 +461,7 @@ sky_data_t sky_data(const scene::camera_t& camera, const scene::view_t& view,
     data.mode = static_cast<std::uint32_t>(world.sky);
     data.sun = { sun.x, sun.y, sun.z };
     data.brightness = world.sky_brightness;
+    data.level = -gpu::lod_bias_in_samplers();
     data.flip = flipped ? -1.0F : 1.0F;
     data.mirrors = in_ring<std::array<float, 4>>(planes, failed).address;
     data.mirror_count = static_cast<std::uint32_t>(planes.size());

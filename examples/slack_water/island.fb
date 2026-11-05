@@ -4,6 +4,7 @@
 
 Import std.core
 Import std.image.hdr
+Import std.image.image
 Import std.math
 Import fbengine
 Import "./flow"
@@ -25,10 +26,19 @@ Const SKY_LIGHT: Float = 1.2
 Const AROUND_LIGHT: Float = 0.45
 Const SUN_LIGHT: Float = 4.5
 Const EXPOSURE: Float = 0.8
-Const BLOOM: Float = 0.5
-Const BLOOM_FROM: Float = 1.5
+Const BLOOM: Float = 1.4
+// From past the sky's brightness, as it fades in from half of this.
+Const BLOOM_FROM: Float = 2.2
 Const LAMP_GLOW: Float = 4.0
 Const LANTERN_LIGHT: Float = 30.0
+/// How high the mill's ceiling is, from its floor.
+Public Const CEILING: Float = 4.97
+/// How many meters of ground each repeat of the rock's maps takes.
+Public Const GROUND_REPEAT: Float = 12.0
+// How many meters the ground's finer grit takes to repeat, which goes evenly into nothing the other does.
+Const GROUND_FINE: Float = 2.7
+/// How much of the light around still gets indoors, past the walls that the light around knows nothing of.
+Const INDOORS: UInt8 = 50
 
 /// Places on the island a game goes to, and walks through.
 Public Enum Spot
@@ -71,6 +81,80 @@ Function Rock(held: Texture[], color: Color, size: Float): Material Throws IOErr
     Return Try Surfaced(held, Res.RockAlbedo, Res.RockNormal, Res.RockRough, 0.0, color, size)
 End Function
 
+// How many pixels of what covers the ground there are to a meter.
+Const COVER_PER_METER: Int = 2
+
+// The ground, of its `heights`, a row of SIDE + 1 after another: what covers it, baked from its height and
+// slope, under a fine grit, at two scales, one turned from the other, so no repeat lines up.
+@MainThread
+Function Ground(held: Texture[], heights: Float[]): Material Throws IOError, GraphicsError
+    Local maps = GroundCover(heights)
+    Local cover = Try Texture.FromImage(maps.0, True, TextureFormat.RGBA8)
+    held.Add(cover)
+    Local rough = Try Texture.FromImage(maps.1, True, TextureFormat.RGBA8_LINEAR)
+    held.Add(rough)
+    Local grit = Try Assets.Load<Texture>(Res.GritAlbedo)
+    held.Add(grit)
+    Local bumps = Try Assets.Load<Texture>(Res.GritNormal)
+    held.Add(bumps)
+    Local whole = UvTurn(Vec2(SIDE As Float, SIDE As Float), 0.0, Vec2(0.0, 0.0))
+    Local material = Material(Color(1.0, 1.0, 1.0))
+    material.SetTexture(0, cover)
+    material.SetLayerUv(0, whole)
+    material.SetTexture(1, grit)
+    material.SetLayer(1, LayerBlend.MULTIPLY_2)
+    material.SetLayerUv(1, UvTurn(Vec2(GROUND_REPEAT, GROUND_REPEAT), 0.0, Vec2(0.0, 0.0)))
+    material.SetTexture(2, grit)
+    material.SetLayer(2, LayerBlend.MULTIPLY_2)
+    material.SetLayerUv(2, UvTurn(Vec2(GROUND_FINE, GROUND_FINE), 0.7, Vec2(0.3, 0.1)))
+    material.SetMap(MaterialMap.NORMAL, bumps)
+    material.SetMapUv(MaterialMap.NORMAL,
+                      UvTurn(Vec2(GROUND_REPEAT, GROUND_REPEAT), 0.0, Vec2(0.0, 0.0)))
+    material.SetMap(MaterialMap.METAL_ROUGH, rough)
+    material.SetMapUv(MaterialMap.METAL_ROUGH, whole)
+    material.SetMetalRough(0.0, 1.0)
+    Return material
+End Function
+
+// `heights` between its points, at (`x`, `z`) meters from its corner.
+Function HeightIn(heights: Float[], x: Float, z: Float): Float
+    Local left = Min(Floor(x) As Int, SIDE - 1)
+    Local top = Min(Floor(z) As Int, SIDE - 1)
+    Local u = x - (left As Float)
+    Local v = z - (top As Float)
+    Local row = SIDE + 1
+    Local near = heights[top * row + left] * (1.0 - u) + heights[top * row + left + 1] * u
+    Local far = heights[(top + 1) * row + left] * (1.0 - u) +
+                heights[(top + 1) * row + left + 1] * u
+    Return near * (1.0 - v) + far * v
+End Function
+
+/// What covers the ground of these `heights`, as two images over the whole of it: its color, and its
+/// roughness in green, as a material's map has it.
+Public Function GroundCover(heights: Float[]): (Image, Image)
+    Local side = SIDE * COVER_PER_METER
+    Local color = Image(side, side)
+    Local rough = Image(side, side)
+    Local half = (SIDE As Float) / 2.0
+    Local most = (SIDE As Float) - 1.0
+    For y = 0 Until side
+        Local z = ((y As Float) + 0.5) / (COVER_PER_METER As Float)
+        For x = 0 Until side
+            Local across = ((x As Float) + 0.5) / (COVER_PER_METER As Float)
+            Local height = HeightIn(heights, across, z)
+            Local dx = HeightIn(heights, Min(across + 1.0, most), z) -
+                       HeightIn(heights, Max(across - 1.0, 0.0), z)
+            Local dz = HeightIn(heights, across, Min(z + 1.0, most)) -
+                       HeightIn(heights, across, Max(z - 1.0, 0.0))
+            Local cover = CoverAt(across - half, z - half, height, Sqrt(dx * dx + dz * dz) / 2.0)
+            color[x, y] = Color32((cover.0.x * 255.0) As UInt8, (cover.0.y * 255.0) As UInt8,
+                                  (cover.0.z * 255.0) As UInt8, 255)
+            rough[x, y] = Color32(255, (cover.1 * 255.0) As UInt8, 0, 255)
+        End For
+    End For
+    Return (color, rough)
+End Function
+
 @MainThread
 Function Wood(held: Texture[]): Material Throws IOError
     Return Try Surfaced(held, Res.WoodAlbedo, Res.WoodNormal, Res.WoodRough, 0.0,
@@ -89,8 +173,8 @@ Function Iron(held: Texture[], color: Color): Material Throws IOError
 End Function
 
 /// The light all around, from straight up, through the haze at the horizon, to the sea below it, by
-/// height alone, so it's the same whichever way a sky or Environment takes as ahead: light past 1's
-/// what's kept in it, so a metal has something bright to reflect.
+/// height alone, so it's the same whichever way a sky or Environment takes as ahead, kept as light, in
+/// an HDR image, for a metal to reflect.
 Public Function SkyImage(): HdrImage
     Local width = 64
     Local height = 128
@@ -133,6 +217,19 @@ Public Function StormGrade(storm: Float): ColorGrade
                       Vec3(0.0, 0.0, 0.0), Vec3(1.0, 1.0, 1.0), 1.0 - 0.35 * storm)
 End Function
 
+// `material`, indoors: the light around's for what can see the sky.
+@MainThread
+Function Indoors(material: Material, held: Texture[]): Material Throws GraphicsError
+    Local image = Image(1, 1)
+    image[0, 0] = Color32(INDOORS, INDOORS, INDOORS, 255)
+    Local shut = Try Texture.FromImage(image, False, TextureFormat.RGBA8_LINEAR)
+    held.Add(shut)
+    Local inside = material.Clone()
+    inside.SetMap(MaterialMap.OCCLUSION, shut)
+    inside.SetOcclusionStrength(1.0)
+    Return inside
+End Function
+
 // A box, its middle at (`x`, `y`, `z`) from the mill's floor, half `w`, `h`, and `d` across.
 @MainThread
 Function Box(parent: Entity, material: Material, x: Float, y: Float, z: Float, w: Float, h: Float,
@@ -146,7 +243,7 @@ End Function
 // The mill, blocked out: walls with a door in the south one, a floor, a roof, the wheel by its east
 // wall, and the lamp on top; gives its pivot, its wheel, and its lamp.
 @MainThread
-Function BuildMill(held: Texture[]): (Pivot, Mesh, Mesh, Light) Throws IOError
+Function BuildMill(held: Texture[]): (Pivot, Mesh, Mesh, Light) Throws IOError, GraphicsError
     Local wood = Try Wood(held)
     Local iron = Try Iron(held, Color(1.0, 1.0, 1.0))
     Local stone = Try Rock(held, Color(0.8, 0.8, 0.82), 0.5)
@@ -154,7 +251,7 @@ Function BuildMill(held: Texture[]): (Pivot, Mesh, Mesh, Light) Throws IOError
     Local mill = Pivot()
     mill.SetPosition(Vec3(MAIN_X, GroundHeight(MAIN_X, 0.0), 0.0))
     // Its floor, a little above the yard, so they don't fight.
-    Box(mill, stone, 0.0, 0.0, 0.0, 6.0, FLOOR, 5.0)
+    Box(mill, Try Indoors(stone, held), 0.0, 0.0, 0.0, 6.0, FLOOR, 5.0)
     Box(mill, stone, 0.0, 2.5, -5.0, 6.0, 2.5, 0.3)
     Box(mill, stone, -6.0, 2.5, 0.0, 0.3, 2.5, 5.0)
     Box(mill, stone, 6.0, 2.5, 0.0, 0.3, 2.5, 5.0)
@@ -162,6 +259,8 @@ Function BuildMill(held: Texture[]): (Pivot, Mesh, Mesh, Light) Throws IOError
     Box(mill, stone, 4.0, 2.5, 5.0, 2.0, 2.5, 0.3)
     Box(mill, stone, 0.0, 4.2, 5.0, 2.0, 0.8, 0.3)
     Box(mill, wood, 0.0, 5.3, 0.0, 6.6, 0.3, 5.6)
+    // The ceiling, under the roof, whose wood would reflect the sky.
+    Box(mill, Try Indoors(wood, held), 0.0, CEILING, 0.0, 5.7, 0.02, 4.7)
     // What the parts go on, inside.
     Box(mill, iron, 3.5, 1.0, -3.0, 1.2, 1.0, 1.2)
     // The wheel, on its axle, by the east wall.
@@ -215,6 +314,7 @@ Public Final Class Island
     Field around: Environment
     Field lantern: Light
     Field lampLight: Light? = Null
+    Field lampBright = False
     Field lampUnlit: Material
     Field sizes: Vec3[] = []
     Field pipHead: Entity
@@ -277,7 +377,7 @@ Public Final Class Island
             End For
         End For
         ground.SetHeights(heights)
-        ground.SetMaterial(Try Rock(held, Color(1.0, 1.0, 1.0), 12.0))
+        ground.SetMaterial(Try Ground(held, heights))
 
         Local sea = Mesh(Geometry.Plane(1))
         sea.SetScale(Vec3(3000.0, 1.0, 3000.0))
@@ -373,6 +473,16 @@ Public Final Class Island
     @MainThread
     Public Method Update(clock: Float64)
         sea.SetPosition(Vec3(0.0, SeaHeight(clock), 0.0))
+        TurnSun(clock)
+    End Method
+
+    /// What the ground's drawn with.
+    @MainThread
+    Public Method GroundMaterial(): Material? => ground.Material()
+
+    /// Turns the sun to where it is `clock` seconds in.
+    @MainThread
+    Public Method TurnSun(clock: Float64)
         Local height, turned = SunAt(clock)
         sun.SetRotation(-height, turned, 0.0)
     End Method
@@ -396,9 +506,6 @@ Public Final Class Island
     /// What the sun's light does now, its rotation.
     @MainThread Public Method SunTurned(): Quat => sun.Rotation()
 
-    /// The World's light all around.
-    @MainThread Public Method Around(): Environment? => scene.LitBy()
-
     /// Takes the normal maps off, or the light around, to see what they've done.
     @MainThread
     Public Method SetAround(on: Bool)
@@ -415,6 +522,14 @@ Public Final Class Island
         lantern.SetIntensity(on ? LANTERN_LIGHT : 0.0)
     End Method
 
+    /// What Pip's body is drawn in.
+    @MainThread Public Method PipBody(): Material? => model.Geometries()[0].Surface(0).Material()
+
+    /// Draws Pip's body in `material`.
+    @MainThread Public Method SetPipBody(material: Material?)
+        model.Geometries()[0].Surface(0).SetMaterial(material)
+    End Method
+
     /// Whether Pip's body has brass's maps, which its file hasn't: only a color.
     @MainThread Public Method PipHasMaps(): Bool
         Local body = model.Geometries()[0].Surface(0).Material()
@@ -427,7 +542,11 @@ Public Final Class Island
     /// Lights the lamp, bright, or dimmer.
     @MainThread
     Public Method LightLamp(bright: Bool)
-        Local glow = bright ? Color(3.0, 2.6, 1.6) : Color(1.4, 1.1, 0.6)
+        // Each Step after the end asks for what it already is.
+        If lampLight != Null && lampBright == bright Then Return
+        lampBright = bright
+        // Red past white, its blue short of it, so it stays warm as it rolls off.
+        Local glow = bright ? Color(1.2, 0.55, 0.08) : Color(0.55, 0.28, 0.05)
         // Brighter than white, which is what bloom's for.
         Local material = Material(Color(0.0, 0.0, 0.0))
         material.SetEmissive(Color(glow.r * LAMP_GLOW, glow.g * LAMP_GLOW, glow.b * LAMP_GLOW))
@@ -438,6 +557,9 @@ Public Final Class Island
         light.SetIntensity(bright ? 40.0 : 12.0)
         light.SetRange(bright ? 60.0 : 25.0)
     End Method
+
+    /// What the lamp's drawn in.
+    @MainThread Public Method LampMaterial(): Material? => lamp.Material()
 
     /// Where the lamp is, in the world, and the wheel.
     @MainThread Public Method LampAt(): Vec3 => lamp.Position(Space.WORLD)

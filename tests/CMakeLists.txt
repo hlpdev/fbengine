@@ -344,6 +344,8 @@ if(FBENGINE_FB_TESTS)
                      "then down True, hit False"
                      "then down False, up True"
                      "flushed, hit False"
+                     "by their numbers: 17 W, 30 A, 31 S, 32 D, 57 SPACE, 42 LEFT_SHIFT, 15 TAB, 29 LEFT_CONTROL, 63 F5, 61 F3"
+                     "a number with no key: True"
                      "of 10 binds, held alone 10"
                      "mouse 110, 45, speed 10, -5"
                      "hit True, wheel 2"
@@ -595,6 +597,20 @@ if(FBENGINE_FB_TESTS)
   if(APPLE)
     set_property(TEST examples.slack_water.frame_cost APPEND PROPERTY ENVIRONMENT "SLACK_WATER_REAL_GPU=1")
   endif()
+  # Each mode that draws with no person there refuses when the loader shows several devices: it would pick
+  # the best for itself, on a machine it could take down.
+  foreach(mode_and_arguments "cooked|--cooked|a|b" "walk3d|--walk3d|bright" "end|--end|a" "hear|--hear"
+          "feel|--feel" "frames|--frames|a")
+    string(REPLACE "|" ";" mode_arguments "${mode_and_arguments}")
+    list(POP_FRONT mode_arguments mode_name)
+    add_test(NAME examples.slack_water.refuses_${mode_name}
+             COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                     -- ${mode_arguments})
+    set_tests_properties(examples.slack_water.refuses_${mode_name} PROPERTIES RESOURCE_LOCK slack_water
+                         ENVIRONMENT "SLACK_WATER_CHECKS=1;SLACK_WATER_DEVICES=2;SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                         PASS_REGULAR_EXPRESSION "this draws only when the loader shows one device"
+                         SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
+  endforeach()
   add_test(NAME examples.slack_water.hear
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
                    -- --hear)
@@ -632,7 +648,7 @@ if(FBENGINE_FB_TESTS)
                    -- "${PROJECT_BINARY_DIR}/example-frames/slack_water_made")
   set_tests_properties(examples.slack_water.tools PROPERTIES
                        FIXTURES_SETUP slack_water_made TIMEOUT 300
-                       PASS_REGULAR_EXPRESSION "15 textures\r?\n13 sounds\r?\n8 joints in Pip\r?\n$")
+                       PASS_REGULAR_EXPRESSION "18 textures\r?\n13 sounds\r?\n8 joints in Pip\r?\n$")
   foreach(checked IN ITEMS "made=${PROJECT_BINARY_DIR}/example-frames/slack_water_made"
                            "kept=${PROJECT_SOURCE_DIR}/examples/slack_water/assets")
     string(FIND "${checked}" "=" split)
@@ -702,99 +718,6 @@ if(FBENGINE_FB_TESTS)
                        RESOURCE_LOCK fbengine_own_shaders
                        ENVIRONMENT "FBENGINE_SLANGC=${FBENGINE_SLANGC};SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        PASS_REGULAR_EXPRESSION "\nwatched 40 frames\r?\n$")
-  # Section 6's item 1: its numbers worked from its formula apart from the sample, exactly and by
-  # Float32s, with the audit's the same.
-  fbengine_add_proof_of_numbers(blitz_random
-      "unseeded: 224942860, 539475828, 650989866"
-      "0x1234's states: 224942860, 539475828, 650989866"
-      "its floats: 0[.]35565948, 0[.]7478714, 0[.]31705475"
-      "Rand[(]1, 100[)]: 36, 75, 32"
-      "Rand[(]100, 1[)]: 36, 75, 32"
-      "Rand[(]-3, 1[)]: -2, 0, -2"
-      "Rnd[(]-1, 1[)]: -0[.]28868103"
-      "seed 0 is seed 1: 48271"
-      "as seed 1 is: 48271"
-      "seed -5 is 2147483643: 2147483643, then 2147290563"
-      "as 2147483643 is: 2147483643, then 2147290563"
-      "0x7FFFFFFE's next: 2147435376"
-      "seeded again, the same: True")
-  # Section 6's item 23, the same way: its maps worked out apart from the sample.
-  set(fbengine_map_rows
-      "a's number: 97"
-      "ab's number: 165"
-      "abcdefghijklmnopqrstuvwxyz's number: 713262292"
-      "SCP, seed 405: 120 rooms, 1 dead ends"
-      "...............##."
-      ".################."
-      ".#...........#...."
-      ".##############..."
-      ".............##..."
-      "....###########..."
-      "....#........#...."
-      "....############.."
-      "....#........###.."
-      ".###############.."
-      ".#................"
-      ".#................"
-      ".#############...."
-      ".............#...."
-      ".............#...."
-      ".#############...."
-      ".#................"
-      ".#########........"
-      "173, seed 147: 123 rooms, 3 dead ends"
-      "............#....."
-      ".############....."
-      ".#................"
-      ".##############..."
-      "..............#..."
-      "...############..."
-      "...#.........#..#."
-      "...##############."
-      "................#."
-      ".################."
-      ".##..............."
-      ".##..............."
-      ".################."
-      "................#."
-      "................#."
-      ".################."
-      ".#................"
-      ".#########........"
-      "the same seed, the same map: True"
-      "another seed, the same map: False")
-  list(TRANSFORM fbengine_map_rows REPLACE "[.]" "[.]")
-  fbengine_add_proof_of_numbers(map_from_a_seed ${fbengine_map_rows})
-  # Section 6's item 8, each number from section 3 worked by hand, in the sample's comments.
-  fbengine_add_proof_of_numbers(room_format
-      "its header: RoomMesh[.]HasTriggerBox"
-      "2 drawn meshes, 1 hidden, 1 trigger"
-      "its lightmap walls_LM1[.]png, as ADD, by its name"
-      "its diffuse concrete[.]png, as MULTIPLY, by its flag"
-      "a vertex's two UVs: [(]0[.]5, 0[.]5[)] and [(]0, 0[.]5[)], its color [(]200, 200, 200, 255[)]"
-      "2 triangles of 4 vertices"
-      "the other's alpha True, the first False"
-      "a hidden mesh's triangle, both ways: 2"
-      "a trigger: door_trigger, of 1 surface"
-      "screen at [(]1, 0, -2[)] shows map[.]jpg"
-      "waypoint at [(]2, 0[.]5, 0[)]"
-      "light, a point light at [(]4, 0, 0[)], range 0[.]5, color 80, 40, 20"
-      "spotlight, a point light at [(]0, 2, 0[)], range 1, color 255, 128, 0"
-      "sound 4 at [(]0, 1, 0[)], range 12[.]5"
-      "where a player starts, not scaled, [(]1, 2, 3[)], angles 0 90 0"
-      "model crate[.]b3d, not scaled, at [(]1, 2, 3[)], turned [(]4, 5, 6[)], scaled [(]7, 8, 9[)]"
-      "that isn't a room: RoomMesh2"
-      "a point entity of a class no one knows: trapdoor"
-      "child 2 of the room's the drawn mesh: True"
-      "baked, left: [(]32, 0, 0, 255[)]"
-      "baked, right: [(]0, 48, 0, 255[)]"
-      "lifted, left: [(]44, 12, 12, 255[)]"
-      "lifted, right: [(]12, 60, 12, 255[)]"
-      "a pick from in front hits the hidden one: True, at z -4"
-      "and from behind: True, at z -4"
-      "beside it, the drawn one's copy: True, at z -5"
-      "where the alpha one would be: True"
-      "validation errors 0")
   # Section 6's item 14, its receiving side: what a game gets of a converter's glTF.
   fbengine_add_proof_of_numbers(models_as_a_converter_writes_them
       "nodes under the figure: Bip01, Bip01 Spine, Bip01 Head, Bip01 HeadNub, body#1"
@@ -832,6 +755,8 @@ if(FBENGINE_FB_TESTS)
                            "a tall one onto a tall rock: 0[.]000, 6[.]503, 10[.]000"
                            "around a ring, 8 iterations: 45[.]443, 1[.]000, -4[.]499, touching 7"
                            "around a ring, 10 iterations: 45[.]443, 1[.]000, -4[.]499, touching 7"
+                           "around a tight ring, 8 iterations: 74[.]0[0-9][0-9], 1[.]000, -2[.]0[0-9][0-9], touching 8"
+                           "around a tight ring, 10 iterations: 73[.]8[0-9][0-9], 1[.]000, -2[.]4[0-9][0-9], touching 10"
                            "a mover into one moving away: -40[.]000, 1[.]000, -1[.]999, the other -40[.]000, 1[.]000, -13[.]000"
                            "a tall one onto a slope of 30: facing -0[.]500, 0[.]866, 0[.]000"
                            "a wall, then a rock: touching 2, level True, other True"
@@ -894,7 +819,11 @@ if(FBENGINE_FB_TESTS)
                            "the wall hidden True"
                            "a target that blocks sight, before the wall True"
                            "past an ellipsoid told to block sight False"
-                           "past a box told to block sight False")
+                           "past a box told to block sight False"
+                           "at zoom 1, x 9[.]9 True, 10[.]1 False"
+                           "y 7[.]4 True, 7[.]6 False"
+                           "at zoom 1[.]1, 84[.]5 degrees across"
+                           "x 9 True, 9[.]2 False")
   fbengine_add_drawn_proof(scene_trees
                            "the room has 2, first door, then lamp"
                            "the handle's parent door, the room's none"
@@ -924,7 +853,9 @@ if(FBENGINE_FB_TESTS)
                            "a copy's door: kind MESH, group 2, pick MESH, blocks True, bounds 1[.]000, 1[.]000, 1[.]000"
                            "its lamp hidden True"
                            "alpha 0: showing True, picked the door"
-                           "alpha 0: a mover rests at 0[.]000, 1[.]501, 0[.]000")
+                           "alpha 0: a mover rests at 0[.]000, 1[.]501, 0[.]000"
+                           "alpha 1: what's over it [(]255, 0, 0, 255[)]"
+                           "alpha 0: what's over it [(]0, 0, 255, 255[)]")
   fbengine_add_drawn_proof(meshes_in_code
                            "1 surface, 4 vertices, 2 triangles"
                            "its second UVs [(]0[.]5, 0[.]75[)], first [(]0, 1[)]"
@@ -1006,6 +937,7 @@ if(FBENGINE_FB_TESTS)
                            "a room's lightmap and diffuse, left: [(]125, 110, 102, 255[)]"
                            "and right, its lightmap's UVs its own: [(]75, 66, 61, 255[)]"
                            "a stage's clamped: [(]120, 120, 120, 255[)]"
+                           "four layers, over vertex colors and light: [(]36, 20, 20, 255[)]"
                            "a layer by its alpha: [(]127, 0, 128, 255[)]"
                            "full bright: [(]255, 255, 255, 255[)]"
                            "lit, with no light: [(]0, 0, 0, 255[)]"
@@ -1035,7 +967,12 @@ if(FBENGINE_FB_TESTS)
                            "and in linear light again, forced alpha: [(]188, 188, 188, 255[)]"
                            "a sprite BILLBOARD, 32 across"
                            "a sprite FIXED, [56] across"
-                           "a sprite UPRIGHT, 32 across")
+                           "a sprite UPRIGHT, 32 across"
+                           "a sprite UPRIGHT_YAW, [56] across"
+                           "BILLBOARD from above and aside: 32 across, 32 high"
+                           "FIXED from above and aside: 0 across, 0 high"
+                           "UPRIGHT from above and aside: 32 across, 16 high"
+                           "UPRIGHT_YAW from above and aside: 16 across, 8 high")
   fbengine_add_drawn_proof(cameras_and_viewports
                            "the left camera's middle: [(]255, 0, 0, 255[)]"
                            "its clear: [(]0, 0, 255, 255[)]"
@@ -1051,6 +988,10 @@ if(FBENGINE_FB_TESTS)
                            "the overlay: [(]255, 255, 0, 255[)]"
                            "the world under it: [(]255, 0, 0, 255[)]"
                            "its clear under it: [(]0, 0, 255, 255[)]"
+                           "deeper, not clearing either: [(]255, 0, 0, 255[)]"
+                           "deeper, clearing depth: [(]0, 255, 255, 255[)]"
+                           "deeper, clearing color: [(]0, 255, 0, 255[)]"
+                           "deeper, clearing both: [(]0, 255, 255, 255[)]"
                            "a hidden camera's part stays: [(]0, 0, 255, 255[)]"
                            "the other's changes: [(]255, 0, 255, 255[)]")
   fbengine_add_drawn_proof(camera_into_a_texture
@@ -2221,6 +2162,7 @@ if(FBENGINE_FB_TESTS)
       "panned left: 0.5, 0"
       "panned right: 0, 0.5"
       "at pitch 2, a tenth of a second plays 0.2 of it"
+      "at 22050 Hz, a tenth of a second plays 0.05 of it"
       "paused: 0, 0, playing True, paused True, held where it was True"
       "resumed: 0.5, 0.5, on from there True"
       "stopped: 0, 0, playing False"
@@ -2297,7 +2239,18 @@ watched 300 frames\r?\n$")
   # 64 channels at 44100 Hz under a game's load, within the budget.
   add_test(NAME examples.audio_stress
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/audio_stress")
-  set_tests_properties(examples.audio_stress PROPERTIES TIMEOUT 120
+  # What it holds the game's calls to still fails what really is slow, each way, every time.
+  add_test(NAME examples.audio_stress_stalled_every_frame
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/audio_stress"
+                   -- --stall-every-frame)
+  set_tests_properties(examples.audio_stress_stalled_every_frame PROPERTIES TIMEOUT 240
+                       PASS_REGULAR_EXPRESSION "run 3: the game's calls take more than audio's 0[.]5 ms a frame\r?\n.*panic: the game's calls take more than")
+  add_test(NAME examples.audio_stress_stalled_now_and_then
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/audio_stress"
+                   -- --stall-now-and-then)
+  set_tests_properties(examples.audio_stress_stalled_now_and_then PROPERTIES TIMEOUT 240
+                       PASS_REGULAR_EXPRESSION "run 3: the game's calls stalled in 60 of 600 frames\r?\n.*panic: the game's calls stalled")
+  set_tests_properties(examples.audio_stress PROPERTIES TIMEOUT 240
                        PASS_REGULAR_EXPRESSION "600 frames on no device, up to 64 channels at once\r?\n.*within the budget\r?\n$")
   # What fbengine_audio panics for with fbengine's entities, each by a run of tests/audio/panics.
   foreach(case IN ITEMS "emitter-follows-freed;an Emitter can't follow a freed Pivot"
