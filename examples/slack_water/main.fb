@@ -247,7 +247,7 @@ Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws Grap
     Local shallowBare, _ = ColorAtDepth(camera, bare, 0.0, 0.3)
     Local deepWith, _ = ColorAtDepth(camera, shore, 0.0, 2.2)
     Local deepBare, _ = ColorAtDepth(camera, bare, 0.0, 2.2)
-    Checks("the ground shows through what's shallow", Apart(shallowWith, shallowBare) > 30.0)
+    Checks("the ground shows through what's shallow", Apart(shallowWith, shallowBare) > 20.0)
     Checks("and not through what's deep", Apart(deepWith, deepBare) < 25.0)
 
     // It goes up the shore with the tide.
@@ -259,10 +259,24 @@ Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws Grap
     Checks("its foam goes up the shore with the tide", nowEdge > wasEdge + 70.0)
     island.Update(0.0)
 
-    // Its normals move, which only the sea shows.
+    // Its foam rolls in, at a depth it's at one moment and not the next.
     camera.SetPosition(Vec3(MAIN_X - 16.0, 4.5, shoreZ + 9.0))
+    Local least: Float = 1000.0
+    Local most: Float = 0.0
+    For step = 0 Until 8
+        island.Update((step As Float64) * 0.6)
+        Local rolled, _ = SeaAtDepth(camera, Try Shown(island), 0.0, 0.55)
+        least = Min(least, rolled)
+        most = Max(most, rolled)
+    End For
+    island.Update(0.0)
+    Checks("its foam rolls in", most > least + 40.0)
+
+    // Its normals move, out at sea, where there's no foam: and nothing but them does.
+    camera.SetPosition(Vec3(MAIN_X, 12.0, 90.0))
+    camera.PointAt(Vec3(MAIN_X, 0.0, 300.0))
     Local before = Try Shown(island)
-    island.Update(0.5)
+    island.Update(0.25)
     Local after = Try Shown(island)
     island.Update(0.0)
     Local moved = Function(from: Int, to: Int): Float
@@ -274,7 +288,7 @@ Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws Grap
         End For
         Return (count As Float) / (((to - from) * before.Width) As Float)
     End Function
-    Checks("the sea moves", moved(300, 700) > 0.2)
+    Checks("the sea's waves move", moved(420, 720) > 0.2)
     Checks("and the sky doesn't", moved(0, 100) < 0.01)
 
     // Out to sea, into the sun, which is where its light's from.

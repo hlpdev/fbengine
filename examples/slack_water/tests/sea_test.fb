@@ -18,19 +18,13 @@ Function Apart(frame: UInt8[], x: Int, y: Int, otherX: Int, otherY: Int): Int
 End Function
 
 @Test
-Function WavesLoop()
-    Expect(WaveFrame(32) == WaveFrame(0))
-    Expect(WaveFrame(0) != WaveFrame(1))
-End Function
-
-@Test
 Function WavesTileAcrossTheirEdgesAsWithinThem()
-    Local frame = WaveFrame(5)
+    Local tile = WaveTile()
     Local inside = 0
     Local edges = 0
     For at = 0 Until SIDE_OF_WAVES
-        inside += Apart(frame, 100, at, 101, at) + Apart(frame, at, 100, at, 101)
-        edges += Apart(frame, 255, at, 0, at) + Apart(frame, at, 255, at, 0)
+        inside += Apart(tile, 100, at, 101, at) + Apart(tile, at, 100, at, 101)
+        edges += Apart(tile, 255, at, 0, at) + Apart(tile, at, 255, at, 0)
     End For
     Expect(inside > 0)
     Expect((edges As Float) < (inside As Float) * 1.3)
@@ -38,56 +32,27 @@ Function WavesTileAcrossTheirEdgesAsWithinThem()
 End Function
 
 @Test
-Function WavesFaceMostlyUp()
-    Local frame = WaveFrame(3)
+Function WavesFaceMostlyUpAndColorNothing()
+    Local tile = WaveTile()
+    Expect(tile.Count == SIDE_OF_WAVES * SIDE_OF_WAVES * 4)
     Local at = 0
-    While at < frame.Count
+    While at < tile.Count
         // Up's blue, and a sheer one would be 128.
-        Expect(frame[at + 2] > 200)
-        Expect(frame[at + 3] == 255)
+        Expect(tile[at + 2] > 200)
+        // Laid over the sea by its alpha, which is none.
+        Expect(tile[at + 3] == 0)
         at += 4
     End While
 End Function
 
 @Test
-Function LandShowsThroughTheShoreMap()
-    Local _, _, _, onLand = ShoreAt(-0.5, 0.0, 0.5)
-    Expect(onLand == 0.0)
-End Function
-
-@Test
-Function FoamIsWhiteAtTheEdgeAndNotInTheDeep()
-    Local r, g, b, hides = ShoreAt(0.05, 0.0, 0.5)
-    Expect(r > 0.9 && g > 0.9 && b > 0.9 && hides > 0.9)
-    r, g, b, hides = ShoreAt(5.0, 0.0, 0.3)
-    Expect(Abs(r - 0.1) < 0.001 && Abs(g - 0.3) < 0.001 && Abs(b - 0.38) < 0.001)
-    Expect(hides == 1.0)
-End Function
-
-@Test
-Function ItsBreakingUpLeavesGapsInTheFoam()
-    Local whole, _, _, _ = ShoreAt(0.08, 0.0, 0.2)
-    Local gone, _, _, _ = ShoreAt(0.08, 0.0, 0.8)
-    Expect(whole > gone + 0.3)
-End Function
-
-@Test
-Function ItRollsIn()
-    // A line at some depth, gone a moment later, and shoreward by then.
-    Local deepestFoam = Function(time: Float): Float
-        Local depth: Float = 1.0
-        While depth > 0.2
-            Local r, _, _, _ = ShoreAt(depth, time, 0.3)
-            If r > 0.5 Then Return depth
-            depth -= 0.01
-        End While
-        Return 0.0
-    End Function
-    Local first = deepestFoam(1.0)
-    Local later = deepestFoam(1.5)
-    Expect(first > 0.2)
-    Expect(later > 0.2)
-    Expect(later < first)
+Function AFlatNormalIsWhatAMapSaysIsFlat()
+    Local r, g, b = NormalTexel(0.0, 0.0)
+    Expect(r == 128 && g == 128 && b == 255)
+    Local across, _, _ = NormalTexel(0.2, 0.0)
+    Local back, _, _ = NormalTexel(-0.2, 0.0)
+    // Mirrored, to a byte, as 127.5 is between two.
+    Expect(Abs((across As Int) + (back As Int) - 256) <= 1)
 End Function
 
 @Test

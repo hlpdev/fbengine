@@ -665,6 +665,14 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(examples.slack_water.assets_match PROPERTIES RESOURCE_LOCK slack_water
                        FIXTURES_REQUIRED slack_water_made
                        ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen" TIMEOUT 300)
+  # The sea's shader is cooked by the game's build step, which every one of its tests runs, by the
+  # Slang release the engine's own are.
+  get_directory_property(fbengine_tests_here TESTS)
+  foreach(test IN LISTS fbengine_tests_here)
+    if(test MATCHES "^examples\.slack_water\.")
+      set_property(TEST "${test}" APPEND PROPERTY ENVIRONMENT "FBENGINE_SLANGC=${FBENGINE_SLANGC}")
+    endif()
+  endforeach()
   foreach(name IN ITEMS sprites_over_a_scene pixels_of_images_and_textures
           textures_by_their_settings)
     add_test(NAME proof.${name}_no_gpu
