@@ -139,18 +139,6 @@ Function Asked(arguments: String[]): Int
     Return Int.Parse(arguments[at + 1]) ?? 0
 End Function
 
-// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
-Function Drew(): Bool Throws GraphicsError
-    Local image = Try Screen.ToImage()
-    Local behind = image[0, 0]
-    For y = 0 To image.Height - 1
-        For x = 0 To image.Width - 1
-            If image[x, y] != behind Then Return True
-        End For
-    End For
-    Return False
-End Function
-
 // A file's rooms.
 Function Loaded(path: Path): Room[] Throws IOError
     Local file = Try File.Open(path)
@@ -219,7 +207,19 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError, IOError
                             room.Z * 30 + 104)
         End For
     End While
-    Print("drew {Try Drew()}")
+    If count == frames
+        // Each room's rectangle, where and as lit as what was read back says.
+        Local shown = Try Screen.ToImage()
+        Local right = read.Count == 4
+        For room In read
+            Local shade = (room.Light * 255.0) As UInt8
+            If shown[room.X * 30 + 90, room.Z * 30 + 70] !=
+               Color32(shade, shade, room.Locked ? 60 : shade, 255)
+                right = False
+            End If
+        End For
+        Print("{read.Count} rooms, each drawn by what's read back {right}, the first's light {read[0].Light:.2}")
+    End If
     Try folder.Close()
     Print("watched {count} frames")
 End Function

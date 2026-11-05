@@ -3,6 +3,7 @@
 // mouse's or a sweeping line's pick marked where it lands.
 
 Import std.core
+Import std.image.image
 Import std.math
 Import fbengine
 Import std.collections
@@ -31,16 +32,21 @@ Function Asked(arguments: String[]): Int
     Return Int.Parse(arguments[at + 1]) ?? 0
 End Function
 
-// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
-Function Drew(): Bool Throws GraphicsError
-    Local image = Try Screen.ToImage()
-    Local behind = image[0, 0]
-    For y = 0 To image.Height - 1
-        For x = 0 To image.Width - 1
-            If image[x, y] != behind Then Return True
-        End For
-    End For
-    Return False
+// Whether two colors are within 2 of each other in each channel, as a GPU's rounding of what's
+// encoded leaves them.
+Function Near(got: Color32, wanted: Color32): Bool
+    Return Abs((got.r As Int) - (wanted.r As Int)) <= 2 &&
+           Abs((got.g As Int) - (wanted.g As Int)) <= 2 &&
+           Abs((got.b As Int) - (wanted.b As Int)) <= 2
+End Function
+
+// `wanted` if `got` is near it, else `got`, to print.
+Function Shown(got: Color32, wanted: Color32): Color32 => Near(got, wanted) ? wanted : got
+
+// What's drawn where `camera` sees `place`.
+Function Seen(camera: Camera, image: Image, place: Vec3): Color32
+    Local at = camera.Project(place) ?? Vec3(0, 0, 0)
+    Return image[at.x As Int, at.y As Int]
 End Function
 
 // A material of no lighting.
@@ -93,7 +99,6 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     marker.SetMaterial(Painted(Color(1, 0.1, 0.1)))
     Local camera = Watching(Vec3(0, 6, 9), Vec3(0, 0, 0))
     Local font = Font.BuiltIn(18.0)
-    Local drew = False
     Local time: Float = 0.0
     Local count = 0
     While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
@@ -112,14 +117,22 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
             marker.Hide()
         End If
         RenderWorld()
-        // The first frame's scene, with nothing yet over it to find instead.
-        If frames > 0 && count == 1 Then drew = Try Drew()
         Local canvas = Screen.Canvas()
         canvas.SetBlend(Blend2D.ALPHA)
         canvas.SetColor(Color32(230, 232, 235, 255))
         canvas.DrawText(font, pick != Null ? "{Said(pick)}" : "nothing", 16, 16)
     End While
-    Print("drew {drew}")
+    If count == frames
+        // What's under the point's named, and marked at it, in 1, 0.1, 0.1's stored 255, 89, 89; each
+        // of the rest's in its color, stored: the ball's 124, 218, 242, the crate's 231, 188, 124, and
+        // the floor's 108, 108, 124.
+        Local shown = Try Screen.ToImage()
+        Local point = Vec2((400.0 + Sin(time) * 300.0) As Float32, 240.0)
+        Local pick = camera.Pick(point)
+        Print("under its point: {Said(pick)}")
+        Print("marked {Shown(shown[point.x As Int, point.y As Int], Color32(255, 89, 89, 255))}")
+        Print("the ball, the crate, the floor: {Shown(Seen(camera, shown, Vec3(2, 2, 0)), Color32(124, 218, 242, 255))}, {Shown(Seen(camera, shown, Vec3(-3, 2, 0)), Color32(231, 188, 124, 255))}, {Shown(Seen(camera, shown, Vec3(4, 0, 6)), Color32(108, 108, 124, 255))}")
+    End If
     Print("watched {count} frames")
 End Function
 

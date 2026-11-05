@@ -1,11 +1,13 @@
-// What the cooker and typed references leave out of a game's folder: what isn't the game's.
+// What the cooker and typed references leave out of a game's folder: what isn't the game's, or is
+// only there to be compiled in.
 
 Import std.text
 
 // Whether a file or folder named `name` isn't the game's: hidden, its name starting with '.', as
-// .git and .DS_Store are, or one of the files Windows' Explorer leaves in a folder.
+// .git and .DS_Store are, or one of the files Windows' Explorer leaves in a folder; or what shaders
+// include, a .inc.slang, whose text is in what's compiled.
 Package Function LeftOut(name: String): Bool
-    If name.StartsWith(".") Then Return True
+    If name.StartsWith(".") || name.EndsWith(".inc.slang") Then Return True
     Local folded = name.ToLower()
     Return folded == "thumbs.db" || folded == "desktop.ini"
 End Function

@@ -43,12 +43,13 @@ extern "C" {
 // material isn't fogged, 10 and 11 its FBE_DEPTH_, and 12 whether its matrix mirrors it, its
 // determinant below 0, which turns its triangles' winding around, 13 to 16 how many of its
 // material's layers have textures, and from 17 those layers', four bits each from the lowest, the
-// FBE_LAYER_ blend and over it the UV set, 49 whether it's wireframe, and 50 whether it's an
-// emitter's particles; the default material is a new one's, but for a sprite or an emitter, which
-// is full-bright with none. A target's format and samples aren't
-// in it, since a camera's draws all go into one target, and they're in the pipeline a pass makes of
-// it. An FBE_SHADING_VERTEX draw has its own lights, `light_count` of fbe_render_draw_lights'
-// indices from `light_first`; any other, 0 of them, as it's lit by its clusters.
+// FBE_LAYER_ blend and over it the UV set, 49 whether it's wireframe, 50 whether it's an emitter's
+// particles, 51 whether it's an Instances', and from 52 the number of its material's shader of its
+// own's code, 0 for the scene's own; the default material is a new one's, but for a sprite or an
+// emitter, which is full-bright with none. A target's format and samples aren't in it, since a
+// camera's draws all go into one target, and they're in the pipeline a pass makes of it. An
+// FBE_SHADING_VERTEX draw has its own lights, `light_count` of fbe_render_draw_lights' indices from
+// `light_first`; any other, 0 of them, as it's lit by its clusters.
 typedef struct fbe_draw_t {
     uint64_t entity;
     int32_t kind;

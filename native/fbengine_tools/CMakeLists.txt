@@ -20,6 +20,27 @@ target_include_directories(fbengine_tools_native PRIVATE "${CMAKE_CURRENT_SOURCE
 target_compile_definitions(fbengine_tools_native PRIVATE FBE_TOOLS_BUILDING
                            FBE_VERSION="${PROJECT_VERSION}")
 target_link_libraries(fbengine_tools_native PRIVATE fbengine_stb ktx fastgltf::fastgltf meshoptimizer)
+# The engine's shaders' sources, which a game's shader is compiled with.
+set(fbengine_shader_sources_folder "${CMAKE_CURRENT_BINARY_DIR}/shader_sources")
+file(MAKE_DIRECTORY "${fbengine_shader_sources_folder}")
+set_source_files_properties(cook/shaders.cpp PROPERTIES COMPILE_DEFINITIONS
+                            "FBE_SHADER_STAMP=\"${fbengine_shader_stamp}\"")
+string(REPLACE ";" "|" fbengine_shader_sources_list "${fbengine_shader_sources}")
+add_custom_command(
+  OUTPUT "${fbengine_shader_sources_folder}/shader_sources.hpp"
+         "${fbengine_shader_sources_folder}/shader_sources.cpp"
+  COMMAND "${CMAKE_COMMAND}" "-DHEADER=${fbengine_shader_sources_folder}/shader_sources.hpp"
+          "-DSOURCE=${fbengine_shader_sources_folder}/shader_sources.cpp"
+          "-DFILES=${fbengine_shader_sources_list}"
+          -P "${PROJECT_SOURCE_DIR}/cmake/embed_text.cmake"
+  DEPENDS ${fbengine_shader_sources} "${PROJECT_SOURCE_DIR}/cmake/embed_text.cmake"
+  COMMENT "Embedding the shaders' sources in fbengine_tools"
+  VERBATIM)
+target_sources(fbengine_tools_native PRIVATE "${fbengine_shader_sources_folder}/shader_sources.cpp")
+target_include_directories(fbengine_tools_native PRIVATE "${fbengine_shader_sources_folder}")
+target_compile_definitions(fbengine_tools_native PRIVATE
+                           FBE_SLANG_VERSION="${fbengine_slang_version}")
+
 # fastgltf's exporter is built as fastgltf is, without _UCRT, as cook/glb.hpp says why.
 if(MINGW)
   set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/cook/glb.cpp" TARGET_DIRECTORY

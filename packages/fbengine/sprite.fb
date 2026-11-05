@@ -19,8 +19,12 @@ Public Enum SpriteViewMode
     BILLBOARD = 0
     /// As the entity itself is turned and scaled, as a decal on a wall is.
     FIXED = 1
-    /// Upright on the entity's own up, turned toward the camera about it, as a tree is.
+    /// Upright on the entity's own up, turned toward the camera about it, whatever its scale, as
+    /// what stands on the ground and faces whoever looks is.
     UPRIGHT = 2
+    /// As the entity itself is turned and scaled, and then by the camera's yaw alone, so looking up
+    /// or down sees it foreshortened, as a tree is.
+    UPRIGHT_YAW = 3
 End Enum
 
 /// An entity that draws a quad, 2 across and 2 high around its place at first, in a Material, or

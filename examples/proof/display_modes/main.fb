@@ -138,6 +138,13 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
         canvas.DrawRect(1, high - 21, 20, 20)
         canvas.DrawRect(wide - 21, high - 21, 20, 20)
     End While
+    If count == frames
+        // Whatever mode it's in, what's asked for's shown: its corners' squares a pixel from the edges.
+        Local shown = Try Screen.ToImage()
+        Local wide = shown.Width
+        Local high = shown.Height
+        Print("{Window.Mode()}, its squares {shown[1, high - 2]}, {shown[wide - 2, high - 2]}, off them {shown[0, high - 1]}, {shown[22, high - 2]}")
+    End If
     If Window.Open() Then Try Window.SetMode(WindowMode.WINDOWED)
     Print("watched {count} frames")
 End Function

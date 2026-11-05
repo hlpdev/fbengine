@@ -1,17 +1,152 @@
 // A game's window, frame timing, and input: a millisecond clock, Flip with and without vsync, a
 // frame limit, keys down and hit and flushed, the mouse's place, speed, buttons, and wheel, moving
 // and hiding it, relative mode, and focus. Driven by Simulate, it prints what it read; with --watch,
-// a window that shows each as a person uses them. A game's own, and not here, are its table from
-// DirectInput's numbers to these Keys, its binds in its settings, and how it scales the mouse's
-// relative motion to feel as the cursor's did: fbengine has only its Keys, in the keyboard's
-// places, and raw counts.
+// a window that shows each as a person uses them. A game's own are its table from DirectInput's
+// numbers to these Keys, which is here as a game's would be, and its binds in its settings; how it
+// scales the mouse's relative motion to feel as the cursor's did is the game's too, and isn't here:
+// fbengine has only its Keys, in the keyboard's places, and raw counts.
 
 Import std.collections
 Import std.core
 Import std.math
 Import std.os
+Import std.text
 Import std.time
 Import fbengine
+
+// A game's table: the Key at DirectInput's number, as a game's settings keep its binds; Null for what
+// it hasn't.
+Function KeyOfScancode(scancode: Int): Key?
+    Select scancode
+        Case 1
+            Return Key.ESCAPE
+        Case 2
+            Return Key.DIGIT_1
+        Case 3
+            Return Key.DIGIT_2
+        Case 4
+            Return Key.DIGIT_3
+        Case 5
+            Return Key.DIGIT_4
+        Case 6
+            Return Key.DIGIT_5
+        Case 7
+            Return Key.DIGIT_6
+        Case 8
+            Return Key.DIGIT_7
+        Case 9
+            Return Key.DIGIT_8
+        Case 10
+            Return Key.DIGIT_9
+        Case 11
+            Return Key.DIGIT_0
+        Case 14
+            Return Key.BACKSPACE
+        Case 15
+            Return Key.TAB
+        Case 16
+            Return Key.Q
+        Case 17
+            Return Key.W
+        Case 18
+            Return Key.E
+        Case 19
+            Return Key.R
+        Case 20
+            Return Key.T
+        Case 21
+            Return Key.Y
+        Case 22
+            Return Key.U
+        Case 23
+            Return Key.I
+        Case 24
+            Return Key.O
+        Case 25
+            Return Key.P
+        Case 28
+            Return Key.RETURN
+        Case 29
+            Return Key.LEFT_CONTROL
+        Case 30
+            Return Key.A
+        Case 31
+            Return Key.S
+        Case 32
+            Return Key.D
+        Case 33
+            Return Key.F
+        Case 34
+            Return Key.G
+        Case 35
+            Return Key.H
+        Case 36
+            Return Key.J
+        Case 37
+            Return Key.K
+        Case 38
+            Return Key.L
+        Case 42
+            Return Key.LEFT_SHIFT
+        Case 44
+            Return Key.Z
+        Case 45
+            Return Key.X
+        Case 46
+            Return Key.C
+        Case 47
+            Return Key.V
+        Case 48
+            Return Key.B
+        Case 49
+            Return Key.N
+        Case 50
+            Return Key.M
+        Case 54
+            Return Key.RIGHT_SHIFT
+        Case 56
+            Return Key.LEFT_ALT
+        Case 57
+            Return Key.SPACE
+        Case 59
+            Return Key.F1
+        Case 60
+            Return Key.F2
+        Case 61
+            Return Key.F3
+        Case 62
+            Return Key.F4
+        Case 63
+            Return Key.F5
+        Case 64
+            Return Key.F6
+        Case 65
+            Return Key.F7
+        Case 66
+            Return Key.F8
+        Case 67
+            Return Key.F9
+        Case 68
+            Return Key.F10
+        Case 87
+            Return Key.F11
+        Case 88
+            Return Key.F12
+        Case 157
+            Return Key.RIGHT_CONTROL
+        Case 184
+            Return Key.RIGHT_ALT
+        Case 200
+            Return Key.UP
+        Case 203
+            Return Key.LEFT
+        Case 205
+            Return Key.RIGHT
+        Case 208
+            Return Key.DOWN
+    End Select
+    Return Null
+End Function
 
 Function Proved() Throws GraphicsError, InputError
     Window.SetHeadless(True)
@@ -56,9 +191,17 @@ Function Proved() Throws GraphicsError, InputError
     FlushKeys()
     Print("flushed, hit {KeyHit(Key.SPACE)}")
 
-    // Each of the ten keys a game's binds are at first, held across frames, each by itself.
-    Local binds = [Key.W, Key.A, Key.S, Key.D, Key.SPACE, Key.LEFT_SHIFT, Key.TAB, Key.LEFT_CONTROL,
-                   Key.F5, Key.F3]
+    // Each of the ten keys a game's binds are at first, by the numbers its settings have them by,
+    // held across frames, each by itself.
+    Local binds: Key[] = []
+    Local names: String[] = []
+    For scancode In [17, 30, 31, 32, 57, 42, 15, 29, 63, 61]
+        Local bound = KeyOfScancode(scancode) ?? Key.UNKNOWN
+        binds.Add(bound)
+        names.Add("{scancode} {bound}")
+    End For
+    Print("by their numbers: {", ".Join(names)}")
+    Print("a number with no key: {KeyOfScancode(999) == Null}")
     Local held = 0
     For bind In binds
         Try Simulate.KeyDown(bind)
@@ -124,7 +267,8 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     Try Graphics(800, 450)
     Defer EndGraphics()
     Window.SetTitle("frame timing and input: Escape ends it")
-    Frame.SetLimit(60)
+    // No limit of its own: a person's run reads Flip's waiting off "a second", the display's refresh
+    // with V's vsync on and far past it with it off.
     Local font = Font.BuiltIn(18.0)
     Local clock = Stopwatch.StartNew()
     Local hits = 0
@@ -137,7 +281,7 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
         Flip(vsync)
         count += 1
         Try Driven(arguments, count)
-        If KeyHit(Key.R) Then Try Relative(!MouseRelative())
+        If KeyHit(Key.R) Then Relative(!MouseRelative())
         If KeyHit(Key.H) Then SetCursorVisible(!CursorVisible())
         If KeyHit(Key.V) Then vsync = !vsync
         If KeyHit(Key.M)
@@ -161,7 +305,7 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
                        "left down {MouseDown(MouseButton.LEFT)}, wheel {MouseWheel()}", "focused {Window.Focused()}",
                        "R relative {MouseRelative()}, H shown {CursorVisible()}, V vsync {vsync}, M moved {moved}, F flushed {flushed}"]
         For i = 0 To lines.Count - 1
-            canvas.DrawText(font, lines[i], 16, 16 + (i As Int32) * 28)
+            canvas.DrawText(font, lines[i], 16, 16 + i * 28)
         End For
         // Where the mouse is, as a game's own pointer.
         canvas.SetColor(Color32(76, 141, 255, 255))

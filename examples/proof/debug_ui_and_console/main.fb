@@ -5,6 +5,7 @@
 
 Import std.collections
 Import std.core
+Import std.image.image
 Import std.math
 Import std.os
 Import fbengine
@@ -196,6 +197,8 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     Local waited: Float64 = 0.0
     Local step = 0
     Local byItself = True
+    Local drawnAt: Float = 0.0
+    Local clear: Image? = Null
     While !Window.Closed() && (frames == 0 || count < frames)
         If KeyHit(Key.ESCAPE)
             If !game.console.Visible() Then Break
@@ -205,6 +208,11 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
         If KeysHit().Count > 0 Then byItself = False
         game.Step()
         count += 1
+        // The last frame with the console shut, and the speed it was drawn at.
+        If frames > 0 && !game.console.Visible()
+            clear = Try Screen.ToImage()
+            drawnAt = game.speed
+        End If
         Try Driven(arguments, count)
         waited += Frame.Delta()
         If byItself && (frames > 0 || waited >= 1.0)
@@ -229,6 +237,13 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
             step += 1
         End If
     End While
+    If count == frames && clear != Null
+        // On the last frame with the console shut, the game's square's where its speed put it, at
+        // 40 + 10 x speed, 32 wide; and the walk's console's open at the end, as its 6 steps leave it.
+        Local x = 40 + (drawnAt * 10.0) As Int
+        Print("at speed {drawnAt}, its square {clear[x + 16, 216]}, past it {clear[x + 40, 216]}")
+        Print("noclip {game.noclip}, console {game.console.Visible()}")
+    End If
     Print("watched {count} frames")
 End Function
 

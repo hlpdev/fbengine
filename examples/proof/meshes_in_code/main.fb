@@ -29,16 +29,10 @@ Function Asked(arguments: String[]): Int
     Return Int.Parse(arguments[at + 1]) ?? 0
 End Function
 
-// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
-Function Drew(): Bool Throws GraphicsError
-    Local image = Try Screen.ToImage()
-    Local behind = image[0, 0]
-    For y = 0 To image.Height - 1
-        For x = 0 To image.Width - 1
-            If image[x, y] != behind Then Return True
-        End For
-    End For
-    Return False
+// What's drawn where `camera` sees `place`.
+Function Seen(camera: Camera, image: Image, place: Vec3): Color32
+    Local at = camera.Project(place) ?? Vec3(0, 0, 0)
+    Return image[at.x As Int, at.y As Int]
 End Function
 
 // A material of no lighting.
@@ -108,7 +102,7 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     lamp.SetRotation(Quat.FromEuler(Deg(-50), Deg(30), 0.0))
     Local rising = grid.Surface(0)
     Local middle = rising.VertexCount() / 2
-    Watching(Vec3(0, 1.5, 0), Vec3(0, 0, -5))
+    Local camera = Watching(Vec3(0, 1.5, 0), Vec3(0, 0, -5))
     Local time: Float = 0.0
     Local count = 0
     While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
@@ -123,7 +117,21 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
         quad.SetRotation(Quat.FromEuler(0.0, Sin(time * 0.6) * 0.6, 0.0))
         RenderWorld()
     End While
-    Print("drew {Try Drew()}")
+    If count == frames
+        // By its corners, turned: red, opaque; blue, opaque; and the corner of no alpha showing the
+        // wall behind it, 0.5's stored 188, whatever its white would be.
+        Local shown = Try Screen.ToImage()
+        Local turned = quad.Rotation(Space.WORLD)
+        Local reddest = Seen(camera, shown, quad.Position() + turned * Vec3(-0.9, 0.9, 0))
+        Local bluest = Seen(camera, shown, quad.Position() + turned * Vec3(0.9, -0.9, 0))
+        Local clearest = Seen(camera, shown, quad.Position() + turned * Vec3(-0.97, -0.97, 0))
+        Print("its red corner {reddest.r > 200 && reddest.g < 80 && reddest.b < 80}, its blue {bluest.b > 200 && bluest.r < 80 && bluest.g < 110}")
+        Print("the wall through its corner of no alpha {Abs((clearest.g As Int) - 188) < 12}")
+        // A grid's normals go with its middle's rise: each side of it faces the light differently.
+        Local top = rising.Vertex(middle).Position
+        Local place = ground.Position() + Vec3(top.x * 2.0, top.y, top.z * 2.0)
+        Print("lit by what it's worked out from its rise {Seen(camera, shown, place + Vec3(-0.25, 0, 0)) != Seen(camera, shown, place + Vec3(0.25, 0, 0))}")
+    End If
     Print("watched {count} frames")
 End Function
 

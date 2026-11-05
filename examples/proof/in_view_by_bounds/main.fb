@@ -4,6 +4,7 @@
 // orbiting a watching camera, seen from above, green while they're in its view.
 
 Import std.core
+Import std.image.image
 Import std.math
 Import fbengine
 Import std.collections
@@ -25,16 +26,18 @@ Function Asked(arguments: String[]): Int
     Return Int.Parse(arguments[at + 1]) ?? 0
 End Function
 
-// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
-Function Drew(): Bool Throws GraphicsError
-    Local image = Try Screen.ToImage()
-    Local behind = image[0, 0]
-    For y = 0 To image.Height - 1
-        For x = 0 To image.Width - 1
-            If image[x, y] != behind Then Return True
-        End For
-    End For
-    Return False
+// Whether two colors are within 2 of each other in each channel, as a GPU's rounding of what's
+// encoded leaves them.
+Function Near(got: Color32, wanted: Color32): Bool
+    Return Abs((got.r As Int) - (wanted.r As Int)) <= 2 &&
+           Abs((got.g As Int) - (wanted.g As Int)) <= 2 &&
+           Abs((got.b As Int) - (wanted.b As Int)) <= 2
+End Function
+
+// What's drawn where `camera` sees `place`.
+Function Seen(camera: Camera, image: Image, place: Vec3): Color32
+    Local at = camera.Project(place) ?? Vec3(0, 0, 0)
+    Return image[at.x As Int, at.y As Int]
 End Function
 
 // A material of no lighting.
@@ -81,7 +84,7 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
         cube.SetScale(Vec3(0.6, 0.6, 0.6))
         cubes.Add(cube)
     End For
-    Watching(Vec3(0, 25, 0.01), Vec3(0, 0, 0))
+    Local above = Watching(Vec3(0, 25, 0.01), Vec3(0, 0, 0))
     Local time: Float = 0.0
     Local count = 0
     While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
@@ -100,8 +103,60 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
         End For
         RenderWorld()
     End While
-    Print("drew {Try Drew()}")
+    If count == frames
+        // Green, 0.2, 0.9, 0.3's stored 124, 242, 149, for those wholly in its view by the sums; red,
+        // 0.7, 0.15, 0.15's 218, 108, 108, for those wholly out of it. It looks down -z, 60 degrees
+        // high and 800 by 600, from 1 to 12, and a cube's corners are 0.6 x root 3 from its middle.
+        Local shown = Try Screen.ToImage()
+        Local reach: Float = 0.6 * Sqrt(3.0)
+        Local green = 0
+        Local red = 0
+        Local right = True
+        For cube In cubes
+            Local at = cube.Position()
+            Local wide = Tan(Deg(30)) * -at.z * 4.0 / 3.0
+            // A plane leans from what's straight ahead by up to this much.
+            Local lean = reach * Sqrt(1.0 + (Tan(Deg(30)) * 4.0 / 3.0) ** 2.0)
+            Local wholly = -at.z > 1.0 + reach && -at.z < 12.0 - reach && Abs(at.x) < wide - lean
+            Local outside = -at.z < 1.0 - reach || -at.z > 12.0 + reach || Abs(at.x) > wide + lean
+            Local drawn = Seen(above, shown, at + Vec3(0, 0.6, 0))
+            If Near(drawn, Color32(124, 242, 149, 255)) Then green += 1
+            If Near(drawn, Color32(218, 108, 108, 255)) Then red += 1
+            If wholly && !Near(drawn, Color32(124, 242, 149, 255)) Then right = False
+            If outside && !Near(drawn, Color32(218, 108, 108, 255)) Then right = False
+        End For
+        Print("{green} green and {red} red, as the sums have them {right}")
+    End If
     Print("watched {count} frames")
+End Function
+
+// The vertical field of view of a zoom, as a game coming from Blitz's has one: its zoom sets what's
+// across, 1 being 90 degrees, in a view of `width` by `height`.
+Function FieldOfViewOf(zoom: Float, width: Float, height: Float): Float
+    Return 2.0 * Atan((height / width) / zoom)
+End Function
+
+// Its field of view across, in degrees, of a vertical one.
+Function DegreesAcross(fieldOfView: Float, width: Float, height: Float): Float
+    Return 2.0 * Atan(Tan(fieldOfView / 2.0) * width / height) * 180.0 / Pi
+End Function
+
+// By zoom: at 1, what's across at a depth of 10 goes to 10, and what's up it to 7.5, in a view of
+// 800 by 600; at the most a game's blood loss gives, 1.1, 2 x atan(1 / 1.1) across.
+Function Zoomed()
+    Local world = World()
+    World.SetCurrent(world)
+    Local eye = Camera()
+    eye.SetViewport(Rect(0, 0, 800, 600))
+    eye.SetRange(1, 50)
+    eye.SetFieldOfView(FieldOfViewOf(1.0, 800, 600))
+    Print("at zoom 1, x 9.9 {eye.InView(Vec3(9.9, 0, -10))}, 10.1 {eye.InView(Vec3(10.1, 0, -10))}")
+    Print("y 7.4 {eye.InView(Vec3(0, 7.4, -10))}, 7.6 {eye.InView(Vec3(0, 7.6, -10))}")
+    Local closer = FieldOfViewOf(1.1, 800, 600)
+    eye.SetFieldOfView(closer)
+    Print("at zoom 1.1, {DegreesAcross(closer, 800, 600):.1} degrees across")
+    Print("x 9 {eye.InView(Vec3(9, 0, -10))}, 9.2 {eye.InView(Vec3(9.2, 0, -10))}")
+    world.Free()
 End Function
 
 // Every plane, a camera moved and turned, what's around the whole view, and what blocks sight.
@@ -236,6 +291,7 @@ If !arguments.Contains("--watch")
     Print("with it not blocking {camera.CanSee(place)}")
     world.Free()
     MovedAndTurned()
+    Zoomed()
 ElseIf Env.Get("FBENGINE_NO_GPU") == "1"
     Print("no GPU here")
 Else

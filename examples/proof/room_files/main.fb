@@ -28,18 +28,6 @@ Function Asked(arguments: String[]): Int
     Return Int.Parse(arguments[at + 1]) ?? 0
 End Function
 
-// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
-Function Drew(): Bool Throws GraphicsError
-    Local image = Try Screen.ToImage()
-    Local behind = image[0, 0]
-    For y = 0 To image.Height - 1
-        For x = 0 To image.Width - 1
-            If image[x, y] != behind Then Return True
-        End For
-    End For
-    Return False
-End Function
-
 Const LEVEL = 2
 Const MOVER = 1
 
@@ -465,7 +453,6 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError, IOError
     camera.SetClearColor(Color(0.02, 0.02, 0.03))
     Local time: Float = 0.0
     Local count = 0
-    Local drew = False
     While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
         Flip()
         count += 1
@@ -475,12 +462,20 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError, IOError
         camera.PointAt(Vec3(0, 0, 0))
         rooms[1].Root.SetRotation(Quat.FromEuler(0.0, time * 0.4, 0.0))
         RenderWorld()
-        If frames > 0 && count == 1 Then drew = Try Drew()
     End While
     If frames > 0
         // 40 frames of a tenth of a second, at 0.4 radians a second, on from a quarter's being replaced.
         Print("the middle room's forward {Fine(rooms[1].Root.Forward())}")
-        Print("drew {drew}")
+        // Each copy's root's where it was placed, and drawn over what the camera clears to, stored
+        // 39, 39, 48, which is all there is in the corner.
+        Local shown = Try Screen.ToImage()
+        Local behind = Color32(39, 39, 48, 255)
+        Local drawn = 0
+        For each In rooms
+            Local at = camera.Project(each.Root.Position(Space.WORLD) + Vec3(0, 1, 0))
+            If at != Null && shown[at.x As Int, at.y As Int] != behind Then drawn += 1
+        End For
+        Print("{drawn} of its 3 copies drawn, its corner {shown[2, 2]}")
     End If
     Try folder.Close()
     Print("watched {count} frames")

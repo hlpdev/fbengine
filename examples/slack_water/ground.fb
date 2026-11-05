@@ -20,6 +20,13 @@ Const EDGE: Float = 14.0
 // How wide each rock is, about.
 Const MAIN_RADIUS: Float = 42.0
 Const FAR_RADIUS: Float = 20.0
+// The headland behind the mill, north of its yard, the island's high ground.
+Const HEADLAND_X: Float = MAIN_X - 4.0
+Const HEADLAND_Z: Float = -58.0
+Const HEADLAND_RADIUS: Float = 22.0
+// How high the crags on it and on the far rock get, over what's under them.
+Const HEADLAND_CRAGS: Float = 16.0
+Const FAR_CRAGS: Float = 4.0
 // How far past its shores the road's ground runs, into each rock, so no gap's left.
 Const ROAD_INTO: Float = 14.0
 // How far in the sea you can wade, and how far past a line you have to go for it to count as crossed.
@@ -63,10 +70,27 @@ Function Mound(x: Float, z: Float, centerX: Float, centerZ: Float, radius: Float
     Return 1.0 - Sqrt(dx * dx + dz * dz) / edge
 End Function
 
+// Noise folded into ridges, from 0 to 1: crags at two scales, sharp along their tops.
+Function Ridged(x: Float, z: Float): Float
+    Local wide = 1.0 - Abs(2.0 * Noise(x * 0.04 + 11.0, z * 0.04 + 5.0) - 1.0)
+    Local fine = 1.0 - Abs(2.0 * Noise(x * 0.11 + 3.0, z * 0.11 + 17.0) - 1.0)
+    Return wide * wide * 0.6 + fine * fine * 0.4
+End Function
+
 // How high the ground is at (`x`, `z`), but for the road.
 Public Function RockHeight(x: Float, z: Float): Float
-    Local land = Max(Mound(x, z, MAIN_X, 0.0, MAIN_RADIUS), Mound(x, z, FAR_X, FAR_Z, FAR_RADIUS))
-    Local height = land > 0.0 ? land * (5.0 + Rough(x, z) * 9.0) : land * 6.0
+    Local far = Mound(x, z, FAR_X, FAR_Z, FAR_RADIUS)
+    Local headland = Mound(x, z, HEADLAND_X, HEADLAND_Z, HEADLAND_RADIUS)
+    Local land = Max(Max(Mound(x, z, MAIN_X, 0.0, MAIN_RADIUS), far), headland)
+    Local height = land * 6.0
+    If land > 0.0
+        Local high = Clamp(headland, 0.0, 1.0)
+        Local low = Clamp(far, 0.0, 1.0)
+        Local crags = Max(high * high * HEADLAND_CRAGS, low * low * FAR_CRAGS) * Ridged(x, z)
+        // What's broken up, but for its shores, which stay as smooth as sand.
+        Local broken = (Noise(x * 0.6, z * 0.6) - 0.5) * 0.5 * Clamp((land - 0.12) * 6.0, 0.0, 1.0)
+        height = land * (5.0 + Rough(x, z) * 9.0) + crags + broken
+    End If
     // The yard's flat, where the mill stands.
     Local yard = Clamp(1.0 - (Sqrt((x - MAIN_X) * (x - MAIN_X) + z * z) - 22.0) / 14.0, 0.0, 1.0)
     Return height + (4.0 - height) * yard
@@ -194,10 +218,63 @@ Public Function SunAt(clock: Float64): (Float, Float)
     Return (0.66 - 0.36 * through, 0.52 - 0.8 * through)
 End Function
 
-/// How the ground's painted (`x`, `z`) meters from its corner, 128 leaving it as it is: large patches,
-/// lighter and darker, that have nothing to do with where its maps repeat.
-Public Function PaintAt(x: Float, z: Float): UInt8
-    Local patches = Noise(x * 0.021 + 7.0, z * 0.021 + 3.0) * 0.6 +
-                    Noise(x * 0.067 + 2.0, z * 0.067 + 9.0) * 0.4
-    Return (Clamp(128.0 + (patches - 0.5) * 300.0, 50.0, 220.0)) As UInt8
+// `from` to `to`, by `amount`, which holds it to between them.
+Function Mixed(from: Vec3, to: Vec3, amount: Float): Vec3
+    Local by = Clamp(amount, 0.0, 1.0)
+    Return Vec3(from.x + (to.x - from.x) * by, from.y + (to.y - from.y) * by,
+                from.z + (to.z - from.z) * by)
+End Function
+
+/// What covers the ground at (`x`, `z`), `height` high with `slope` meters up to the meter: its color, as
+/// sRGB, and how rough it is, from 0 to 1. Sand low down and wet where the sea's just been, bare rock in
+/// bands where it's steep, turf on what's high and flat, and the trodden ground by the mill and to the
+/// road. From noise at several scales, so it's patches that have nothing to do with where a map repeats.
+Public Function CoverAt(x: Float, z: Float, height: Float, slope: Float): (Vec3, Float)
+    Local fine = Noise(x * 0.8 + 1.0, z * 0.8 + 2.0)
+    Local patches = Noise(x * 0.09 + 4.0, z * 0.09 + 6.0) * 0.6 +
+                    Noise(x * 0.31 + 8.0, z * 0.31 + 1.0) * 0.4
+    Local bands = Noise(x * 0.05 + z * 0.03, height * 1.6)
+    Local color = Mixed(Vec3(0.27, 0.27, 0.27), Vec3(0.47, 0.46, 0.43), bands * 0.6 + fine * 0.4)
+    // Its cracks, and lichen on it.
+    Local crack = 1.0 - Abs(2.0 * Noise(x * 0.37 + 5.0, z * 0.37 + height * 0.5) - 1.0)
+    color = Mixed(color, Vec3(0.12, 0.12, 0.12), Clamp((crack - 0.9) * 8.0, 0.0, 1.0))
+    Local lichen = Clamp((Noise(x * 0.6 + 9.0, z * 0.6 + 2.0) - 0.68) * 6.0, 0.0, 1.0)
+    color = Mixed(color, Vec3(0.62, 0.6, 0.42), lichen * 0.6)
+    Local rough = 0.72 + fine * 0.2
+    // Where the high water reaches, it's dark and wet, in patches.
+    Local tide = Clamp(1.0 - Abs(height - 1.7) / 0.35, 0.0, 1.0) *
+                 Clamp((patches - 0.25) * 4.0, 0.0, 1.0)
+    color = Mixed(color, Vec3(0.18, 0.18, 0.16), tide * 0.7)
+    rough -= tide * 0.3
+    // Turf, where it can hold on.
+    Local flat = Clamp((0.8 - slope) / 0.4, 0.0, 1.0)
+    Local blades = Noise(x * 2.3 + 3.0, z * 2.3 + 7.0)
+    Local turf = flat * Clamp((patches - 0.28) * 5.0, 0.0, 1.0) *
+                 Clamp((height - 2.3) / 1.2, 0.0, 1.0)
+    color = Mixed(color,
+                  Mixed(Vec3(0.29, 0.35, 0.18), Vec3(0.45, 0.47, 0.25),
+                        patches * 0.6 + blades * 0.6 - 0.2),
+                  turf)
+    rough = rough + (0.95 - rough) * turf
+    // Trodden ground around the mill, and from its door to the road.
+    Local fromMill = Sqrt((x - MAIN_X) * (x - MAIN_X) + z * z)
+    Local trodden = Clamp((12.0 + patches * 5.0 - fromMill) / 3.0, 0.0, 1.0)
+    If x > MAIN_X && x < ROAD_WEST
+        Local across = (x - MAIN_X) / (ROAD_WEST - MAIN_X)
+        Local pathZ = DoorSpot().y + (RoadZ(ROAD_WEST) - DoorSpot().y) * across
+        trodden = Max(trodden, Clamp((2.2 + fine - Abs(z - pathZ)) / 1.2, 0.0, 1.0))
+    End If
+    trodden *= Clamp((1.2 - slope) / 0.4, 0.0, 1.0)
+    color = Mixed(color, Mixed(Vec3(0.38, 0.33, 0.25), Vec3(0.5, 0.43, 0.32), fine), trodden)
+    rough = rough + (0.88 - rough) * trodden
+    // Sand, up to what's broken by the rock's own shape.
+    Local sand = Clamp((1.5 + (patches - 0.5) * 1.8 - height) / 0.5, 0.0, 1.0) *
+                 Clamp((1.3 - slope) / 0.4, 0.0, 1.0)
+    color = Mixed(color, Mixed(Vec3(0.72, 0.64, 0.47), Vec3(0.83, 0.76, 0.59), fine), sand)
+    rough = rough + (0.92 - rough) * sand
+    // Wet, where the sea's just been: darker, and it shines.
+    Local wet = Clamp((0.55 + (fine - 0.5) * 0.3 - height) / 0.3, 0.0, 1.0)
+    color = Mixed(color, Vec3(color.x * 0.58, color.y * 0.56, color.z * 0.54), wet)
+    rough = rough + (0.28 - rough) * wet
+    Return (color, Clamp(rough, 0.0, 1.0))
 End Function

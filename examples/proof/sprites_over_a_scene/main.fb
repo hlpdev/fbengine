@@ -112,6 +112,8 @@ Function Proved() Throws GraphicsError, IOError
     Local font = Font.BuiltIn(16.0)
     canvas.SetColor(Color32(255, 255, 255, 255))
     canvas.DrawText(font, "Score", 10, 40)
+    // Noto Sans's own advances, of 1000 an em: S 549, c 480, o 605, r 413, e 564, and its kern of r to e,
+    // -20, are 2591, which at 16 an em is 41.456; twice, with no kern of e to S, 82.912.
     Print("its width {font.Width("Score"):.2}, of \"ScoreScore\" {font.Width("ScoreScore"):.2}")
     Print("its ink's the pen's {Try Inked(10, 40, 42, 20)}, beside it {Try Inked(60, 40, 20, 20)}")
 
@@ -239,6 +241,22 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
         canvas.DrawText(font, "2D over a mesh: a strip's frames, turned, faded shapes, and text",
                         16, 416)
     End While
+    If count == frames
+        // By the sums: the rect's 160 of 255 of 200, 40, 40 over what's behind; the strip at 6 to one from
+        // its middle, 120, 120, at frame 0 of the time's 16, a column of 6 at its left; turned by 4
+        // radians, frame 3's left half; the mesh under them; and the text's ink's the pen's.
+        Local shown = Try Screen.ToImage()
+        Print("the rect over what's behind {shown[660, 240]}, the oval's middle {shown[660, 120]}, off its corner {shown[603, 83]}")
+        Print("the strip's first frame {shown[99, 120]}, off its block {shown[130, 120]}")
+        Print("turned {shown[408, 234]}, off it {shown[392, 216]}")
+        Local inked = 0
+        For y = 416 To 440
+            For x = 16 To 516
+                If shown[x, y] == Color32(230, 232, 235, 255) Then inked += 1
+            End For
+        End For
+        Print("the mesh under them {shown[345, 225]}, the text's ink {inked > 50}")
+    End If
     Print("watched {count} frames")
 End Function
 

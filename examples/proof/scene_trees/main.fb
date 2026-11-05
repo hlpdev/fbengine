@@ -7,6 +7,7 @@
 // forward.
 
 Import std.core
+Import std.image.image
 Import std.math
 Import fbengine
 Import std.collections
@@ -30,16 +31,21 @@ Function Asked(arguments: String[]): Int
     Return Int.Parse(arguments[at + 1]) ?? 0
 End Function
 
-// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
-Function Drew(): Bool Throws GraphicsError
-    Local image = Try Screen.ToImage()
-    Local behind = image[0, 0]
-    For y = 0 To image.Height - 1
-        For x = 0 To image.Width - 1
-            If image[x, y] != behind Then Return True
-        End For
-    End For
-    Return False
+// Whether two colors are within 2 of each other in each channel, as a GPU's rounding of what's
+// encoded leaves them.
+Function Near(got: Color32, wanted: Color32): Bool
+    Return Abs((got.r As Int) - (wanted.r As Int)) <= 2 &&
+           Abs((got.g As Int) - (wanted.g As Int)) <= 2 &&
+           Abs((got.b As Int) - (wanted.b As Int)) <= 2
+End Function
+
+// `wanted` if `got` is near it, else `got`, to print.
+Function Shown(got: Color32, wanted: Color32): Color32 => Near(got, wanted) ? wanted : got
+
+// What's drawn where `camera` sees `place`.
+Function Seen(camera: Camera, image: Image, place: Vec3): Color32
+    Local at = camera.Project(place) ?? Vec3(0, 0, 0)
+    Return image[at.x As Int, at.y As Int]
 End Function
 
 // A material of no lighting.
@@ -88,9 +94,11 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     Local copy = room.Copy()
     copy.SetPosition(Vec3(2.5, 0, -7))
     Local shut = copy.Find("door")
-    Watching(Vec3(0, 3, 0), Vec3(0, 0.5, -7))
+    Local camera = Watching(Vec3(0, 3, 0), Vec3(0, 0.5, -7))
     Local time: Float = 0.0
     Local count = 0
+    Local blinks = 0
+    Local wrong = 0
     While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
         Flip()
         count += 1
@@ -104,8 +112,33 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
             If (Floor(time) As Int) % 2 == 0 Then shut.Hide() Else shut.Show()
         End If
         RenderWorld()
+        // Each frame, the copy's door's color on the copy's side of the view, the right, just while
+        // it isn't hidden, as it turns edge on too.
+        If frames > 0 && shut != Null
+            Local image = Try Screen.ToImage()
+            Local drawn = False
+            For y = 0 Until image.Height Step 2
+                For x = image.Width / 2 Until image.Width Step 2
+                    If Near(image[x, y], Color32(218, 170, 124, 255)) Then drawn = True
+                End For
+            End For
+            If shut.Hidden() Then blinks += 1
+            If drawn == shut.Hidden() Then wrong += 1
+        End If
     End While
-    Print("drew {Try Drew()}")
+    If count == frames
+        // Each where its parents have it, in its color, stored: a door's 218, 170, 124, and its
+        // handle's 242, 242, 149 where it's on the door's side the camera sees, else the door's.
+        Local shown = Try Screen.ToImage()
+        Local doorAt = door.Position(Space.WORLD)
+        Local handleAt = handle.Position(Space.WORLD)
+        Local seenSide = Dot(handleAt - doorAt, camera.Position(Space.WORLD) - doorAt) > 0.0
+        Local wanted = seenSide ? Color32(242, 242, 149, 255) : Color32(218, 170, 124, 255)
+        Print("a door {Shown(Seen(camera, shown, doorAt), Color32(218, 170, 124, 255))}, its handle on the side it's seen from {seenSide}, drawn so {Near(Seen(camera, shown, handleAt), wanted)}")
+        If shut != Null
+            Print("the copy's door hidden {blinks} frames of {count}, drawn just while it's not {wrong == 0}")
+        End If
+    End If
     Print("watched {count} frames")
 End Function
 
@@ -113,7 +146,7 @@ End Function
 Function Fine(at: Vec3): String => "{at.x:.3}, {at.y:.3}, {at.z:.3}"
 
 // Every way of moving's sums, what a copy keeps, and alpha 0, which still collides and picks.
-Function WaysAndCopies()
+Function WaysAndCopies() Throws GraphicsError
     Local world = World()
     World.SetCurrent(world)
     world.SetCollisionResponse(1, 2, CollisionResponse.STOP)
@@ -166,6 +199,32 @@ Function WaysAndCopies()
     mover.Translate(Vec3(0, -10, 0))
     world.Collide()
     Print("alpha 0: a mover rests at {Fine(mover.Position())}")
+
+    // And not drawn: what's looked down on is the door at alpha 1, and what's behind it at 0.
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+        world.Free()
+        Return
+    End If
+    Window.SetHeadless(True)
+    Local target = Try Texture.Target(16, 16, TextureFormat.RGBA8, 1, True)
+    Local above = Camera()
+    above.SetRenderTarget(target)
+    above.SetClearColor(Color(0, 0, 1))
+    above.SetPosition(Vec3(0, 5, 0))
+    above.SetRotation(Quat.FromAxisAngle(Vec3(1, 0, 0), Deg(-90)))
+    Local painted = Material()
+    painted.SetShading(Shading.UNLIT)
+    painted.SetColor(Color(1, 0, 0))
+    door.SetMaterial(painted)
+    door.SetAlpha(1)
+    above.Render()
+    Print("alpha 1: what's over it {target.ToImage()[8, 8]}")
+    Flip(False)
+    door.SetAlpha(0)
+    above.Render()
+    Print("alpha 0: what's over it {target.ToImage()[8, 8]}")
+    Flip(False)
     world.Free()
 End Function
 
@@ -242,7 +301,7 @@ If !arguments.Contains("--watch")
     room.Free()
     Print("freed: the room {room.Freed()}, its handle {handle.Freed()}, the copy's {handleOfCopy?.Freed() ?? True}")
     world.Free()
-    WaysAndCopies()
+    Try WaysAndCopies()
 ElseIf Env.Get("FBENGINE_NO_GPU") == "1"
     Print("no GPU here")
 Else
