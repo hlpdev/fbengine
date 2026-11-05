@@ -223,6 +223,8 @@ void destroy(texture_t& texture) {
     const fbe::gpu::device_t& gpu = *fbe::gpu::device();
     vkDestroyImageView(gpu.device, texture.view, nullptr);
     vmaDestroyImage(gpu.allocator, texture.image, texture.memory);
+    vkDestroyImageView(gpu.device, texture.stored_view, nullptr);
+    vkDestroyImageView(gpu.device, texture.stored_msaa_view, nullptr);
     vkDestroyImageView(gpu.device, texture.msaa_view, nullptr);
     vmaDestroyImage(gpu.allocator, texture.msaa, texture.msaa_memory);
     vkDestroyImageView(gpu.device, texture.depth_view, nullptr);
@@ -230,14 +232,53 @@ void destroy(texture_t& texture) {
     texture = {};
 }
 
+/// The two formats a target of sRGB bytes is viewed as, which, being listed, leaves a GPU that
+/// compresses what it draws doing so.
+constexpr std::array<VkFormat, 2> stored_or_decoded{
+    VK_FORMAT_R8G8B8A8_SRGB,
+    VK_FORMAT_R8G8B8A8_UNORM,
+};
+const VkImageFormatListCreateInfo stored_or_decoded_list{
+    .sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO,
+    .viewFormatCount = stored_or_decoded.size(),
+    .pViewFormats = stored_or_decoded.data(),
+};
+
+/// A view of a target's image, of a format it has that writes its bytes as they are; false, with
+/// fbe_error's why, if it can't be made.
+bool make_stored_view(VkImage image, VkImageView& view) {
+    const VkImageViewCreateInfo info{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = image,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = VK_FORMAT_R8G8B8A8_UNORM,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .levelCount = 1,
+            .layerCount = 1,
+        },
+    };
+    const VkResult result = vkCreateImageView(fbe::gpu::device()->device, &info, nullptr, &view);
+    if (result != VK_SUCCESS) {
+        view = VK_NULL_HANDLE;
+        return fbe::gpu::fail_vulkan("couldn't make a target's view of its stored bytes", result);
+    }
+    return true;
+}
+
 /// A target's own attachment, the size of its image: its multisampled color or its depth, with a
-/// view; false, with fbe_error's why, if it can't be made.
+/// view, and, given where to put it, one of its stored bytes; false, with fbe_error's why, if it
+/// can't be made.
 bool make_attachment(const texture_t& texture, VkFormat format, VkImageUsageFlags usage,
                      VkImageAspectFlags aspect, VkImage& image, VmaAllocation& memory,
-                     VkImageView& view) {
+                     VkImageView& view, VkImageView* stored_view = nullptr) {
     const fbe::gpu::device_t& gpu = *fbe::gpu::device();
     const VkImageCreateInfo info{
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .pNext = stored_view != nullptr ? &stored_or_decoded_list : nullptr,
+        .flags = stored_view != nullptr
+                     ? flag<VkImageCreateFlags>(VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT)
+                     : 0U,
         .imageType = VK_IMAGE_TYPE_2D,
         .format = format,
         .extent = { .width = texture.width, .height = texture.height, .depth = 1 },
@@ -266,7 +307,7 @@ bool make_attachment(const texture_t& texture, VkFormat format, VkImageUsageFlag
         view = VK_NULL_HANDLE;
         return fbe::gpu::fail_vulkan("couldn't make a target's attachment's view", result);
     }
-    return true;
+    return stored_view == nullptr || make_stored_view(image, *stored_view);
 }
 
 /// The barrier that moves a target's depth from `from` to `to`.
@@ -455,8 +496,12 @@ bool make(std::uint32_t slot, const spec_t& spec) {
         .target = spec.target,
         .samples = spec.samples,
     };
+    // A game's target of sRGB bytes, the screen too, as a camera can draw it in stored values.
+    const bool stores = spec.target && !spec.engine && texture.vk_format == VK_FORMAT_R8G8B8A8_SRGB;
     const VkImageCreateInfo info{
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .pNext = stores ? &stored_or_decoded_list : nullptr,
+        .flags = stores ? flag<VkImageCreateFlags>(VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) : 0U,
         .imageType = VK_IMAGE_TYPE_2D,
         .format = texture.vk_format,
         .extent = { .width = spec.width, .height = spec.height, .depth = 1 },
@@ -495,13 +540,18 @@ bool make(std::uint32_t slot, const spec_t& spec) {
         destroy(texture);
         return fbe::gpu::fail_vulkan("couldn't make a texture's view", result);
     }
+    if (stores && !make_stored_view(texture.image, texture.stored_view)) {
+        destroy(texture);
+        return false;
+    }
     const auto attached = flag<VkImageUsageFlags>(VK_IMAGE_USAGE_TRANSFER_DST_BIT);
     const bool multisampled = spec.samples != VK_SAMPLE_COUNT_1_BIT;
     if ((multisampled &&
          !make_attachment(texture, texture.vk_format,
                           attached | flag<VkImageUsageFlags>(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT),
                           flag<VkImageAspectFlags>(VK_IMAGE_ASPECT_COLOR_BIT), texture.msaa,
-                          texture.msaa_memory, texture.msaa_view)) ||
+                          texture.msaa_memory, texture.msaa_view,
+                          stores ? &texture.stored_msaa_view : nullptr)) ||
         (spec.depth && !make_attachment(texture, fbe::texture::depth_format,
                                         attached | flag<VkImageUsageFlags>(
                                                        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT),

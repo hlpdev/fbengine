@@ -657,6 +657,8 @@ Function WhatCantBeStoppedStaysKnownOf() Throws IOError, GraphicsError
     Saved(editor)
     editor.Play()
     StepUntil(editor, Function() => File.Exists(folder / "beat") || !editor.Run.Going())
+    // What it said comes through its pipe a step or two after it's on disk that it's going.
+    StepUntil(editor, Function() => Said(editor).Contains("it says --scene") || !editor.Run.Going())
     Local first = editor.Run.ProcessId()
     Expect(first != Null && editor.Run.State() == PlayState.RUNNING, Said(editor))
     StepUntil(editor, Function() => Said(editor).Contains("it says --scene"))

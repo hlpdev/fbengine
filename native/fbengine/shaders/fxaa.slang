@@ -29,15 +29,19 @@ float4 vertexMain(uint index : SV_VulkanVertexID) : SV_Position
     return float4((at * 2.0) - 1.0, 0.0, 1.0);
 }
 
+// Whether its camera draws in stored values, as its image then has.
+[vk::constant_id(0)] const uint storedValues = 0;
+
 float4 colorAt(float2 uv)
 {
     return sampleTextureLevel(fxaa.image, fxaa.sampler, uv, 0.0);
 }
 
-/// How bright a color looks, near enough, of its linear light.
+/// How bright a color looks, near enough, of its linear light or, in stored values, of those.
 float brightness(float3 color)
 {
-    return sqrt(max(dot(color, float3(0.2126, 0.7152, 0.0722)), 0.0));
+    const float weighed = max(dot(color, float3(0.2126, 0.7152, 0.0722)), 0.0);
+    return storedValues != 0 ? weighed : sqrt(weighed);
 }
 
 float brightnessAt(float2 uv)

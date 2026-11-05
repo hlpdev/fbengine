@@ -1,7 +1,8 @@
 // Drawing into textures: a camera's target, shown on a mesh another camera sees, as a security monitor
 // is; the frame copied into a texture, and drawn back, as a blur is; drawing and clearing into a
-// texture; and copying a part of one to another. It prints each pixel it reads; with --watch, a window
-// of a monitor showing a turning cube, the frame fed back over it.
+// texture; copying a part of one to another; and all that blends on what's stored, as DirectX 7 did.
+// It prints each pixel it reads; with --watch, a window of a monitor showing a turning cube, the frame
+// fed back over it.
 
 Import std.collections
 Import std.core
@@ -133,6 +134,41 @@ Function Proved() Throws GraphicsError
     Check("beside it", copy.ReadPixel(3, 3), Color32(0, 0, 0, 0))
     sheet.CopyFrom(sheet, 4, 4, 4, 4, 6, 6)
     Check("over itself", sheet.ReadPixel(9, 9), Color32(200, 100, 50, 255))
+
+    // Drawn back at half into linear bytes, on what's stored: half of 255, not 188.
+    Local bytes = Try Texture.Target(32, 32, TextureFormat.RGBA8_LINEAR)
+    Local onBytes = Canvas(bytes)
+    onBytes.SetColor(Gray(0))
+    onBytes.Clear()
+    onBytes.SetBlend(Blend2D.ALPHA)
+    onBytes.SetColor(Color32(255, 255, 255, 128))
+    onBytes.Draw(Sprite2D(shot), 0.0, 0.0)
+    Check("drawn back at half, on what's stored", bytes.ReadPixel(16, 16), Color32(128, 0, 0, 255))
+
+    // The monitor's camera in stored values, half red over black: 128 in its bytes, and those bytes
+    // on the screen, whichever way the screen's camera draws.
+    Local half = Plain(Color(1, 0, 0))
+    half.SetBlend(Blend.ALPHA)
+    half.SetAlpha(0.5)
+    seen.SetMaterial(half)
+    watching.SetClearColor(Color(0, 0, 0))
+    watching.SetStoredValues(True)
+    player.SetClearColor(Color(0, 0, 0))
+    Flip()
+    RenderWorld()
+    Check("the monitor in stored values, on the screen", (Try Screen.ToImage())[16, 16],
+          Color32(128, 0, 0, 255))
+
+    // Half of that over black on the screen: 128's light halved, 92; in stored values, half of 128.
+    shows.SetBlend(Blend.ALPHA)
+    shows.SetAlpha(0.5)
+    Flip()
+    RenderWorld()
+    Check("and half of it, in linear light", (Try Screen.ToImage())[16, 16], Color32(92, 0, 0, 255))
+    player.SetStoredValues(True)
+    Flip()
+    RenderWorld()
+    Check("and in stored values", (Try Screen.ToImage())[16, 16], Color32(64, 0, 0, 255))
 End Function
 
 // A window of a monitor showing a turning cube, and the frame fed back over itself; or `frames` frames

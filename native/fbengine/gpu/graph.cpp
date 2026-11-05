@@ -589,7 +589,12 @@ void draw(VkCommandBuffer commands, const fbe::gpu::pass_t& pass) {
         const resource_record_t& target = resources[color.target];
         extent = extent_of(target);
         const bool multisampled = target.texture.msaa != VK_NULL_HANDLE;
-        VkImageView view = multisampled ? target.texture.msaa_view : target.texture.view;
+        const bool stored = color.stored && target.texture.stored_view != VK_NULL_HANDLE;
+        VkImageView resolved = stored ? target.texture.stored_view : target.texture.view;
+        VkImageView view = stored ? target.texture.stored_msaa_view : target.texture.msaa_view;
+        if (!multisampled) {
+            view = resolved;
+        }
         if (target.kind == kind_t::EXTERNAL) {
             view = target.external.view;
         }
@@ -598,7 +603,7 @@ void draw(VkCommandBuffer commands, const fbe::gpu::pass_t& pass) {
             .imageView = view,
             .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             .resolveMode = multisampled ? VK_RESOLVE_MODE_AVERAGE_BIT : VK_RESOLVE_MODE_NONE,
-            .resolveImageView = multisampled ? target.texture.view : VK_NULL_HANDLE,
+            .resolveImageView = multisampled ? resolved : VK_NULL_HANDLE,
             .resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             .loadOp = color.clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD,
             .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
