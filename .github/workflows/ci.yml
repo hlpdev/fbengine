@@ -208,10 +208,6 @@ jobs:
           restore-keys: khronos-${{ runner.os }}-
 
       - name: Configure
-        env:
-          # As the test job's: fb 1.2.2's FileWatcher and a runner's 8.3 TEMP.
-          TEMP: ${{ runner.temp }}
-          TMP: ${{ runner.temp }}
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DFBENGINE_REQUIRE_KHRONOS=ON
 
       # Saved here, not at the job's end, so a red test doesn't lose what was fetched.
