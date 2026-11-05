@@ -847,6 +847,14 @@ float4 tangentThrough(Layer map, float3 normal, float4 tangent)
                   (tangent.w < 0.0 ? -1.0 : 1.0) * (across < 0.0 ? -1.0 : 1.0));
 }
 
+// Which of `count` clusters a part of the way along is in. By a comparison, not a clamp: a clamp says
+// nothing of a NaN, which turned into an integer reads anywhere, and tools/check_spirv.py refuses.
+uint clusterAlong(float part, uint count)
+{
+    const float at = part * float(count);
+    return at > 0.0 ? uint(min(at, float(count - 1))) : 0;
+}
+
 // What a pixel looks like, shaded by pbr.slang: its base color by its environment and ambient light,
 // each directional light, and its cluster's, what it emits on top.
 float3 pixelShaded(Camera* camera, Material material, Corner corner, float3 baseColor, bool front)
@@ -918,9 +926,9 @@ float3 pixelShaded(Camera* camera, Material material, Corner corner, float3 base
     const float part = camera.perspective != 0 ? log(max(depth, 0.000001)) * camera.sliceScale +
                                                      camera.sliceBias
                                                : depth * camera.sliceScale + camera.sliceBias;
-    const uint column = uint(clamp(across.x * float(clustersAcross), 0.0, float(clustersAcross - 1)));
-    const uint row = uint(clamp(across.y * float(clustersUp), 0.0, float(clustersUp - 1)));
-    const uint slice = uint(clamp(part * float(clustersDeep), 0.0, float(clustersDeep - 1)));
+    const uint column = clusterAlong(across.x, clustersAcross);
+    const uint row = clusterAlong(across.y, clustersUp);
+    const uint slice = clusterAlong(part, clustersDeep);
     const Cluster cluster = camera.clusters[column + clustersAcross * (row + clustersUp * slice)];
     for (uint i = 0; i < cluster.count; ++i)
     {
@@ -1218,8 +1226,9 @@ float4 prepassFragment(PrepassCorner corner) : SV_Target
                              : float2(0.0, 0.0);
     // As far as 16 bits have it, exactly, then what they lost of it, which render/prepass.cpp says.
     const float depth = clamp(corner.depth, 0.001, 60000.0);
-    const float place = pow(2.0, floor(log2(depth)) - 10.0);
-    const float kept = round(depth / place) * place;
+    // By its bits, rounding off the 13 a half hasn't, as a power of 2 from pow can be a float's step
+    // under, and Apple's GPUs store a half toward zero, which makes that a whole step of a half.
+    const float kept = asfloat((asuint(depth) + 0x1000u) & 0xFFFFE000u);
     return float4(kept, ((depth - kept) / kept) * 1024.0, moved);
 }
 

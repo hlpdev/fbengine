@@ -1178,7 +1178,7 @@ End Class
 /// thing, each entity's named by its path of names under its tree, so a change to an entity is a change
 /// to its own lines, and what's named after it, as a material whose first user it is, keeps its id. A
 /// same-named sibling put before another takes its #n, and so changes those paths; and a Geometry's
-/// vertices are a line to each array of them, so two edits of those don't merge.
+/// vertices are a line each.
 ///
 /// A scene holds Pivots, Meshes, Lights, Cameras, and Sprites, with what each is set to, and each one's
 /// components, which Load puts on it by Components.Attach; a Mesh by what it's made of: a file's mesh, as a model's that
