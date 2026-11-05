@@ -8,7 +8,9 @@
 // VERTEX are the fixed-function look, which worked on what was
 // stored: their colors, textures, adds, doublings, and fog are all in encoded values, sRGB's, each
 // stage clamped to 0 to 1, as its stages were, and only the color they end with is made linear for
-// the target. A room's 50 doubled is 100, as it was, not linear light's 71.
+// the target. A room's 50 doubled is 100, as it was, not linear light's 71. A camera that draws in
+// stored values leaves that last step out, so what blends blends with what's stored, and has what
+// PBR ends with encoded instead.
 
 import bindless;
 import pbr;
@@ -27,6 +29,8 @@ import pbr;
 [vk::constant_id(7)] const uint layerBlends = 0;
 [vk::constant_id(8)] const uint layerSets = 0;
 [vk::constant_id(9)] const uint inPrepass = 0;
+// Whether its camera draws in stored values: what's written goes into the target's bytes as it is.
+[vk::constant_id(10)] const uint storedValues = 0;
 
 static const uint shadingUnlit = 1;
 static const uint shadingVertex = 2;
@@ -1180,7 +1184,11 @@ float4 fragmentMain(Corner corner, bool front : SV_IsFrontFace) : SV_Target
         // Scaled by its alpha: none of it leaves what's behind as it is.
         current.rgb = lerp(float3(1.0, 1.0, 1.0), current.rgb, current.a);
     }
-    if (encoded)
+    if (storedValues != 0)
+    {
+        current.rgb = encoded ? saturate(current.rgb) : toEncoded(saturate(current.rgb));
+    }
+    else if (encoded)
     {
         current.rgb = toLinear(saturate(current.rgb));
     }

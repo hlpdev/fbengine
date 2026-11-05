@@ -63,6 +63,10 @@ struct texture_t {
     VkImage msaa = VK_NULL_HANDLE;
     VmaAllocation msaa_memory = VK_NULL_HANDLE;
     VkImageView msaa_view = VK_NULL_HANDLE;
+    /// A target of sRGB bytes' views that write those bytes as they are, for a camera that draws
+    /// stored values; nothing for any other texture.
+    VkImageView stored_view = VK_NULL_HANDLE;
+    VkImageView stored_msaa_view = VK_NULL_HANDLE;
     /// A target's depth, if it has one: 32-bit floats, reversed, 1 nearest and 0 farthest, as
     /// many samples as it draws.
     VkImage depth = VK_NULL_HANDLE;

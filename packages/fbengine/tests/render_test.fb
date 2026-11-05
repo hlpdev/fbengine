@@ -249,6 +249,11 @@ Function ACamerasAmbientOcclusionAndAntialiasingAreWhatTheyreSetTo()
     Expect(!camera.Fxaa())
     camera.SetFxaa(True)
     Expect(camera.Fxaa())
+    Expect(!camera.StoredValues())
+    camera.SetStoredValues(True)
+    Expect(camera.StoredValues())
+    camera.SetStoredValues(False)
+    Expect(!camera.StoredValues())
 End Function
 
 @Test

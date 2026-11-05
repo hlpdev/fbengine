@@ -610,6 +610,56 @@ TEST_CASE("a file's BC7 is sampled, and nothing else", "[gpu]") {
     stop_gpu();
 }
 
+TEST_CASE("a file's sRGB BC7 is what's stored to UNLIT, as its undecoded twin is", "[gpu]") {
+    start();
+    if (!samples_format(VK_FORMAT_BC7_SRGB_BLOCK) || !samples_format(VK_FORMAT_BC7_UNORM_BLOCK)) {
+        stop_gpu();
+        SKIP("this GPU doesn't sample BC7");
+    }
+    const std::vector<std::uint8_t> bytes(16, 0x40);
+    const std::uint64_t load = image_load(block_image(assets::formats::bc7_srgb, 16), bytes);
+    const std::uint64_t decoded = fbe_texture_from_load(load, true, false);
+    const std::uint64_t undecoded = fbe_texture_from_load(load, false, false);
+    REQUIRE(decoded != 0);
+    REQUIRE(undecoded != 0);
+    const std::uint64_t world = fbe_world_create();
+    const std::uint64_t target = fbe_texture_create_target(4, 4, FBE_TEXTURE_RGBA8, 1, true);
+    const std::uint64_t camera = fbe_entity_create(world, 0, FBE_ENTITY_CAMERA);
+    REQUIRE(fbe_camera_set_target(camera, target));
+    const std::uint64_t material = fbe_material_create();
+    REQUIRE(fbe_material_set_shading(material, FBE_SHADING_UNLIT));
+    const std::uint64_t mesh = fbe_entity_create(world, 0, FBE_ENTITY_MESH);
+    const std::uint64_t geometry = fbe_geometry_cube();
+    REQUIRE(fbe_mesh_set_geometry(mesh, geometry));
+    REQUIRE(fbe_mesh_set_material(mesh, material));
+    REQUIRE(fbe_entity_set_position(mesh, 0.0F, 0.0F, -2.0F, FBE_SPACE_WORLD));
+    const auto drawn_with = [&](std::uint64_t texture) {
+        REQUIRE(fbe_material_set_texture(material, 0, texture));
+        REQUIRE(fbe_render_world(world, 1.0F));
+        std::array<std::uint8_t, 64> read{};
+        REQUIRE(fbe_texture_read(target, 0, read.data(), 64));
+        fbe_frame_flip(false);
+        return std::array<std::uint8_t, 3>{ read[40], read[41], read[42] };
+    };
+    const std::array<std::uint8_t, 3> stored = drawn_with(undecoded);
+    CHECK(stored[0] + stored[1] + stored[2] > 0);
+    const std::array<std::uint8_t, 3> through = drawn_with(decoded);
+    for (std::size_t channel = 0; channel < 3; ++channel) {
+        CAPTURE(channel, int{ stored[channel] }, int{ through[channel] });
+        CHECK(std::abs(stored[channel] - through[channel]) <= 1);
+    }
+    fbe_world_free(world);
+    std::array<std::uint64_t, 64> some{};
+    while (fbe_entity_freed(some.data(), some.size()) != 0) {}
+    fbe_geometry_release(geometry);
+    fbe_material_release(material);
+    fbe_texture_release(target);
+    CHECK(fbe_texture_release(decoded));
+    CHECK(fbe_texture_release(undecoded));
+    CHECK(fbe_assets_free(load));
+    stop_gpu();
+}
+
 TEST_CASE("a file's own format is a map that holds no color unless it's sRGB", "[gpu]") {
     start();
     if (!samples_format(VK_FORMAT_BC7_SRGB_BLOCK) || !samples_format(VK_FORMAT_BC7_UNORM_BLOCK)) {

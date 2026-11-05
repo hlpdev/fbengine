@@ -395,6 +395,7 @@ bool add_game_passes(const scene::camera_t& camera, std::span<const game_pass_t>
                 .colors = { {
                     .target = next,
                     .clear = !last || into_nothing,
+                    .stored = camera.stored_values,
                 }, },
                 .uses = std::move(uses),
                 .record =

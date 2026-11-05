@@ -288,6 +288,8 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_camera_ambient_occlusion_radius(camera: UInt64): Float32
     Function fbe_camera_set_fxaa(camera: UInt64, on: Bool): Bool
     Function fbe_camera_fxaa(camera: UInt64): Bool
+    Function fbe_camera_set_stored_values(camera: UInt64, on: Bool): Bool
+    Function fbe_camera_stored_values(camera: UInt64): Bool
     Function fbe_camera_set_temporal_aa(camera: UInt64, on: Bool): Bool
     Function fbe_camera_temporal_aa(camera: UInt64): Bool
     Function fbe_camera_reset_history(camera: UInt64): Bool

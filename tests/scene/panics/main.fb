@@ -187,6 +187,14 @@ Select arguments[0]
         Camera().SetExposure(-1.0)
     Case "gamma-zero"
         Camera().SetGamma(0.0)
+    Case "stored-on-hdr"
+        Local bright = Camera()
+        bright.SetHdr(True)
+        bright.SetStoredValues(True)
+    Case "hdr-on-stored"
+        Local stored = Camera()
+        stored.SetStoredValues(True)
+        stored.SetHdr(True)
     Case "tonemap-range"
         Camera().SetTonemap((arguments.Count + 8) As Tonemap)
     Case "exposure-freed"
