@@ -633,8 +633,12 @@ Function Checked(folder: Path) Throws GraphicsError, IOError
     End If
     Local mesh = found As Mesh
     Local geometry = pip.Geometries()[0]
+    Local morphs = 0
+    For surface In geometry.Surfaces()
+        morphs += surface.MorphTargetCount()
+    End For
     Checks("its surfaces, morphs, and bones are what they are", geometry.SurfaceCount() == 3 &&
-           geometry.Surface(0).MorphTargetCount() == 1 && mesh.Palette().Count == 8)
+           morphs == 3 && geometry.Surface(0).MorphTargetCount() == 1 && mesh.Palette().Count == 8)
     Local bounds = geometry.Bounds()
     Checks("it's 0.9 m high to its antenna's top, on the ground",
            IsClose(bounds.Max.y, 0.9, 0.001) && IsClose(bounds.Min.y, 0.0, 0.001))
@@ -674,12 +678,12 @@ Function Checked(folder: Path) Throws GraphicsError, IOError
     Local carrying = 2.0 * Abs(mesh.Palette()[legR].TransformPoint(footAt).z - carryFrom)
     Checks("its carry's stride is too {carrying}", Abs(carrying - CARRY_STRIDE) < 0.03)
     player.Play(pip.Clips()[1])
-    // At each of its walk's keys, its lowest point's on the ground, within a centimeter.
+    // At each eighth of its walk, its lowest point's on the ground, within a few millimeters.
     Local grounded = True
     Local vertices = geometry.Surface(0).Vertices()
     Local joints = geometry.Surface(0).Joints()
-    For key = 0 To 4
-        player.SetTime((key As Float) * 0.25)
+    For key = 0 To 8
+        player.SetTime((key As Float) * 0.125)
         UpdateWorld(0.0)
         Local posed = mesh.Palette()
         Local lowest = 1000.0
@@ -687,21 +691,38 @@ Function Checked(folder: Path) Throws GraphicsError, IOError
             Local placed = posed[joints[at].Joint0 As Int].TransformPoint(vertices[at].Position)
             lowest = Min(lowest, placed.y)
         End For
-        If Abs(lowest) > 0.01
-            Print("at key {key} it's {lowest} up")
+        If Abs(lowest) > GROUNDED
+            Print("at an eighth {key} it's {lowest} up")
             grounded = False
         End If
     End For
-    Checks("at each key of its walk, it's on the ground", grounded)
-    // The blink shuts its eyes: their tops come down.
-    Local open = mesh.MorphedPositions(1)
+    Checks("at each eighth of its walk, it's on the ground", grounded)
+    // The blink shuts its eyes: everything of its pupils and whites over their bottoms comes down,
+    // its pupils to no higher than what's left of its whites.
+    Local openPupils = mesh.MorphedPositions(1)
+    Local openWhites = mesh.MorphedPositions(2)
     mesh.SetMorphWeights([1.0])
-    Local shut = mesh.MorphedPositions(1)
-    Local moved = False
-    For at = 0 Until open.Count
-        If shut[at].y < open[at].y Then moved = True
+    Local shutPupils = mesh.MorphedPositions(1)
+    Local shutWhites = mesh.MorphedPositions(2)
+    Local allDown = True
+    Local whitesTop = -1000.0
+    For at = 0 Until shutWhites.Count
+        whitesTop = Max(whitesTop, shutWhites[at].y)
     End For
-    Checks("blinking, its eyes shut", moved)
+    Local pupilsTop = -1000.0
+    For at = 0 Until shutPupils.Count
+        pupilsTop = Max(pupilsTop, shutPupils[at].y)
+    End For
+    For pair In [(openPupils, shutPupils), (openWhites, shutWhites)]
+        Local lowest = 1000.0
+        For point In pair.0
+            lowest = Min(lowest, point.y)
+        End For
+        For at = 0 Until pair.0.Count
+            If pair.0 [at].y > lowest + 0.002 && pair.1 [at].y >= pair.0 [at].y Then allDown = False
+        End For
+    End For
+    Checks("blinking, its eyes shut", allDown && pupilsTop <= whitesTop)
 End Function
 
 // Whether two folders' files are the same: every byte, but for PNGs, whose pixels are, as a PNG's
@@ -1276,6 +1297,8 @@ End Function
 Const CEILING_SKY: Float = 12.0
 Const SKY_BLOOM: Int = 1
 Const GROUND_APART: Float = 10.0
+// How far off the ground Pip's lowest point may be, walking.
+Const GROUNDED: Float = 0.003
 // How much brighter or darker a still may be than the same drawn after itself: the yard after the dark
 // mill, with the mill's frame blended in, was 2.5 darker, and afresh, 0.13.
 Const AFRESH: Float = 0.8

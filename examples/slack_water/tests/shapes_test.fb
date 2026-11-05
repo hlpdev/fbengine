@@ -1,5 +1,5 @@
-// The shapes built in code, by their numbers: each face facing out, as far as it says across, and its
-// UVs in meters.
+// The shapes built in code, by their numbers: each face facing out, as far as it says across, and
+// its UVs in meters.
 
 Import std.core
 Import std.math

@@ -1,14 +1,14 @@
-// Shapes built in code, for what's made of more than boxes: a box with its edges and corners cut, as
-// what's made by hand has, and what's turned on a lathe, by its outline. Their UVs are in meters, so a
-// material's maps are the same size on all of them.
+// Shapes built in code, for what's made of more than boxes: a box with its edges and corners cut,
+// as what's made by hand has, and what's turned on a lathe, by its outline. Their UVs are in
+// meters, so a material's maps are the same size on all of them.
 
 Import std.collections
 Import std.core
 Import std.math
 Import fbengine
 
-// A corner's point on its face across `axis`: the corner, `half` from the middle by `signs`, but for
-// the other two axes, which are in by `bevel`.
+// A corner's point on its face across `axis`: the corner, `half` from the middle by `signs`, but
+// for the other two axes, which are in by `bevel`.
 Function Cut(half: Vec3, signs: Vec3, axis: Int, bevel: Float): Vec3
     Local x = signs.x * (axis == 0 ? half.x : half.x - bevel)
     Local y = signs.y * (axis == 1 ? half.y : half.y - bevel)
@@ -19,8 +19,8 @@ End Function
 // One of a vector's three by `axis`.
 Function Along(v: Vec3, axis: Int): Float => axis == 0 ? v.x : (axis == 1 ? v.y : v.z)
 
-// Adds a flat face of `points`, a convex outline, to `surface`, facing away from the middle, its UVs
-// in meters across it: along its longer side of `half` down v, as a grain runs along a plank.
+// Adds a flat face of `points`, a convex outline, to `surface`, facing away from the middle, its
+// UVs in meters across it: along its longer side of `half` down v, as a grain runs along a plank.
 Function Face(surface: Surface, points: Vec3[], half: Vec3)
     Local normal = Normalize(Cross(points[1] - points[0], points[2] - points[0]))
     Local middle = Vec3(0.0, 0.0, 0.0)
@@ -56,8 +56,8 @@ Function Face(surface: Surface, points: Vec3[], half: Vec3)
     End For
 End Function
 
-/// A box `half` across from its middle on each axis, its edges and corners cut by `bevel`, each face
-/// flat, so its edges catch the light.
+/// A box `half` across from its middle on each axis, its edges and corners cut by `bevel`, each
+/// face flat, so its edges catch the light.
 @MainThread
 Public Function Beveled(half: Vec3, bevel: Float): Geometry
     Local geometry = Geometry()
