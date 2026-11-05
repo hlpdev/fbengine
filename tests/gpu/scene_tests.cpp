@@ -408,7 +408,8 @@ TEST_CASE("the LOD bias reaches a layer through its samplers, or its shader", "[
         require(fbe_material_set_shader(material, shader));
         require(fbe_shader_release(shader));
         require(fbe_material_set_parameter(material, 0, 8.0F, 0.0F, 0.0F, 0.0F));
-        require(fbe_material_set_parameter(material, 3, 0.0F, scale, 0.0F, 0.0F));
+        // A layer's scale divides its UVs, as these are multiplied.
+        require(fbe_material_set_parameter(material, 3, 0.0F, 1.0F / scale, 0.0F, 0.0F));
     }
     const auto spread = [&scene] {
         const fbe::golden::frame_t frame = scene.drawn();
