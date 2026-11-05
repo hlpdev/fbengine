@@ -239,6 +239,19 @@ Public Final Class Model Implements Asset
         Return clips.Clone()
     End Method
 
+    // Which of its Textures, its own or another of an image, has `source` for its Path, or Null.
+    @MainThread
+    Package Method TextureFrom(source: String): Texture?
+        Live("TextureFrom")
+        For texture In textures
+            If texture != Null && texture.Path() == source Then Return texture
+        End For
+        For texture In others
+            If texture.Path() == source Then Return texture
+        End For
+        Return Null
+    End Method
+
     /// The Texture its material at `index` reads for `map`, as it's bound, which for an image read
     /// two ways needn't be the one in Textures, or Null for none.
     @MainThread @PanicsAtCaller
@@ -337,7 +350,9 @@ Public Final Class Model Implements Asset
             End If
             Local texture = fbe_model_texture(load.Handle, at, True)
             If texture == 0 Then Throw PartError()
-            textures.Add(Texture(texture))
+            Local own = Texture(texture)
+            own.SetSource("{load.Path()}#{at}")
+            textures.Add(own)
         End For
         Local read = Buffer<UInt64>(info.Images As Int64 + 1)
         For at = 0 Until info.Images
@@ -362,8 +377,14 @@ Public Final Class Model Implements Asset
             End If
         End For
         // What it made is here to let go of, even if it then couldn't.
+        Local readOtherwise = Map<Int32, Int>()
         For at = 0 Until made
-            others.Add(Texture(kept[at]))
+            Local other = Texture(kept[at])
+            Local image = images[at]
+            Local nth = (readOtherwise.Get(image) ?? 0) + 1
+            readOtherwise[image] = nth
+            other.SetSource("{load.Path()}#{image}:{nth}")
+            others.Add(other)
         End For
         If failure != Null Then Throw failure
         For at = 0 Until info.Skins

@@ -165,9 +165,10 @@ Public Class Gpu
 
     /// Biases which mipmap every texture is read from, added to the one the GPU picks: negative
     /// is sharper, and can shimmer, positive blurrier, as a texture detail setting wants; from -16
-    /// to 16, which the GPU's own limit clamps further, and a GPU whose samplers have none, as a
-    /// Mac's, draws with no bias. It panics for one outside, and throws, keeping the bias it had,
-    /// when the GPU can't make samplers with it.
+    /// to 16. What a GPU's samplers can't take, all of it on a Mac's, a scene's layers and maps take
+    /// in their shader, and shadows' cut-outs; a canvas's textures don't, and a sky's texture is never
+    /// biased. It panics for one outside, and throws, keeping the bias it had, when the GPU can't make
+    /// samplers with it.
     @MainThread Public Static Method SetLodBias(bias: Float32) Throws GraphicsError
         If !(bias >= -16.0 && bias <= 16.0) Then Panic("a LOD bias is -16 to 16, not {bias}")
         If !fbe_gpu_set_lod_bias(bias) Then Throw GraphicsError(LastError())

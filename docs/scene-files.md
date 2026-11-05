@@ -63,7 +63,9 @@ material = "room/crate.material"
   `metallic`, `roughness`, `emissive`, `normal_scale`, and `occlusion_strength`, are written when they aren't what a
   new one has, as is each of its `[[material.maps]]`: `map` is METAL_ROUGH, NORMAL, OCCLUSION, or EMISSIVE, with a
   `texture`, `uv_set`, and `uv`. A map but EMISSIVE isn't a color, so its file's import settings say it isn't sRGB,
-  and `Scene.Load` refuses one that is.
+  and `Scene.Load` refuses one that is. A layer's or a map's `texture` is an image's file, or one of a model's:
+  `res://door.glb#2` by its image's number, with `:1` and on for another Texture of that image, read as other than
+  its first is. A texture of neither can't be saved, and `Scene.Save` says which entity has it.
 - A **light**'s shadows are `shadows`, `shadow_size`, `shadow_bias`, `cascades`, and `shadow_distance`; a **camera**'s
   picture `hdr`, `exposure`, `tonemap`, `gamma`, `bloom`, `grade`, `occlusion`, `ambient_occlusion`,
   `ambient_occlusion_radius`, `fxaa`, and `temporal_aa`; and any entity's `occluder` and `casts_shadows`. Each is

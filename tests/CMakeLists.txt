@@ -592,6 +592,20 @@ if(FBENGINE_FB_TESTS)
   if(APPLE)
     set_property(TEST examples.slack_water.frame_cost APPEND PROPERTY ENVIRONMENT "SLACK_WATER_REAL_GPU=1")
   endif()
+  # Each mode that draws with no person there refuses when the loader shows several devices: it would pick
+  # the best for itself, on a machine it could take down.
+  foreach(mode_and_arguments "cooked|--cooked|a|b" "walk3d|--walk3d|bright" "end|--end|a" "hear|--hear"
+          "feel|--feel" "frames|--frames|a")
+    string(REPLACE "|" ";" mode_arguments "${mode_and_arguments}")
+    list(POP_FRONT mode_arguments mode_name)
+    add_test(NAME examples.slack_water.refuses_${mode_name}
+             COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                     -- ${mode_arguments})
+    set_tests_properties(examples.slack_water.refuses_${mode_name} PROPERTIES RESOURCE_LOCK slack_water
+                         ENVIRONMENT "SLACK_WATER_CHECKS=1;SLACK_WATER_DEVICES=2;SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                         PASS_REGULAR_EXPRESSION "this draws only when the loader shows one device"
+                         SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
+  endforeach()
   add_test(NAME examples.slack_water.hear
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
                    -- --hear)
@@ -629,7 +643,7 @@ if(FBENGINE_FB_TESTS)
                    -- "${PROJECT_BINARY_DIR}/example-frames/slack_water_made")
   set_tests_properties(examples.slack_water.tools PROPERTIES
                        FIXTURES_SETUP slack_water_made TIMEOUT 300
-                       PASS_REGULAR_EXPRESSION "15 textures\r?\n13 sounds\r?\n8 joints in Pip\r?\n$")
+                       PASS_REGULAR_EXPRESSION "18 textures\r?\n13 sounds\r?\n8 joints in Pip\r?\n$")
   foreach(checked IN ITEMS "made=${PROJECT_BINARY_DIR}/example-frames/slack_water_made"
                            "kept=${PROJECT_SOURCE_DIR}/examples/slack_water/assets")
     string(FIND "${checked}" "=" split)

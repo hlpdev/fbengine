@@ -854,3 +854,107 @@ Function ALostGpusCostIsNoCost()
     Expect(!CostWasRead(False, -1.0))
     Expect(!CostWasRead(True, 0.5))
 End Function
+
+// The ground's paint: as much lighter as darker, in patches that go from one to the other.
+// How much more of one channel than another, over many places, of what covers ground this high and steep.
+Function CoverOver(height: Float, slope: Float): (Vec3, Float)
+    Local sum = Vec3(0.0, 0.0, 0.0)
+    Local rough = 0.0
+    For at = 0 Until 100
+        Local cover = CoverAt(90.0 + (at As Float) * 3.1, -70.0 + (at As Float) * 1.7, height,
+                              slope)
+        sum = Vec3(sum.x + cover.0.x, sum.y + cover.0.y, sum.z + cover.0.z)
+        rough += cover.1
+    End For
+    Return (Vec3(sum.x / 100.0, sum.y / 100.0, sum.z / 100.0), rough / 100.0)
+End Function
+
+@Test
+Function WhatCoversTheGroundGoesByItsHeightAndSlope()
+    Local sand = CoverOver(0.9, 0.1)
+    Local wet = CoverOver(0.1, 0.1)
+    Local rock = CoverOver(10.0, 1.4)
+    Local turf = CoverOver(10.0, 0.1)
+    Local tide = CoverOver(1.7, 1.4)
+    Local rockBelow = CoverOver(3.0, 1.4)
+    // Sand's warm and bright; wet, it's darker, and it shines.
+    Expect(sand.0.x > 0.65 && sand.0.x > sand.0.z + 0.15)
+    Expect(wet.0.x < sand.0.x * 0.7)
+    Expect(wet.1 < sand.1 - 0.4)
+    // Rock's about grey, wherever it's too steep for anything else.
+    Expect(Abs(rock.0.x - rock.0.z) < 0.08)
+    Expect(rock.0.x < sand.0.x)
+    // Turf's greener than it's red, and rougher than rock.
+    Expect(turf.0.y > turf.0.x)
+    Expect(turf.0.y > turf.0.z + 0.1)
+    Expect(turf.1 > rock.1)
+    // Where the high water reaches, it's darker than the rock over it, and smoother.
+    Expect(tide.0.x < rockBelow.0.x - 0.06)
+    Expect(tide.1 < rockBelow.1 - 0.1)
+End Function
+
+@Test
+Function TheGroundsTroddenByTheMillAndToTheRoad()
+    Local trodden = CoverAt(MAIN_X + 9.0, 0.0, 4.0, 0.0)
+    Local door = DoorSpot()
+    Local halfway = (MAIN_X + ROAD_WEST) / 2.0
+    Local alongZ = (door.y + RoadZ(ROAD_WEST)) / 2.0
+    Local path = CoverAt(halfway, alongZ, 4.0, 0.0)
+    Local beside = CoverAt(halfway, alongZ + 8.0, 4.0, 0.0)
+    Expect(trodden.0.z < trodden.0.x - 0.05)
+    Expect(path.0.y < path.0.x)
+    Expect(beside.0.y > beside.0.x)
+End Function
+
+@Test
+Function TheHeadlandsTheHighGroundAndTheYardsStillFlat()
+    Local highest = 0.0
+    For x = -80 To -20
+        For z = -85 To -30
+            highest = Max(highest, GroundHeight(x As Float, z As Float))
+        End For
+    End For
+    Expect(highest > 16.0, "{highest}")
+    Expect(Abs(GroundHeight(MAIN_X, 0.0) - 4.0) < 0.001)
+    Expect(Abs(GroundHeight(MAIN_X + 15.0, 10.0) - 4.0) < 0.001)
+End Function
+
+@Test
+Function WhatDrawsWithNoPersonDoesntPickAGpu()
+    For mode In ["--cooked", "--walk3d", "--end", "--hear", "--feel", "--frames"]
+        Expect(DrawsWithoutAPerson([mode, "x"]))
+    End For
+    Expect(!DrawsWithoutAPerson([]))
+    Expect(!DrawsWithoutAPerson(["--walk", "x"]))
+    Expect(!DrawsWithoutAPerson(["--check", "x"]))
+    Expect(MayDrawOn(0))
+    Expect(MayDrawOn(1))
+    Expect(!MayDrawOn(2))
+End Function
+
+@Test
+Function APartIsSeenByWhatItChangesNearIt()
+    Local without = Image(40, 40)
+    Local with = Image(40, 40)
+    For y = 0 Until 40
+        For x = 0 Until 40
+            without[x, y] = Color32(100, 100, 100, 255)
+            with[x, y] = Color32(100, 100, 100, 255)
+        End For
+    End For
+    // Nothing changed, and a frame's little difference, aren't it.
+    Expect(!DiffersAround(with, without, 20, 20))
+    with[20, 20] = Color32(108, 108, 108, 255)
+    Expect(!DiffersAround(with, without, 20, 20))
+    with[20, 20] = Color32(109, 108, 108, 255)
+    Expect(DiffersAround(with, without, 20, 20))
+    // Darker is as much of a change, to the end of how far it looks, and not past it.
+    with[20, 20] = Color32(100, 100, 100, 255)
+    with[26, 14] = Color32(0, 0, 0, 255)
+    Expect(DiffersAround(with, without, 20, 20))
+    Expect(!DiffersAround(with, without, 19, 20))
+    Expect(!DiffersAround(with, without, 20, 21))
+    Expect(DiffersAround(with, without, 32, 8))
+    Expect(!DiffersAround(with, without, 33, 8))
+    Expect(!DiffersAround(with, without, 32, 7))
+End Function

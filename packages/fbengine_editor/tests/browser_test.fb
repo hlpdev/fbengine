@@ -988,7 +988,8 @@ Function SidecarEditsHaveAHistoryOfTheirOwn() Throws IOError, GraphicsError
     Defer editor.Finish()
     editor.Actions.Run("add.cube")
     editor.SaveScene("res://a.scene")
-    editor.Step()
+    // Its row comes when its watcher says, which is later on a Mac, and moves the rows below it.
+    StepUntil(editor, Function() => editor.Files.RowOf("res://a.scene") != Null)
     Try ClickAt(editor, Row(editor, "res://wall.png").Center)
     (Found(editor, "assets.srgb") As? Toggle)?.Click()
     editor.Step()
@@ -1404,6 +1405,75 @@ Function AnImageLetGoOnATexturesRowGoesOnIt() Throws IOError, GraphicsError
     // A model still goes on the scene.
     drag("res://sub/ball.gltf", editor.View.Box().Center)
     Expect(editor.Edited.Entities().Count > 1, "a model's not placed")
+End Function
+
+// A model with its own textures, let go on the scene, is saved, and opens with them.
+@Test
+Function ATexturedModelDroppedIsSavedAndOpens() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local game = Try Game(games.Path)
+    Local pixel = Image(1, 1)
+    pixel[0, 0] = Color32(200, 100, 50, 255)
+    Local parts =
+        "\"materials\":[{{\"pbrMetallicRoughness\":{{\"baseColorTexture\":{{\"index\":0}}}}}}]," +
+        "\"textures\":[{{\"source\":0}}],\"images\":[{{\"uri\":\"data:image/png;base64," +
+        "{Base64.Encode(Png.Encode(pixel))}\"}}],\"accessors\":"
+    Local painted = TRIANGLE.Replace("{{\"POSITION\":0}}}}",
+                                     "{{\"POSITION\":0,\"TEXCOORD_0\":1}},\"material\":0}}")
+    painted = painted.Replace("\"accessors\":", parts)
+    painted = painted.Replace("\"max\":[1,0,1]}}]",
+                              "\"max\":[1,0,1]}},{{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC2\"}}]")
+    Try File.WriteText(game / "assets" / "painted.gltf", painted)
+    Local editor = Try Started(settings.Path, game)
+    Defer editor.Finish()
+    editor.View.LookAt(Vec3(0, 0, 0), 10.0)
+    editor.Step()
+    Local from = Row(editor, "res://painted.gltf").Center
+    Local to = editor.View.Box().Center
+    Try Simulate.MoveMouse(from.x, from.y)
+    editor.Step()
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    editor.Step()
+    Try Simulate.MoveMouse(to.x, to.y)
+    editor.Step()
+    editor.Step()
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    editor.Step()
+    editor.Step()
+    Expect(editor.Edited.Entities().Count == 2, "it's not placed")
+    Local blade = editor.Edited.Entities()[1] As? Mesh
+    Expect(blade?.Geometry()?.Surface(0)?.Material()?.Texture(0)?.Path() ==
+           "res://painted.gltf#0", "its own texture's not known")
+    editor.SaveScene("res://level.scene")
+    editor.Step()
+    Local refused = editor.ShowingDialog() != Null
+    Expect(!refused, "saving it was refused")
+    Local file = game / "assets" / "level.scene"
+    Expect(File.Exists(file), "it's not saved")
+    Local text = Try Text(file)
+    editor.OpenScene("res://level.scene")
+    editor.Step()
+    Local refusedOpening = editor.ShowingDialog() != Null
+    Expect(!refusedOpening, "opening it said something: {text}")
+    Local again = editor.Edited.Entities()[1] As? Mesh
+    Local read = again?.Geometry()?.Surface(0)?.Material()?.Texture(0)
+    Expect(read?.Path() == "res://painted.gltf#0", text)
+    // One given to the mesh as its own material goes through the file too.
+    If again == Null Then Panic("its mesh")
+    again.SetMaterial(again.Geometry()?.Surface(0)?.Material())
+    editor.Edits.Commit(RenameEdit(again, "kept"))
+    editor.SaveScene()
+    editor.Step()
+    Local refusedAgain = editor.ShowingDialog() != Null
+    Expect(!refusedAgain, "saving it again was refused")
+    text = Try Text(file)
+    Expect(text.Contains("texture = \"res://painted.gltf#0\""), text)
+    editor.OpenScene("res://level.scene")
+    editor.Step()
+    Local last = editor.Edited.Entities()[1] As? Mesh
+    Expect(last?.Material()?.Texture(0)?.Path() == "res://painted.gltf#0", text)
 End Function
 
 // A row scrolled out of sight can't be let go on, where it'd be.
