@@ -173,8 +173,9 @@ Extend Camera
     /// Runs a full-screen pass after what it draws: after its tonemap and its grade, if it's HDR, and
     /// after those before it, on its own target. `shader` is one whose file says `#define FBE_PASS`,
     /// and it gives back the Material it holds it by, whose SetParameter and layers' SetTexture are
-    /// what that reads: `parameter(index)` and `layer(index, uv)` there. One no pipeline can be made
-    /// of says so once, on the error stream, and is left out. Any other shader panics.
+    /// what that reads: `parameter(index)` and `layer(index, uv)` there. In stored values, the color
+    /// it reads and writes is what's stored, not light. One no pipeline can be made of says so once,
+    /// on the error stream, and is left out. Any other shader panics.
     @MainThread @PanicsAtCaller
     Public Method AddPass(shader: Shader): Material
         Local pass = Material()

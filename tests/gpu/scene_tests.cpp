@@ -11058,7 +11058,7 @@ TEST_CASE("a pass is after an HDR camera's tonemap and grade, on any camera", "[
     wall(scene.world, -3.0F, 10.0F, paint);
     // Graded down to a half first, or it'd come to 0: the pass inverts what the grade made.
     const std::array<float, 10> halved{
-        0.5F, 0.5F, 0.5F, 0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 1.0F,
+        0.5F, 0.5F, 0.5F, 0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 1.0F
     };
     require(fbe_camera_set_grade(scene.camera, halved.data()));
     CHECK(near(middle(scene.drawn()), { srgb(0.5F), srgb(0.5F), srgb(0.5F) }));
@@ -11066,9 +11066,8 @@ TEST_CASE("a pass is after an HDR camera's tonemap and grade, on any camera", "[
     require(fbe_camera_add_pass(scene.camera, pass));
     CHECK(near(middle(scene.drawn()), { srgb(0.5F), srgb(0.5F), srgb(0.5F) }));
     // Inverted past a quarter, so the two can't be told apart by chance.
-    const std::array<float, 10> quartered{
-        0.25F, 0.25F, 0.25F, 0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 1.0F,
-    };
+    const std::array<float, 10> quartered{ 0.25F, 0.25F, 0.25F, 0.0F, 0.0F,
+                                           0.0F,  1.0F,  1.0F,  1.0F, 1.0F };
     require(fbe_camera_set_grade(scene.camera, quartered.data()));
     CHECK(near(middle(scene.drawn()), { srgb(0.75F), srgb(0.75F), srgb(0.75F) }));
     fbe_material_release(pass);
@@ -11124,9 +11123,8 @@ TEST_CASE("a pass reads what antialiasing over frames resolved", "[gpu][scene]")
     require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
     const std::uint64_t paint = unlit(1.0F, 1.0F, 1.0F);
     wall(scene.world, -3.0F, 10.0F, paint);
-    const std::array<float, 10> quartered{
-        0.25F, 0.25F, 0.25F, 0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 1.0F,
-    };
+    const std::array<float, 10> quartered{ 0.25F, 0.25F, 0.25F, 0.0F, 0.0F,
+                                           0.0F,  1.0F,  1.0F,  1.0F, 1.0F };
     require(fbe_camera_set_grade(scene.camera, quartered.data()));
     const std::uint64_t pass = game_pass(pass_inverts);
     require(fbe_camera_add_pass(scene.camera, pass));
@@ -11236,8 +11234,8 @@ TEST_CASE("a pass runs on the screen as on a target", "[gpu][scene]") {
     stop_gpu();
 }
 
-// As FXAA does in stored values: what it reads is the bytes, and so is what it writes, with no light
-// between them. Half of 100 in light would be 73.
+// As FXAA does in stored values: what it reads is the bytes, and so is what it writes, with no
+// light between them. Half of 100 in light would be 73.
 TEST_CASE("a pass on a camera in stored values has what's stored, as it is", "[gpu][scene]") {
     const std::int32_t samples = GENERATE(1, 4);
     const bool fxaa = GENERATE(false, true);
@@ -11247,16 +11245,19 @@ TEST_CASE("a pass on a camera in stored values has what's stored, as it is", "[g
         fbe_texture_create_target(frame_size, frame_size, FBE_TEXTURE_RGBA8, samples, true);
     REQUIRE(target != 0);
     require(fbe_camera_set_target(scene.camera, target));
-    require(fbe_camera_set_clear_color(scene.camera, light_of(100), light_of(100), light_of(100), 1.0F));
+    require(fbe_camera_set_clear_color(scene.camera, light_of(100), light_of(100), light_of(100),
+                                       1.0F));
     require(fbe_camera_set_fxaa(scene.camera, fxaa));
     const std::uint64_t halving = game_pass(pass_halves);
     require(fbe_camera_add_pass(scene.camera, halving));
     const auto byte = [&] {
         require(fbe_render_world(scene.world, 1.0F));
         std::vector<std::uint8_t> pixels(std::size_t{ frame_size } * frame_size * 4);
-        require(fbe_texture_read(target, 0, pixels.data(), static_cast<std::int64_t>(pixels.size())));
+        require(
+            fbe_texture_read(target, 0, pixels.data(), static_cast<std::int64_t>(pixels.size())));
         fbe_frame_flip(false);
-        return int{ pixels.at(((std::size_t{ frame_size / 2 } * frame_size) + (frame_size / 2)) * 4) };
+        return int{ pixels.at(((std::size_t{ frame_size / 2 } * frame_size) + (frame_size / 2)) *
+                              4) };
     };
     CHECK(std::abs(byte() - 73) <= 1);
     require(fbe_camera_set_stored_values(scene.camera, true));
