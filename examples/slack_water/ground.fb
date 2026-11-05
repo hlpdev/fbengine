@@ -230,14 +230,54 @@ Function Mixed(from: Vec3, to: Vec3, amount: Float): Vec3
                 from.z + (to.z - from.z) * by)
 End Function
 
+// The cover's noise: fine, a meter or so across, and patches, many meters.
+Function Fine(x: Float, z: Float): Float => Noise(x * 0.8 + 1.0, z * 0.8 + 2.0)
+
+Function Patches(x: Float, z: Float): Float
+    Return Noise(x * 0.09 + 4.0, z * 0.09 + 6.0) * 0.6 + Noise(x * 0.31 + 8.0, z * 0.31 + 1.0) * 0.4
+End Function
+
+// How much turf holds on, `height` high with `slope`, in `patches`: high and flat.
+Function Turf(height: Float, slope: Float, patches: Float): Float
+    Local flat = Clamp((0.8 - slope) / 0.4, 0.0, 1.0)
+    Return flat * Clamp((patches - 0.28) * 5.0, 0.0, 1.0) * Clamp((height - 2.3) / 1.2, 0.0, 1.0)
+End Function
+
+// How trodden (`x`, `z`) is: around the mill, and from its door to the road, where it isn't steep.
+Function Trodden(x: Float, z: Float, slope: Float, patches: Float, fine: Float): Float
+    Local fromMill = Sqrt((x - MAIN_X) * (x - MAIN_X) + z * z)
+    Local trodden = Clamp((12.0 + patches * 5.0 - fromMill) / 3.0, 0.0, 1.0)
+    If x > MAIN_X && x < ROAD_WEST
+        Local across = (x - MAIN_X) / (ROAD_WEST - MAIN_X)
+        Local pathZ = DoorSpot().y + (RoadZ(ROAD_WEST) - DoorSpot().y) * across
+        trodden = Max(trodden, Clamp((2.2 + fine - Abs(z - pathZ)) / 1.2, 0.0, 1.0))
+    End If
+    Return trodden * Clamp((1.2 - slope) / 0.4, 0.0, 1.0)
+End Function
+
+// How sandy it is, `height` high with `slope`, in `patches`: low down, up to what the rock breaks.
+Function Sand(height: Float, slope: Float, patches: Float): Float
+    Return Clamp((1.5 + (patches - 0.5) * 1.8 - height) / 0.5, 0.0, 1.0) *
+           Clamp((1.3 - slope) / 0.4, 0.0, 1.0)
+End Function
+
+/// How much of what covers the ground at (`x`, `z`), `height` high with `slope` meters up to the meter,
+/// is turf that shows, from 0 to 1: CoverAt's turf, less what's trodden over it and sand: where grass
+/// grows.
+Public Function TurfAt(x: Float, z: Float, height: Float, slope: Float): Float
+    Local patches = Patches(x, z)
+    Local turf = Turf(height, slope, patches)
+    Return turf * (1.0 - Trodden(x, z, slope, patches, Fine(x, z))) *
+           (1.0 - Sand(height, slope, patches))
+End Function
+
 /// What covers the ground at (`x`, `z`), `height` high with `slope` meters up to the meter: its color, as
 /// sRGB, and how rough it is, from 0 to 1. Sand low down and wet where the sea's just been, bare rock in
 /// bands where it's steep, turf on what's high and flat, and the trodden ground by the mill and to the
 /// road. From noise at several scales, so it's patches that have nothing to do with where a map repeats.
 Public Function CoverAt(x: Float, z: Float, height: Float, slope: Float): (Vec3, Float)
-    Local fine = Noise(x * 0.8 + 1.0, z * 0.8 + 2.0)
-    Local patches = Noise(x * 0.09 + 4.0, z * 0.09 + 6.0) * 0.6 +
-                    Noise(x * 0.31 + 8.0, z * 0.31 + 1.0) * 0.4
+    Local fine = Fine(x, z)
+    Local patches = Patches(x, z)
     Local bands = Noise(x * 0.05 + z * 0.03, height * 1.6)
     Local color = Mixed(Vec3(0.27, 0.27, 0.27), Vec3(0.47, 0.46, 0.43), bands * 0.6 + fine * 0.4)
     // Its cracks, and lichen on it.
@@ -252,29 +292,19 @@ Public Function CoverAt(x: Float, z: Float, height: Float, slope: Float): (Vec3,
     color = Mixed(color, Vec3(0.18, 0.18, 0.16), tide * 0.7)
     rough -= tide * 0.3
     // Turf, where it can hold on.
-    Local flat = Clamp((0.8 - slope) / 0.4, 0.0, 1.0)
     Local blades = Noise(x * 2.3 + 3.0, z * 2.3 + 7.0)
-    Local turf = flat * Clamp((patches - 0.28) * 5.0, 0.0, 1.0) *
-                 Clamp((height - 2.3) / 1.2, 0.0, 1.0)
+    Local turf = Turf(height, slope, patches)
     color = Mixed(color,
                   Mixed(Vec3(0.29, 0.35, 0.18), Vec3(0.45, 0.47, 0.25),
                         patches * 0.6 + blades * 0.6 - 0.2),
                   turf)
     rough = rough + (0.95 - rough) * turf
     // Trodden ground around the mill, and from its door to the road.
-    Local fromMill = Sqrt((x - MAIN_X) * (x - MAIN_X) + z * z)
-    Local trodden = Clamp((12.0 + patches * 5.0 - fromMill) / 3.0, 0.0, 1.0)
-    If x > MAIN_X && x < ROAD_WEST
-        Local across = (x - MAIN_X) / (ROAD_WEST - MAIN_X)
-        Local pathZ = DoorSpot().y + (RoadZ(ROAD_WEST) - DoorSpot().y) * across
-        trodden = Max(trodden, Clamp((2.2 + fine - Abs(z - pathZ)) / 1.2, 0.0, 1.0))
-    End If
-    trodden *= Clamp((1.2 - slope) / 0.4, 0.0, 1.0)
+    Local trodden = Trodden(x, z, slope, patches, fine)
     color = Mixed(color, Mixed(Vec3(0.38, 0.33, 0.25), Vec3(0.5, 0.43, 0.32), fine), trodden)
     rough = rough + (0.88 - rough) * trodden
     // Sand, up to what's broken by the rock's own shape.
-    Local sand = Clamp((1.5 + (patches - 0.5) * 1.8 - height) / 0.5, 0.0, 1.0) *
-                 Clamp((1.3 - slope) / 0.4, 0.0, 1.0)
+    Local sand = Sand(height, slope, patches)
     color = Mixed(color, Mixed(Vec3(0.72, 0.64, 0.47), Vec3(0.83, 0.76, 0.59), fine), sand)
     rough = rough + (0.92 - rough) * sand
     // Wet, where the sea's just been: darker, and it shines.

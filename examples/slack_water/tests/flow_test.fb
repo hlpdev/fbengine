@@ -988,3 +988,34 @@ Function WhatsWhiteIsBrightAndGrey()
     Expect(WhiteAround(image, 10, 10) == 1)
     Expect(WhiteAround(image, 11, 10) == 2)
 End Function
+
+@Test
+Function TurfIsWhereTheCoversGreen()
+    // Over a field of the island's heights and slopes, it's turf where the cover's green, and not where
+    // it isn't.
+    Local agreed = 0
+    Local count = 0
+    For x = -80 To 60 Step 4
+        For z = -60 To 40 Step 4
+            For slope In [0.1, 0.5, 1.2]
+                Local fx = x As Float
+                Local fz = z As Float
+                Local height = Max(GroundHeight(fx, fz), 0.0)
+                Local cover = CoverAt(fx, fz, height, slope)
+                Local green = cover.0.y > cover.0.x && cover.0.y > cover.0.z + 0.1
+                Local turf = TurfAt(fx, fz, height, slope)
+                If turf > 0.6 || turf < 0.05
+                    count += 1
+                    If (turf > 0.6) == green Then agreed += 1
+                End If
+            End For
+        End For
+    End For
+    Expect(count > 200)
+    Expect(agreed == count, "{agreed} of {count}")
+    // None on the path from the door, in the yard, on sand, or on a cliff.
+    Expect(TurfAt(MAIN_X, DoorSpot().y + 2.0, 4.0, 0.0) == 0.0)
+    Expect(TurfAt(MAIN_X + 5.0, 3.0, 4.0, 0.0) == 0.0)
+    Expect(TurfAt(MAIN_X - 30.0, 30.0, 0.8, 0.1) == 0.0)
+    Expect(TurfAt(MAIN_X - 30.0, 30.0, 10.0, 1.5) == 0.0)
+End Function
