@@ -20,6 +20,7 @@ target_include_directories(fbengine_tools_native PRIVATE "${CMAKE_CURRENT_SOURCE
 target_compile_definitions(fbengine_tools_native PRIVATE FBE_TOOLS_BUILDING
                            FBE_VERSION="${PROJECT_VERSION}")
 target_link_libraries(fbengine_tools_native PRIVATE fbengine_stb ktx fastgltf::fastgltf meshoptimizer)
+fbengine_use_fetched_simdjson(fbengine_tools_native)
 # The engine's shaders' sources, which a game's shader is compiled with.
 set(fbengine_shader_sources_folder "${CMAKE_CURRENT_BINARY_DIR}/shader_sources")
 file(MAKE_DIRECTORY "${fbengine_shader_sources_folder}")
