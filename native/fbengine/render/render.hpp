@@ -75,10 +75,12 @@ struct game_pass_t {
     const gpu::shader_t* shader = nullptr;
 };
 
-/// The camera's full-screen passes that can be made, the last into `format` of `samples`, each of
-/// the others saying so once.
+/// The camera's full-screen passes that can be made, the last into `format` of `samples`, over
+/// what's there unless `into_nothing`, and, with others, into `between` of one sample; each of the
+/// others, or one that isn't a pass now, saying so once.
 std::vector<game_pass_t> game_passes(const scene::camera_t& camera, VkFormat format,
-                                     VkSampleCountFlagBits samples);
+                                     VkSampleCountFlagBits samples, VkFormat between,
+                                     bool into_nothing);
 
 /// An image a camera's picture goes through on its way to its target: what it's made as, and its
 /// format, which a transient's isn't known as until it's recorded.

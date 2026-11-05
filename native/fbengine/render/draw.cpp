@@ -933,7 +933,8 @@ bool draw_camera(std::uint32_t slot, float tween) {
     const std::vector<game_pass_t> passes =
         camera.passes.empty() ? std::vector<game_pass_t>{}
                               : game_passes(camera, camera.fxaa ? picture.format : drawn_format,
-                                            camera.fxaa ? VK_SAMPLE_COUNT_1_BIT : samples);
+                                            camera.fxaa ? VK_SAMPLE_COUNT_1_BIT : samples,
+                                            picture.format, camera.fxaa);
     const bool read_after = !passes.empty() || camera.fxaa;
     const bool aside = camera.hdr || read_after;
     VkFormat format = drawn_format;

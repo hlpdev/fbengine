@@ -72,8 +72,10 @@ VkPipelineLayout pipeline_layout();
 VkPipeline pipeline(const pipeline_desc_t& desc);
 
 /// For a test: pipelines of a shader of `name` aren't made, as a driver might refuse them, "" for
-/// all to be; and how many have been asked for since.
-void refuse_pipelines_of(std::string_view name);
+/// all to be, or only those drawing `samples` a pixel if it says; and how many have been asked for
+/// since.
+void refuse_pipelines_of(std::string_view name,
+                         VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_FLAG_BITS_MAX_ENUM);
 std::uint32_t pipelines_refused();
 
 /// Loads the pipeline cache as the device starts: the file fbe_gpu_set_pipeline_cache names, if

@@ -126,9 +126,10 @@ std::uint64_t create_engine_texture(std::uint32_t width, std::uint32_t height, s
 /// asked for and let go of with it; 0, with fbe_error's why, if it can't be made.
 std::uint64_t depth_read_of(std::uint64_t target);
 
-/// Records a target's depth into its copy, leaving its depth as it was and the copy to be sampled:
-/// by a copy, or for one of many samples, its first sample, by a resolve.
-void record_depth_read(VkCommandBuffer commands, const texture_t& target);
+/// Records a target's depth into `read`, its copy, leaving its depth as it was and the copy to be
+/// sampled: by a copy, or for one of many samples, its first sample, by a resolve. Both are as they
+/// were when what records it was added, as a pass's are, whatever's let go of them since.
+void record_depth_read(VkCommandBuffer commands, const texture_t& target, const texture_t& read);
 
 /// Writes `width` by `height` pixels at `x`, `y` into level 0 of a texture without mipmaps, rows
 /// `pitch` bytes apart, in the frame's uploads, before its commands, even where a pass of the

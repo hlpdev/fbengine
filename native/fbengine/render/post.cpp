@@ -93,7 +93,8 @@ struct pass_data_t {
     float depth_offset = 0.0F;
     float depth_scale = 0.0F;
     std::uint32_t perspective = 0;
-    std::uint32_t layer_count = 0;
+    /// A bit for each of its layers that has a texture.
+    std::uint32_t layers_there = 0;
     std::array<pass_layer_t, FBE_MATERIAL_LAYERS> layers{};
     std::array<std::array<float, 4>, FBE_MATERIAL_PARAMETERS> parameters{};
 };
@@ -294,15 +295,25 @@ gpu::resource_t add_bloom(const scene::camera_t& camera, gpu::resource_t image, 
 } // namespace
 
 std::vector<game_pass_t> game_passes(const scene::camera_t& camera, VkFormat format,
-                                     VkSampleCountFlagBits samples) {
+                                     VkSampleCountFlagBits samples, VkFormat between,
+                                     bool into_nothing) {
     std::vector<game_pass_t> ready;
     for (const std::uint64_t material : camera.passes) {
-        const std::uint32_t code = shaders_own::pass_code_of(fbe_material_shader(material));
+        const std::uint64_t has = fbe_material_shader(material);
+        const std::uint32_t code = shaders_own::pass_code_of(has);
+        if (code == 0) {
+            shaders_own::not_a_pass(shaders_own::code_of(has));
+            continue;
+        }
         const gpu::shader_t* shader = shaders_own::shader_of(code);
         if (shader == nullptr) {
             continue;
         }
-        if (pass_pipeline(*shader, format, samples, camera) == VK_NULL_HANDLE) {
+        // Any of them can be last, or between two, as which can be made says.
+        if (pass_pipeline(*shader, format, samples, camera, into_nothing) == VK_NULL_HANDLE ||
+            (camera.passes.size() > 1 &&
+             pass_pipeline(*shader, between, VK_SAMPLE_COUNT_1_BIT, camera, true) ==
+                 VK_NULL_HANDLE)) {
             shaders_own::refuse(code);
             continue;
         }
@@ -316,18 +327,19 @@ bool add_game_passes(const scene::camera_t& camera, std::span<const game_pass_t>
                      VkSampleCountFlagBits samples, const picture_t& picture, std::uint64_t target,
                      const scene::view_t& view, VkRect2D scissor, bool into_nothing) {
     const std::uint64_t depth_read = texture::depth_read_of(target);
-    if (depth_read == 0) {
+    const texture::texture_t* drawn = texture::find(target);
+    const texture::texture_t* read = texture::find(depth_read);
+    if (depth_read == 0 || drawn == nullptr || read == nullptr) {
         return false;
     }
     const VkExtent2D size{ .width = picture.target.width, .height = picture.target.height };
+    // Both as they are now, as the graph has a texture it's given: a screen let go of before the
+    // frame's recorded, as a resize does, keeps its images till the frames that drew it are done.
     if (!gpu::add_pass({
             .name = "pass depth",
             .record =
-                [target](VkCommandBuffer commands) {
-                    const texture::texture_t* drawn = texture::find(target);
-                    if (drawn != nullptr) {
-                        texture::record_depth_read(commands, *drawn);
-                    }
+                [drawn = *drawn, read = *read](VkCommandBuffer commands) {
+                    texture::record_depth_read(commands, drawn, read);
                 },
         })) {
         return false;
@@ -364,17 +376,19 @@ bool add_game_passes(const scene::camera_t& camera, std::span<const game_pass_t>
             .parameters = material.parameters,
         };
         std::vector<std::pair<gpu::resource_t, gpu::use_t>> uses{ { from, gpu::use_t::SAMPLED } };
-        for (const scene::layer_t& layer : material.layers) {
+        // Each at its own index, as layer(index, uv) reads it.
+        for (std::uint32_t index = 0; index < material.layers.size(); ++index) {
+            const scene::layer_t& layer = material.layers.at(index);
             const texture::texture_t* image =
                 layer.texture != target ? texture::find(layer.texture) : nullptr;
             if (image == nullptr) {
                 continue;
             }
-            data.layers.at(data.layer_count) = {
+            data.layers.at(index) = {
                 .texture = texture::index_of(layer.texture),
                 .sampler = texture::sampler_of(*image),
             };
-            ++data.layer_count;
+            data.layers_there |= 1U << index;
             const gpu::resource_t used = gpu::texture_resource(layer.texture);
             if (used == gpu::no_resource) {
                 return false;

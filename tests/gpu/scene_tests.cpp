@@ -10748,6 +10748,7 @@ constexpr float pass_makes_an_edge = 7.0F;
 constexpr float pass_reads_between_pixels = 8.0F;
 constexpr float pass_draws_a_parameter_past_the_last = 9.0F;
 constexpr float pass_draws_a_layer_past_the_last = 10.0F;
+constexpr float pass_draws_its_second_layer = 11.0F;
 
 /// A camera's grade that scales what's drawn by `by`.
 std::array<float, 10> graded_by(float by) {
@@ -11101,6 +11102,43 @@ TEST_CASE("a pass reads its parameters and its material's layers", "[gpu][scene]
     fbe_texture_release(texture);
 }
 
+TEST_CASE("a pass's layers are each at their own index", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t pass = game_pass(pass_draws_its_second_layer);
+    require(fbe_camera_add_pass(scene.camera, pass));
+    const std::uint64_t red = flat_texture(255, 0, 0, 255);
+    require(fbe_material_set_texture(pass, 1, red));
+    CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
+    // The first, which it hasn't, is white, not the second.
+    require(fbe_material_set_parameter(pass, 0, pass_draws_a_layer, 0.0F, 0.0F, 0.0F));
+    CHECK(near(middle(scene.drawn()), { 255, 255, 255 }));
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_material_release(pass);
+    fbe_texture_release(red);
+}
+
+// What a camera that doesn't clear draws nothing on is 0 to its passes, alpha and all, and stays
+// what's under it: an inverse that's premultiplied keeps it so.
+TEST_CASE("a pass over what a camera doesn't clear is premultiplied, in and out", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t paint = unlit(1.0F, 1.0F, 1.0F);
+    wall(scene.world, -3.0F, 1.0F, paint);
+    const std::uint64_t over = fbe_entity_create(scene.world, 0, FBE_ENTITY_CAMERA);
+    require(fbe_camera_set_target(over, scene.target));
+    require(fbe_camera_set_clear(over, false, false));
+    const std::uint64_t pass = game_pass(pass_inverts);
+    require(fbe_camera_add_pass(over, pass));
+    const fbe::golden::frame_t frame = scene.drawn();
+    // The wall it draws again, inverted, and the blue it doesn't, as it was.
+    CHECK(near(middle(frame), { 0, 0, 0 }));
+    CHECK(near(pixel(frame, 4, 4), { 0, 0, 255 }));
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_entity_free(over);
+    fbe_material_release(pass);
+    fbe_material_release(paint);
+}
+
 TEST_CASE("a pass reads what's beside it, as a blur would", "[gpu][scene]") {
     const scene_t scene;
     require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
@@ -11271,6 +11309,79 @@ TEST_CASE("a pass's alpha lets what's there through FXAA", "[gpu][scene]") {
     fbe_material_release(pass);
 }
 
+// A target let go of between drawing and the frame's recording, which what samples it keeps the
+// images of till then: the depth its camera's pass reads is the one it drew.
+TEST_CASE("a pass reads the depth of a target let go of before its frame's recorded",
+          "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t other = fbe_world_create();
+    const std::uint64_t seen = fbe_entity_create(other, 0, FBE_ENTITY_CAMERA);
+    const std::uint64_t target =
+        fbe_texture_create_target(frame_size, frame_size, FBE_TEXTURE_RGBA8, 1, true);
+    REQUIRE(target != 0);
+    require(fbe_camera_set_target(seen, target));
+    const std::uint64_t paint = unlit(1.0F, 1.0F, 1.0F);
+    wall(other, -3.0F, 10.0F, paint);
+    const std::uint64_t pass = game_pass(pass_draws_its_depth);
+    require(fbe_camera_add_pass(seen, pass));
+    // The scene shows it, on a wall of its own.
+    const std::uint64_t showing = unlit(1.0F, 1.0F, 1.0F);
+    require(fbe_material_set_texture(showing, 0, target));
+    wall(scene.world, -3.0F, 10.0F, showing);
+    require(fbe_render_world(other, 1.0F));
+    require(fbe_render_world(scene.world, 1.0F));
+    require(fbe_entity_free(seen));
+    require(fbe_material_set_texture(showing, 0, 0));
+    require(fbe_texture_release(target));
+    CHECK(fbe::texture::find(target) == nullptr);
+    const fbe::golden::frame_t frame = scene_t::read(scene.target);
+    fbe_frame_flip(false);
+    CHECK(near(middle(frame), { srgb(0.3F), 0, 0 }));
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_material_release(pass);
+    fbe_material_release(paint);
+    fbe_material_release(showing);
+    fbe_world_free(other);
+}
+
+// The screen's let go of as soon as its size changes, which can be between drawing and the frame's
+// recording, where a pass reads the depth it drew.
+TEST_CASE("a pass reads the depth of a screen resized before its frame's recorded", "[gpu][scene]") {
+    REQUIRE(fbe_window_set_headless(true));
+    fbe_gpu_set_pipeline_cache("");
+    require(fbe_window_open(32, 32, FBE_WINDOW_WINDOWED));
+    require(fbe_gpu_start());
+    {
+        const std::uint64_t world = fbe_world_create();
+        const std::uint64_t camera = fbe_entity_create(world, 0, FBE_ENTITY_CAMERA);
+        const std::uint64_t paint = unlit(1.0F, 1.0F, 1.0F);
+        wall(world, -3.0F, 10.0F, paint);
+        const std::uint64_t pass = game_pass(pass_draws_its_depth);
+        require(fbe_camera_add_pass(camera, pass));
+        const std::uint64_t first = fbe_gpu_screen();
+        require(fbe_render_world(world, 1.0F));
+        require(fbe_gpu_set_render_size(48, 48));
+        CHECK(fbe_gpu_screen() != first);
+        fbe_frame_flip(false);
+        CHECK(fbe_gpu_validation_errors() == 0);
+        // And the new one, in its turn.
+        require(fbe_render_world(world, 1.0F));
+        const fbe::golden::frame_t frame = scene_t::read(fbe_gpu_screen());
+        fbe_frame_flip(false);
+        CHECK(frame.width == 48);
+        CHECK(near(middle(frame), { srgb(0.3F), 0, 0 }));
+        CHECK(fbe_gpu_validation_errors() == 0);
+        require(fbe_gpu_set_render_size(0, 0));
+        fbe_material_release(pass);
+        fbe_material_release(paint);
+        fbe_world_free(world);
+        std::array<std::uint64_t, 64> some{};
+        while (fbe_entity_freed(some.data(), some.size()) != 0) {}
+    }
+    fbe_window_close();
+    stop_gpu();
+}
+
 TEST_CASE("a pass runs on the screen as on a target", "[gpu][scene]") {
     REQUIRE(fbe_window_set_headless(true));
     fbe_gpu_set_pipeline_cache("");
@@ -11384,6 +11495,12 @@ TEST_CASE("a pass no pipeline can be made of says so once, and is left out", "[g
     // The other runs.
     CHECK(near(middle(scene.drawn()), { 0, 0, srgb(0.5F) }));
     CHECK(fbe::gpu::pipelines_refused() == 1);
+    // It says it's a camera's pass, not a material's.
+    const std::string said = fbe::shaders_own::refusal(fbe::shaders_own::pass_code_of(shader));
+    CAPTURE(said);
+    CHECK(said.contains("res://refused_pass.slang"));
+    CHECK(said.contains("the camera's pass is left out"));
+    CHECK_FALSE(said.contains("material"));
     CHECK(near(middle(scene.drawn()), { 0, 0, srgb(0.5F) }));
     CHECK(fbe::gpu::pipelines_refused() == 1);
     fbe::gpu::refuse_pipelines_of("");
@@ -11391,6 +11508,71 @@ TEST_CASE("a pass no pipeline can be made of says so once, and is left out", "[g
     fbe_shader_release(shader);
     fbe_material_release(bad);
     fbe_material_release(good);
+}
+
+// One that can be last but not between two, here of one sample a pixel where the target has 4, is
+// left out as one that can't be made at all is.
+TEST_CASE("a pass that can't be between two says so once, and is left out", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t target =
+        fbe_texture_create_target(frame_size, frame_size, FBE_TEXTURE_RGBA8, 4, true);
+    REQUIRE(target != 0);
+    require(fbe_camera_set_target(scene.camera, target));
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    std::vector<std::uint32_t> words(fbe::test_shaders::game_pass.code.begin(),
+                                     fbe::test_shaders::game_pass.code.end());
+    // A bound on its ids one higher, so its code isn't the good one's, and still SPIR-V, as its last
+    // pipeline's made.
+    ++words.at(3);
+    const std::vector<std::uint8_t> bytes = cooked_shader(words);
+    const std::uint64_t shader = fbe_shader_create(
+        bytes.data(), static_cast<std::int64_t>(bytes.size()), "res://refused_between.slang");
+    REQUIRE(shader != 0);
+    fbe::gpu::refuse_pipelines_of("res://refused_between.slang", VK_SAMPLE_COUNT_1_BIT);
+    const std::uint64_t bad = fbe_material_create();
+    require(fbe_material_set_shader(bad, shader));
+    require(fbe_camera_add_pass(scene.camera, bad));
+    const std::uint64_t good = game_pass(pass_halves);
+    require(fbe_camera_add_pass(scene.camera, good));
+    const std::uint32_t said = fbe::shaders_own::times_said();
+    const auto blue = [&] {
+        require(fbe_render_world(scene.world, 1.0F));
+        std::vector<std::uint8_t> pixels(std::size_t{ frame_size } * frame_size * 4);
+        require(fbe_texture_read(target, 0, pixels.data(), static_cast<std::int64_t>(pixels.size())));
+        fbe_frame_flip(false);
+        const std::size_t row = std::size_t{ frame_size / 2 } * frame_size;
+        return int{ pixels.at(((row + (frame_size / 2)) * 4) + 2) };
+    };
+    CHECK(std::abs(blue() - int{ srgb(0.5F) }) <= 2);
+    CHECK(fbe::gpu::pipelines_refused() == 1);
+    CHECK(std::abs(blue() - int{ srgb(0.5F) }) <= 2);
+    CHECK(fbe::gpu::pipelines_refused() == 1);
+    CHECK(fbe::shaders_own::times_said() == said + 1);
+    fbe::gpu::refuse_pipelines_of("");
+    CHECK(fbe_gpu_validation_errors() == 0);
+    require(fbe_camera_set_target(scene.camera, scene.target));
+    fbe_shader_release(shader);
+    fbe_material_release(bad);
+    fbe_material_release(good);
+    fbe_texture_release(target);
+}
+
+// A shader's file changed so it doesn't say FBE_PASS, as a hot reload takes it, isn't a pass now.
+TEST_CASE("a pass reloaded as a material's shader says so once, and is left out", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t pass = game_pass(pass_halves);
+    require(fbe_camera_add_pass(scene.camera, pass));
+    CHECK(near(middle(scene.drawn()), { 0, 0, srgb(0.5F) }));
+    const std::vector<std::uint8_t> bytes = cooked_shader(fbe::test_shaders::game_shader.code);
+    require(fbe_shader_replace(fbe_material_shader(pass), bytes.data(),
+                               static_cast<std::int64_t>(bytes.size()), "res://no_pass_now.slang"));
+    const std::uint32_t said = fbe::shaders_own::times_said();
+    CHECK(near(middle(scene.drawn()), { 0, 0, 255 }));
+    CHECK(near(middle(scene.drawn()), { 0, 0, 255 }));
+    CHECK(fbe::shaders_own::times_said() == said + 1);
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_material_release(pass);
 }
 
 TEST_CASE("a camera with no passes draws nothing it wouldn't, and one with them that much more",

@@ -1139,11 +1139,9 @@ std::uint64_t depth_read_of(std::uint64_t target) {
     return found->depth_read;
 }
 
-void record_depth_read(VkCommandBuffer commands, const texture_t& target) {
-    const texture_t* read = find(target.depth_read);
-    if (read == nullptr) {
-        return;
-    }
+void record_depth_read(VkCommandBuffer commands, const texture_t& target,
+                       const texture_t& depth_read) {
+    const texture_t* read = &depth_read;
     const auto tests = flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT) |
                        flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT);
     const auto written = flag<VkAccessFlags2>(VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);

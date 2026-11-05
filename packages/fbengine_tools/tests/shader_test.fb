@@ -464,3 +464,18 @@ Function APassThatWritesNoPassSaysSo() Throws IOError
         Expect(e.Message.Contains("has no `float4 pass("))
     End Try
 End Function
+
+// FBE_PASS in a comment, or in another's name, isn't one: this is a material's.
+@Test
+Function APassSaidInACommentIsntOne() Throws IOError, GraphicsError
+    If NoSlangc() Then Skip("no slangc here")
+    Local folder = Try TempDir()
+    Local from = folder.Path / "commented.slang"
+    Local to = folder.Path / "commented.cooked"
+    Try File.WriteText(from, "// #define FBE_PASS, someday\n#define FBE_PASSES 2\n{FLAT}")
+    Try Cooker.CookShader(from, to)
+    Assets.MountFiles("res://shader-commented", {"commented.slang": Try File.ReadBytes(to)})
+    Defer Assets.Unmount("res://shader-commented")
+    Local shader = Try Assets.Load<Shader>("res://shader-commented/commented.slang")
+    Expect(!shader.IsPass())
+End Function

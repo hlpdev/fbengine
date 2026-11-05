@@ -3,13 +3,17 @@
 //
 //     float4 pass(float2 uv, float4 color, float depth)
 //     {
-//         return float4(1.0 - color.rgb, color.a);
+//         return float4(color.a - color.rgb, color.a);
 //     }
 //
 // which gives each pixel of the camera's viewport, from `uv`, 0 to 1 across it from its top left, the
 // `color` that's drawn there so far, in linear light after the tonemap and the grade, and the `depth`
 // of what's drawn there, how far in front of the camera along its view, in meters, or its far for
 // nothing. What it returns goes to the next pass, or the camera's target, as linear light.
+//
+// Both colors are premultiplied by their alpha, as a camera that doesn't clear has less than 1 where
+// it draws nothing, and the last pass goes over what's under it so: its inverse is `color.a -
+// color.rgb`, which stays 0 where nothing is, where `1 - color.rgb` would add white.
 //
 // It reads only what's here. A texture of its own, or a global that isn't `static`, is something the
 // pipelines don't bind, which CookShader refuses: parameters and its Material's layers are how a game
@@ -25,8 +29,8 @@ struct PassLayer
 };
 
 // What a pass is run with: the texture's size in pixels; the samplers it reads what's drawn through;
-// the viewport, in pixels; what takes a stored depth to one in meters; its material's layers, and how
-// many it has; and its parameters.
+// the viewport, in pixels; what takes a stored depth to one in meters; its material's layers, each at
+// its own index, and a bit for each there is; and its parameters.
 struct PassData
 {
     float2 size;
@@ -36,7 +40,7 @@ struct PassData
     float depthOffset;
     float depthScale;
     uint perspective;
-    uint layerCount;
+    uint layersThere;
     PassLayer layers[8];
     float4 parameters[8];
 };
@@ -61,7 +65,7 @@ float4 parameter(uint index)
 // for one it hasn't.
 float4 layer(uint index, float2 uv)
 {
-    if (index >= passPush.data.layerCount)
+    if (index >= 8 || (passPush.data.layersThere & (1u << index)) == 0)
     {
         return float4(1.0, 1.0, 1.0, 1.0);
     }

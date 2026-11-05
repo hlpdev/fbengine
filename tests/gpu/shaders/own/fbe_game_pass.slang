@@ -47,5 +47,10 @@ float4 pass(float2 uv, float4 color, float depth)
     {
         return layer(8, uv);
     }
-    return float4(1.0 - color.rgb, color.a);
+    if (which == 11.0)
+    {
+        return layer(1, uv);
+    }
+    // Inverted, premultiplied.
+    return float4(color.a - color.rgb, color.a);
 }
