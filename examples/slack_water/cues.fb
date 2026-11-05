@@ -43,9 +43,6 @@ Public Enum Surface
     TURF = 5
 End Enum
 
-// How much of a cover the ground has to be for your steps to be on it.
-Const UNDERFOOT: Float = 0.5
-
 // How far you walk to a step, in meters, and how far a move can be before it's the water carrying you.
 Const STRIDE: Float = 1.8
 Const FARTHEST_MOVE: Float = 1.0
@@ -96,7 +93,7 @@ Public Function CueLevel(cue: Cue): Float
 End Function
 
 /// How loud the wind is, by the tide's clock: it rises with the storm, and gusts in it; and less inside
-/// the mill.
+/// the mill. The sea and surf have their own, below.
 Public Function WindLevel(clock: Float64, inside: Bool): Float
     Return (0.35 + 0.5 * (Min(clock / TIDE_IN_AT, 1.0) As Float)) * Gust(clock) *
            (inside ? 0.5 : 1.0) *
@@ -104,11 +101,15 @@ Public Function WindLevel(clock: Float64, inside: Bool): Float
 End Function
 
 /// What the wind's level is multiplied by, `clock` seconds in: 1 until the storm, then swelling and
-/// falling, by up to GUSTS either way at its height, by three slow waves that don't line up.
-Public Function Gust(clock: Float64): Float
-    Local swells = 0.5 * (Sin(clock * 0.9) As Float) + 0.3 * (Sin(clock * 2.3 + 1.0) As Float) +
-                   0.2 * (Sin(clock * 5.1 + 2.0) As Float)
-    Return 1.0 + GUSTS * StormAt(clock) * swells
+/// falling, by up to GUSTS either way at its height, by its Swells.
+Public Function Gust(clock: Float64): Float => 1.0 + GUSTS * StormAt(clock) * Swells(clock)
+
+/// The wind's swells, from -1 to 1, `clock` seconds in: three slow waves at 0.9, 2.39, and 5.29
+/// radians a second, which at no lag from a second to the ten minutes a game can last all come round
+/// together, to within 0.14 of where they were; none is the sound's own swell, at 0.9 and 2.3.
+Public Function Swells(clock: Float64): Float
+    Return 0.5 * (Sin(clock * 0.9) As Float) + 0.3 * (Sin(clock * 2.39 + 1.0) As Float) +
+           0.2 * (Sin(clock * 5.29 + 2.0) As Float)
 End Function
 
 /// How high the wind's pitched, `clock` seconds in: as it was made until the storm, and up to
@@ -116,11 +117,15 @@ End Function
 Public Function WindPitch(clock: Float64): Float => 1.0 + STORM_PITCH * StormAt(clock)
 
 /// How loud the surf is, breaking on the rocks: a little at slack water, more as the storm comes, and
-/// its roar once the flood's over the road, over ROAR_SECONDS; and less inside the mill.
+/// its Roar; and less inside the mill.
 Public Function SurfLevel(clock: Float64, inside: Bool): Float
-    Local roar = Clamp(((clock - FLOOD_AT) / ROAR_SECONDS) As Float, 0.0, 1.0)
-    Return (0.2 + 0.4 * StormAt(clock) + 0.2 * roar) * (inside ? 0.45 : 1.0) * AMBIENCE
+    Return (0.2 + 0.4 * StormAt(clock) + 0.2 * Roar(clock)) * (inside ? 0.45 : 1.0) * AMBIENCE
 End Function
+
+/// How far the surf's come to its roar, from 0 to 1: none until the flood's over the road, then
+/// evenly, all of it ROAR_SECONDS on.
+Public Function Roar(clock: Float64): Float => Clamp(((clock - FLOOD_AT) / ROAR_SECONDS) As Float,
+                                                     0.0, 1.0)
 
 /// How loud the sea is, by the tide's clock, as it comes in, and less inside the mill.
 Public Function SeaLevel(clock: Float64, inside: Bool): Float
@@ -161,15 +166,25 @@ Public Function WheelLevel(speed: Float): Float => (0.3 + 0.7 * speed) * WHEEL
 Public Function WorksLevel(speed: Float): Float => speed > 0.0 ? (0.4 + 0.6 * speed) * WORKS : 0.0
 
 /// What you're on at (`x`, `z`), `inside` the mill or not, with the sea at `sea`: what the ground's
-/// painted with there, as CoverParts has it.
-Public Function SurfaceAt(x: Float, z: Float, inside: Bool, sea: Float): Surface
+/// painted with there, as the terrain's `heights` bake it.
+Public Function SurfaceAt(heights: Float[], x: Float, z: Float, inside: Bool, sea: Float): Surface
     If inside Then Return Surface.FLOOR
-    Local height = GroundHeight(x, z)
-    If height < sea Then Return Surface.SHALLOWS
+    Local half = (SIDE As Float) / 2.0
+    Local baked = BakedAt(heights, x + half, z + half)
+    If baked.0 < sea Then Return Surface.SHALLOWS
     If OnRoad(x, z) Then Return Surface.ROAD
-    Local parts = CoverParts(x, z, height, SlopeAt(x, z))
-    If parts.0 >= UNDERFOOT Then Return Surface.SAND
-    If parts.1 >= UNDERFOOT || parts.2 >= UNDERFOOT Then Return Surface.TURF
+    Return Underfoot(CoverParts(x, z, baked.0, baked.1))
+End Function
+
+/// What's most seen of the cover's `parts`, sand, turf, and trodden ground, as CoverAt paints turf,
+/// then trodden ground over it, then sand over both, over rock: trodden ground sounds as turf.
+Public Function Underfoot(parts: (Float, Float, Float)): Surface
+    Local sand = parts.0
+    Local trodden = parts.2 * (1.0 - sand)
+    Local turf = parts.1 * (1.0 - parts.2) * (1.0 - sand)
+    Local rock = (1.0 - parts.1) * (1.0 - parts.2) * (1.0 - sand)
+    If sand >= trodden && sand >= turf && sand >= rock Then Return Surface.SAND
+    If trodden >= rock || turf >= rock Then Return Surface.TURF
     Return Surface.ROCK
 End Function
 

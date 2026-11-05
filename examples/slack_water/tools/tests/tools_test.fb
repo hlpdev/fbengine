@@ -1,5 +1,6 @@
 // What the tools make, by its numbers: sounds each their own, that loop without a click, around 0,
-// and under clipping; a fade that holds its power; and materials that tile.
+// and under clipping, and that end at nothing if they're played once; a fade that holds its power; and
+// materials that tile.
 
 Import std.collections
 Import std.core
@@ -17,6 +18,20 @@ Function LargestStep(samples: Float[]): Float
     Return largest
 End Function
 
+// Every sound the tools make.
+Function AllSounds(): Float[][]
+    Return [Wind(), Sea(), Surf(), Gull(), Creak(), Wheel(), Works(), Step(5), Step(6), Step(7),
+            FloorStep(9), FloorStep(10), Wade(11), Wade(12), SandStep(13), SandStep(14),
+            TurfStep(15), TurfStep(16), Splash(), Fit(), Sluice()]
+End Function
+
+// What's played once, not looped.
+Function OneShots(): Float[][]
+    Return [Gull(), Creak(), Step(5), Step(6), Step(7), FloorStep(9), FloorStep(10), Wade(11),
+            Wade(12), SandStep(13), SandStep(14), TurfStep(15), TurfStep(16), Splash(), Fit(),
+            Sluice()]
+End Function
+
 // The samples' root mean square.
 Function Rms(samples: Float[], from: Int, until: Int): Float
     Local sum = 0.0
@@ -28,9 +43,7 @@ End Function
 
 @Test
 Function EverySoundIsItsOwn()
-    Local sounds = [Wind(), Sea(), Gull(), Creak(), Wheel(), Step(5), Step(6), Step(7),
-                    FloorStep(9),
-                    FloorStep(10), Wade(11), Wade(12), Splash()]
+    Local sounds = AllSounds()
     For one = 0 Until sounds.Count
         For two = one + 1 Until sounds.Count
             Expect(sounds[one] != sounds[two])
@@ -40,7 +53,7 @@ End Function
 
 @Test
 Function WhatLoopsDoesntClick()
-    For sound In [Wind(), Sea(), Wheel()]
+    For sound In [Wind(), Sea(), Surf(), Wheel(), Works()]
         Expect(Abs(sound[sound.Count - 1] - sound[0]) <= LargestStep(sound))
         Local mean = 0.0
         For sample In sound
@@ -52,11 +65,18 @@ End Function
 
 @Test
 Function NothingClips()
-    For sound In [Wind(), Sea(), Gull(), Creak(), Wheel(), Step(5), Step(6), Step(7), FloorStep(9),
-                  FloorStep(10), Wade(11), Wade(12), Splash()]
+    For sound In AllSounds()
         For sample In sound
             Expect(Abs(sample) < 1.0)
         End For
+    End For
+End Function
+
+// What's played once ends at nothing, so it doesn't click as it stops.
+@Test
+Function WhatsPlayedOnceEndsAtNothing()
+    For sound In OneShots()
+        Expect(Abs(sound[sound.Count - 1]) < 0.005)
     End For
 End Function
 

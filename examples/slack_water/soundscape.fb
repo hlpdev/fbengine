@@ -1,8 +1,8 @@
-// The game's sounds in its world: streamed wind, sea, and surf all around, by the storm and tide, the wind
-// gusting and the surf roaring from the flood, muffled from inside the mill; gulls over the water, creaks at the mill, the wheel at the wheel, the flood's splash
-// on the road, the mill's parts fitted, its sluice, and its works once the wheel turns, and your own
-// steps, on sand, rock, turf, the road, the mill's boards, or the shallows,
-// as its Cues say.
+// The game's sounds in its world: streamed wind, sea, and surf all around, by the storm and tide, the
+// wind gusting and the surf roaring from the flood, muffled from inside the mill; gulls over the water,
+// creaks at the mill, the wheel at the wheel, the flood's splash on the road, the mill's parts fitted,
+// its sluice, and its works once the wheel turns; and your own steps, on sand, rock, turf, the road,
+// the mill's boards, or the shallows, as its Cues say.
 
 Import std.core
 Import std.math
@@ -50,9 +50,14 @@ Public Final Class Soundscape
     Field fromX: Float
     Field fromZ: Float
     Field played: Int[]
-    // What the wind and sea are at, 0 for none, to hear the rest by itself.
+    // What the wind, sea, and surf are at, 0 for none, to hear the rest by itself.
     Field beds: Float = 1.0
-    // How far through the door the wind's and sea's levels are, from 0, outside, to 1, inside.
+    // What the surf's at, and the wind and sea, apart, under beds, so a test can hear each alone.
+    Field surfBed: Float = 1.0
+    Field windSea: Float = 1.0
+    // The terrain's heights, as its cover's baked, which say what you're walking on.
+    Field heights: Float[]
+    // How far through the door the wind's, sea's, and surf's levels are, from 0, outside, to 1, inside.
     Field indoors: Float = 0.0
 
     New(sounds: Sound[], wind: Sound, sea: Sound, surf: Sound, wheel: Sound, works: Sound,
@@ -62,6 +67,7 @@ Public Final Class Soundscape
         Self.wind = wind
         Self.sea = sea
         Self.surf = surf
+        heights = TerrainHeights()
         Self.wheel = wheel
         Self.works = works
         works.SetLoop(True)
@@ -195,10 +201,28 @@ Public Final Class Soundscape
     @MainThread
     Public Method SetBeds(level: Float)
         beds = level
-        windPlays.SetVolume(WindLevel(0.0, False) * beds)
-        seaPlays.SetVolume(SeaLevel(0.0, False) * beds)
-        surfPlays.SetVolume(SurfLevel(0.0, False) * beds)
+        windPlays.SetVolume(WindLevel(0.0, False) * beds * windSea)
+        seaPlays.SetVolume(SeaLevel(0.0, False) * beds * windSea)
+        surfPlays.SetVolume(SurfLevel(0.0, False) * beds * surfBed)
     End Method
+
+    /// Sets what the surf's at by itself, 0 for none, under SetBeds'.
+    @MainThread
+    Public Method SetSurf(level: Float)
+        surfBed = level
+        surfPlays.SetVolume(SurfLevel(0.0, False) * beds * surfBed)
+    End Method
+
+    /// Sets what the wind and sea are at by themselves, 0 for none, under SetBeds'.
+    @MainThread
+    Public Method SetWindAndSea(level: Float)
+        windSea = level
+        windPlays.SetVolume(WindLevel(0.0, False) * beds * windSea)
+        seaPlays.SetVolume(SeaLevel(0.0, False) * beds * windSea)
+    End Method
+
+    /// How many cues it has a sound for.
+    @MainThread Public Method CueCount(): Int => sounds.Count
 
     /// Moves it on `seconds`, as `game` has.
     @MainThread
@@ -210,7 +234,7 @@ Public Final Class Soundscape
         fromX = here.x
         fromZ = here.y
         Local inside = InMill(here.x, here.y)
-        Local surface = SurfaceAt(here.x, here.y, inside, SeaHeight(flow.Clock()))
+        Local surface = SurfaceAt(heights, here.x, here.y, inside, SeaHeight(flow.Clock()))
         For cue In cues.Step(flow, Sqrt(dx * dx + dz * dz), seconds, surface, inside)
             sounds[cue As Int].SetPitch(
                 IsStep(cue) ? StepPitch(surface) : 1.0)
@@ -245,9 +269,9 @@ Public Final Class Soundscape
                       (SeaLevel(clock, True) - SeaLevel(clock, False)) * indoors
         Local surfAt = SurfLevel(clock, False) +
                        (SurfLevel(clock, True) - SurfLevel(clock, False)) * indoors
-        windPlays.SetVolume(windAt * beds)
-        seaPlays.SetVolume(seaAt * beds)
-        surfPlays.SetVolume(surfAt * beds)
+        windPlays.SetVolume(windAt * beds * windSea)
+        seaPlays.SetVolume(seaAt * beds * windSea)
+        surfPlays.SetVolume(surfAt * beds * surfBed)
         windPlays.SetPitch(WindPitch(clock))
         cutoff = CutoffToward(cutoff, OutsideCutoff(inside), seconds)
         outside.SetLowPass(cutoff)

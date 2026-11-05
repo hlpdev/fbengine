@@ -994,19 +994,23 @@ Function HighsOf(samples: Float[]): Float
     Return Sqrt(sum / Max(samples.Count As Float, 1.0))
 End Function
 
-// Whether what a walk heard is what it should be: the wind and sea all along, your feet, and the
-// flood; the wheel by how it ended; and a mix that's not silent, and doesn't clip.
+// Whether what a walk heard is what it should be: the wind, sea, and surf all along, your feet on each
+// surface, the flood, the mill's parts and sluice; the wheel and works by how it ended; and a mix
+// that's not silent, and doesn't clip.
 Function Heard(scape: Soundscape, flow: Flow, loudest: Float)
     Checks("the wind, sea, and surf are streamed, and playing", scape.AroundYou())
     // The storm's in by the end: the wind's whistling, at its pitch.
     Checks("the wind's pitched by the storm",
            IsClose(scape.WindPitchNow(), WindPitch(flow.Clock()), 0.001) &&
            scape.WindPitchNow() > 1.0)
-    // On rock, sand, and the mill's boards, each a walk crosses.
-    Checks("your steps are heard on rock, sand, and boards",
+    // On rock, sand, the trodden ground from the door to the road, and the mill's boards, each a walk
+    // crosses.
+    Checks("your steps are heard on rock, sand, turf, and boards",
            scape.Played(Cue.STEP_1) + scape.Played(Cue.STEP_2) + scape.Played(Cue.STEP_3) > 0 &&
            scape.Played(Cue.SAND_1) + scape.Played(Cue.SAND_2) > 0 &&
+           scape.Played(Cue.TURF_1) + scape.Played(Cue.TURF_2) > 0 &&
            scape.Played(Cue.FLOOR_1) + scape.Played(Cue.FLOOR_2) > 0)
+    Checks("there's a sound for each cue", scape.CueCount() == CUES)
     Checks("the flood splashes, once", scape.Played(Cue.SPLASH) == 1)
     // A clank for each part fitted, and the sluice once, as how it ended says.
     Local fitted = 0
@@ -1047,11 +1051,15 @@ Function Listened() Throws GraphicsError, IOError, AudioError
     Audio.Mix(rate)
     Local bed = RmsOf(Audio.Mix(rate))
     Checks("the wind and sea are heard at slack water", bed > 0.005)
-    // With the storm in and the surf roaring, it's louder, and as loud again once it's slack water.
-    scape.Surroundings(TIDE_IN_AT, False, 1.0)
-    Audio.Mix(rate)
-    Local storm = RmsOf(Audio.Mix(rate))
-    Checks("the storm and its surf are louder than slack water", storm > 1.5 * bed)
+    // The surf by itself, over a whole wave each: at its level, and louder with the storm in and its
+    // roar than at slack water, by more than the wind and sea alone could make it.
+    scape.SetWindAndSea(0.0)
+    Local slackSurf = WaveOf(scape, 0.0, rate)
+    Local stormSurf = WaveOf(scape, TIDE_IN_AT, rate)
+    Checks("the surf's at its level, with the storm in",
+           IsClose(scape.SurfNow(), SurfLevel(TIDE_IN_AT, False), 0.0001))
+    Checks("the surf by itself is louder with the storm in", stormSurf > 2.0 * slackSurf)
+    scape.SetWindAndSea(1.0)
     scape.Surroundings(0.0, False, 1.0)
     Audio.Mix(rate)
     // A gull, off over the water, over them.
@@ -1147,8 +1155,10 @@ Function Listened() Throws GraphicsError, IOError, AudioError
     End For
     scape.Play(Cue.SPLASH, door)
     Checks("the splash is muffled from inside", openSplash > 2.0 * HighsOf(Audio.Mix(rate)))
-    // Through the door and back, a frame at a time, with no click: no sample's step stands out.
+    // Through the door and back, a frame at a time, with no click: no sample's step stands out, over the
+    // wind and sea, with the surf's crashes at nothing, as they'd hide one.
     scape.SetBeds(1.0)
+    scape.SetSurf(0.0)
     For step = 1 To 60
         scape.Surroundings(0.0, False, 1.0 / 60.0)
         Audio.Mix(735)
@@ -1167,7 +1177,10 @@ Function Listened() Throws GraphicsError, IOError, AudioError
         End For
     End For
     Print("the largest step's {largestBefore}, and {largestDuring} through the door")
-    Checks("the door doesn't click", largestDuring <= 1.5 * largestBefore)
+    Checks("the door doesn't click", !Clicks(largestDuring, largestBefore))
+    Checks("a click of 1.4 times the largest step would",
+           Clicks(1.4 * largestBefore, largestBefore))
+    scape.SetSurf(1.0)
 End Function
 
 // Whether the PNGs of each view in `one` are close to the same in `other`, by their PSNR, in decibels.
@@ -1179,6 +1192,16 @@ Function AlikeViews(one: Path, other: Path, floor: Float) Throws IOError
         Print("{name}: {psnr} dB")
         Checks("{name} is alike in both", psnr >= floor)
     End For
+End Function
+
+// Whether a step of `during` stands out over `before`, the largest there was before it: a click.
+Function Clicks(during: Float, before: Float): Bool => during > 1.25 * before
+
+// The surf's loudness over a whole wave, 4 seconds, `clock` seconds in, once it's settled there.
+Function WaveOf(scape: Soundscape, clock: Float64, rate: Int): Float
+    scape.Surroundings(clock, False, 1.0)
+    Audio.Mix(rate)
+    Return RmsOf(Audio.Mix(rate * 4))
 End Function
 
 // The largest change from a sample to the next on the same channel.

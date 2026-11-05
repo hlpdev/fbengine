@@ -57,9 +57,10 @@ End Function
 // What you're on says which steps those are.
 @Test
 Function StepsAreByTheSurface()
-    Expect(SurfaceAt(MAIN_X, 0.0, True, 0.0) == Surface.FLOOR)
-    Expect(SurfaceAt(PaddleSpot().x, PaddleSpot().y, False, 0.0) == Surface.ROAD)
-    Expect(SurfaceAt(PaddleSpot().x, PaddleSpot().y, False, 0.6) == Surface.SHALLOWS)
+    Local heights = TerrainHeights()
+    Expect(SurfaceAt(heights, MAIN_X, 0.0, True, 0.0) == Surface.FLOOR)
+    Expect(SurfaceAt(heights, PaddleSpot().x, PaddleSpot().y, False, 0.0) == Surface.ROAD)
+    Expect(SurfaceAt(heights, PaddleSpot().x, PaddleSpot().y, False, 0.6) == Surface.SHALLOWS)
     Expect(StepPitch(Surface.ROAD) < StepPitch(Surface.ROCK))
     Local banks = [(Surface.FLOOR, [Cue.FLOOR_1, Cue.FLOOR_2]),
                    (Surface.SHALLOWS, [Cue.WADE_1, Cue.WADE_2]),
@@ -78,29 +79,66 @@ Function StepsAreByTheSurface()
     End For
 End Function
 
-// Outside, off the road and above the sea, your steps are on what the ground's painted with there: sand
-// on the beaches, turf and trodden ground, and bare rock where it's neither; and the island has each.
+// Outside, off the road and above the sea, your steps are on what the bake painted there, at each texel's
+// middle, as the island's GroundCover reads the terrain's heights: sand, turf and trodden ground, and
+// rock; and the island has each, with nothing but sand and rock at the sea's edge.
 @Test
 Function StepsAreOnWhatsPaintedThere()
+    Local heights = TerrainHeights()
+    Local half = (SIDE As Float) / 2.0
     Local found = [0, 0, 0]
-    For row = -50 To 50
-        For column = -50 To 50
-            Local x = MAIN_X + (column As Float) * 2.0
-            Local z = (row As Float) * 2.0
-            Local height = GroundHeight(x, z)
-            If height < 0.0 || OnRoad(x, z) Then Continue
-            Local parts = CoverParts(x, z, height, SlopeAt(x, z))
+    Local edges = 0
+    For row = 0 Until 120
+        For column = 0 Until 120
+            // A texel's middle, 2 to the meter, as GroundCover bakes them, in every other meter.
+            Local across = (column As Float) * 2.0 + 0.25
+            Local down = (row As Float) * 2.0 + 0.25
+            Local x = across - half
+            Local z = down - half
+            Local baked = BakedAt(heights, across, down)
+            If baked.0 < 0.0 || OnRoad(x, z) Then Continue
+            Local parts = CoverParts(x, z, baked.0, baked.1)
+            // What's most seen, painted as CoverAt paints it: turf, then trodden ground, then sand.
+            Local sand = parts.0
+            Local trodden = parts.2 * (1.0 - sand)
+            Local turf = parts.1 * (1.0 - parts.2) * (1.0 - sand)
+            Local rock = (1.0 - parts.1) * (1.0 - parts.2) * (1.0 - sand)
             Local wanted = Surface.ROCK
-            If parts.1 >= 0.5 || parts.2 >= 0.5 Then wanted = Surface.TURF
-            If parts.0 >= 0.5 Then wanted = Surface.SAND
-            Expect(SurfaceAt(x, z, False, 0.0) == wanted)
+            If Max(trodden, turf) > rock Then wanted = Surface.TURF
+            If sand >= Max(Max(trodden, turf), rock) Then wanted = Surface.SAND
+            Local heard = SurfaceAt(heights, x, z, False, 0.0)
+            Expect(heard == wanted)
             found[wanted == Surface.SAND ? 0 : wanted == Surface.TURF ? 1 : 2] += 1
+            // The sea's edge, under 30 cm up, at slack water: sand or rock, never turf.
+            If baked.0 < 0.3
+                edges += 1
+                Expect(heard == Surface.SAND || heard == Surface.ROCK)
+            End If
         End For
     End For
     Expect(found[0] > 20 && found[1] > 20 && found[2] > 20)
-    // The mill's door is trodden ground, and the sea's edge at slack water sand or rock.
+    Expect(edges > 20)
     Local door = DoorSpot()
-    Expect(SurfaceAt(door.x, door.y + 2.0, False, 0.0) == Surface.TURF)
+    Expect(SurfaceAt(heights, door.x, door.y + 2.0, False, 0.0) == Surface.TURF)
+End Function
+
+// CUES is how many cues there are: each number to it is one, and SLUICE, the last, is CUES less one.
+@Test
+Function CuesCountsThem()
+    Expect((Cue.SLUICE As Int) == CUES - 1)
+    For number = 0 Until CUES
+        Expect(CueLevel(number As Cue) > 0.0)
+    End For
+End Function
+
+// What's most seen decides it, after the painting order: sand over trodden ground, which is over turf.
+@Test
+Function WhatsMostSeenIsUnderfoot()
+    Expect(Underfoot((0.45, 0.0, 0.55)) == Surface.SAND)
+    Expect(Underfoot((0.0, 0.0, 0.0)) == Surface.ROCK)
+    Expect(Underfoot((0.0, 0.9, 0.0)) == Surface.TURF)
+    Expect(Underfoot((0.0, 0.0, 0.6)) == Surface.TURF)
+    Expect(Underfoot((0.3, 0.0, 0.0)) == Surface.ROCK)
 End Function
 
 // The water carrying you isn't walking.
@@ -229,16 +267,30 @@ Function TheWindGustsAndTheSurfRoarsWithTheStorm()
         most = Max(most, gust)
     End For
     Expect(least < 0.9 && least >= 0.7 && most > 1.1 && most <= 1.3)
+    // Its swells don't come round in ten minutes: at no lag of a second to 600 are they all within
+    // 0.1 of where they were.
+    For lag = 10 To 6000
+        Local apart = 0.0
+        For tick = 0 Until 64
+            Local at = (tick As Float64) * 0.73
+            apart = Max(apart, Abs(Swells(at) - Swells(at + (lag As Float64) * 0.1)))
+        End For
+        Expect(apart > 0.1)
+    End For
     Expect(WindPitch(0.0) == 1.0 && WindPitch(RISING_AT) == 1.0)
     Expect(WindPitch(FLOOD_AT) > 1.0 && WindPitch(FLOOD_AT) < WindPitch(TIDE_IN_AT))
     Expect(IsClose(WindPitch(TIDE_IN_AT), 1.2, 0.0001))
     Expect(SurfLevel(0.0, False) == SurfLevel(RISING_AT, False))
     Expect(SurfLevel(RISING_AT, False) < SurfLevel(FLOOD_AT, False))
-    // Its roar: none at the flood, all of it 20 seconds on, on top of the storm's.
-    Local storm = SurfLevel(FLOOD_AT + 20.0, False) - SurfLevel(FLOOD_AT, False)
-    Local stormOnly = (StormAt(FLOOD_AT + 20.0) - StormAt(FLOOD_AT)) * 0.4 *
-                      (SurfLevel(0.0, False) / 0.2)
-    Expect(storm > stormOnly * 1.5)
+    // Its roar: none until the flood, evenly to all of it 20 seconds on, then held.
+    Expect(Roar(FLOOD_AT - 1.0) == 0.0 && Roar(FLOOD_AT) == 0.0)
+    Expect(IsClose(Roar(FLOOD_AT + 5.0), 0.25, 0.0001) &&
+           IsClose(Roar(FLOOD_AT + 10.0), 0.5, 0.0001))
+    Expect(Roar(FLOOD_AT + 20.0) == 1.0 && Roar(TIDE_IN_AT) == 1.0)
+    // On top of the storm's: a fifth of slack water's again, all told.
+    Local slack = SurfLevel(0.0, False) / 0.2
+    Expect(IsClose(SurfLevel(FLOOD_AT + 20.0, False) - SurfLevel(FLOOD_AT, False),
+                   ((StormAt(FLOOD_AT + 20.0) - StormAt(FLOOD_AT)) * 0.4 + 0.2) * slack, 0.0001))
     Expect(SurfLevel(TIDE_IN_AT, True) < SurfLevel(TIDE_IN_AT, False))
 End Function
 
@@ -306,9 +358,13 @@ Function NothingAtOnceClips()
     Local toTheEnd = loudestBeds * 0.7 + WheelLevel(1.0) * 0.7 + WorksLevel(1.0) * 0.6 +
                      CueLevel(Cue.STEP_1) * 0.7 + CueLevel(Cue.CREAK) * 0.6
     Expect(toTheEnd < 1.0)
-    Local atTheFlood = (WindLevel(FLOOD_AT, False) + SeaLevel(FLOOD_AT, False) +
-                        SurfLevel(FLOOD_AT, False)) * 0.7 +
-                       CueLevel(Cue.SPLASH) * 0.8 + CueLevel(Cue.STEP_1) * 0.7 +
+    Local floodBeds = 0.0
+    For tick = 0 To 9
+        Local clock = FLOOD_AT + (tick As Float64) * 0.1
+        floodBeds = Max(floodBeds, WindLevel(clock, False) + SeaLevel(clock, False) +
+                        SurfLevel(clock, False))
+    End For
+    Local atTheFlood = floodBeds * 0.7 + CueLevel(Cue.SPLASH) * 0.8 + CueLevel(Cue.STEP_1) * 0.7 +
                        CueLevel(Cue.GULL) * 0.6
     Expect(atTheFlood < 1.0)
 End Function

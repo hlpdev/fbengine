@@ -247,12 +247,38 @@ Public Function CoverParts(x: Float, z: Float, height: Float, slope: Float): (Fl
     Return (sand, turf, trodden)
 End Function
 
-/// How steep the ground is at (`x`, `z`), in meters up to the meter, over a meter each way, as the
-/// island's cover is baked by.
-Public Function SlopeAt(x: Float, z: Float): Float
-    Local dx = GroundHeight(x + 1.0, z) - GroundHeight(x - 1.0, z)
-    Local dz = GroundHeight(x, z + 1.0) - GroundHeight(x, z - 1.0)
-    Return Sqrt(dx * dx + dz * dz) / 2.0
+/// How high the terrain's grid of `heights` is at (`x`, `z`), meters from its corner: between its
+/// samples, a meter apart, as the terrain draws it and its cover's baked by.
+Public Function HeightIn(heights: Float[], x: Float, z: Float): Float
+    Local left = Min(Floor(x) As Int, SIDE - 1)
+    Local top = Min(Floor(z) As Int, SIDE - 1)
+    Local u = x - (left As Float)
+    Local v = z - (top As Float)
+    Local row = SIDE + 1
+    Local near = heights[top * row + left] * (1.0 - u) + heights[top * row + left + 1] * u
+    Local far = heights[(top + 1) * row + left] * (1.0 - u) +
+                heights[(top + 1) * row + left + 1] * u
+    Return near * (1.0 - v) + far * v
+End Function
+
+/// How high and steep the terrain of `heights` is at (`x`, `z`), meters from its corner, its slope in
+/// meters up to the meter over a meter each way, held to the terrain: what its cover's baked by.
+Public Function BakedAt(heights: Float[], x: Float, z: Float): (Float, Float)
+    Local most = (SIDE As Float) - 1.0
+    Local dx = HeightIn(heights, Min(x + 1.0, most), z) - HeightIn(heights, Max(x - 1.0, 0.0), z)
+    Local dz = HeightIn(heights, x, Min(z + 1.0, most)) - HeightIn(heights, x, Max(z - 1.0, 0.0))
+    Return (HeightIn(heights, x, z), Sqrt(dx * dx + dz * dz) / 2.0)
+End Function
+
+/// The terrain's heights, a sample each meter from its corner, as GroundHeight has them.
+Public Function TerrainHeights(): Float[]
+    Local heights: Float[] = []
+    For z = 0 To SIDE
+        For x = 0 To SIDE
+            heights.Add(GroundHeight((x - SIDE / 2) As Float, (z - SIDE / 2) As Float))
+        End For
+    End For
+    Return heights
 End Function
 
 /// What covers the ground at (`x`, `z`), `height` high with `slope` meters up to the meter: its color, as

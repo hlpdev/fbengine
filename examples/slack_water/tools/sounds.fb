@@ -76,6 +76,18 @@ Function Leveled(samples: Float[], peak: Float): Float[]
     Return leveled
 End Function
 
+// `samples`, played once, faded to nothing over their last 5 ms, as leveling them around 0 can leave
+// their last sample off it, a click as they stop.
+Function Ended(samples: Float[]): Float[]
+    Local count = Min(Samples(0.005), samples.Count)
+    Local ended = samples
+    For at = 0 Until count
+        Local from = samples.Count - count + at
+        ended[from] = samples[from] * (((count - 1 - at) As Float) / (count As Float))
+    End For
+    Return ended
+End Function
+
 // Writes `samples`, from -1 to 1, as a WAV.
 Function WriteWav(path: Path, samples: Float[]) Throws IOError
     Local bytes: UInt8[] = []
@@ -171,7 +183,7 @@ Public Function Gull(): Float[]
         Local envelope = Sine(part * 3.14159)
         made.Add((Sine(phase) + 0.4 * Sine(phase * 2.0)) * envelope)
     End For
-    Return Leveled(made, 0.6)
+    Return Ended(Leveled(made, 0.6))
 End Function
 
 // Wood creaking: a low tone in stutters.
@@ -186,7 +198,7 @@ Public Function Creak(): Float[]
         Local fade = Sine(t / 0.5 * 3.14159)
         made.Add((Sine(phase) * 0.6 + hiss.Next() * 0.1) * stutter * fade)
     End For
-    Return Leveled(made, 0.6)
+    Return Ended(Leveled(made, 0.6))
 End Function
 
 // The wheel: a slow thump, and water, turning once in its length, which is whole beats once its
@@ -213,7 +225,7 @@ Public Function Step(seed: UInt32): Float[]
         Local t = (at As Float) / (RATE As Float)
         made.Add(low.Next(hiss.Next(), 0.25) * Decay(-t * 38.0))
     End For
-    Return Leveled(made, 0.7)
+    Return Ended(Leveled(made, 0.7))
 End Function
 
 // A step on the mill's boards: a low knock, a seed for each of two.
@@ -226,7 +238,7 @@ Public Function FloorStep(seed: UInt32): Float[]
         Local knock = Sine(t * TAU * 140.0) * Decay(-t * 30.0)
         made.Add(knock + low.Next(hiss.Next(), 0.1) * Decay(-t * 60.0))
     End For
-    Return Leveled(made, 0.7)
+    Return Ended(Leveled(made, 0.7))
 End Function
 
 // A part fitted: iron struck on iron, a few partials that aren't harmonics, ringing down, and a
@@ -243,7 +255,7 @@ Public Function Fit(): Float[]
                                         18.0) < 0.12 && t < 0.5 ? hiss.Next() * 0.5 : 0.0
         made.Add(ring * Min(t / 0.002, 1.0) + click)
     End For
-    Return Leveled(made, 0.6)
+    Return Ended(Leveled(made, 0.6))
 End Function
 
 // The sluice opened: its wood groaning as it's raised, a low tone in stutters that rises, then the
@@ -264,7 +276,7 @@ Public Function Sluice(): Float[]
                      Clamp((t - 0.4) / 0.8, 0.0, 1.0) * Clamp((2.2 - t) / 0.4, 0.0, 1.0) * 2.5
         made.Add(groan * 0.6 + rush)
     End For
-    Return Leveled(made, 0.7)
+    Return Ended(Leveled(made, 0.7))
 End Function
 
 // The mill's works, driven: a gear's teeth clicking twelve times a second, a shaft's low hum, and the
@@ -296,10 +308,11 @@ Public Function SandStep(seed: UInt32): Float[]
         // Grains: the noise let through in bursts, more of them at first.
         Local grain = hiss.Next()
         Local through = Abs(grain) > 0.55 + t * 2.0 ? 1.0 : 0.25
-        Local swell = Sine(Min(t / 0.03, 1.0) * TAU / 4.0) * Decay(-t * 14.0)
+        Local swell = Sine(Min(t / 0.03, 1.0) * TAU / 4.0) * Decay(-t * 14.0) *
+                      Clamp((0.22 - t) / 0.06, 0.0, 1.0)
         made.Add(low.Next(grain * through, 0.45 - t) * swell)
     End For
-    Return Leveled(made, 0.6)
+    Return Ended(Leveled(made, 0.6))
 End Function
 
 // A step on turf: a soft, low thud, and the grass brushed, a seed for each of two.
@@ -313,7 +326,7 @@ Public Function TurfStep(seed: UInt32): Float[]
         Local brush = low.Next(hiss.Next(), 0.12) * Sine(Min(t / 0.2, 1.0) * TAU / 2.0) * 0.6
         made.Add(thud + brush)
     End For
-    Return Leveled(made, 0.6)
+    Return Ended(Leveled(made, 0.6))
 End Function
 
 // A step in the shallows: a wash of noise, a seed for each of two.
@@ -326,7 +339,7 @@ Public Function Wade(seed: UInt32): Float[]
         Local swell = Sine(Min(t / 0.35, 1.0) * TAU / 2.0)
         made.Add(low.Next(hiss.Next(), 0.2 + 0.25 * swell) * swell)
     End For
-    Return Leveled(made, 0.6)
+    Return Ended(Leveled(made, 0.6))
 End Function
 
 // A splash: noise, bright at first, darkening and dying away.
@@ -338,7 +351,7 @@ Public Function Splash(): Float[]
         Local t = (at As Float) / (RATE As Float)
         made.Add(low.Next(hiss.Next(), 0.5 * Decay(-t * 4.0) + 0.03) * Decay(-t * 4.5))
     End For
-    Return Leveled(made, 0.8)
+    Return Ended(Leveled(made, 0.8))
 End Function
 
 /// Writes every sound in `folder`.
