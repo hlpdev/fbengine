@@ -746,8 +746,8 @@ FBE_API const char* fbe_material_scene_id(uint64_t material);
 FBE_API bool fbe_material_set_texture(uint64_t material, int32_t layer, uint64_t texture);
 FBE_API uint64_t fbe_material_texture(uint64_t material, int32_t layer);
 // What a layer's UVs go through: scaled down, so a scale of 2 looks twice as big, turned back by an
-// angle in radians, then moved back by an offset in UV units, as Blitz's ScaleTexture,
-// RotateTexture, and PositionTexture; false for a scale of 0, or anything not finite. Reading them
+// angle in radians, then moved back by an offset in UV units; false for a scale of 0, or anything
+// not finite. Reading them
 // writes the five values in that order.
 FBE_API bool fbe_material_set_layer_uv(uint64_t material, int32_t layer, float scale_u,
                                        float scale_v, float angle, float offset_u, float offset_v);

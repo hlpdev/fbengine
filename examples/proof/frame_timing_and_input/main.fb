@@ -1,9 +1,10 @@
 // A game's window, frame timing, and input: a millisecond clock, Flip with and without vsync, a
 // frame limit, keys down and hit and flushed, the mouse's place, speed, buttons, and wheel, moving
 // and hiding it, relative mode, and focus. Driven by Simulate, it prints what it read; with --watch,
-// a window that shows each as a person uses them. A game's own are its table from DirectInput's
-// numbers to these Keys, its binds in its settings, and how it scales the mouse's relative motion
-// to feel as the cursor's did: fbengine has only its Keys, in the keyboard's places, and raw counts.
+// a window that shows each as a person uses them. A game's own, and not here, are its table from
+// DirectInput's numbers to these Keys, its binds in its settings, and how it scales the mouse's
+// relative motion to feel as the cursor's did: fbengine has only its Keys, in the keyboard's
+// places, and raw counts.
 
 Import std.collections
 Import std.core
