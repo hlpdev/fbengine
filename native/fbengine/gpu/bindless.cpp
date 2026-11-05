@@ -302,6 +302,11 @@ std::uint32_t sampler_index(std::int32_t filter, std::int32_t wrap_u, std::int32
     return static_cast<std::uint32_t>((filter * wraps * wraps) + (wrap_u * wraps) + wrap_v);
 }
 
+float lod_bias_left() {
+    const float most = device() != nullptr ? device()->max_lod_bias : 0.0F;
+    return lod_bias - std::clamp(lod_bias, -most, most);
+}
+
 std::uint32_t sampler_2d_index(std::int32_t filter, bool repeat) {
     static_assert((filters * wraps * wraps) + (filters * 2) <= sampler_slots,
                   "the set has a slot for each of 3D's samplers and 2D's");

@@ -816,3 +816,41 @@ Function ThePsnrOfImages()
     End For
     Expect(PsnrOf(one, two) < 1.0)
 End Function
+
+// The storm comes with the water, and the sun lowers as it does.
+@Test
+Function TheStormAndSunGoByTheClock()
+    Expect(StormAt(0.0) == 0.0)
+    Expect(StormAt(RISING_AT) == 0.0)
+    Expect(StormAt(FLOOD_AT) > 0.0)
+    Expect(StormAt(TIDE_IN_AT) == 1.0)
+    Expect(StormAt(TIDE_IN_AT + 100.0) == 1.0)
+    Local first = SunAt(0.0)
+    Local last = SunAt(TIDE_IN_AT)
+    Expect(first.0 > last.0)
+    // Still above the horizon, so the yard's lit to the end.
+    Expect(last.0 > 0.2)
+    Expect(first.1 != last.1)
+    Expect(SunAt(TIDE_IN_AT + 100.0).0 == last.0)
+End Function
+
+// What a frame's cost is measured on: a real GPU only if that's asked for, and the only one shown.
+@Test
+Function ARealGpuIsMeasuredOnlyIfAskedAndAlone()
+    Expect(MayMeasureOn(True, Null, 1))
+    Expect(MayMeasureOn(True, "0", 3))
+    Expect(!MayMeasureOn(False, Null, 1))
+    Expect(!MayMeasureOn(False, "0", 1))
+    Expect(!MayMeasureOn(False, "", 1))
+    Expect(MayMeasureOn(False, "1", 1))
+    Expect(!MayMeasureOn(False, "1", 2))
+End Function
+
+// A cost from a lost GPU isn't a cost, however low it looks.
+@Test
+Function ALostGpusCostIsNoCost()
+    Expect(CostWasRead(False, 0.5))
+    Expect(CostWasRead(False, 0.0))
+    Expect(!CostWasRead(False, -1.0))
+    Expect(!CostWasRead(True, 0.5))
+End Function

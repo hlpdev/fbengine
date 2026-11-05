@@ -1,8 +1,9 @@
 // The display's modes, and the window as a game's settings choose it: windowed, fullscreen, or
 // borderless at the desktop's size, and a screen of its own size scaled into it. It prints what it
 // found; with --watch, a window that lists the modes, goes through each, fullscreen at one of them,
-// and back. Offscreen there are no modes for fullscreen, so only a person's run shows a real one:
-// this requirement stays open until then.
+// and back. Offscreen there are no modes for fullscreen; with --real-display, under
+// FBENGINE_REAL_DISPLAY=1, as CI sets on a display of its own, it says a real display has some, and
+// switches to one. That opens a window, so without the variable it refuses, opening nothing.
 
 Import std.collections
 Import std.core
@@ -44,6 +45,33 @@ Function Proved() Throws GraphicsError
     Print("shown in {shown?.Width ?? 0.0} by {shown?.Height ?? 0.0} of the window")
     Screen.SetSize(0, 0)
     Print("the window's again {Screen.Width()} by {Screen.Height()}, {Screen.FollowsWindow()}")
+End Function
+
+// A real display: it has modes, and a fullscreen window takes one, then goes back to a window. Each
+// failure's the exit code.
+Function ProvedReal() Throws GraphicsError
+    Try Graphics(640, 360)
+    Defer EndGraphics()
+    Local main = (Try Displays())[0]
+    Print("{main.Modes.Count} modes for fullscreen")
+    If main.Modes.Count == 0
+        Print("the real display's modes are real False")
+        Process.Exit(1)
+    End If
+    Local chosen = main.Modes[main.Modes.Count / 2]
+    Print("switching to {chosen}")
+    EndGraphics()
+    Try Graphics(chosen.Width, chosen.Height, WindowMode.FULLSCREEN)
+    Local switched = Window.Mode() == WindowMode.FULLSCREEN && Window.Width() == chosen.Width &&
+                     Window.Height() == chosen.Height
+    Print("fullscreen, {Window.Mode()}, {Window.Width()} by {Window.Height()}")
+    Flip(False)
+    Try Window.SetMode(WindowMode.WINDOWED)
+    Flip(False)
+    Local back = Window.Mode() == WindowMode.WINDOWED
+    Print("back in a window {back}")
+    Print("the real display's modes are real {switched && back}")
+    If !switched || !back Then Process.Exit(1)
 End Function
 
 // A window that goes through each mode, 3 seconds each, and back; or `frames` frames offscreen.
@@ -131,7 +159,13 @@ Function Asked(arguments: String[]): Int
 End Function
 
 Local arguments = Process.Arguments()
-If arguments.Contains("--watch")
+If arguments.Contains("--real-display")
+    If Env.Get("FBENGINE_REAL_DISPLAY") != "1"
+        PrintError("--real-display opens a window: it's for CI, under FBENGINE_REAL_DISPLAY=1")
+        Process.Exit(2)
+    End If
+    Try ProvedReal()
+ElseIf arguments.Contains("--watch")
     Try Watched(Asked(arguments), arguments)
 Else
     Try Proved()

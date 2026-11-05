@@ -816,6 +816,7 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
         const auto first = firsts.find(light.light);
         light.shadow = first != firsts.end() ? static_cast<std::int32_t>(first->second) : -1;
     }
+    data.lod_bias = gpu::lod_bias_left();
     data.lights = in_ring<fbe_draw_light_t>(lights, failed).address;
     data.clusters = in_ring<fbe_cluster_t>(lists.clusters, failed).address;
     data.cluster_lights = in_ring<std::uint32_t>(lists.cluster_lights, failed).address;
