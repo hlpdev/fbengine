@@ -10628,7 +10628,8 @@ TEST_CASE("a shader of its own draws an Instances, each moved in its own space",
     fbe_material_release(material);
 }
 
-TEST_CASE("a shader of its own reaches the prepass: what it moves, and what it cuts", "[gpu][scene]") {
+TEST_CASE("a shader of its own reaches the prepass: what it moves, and what it cuts",
+          "[gpu][scene]") {
     const scene_t scene;
     const std::uint64_t paint = fbe_material_create();
     wall(scene.world, -10.0F, 30.0F, paint);
@@ -10672,7 +10673,8 @@ TEST_CASE("a shader of its own reaches the prepass: what it moves, and what it c
         // No move of its own, and its normals +X, from +Z.
         const std::array<float, 12> still{};
         const std::array<float, 12> to_x{ 1, 0, -1, 1, 0, -1, 1, 0, -1, 1, 0, -1 };
-        require(fbe_morph_add_target(fbe_mesh_geometry(quad), 0, still.data(), to_x.data(), 4) == 0);
+        require(fbe_morph_add_target(fbe_mesh_geometry(quad), 0, still.data(), to_x.data(), 4) ==
+                0);
         const std::array<float, 1> one{ 1.0F };
         require(fbe_morph_set_weights(quad, one.data(), 1));
         CHECK(same(reference, scene.drawn()));
@@ -10683,7 +10685,8 @@ TEST_CASE("a shader of its own reaches the prepass: what it moves, and what it c
         const auto turned = [&](std::uint64_t material, float along) {
             const skinned_wall_t made = skinned_wall(scene.world, material, -9.0F, 1.0F);
             all_on(made.geometry, 1, 1.0F);
-            require(fbe_entity_set_position(made.moving, along, 0.0F, -9.0F + along, FBE_SPACE_WORLD));
+            require(
+                fbe_entity_set_position(made.moving, along, 0.0F, -9.0F + along, FBE_SPACE_WORLD));
             require(fbe_entity_set_rotation(made.moving, 0.0F, std::sin(half_turn), 0.0F,
                                             std::cos(half_turn), FBE_SPACE_WORLD));
             return made;
@@ -10760,7 +10763,8 @@ TEST_CASE("a shader of its own reaches the prepass: what it moves, and what it c
         require(fbe_material_set_shading(white, FBE_SHADING_UNLIT));
         // Moved 3 across, by its shader, in its space, scaled by 3; two whole pixels a frame.
         require(fbe_material_set_parameter(white, 1, 1.0F, 0.0F, 0.0F, 0.0F));
-        const std::uint64_t made = cubes_at(scene.world, white, { instance_at(0.0F, 0.0F, 0.0F, 3.0F) });
+        const std::uint64_t made =
+            cubes_at(scene.world, white, { instance_at(0.0F, 0.0F, 0.0F, 3.0F) });
         const float across = std::tan(std::numbers::pi_v<float> / 6.0F) * 7.0F / 64.0F;
         fbe::golden::frame_t last;
         for (int frame = 0; frame <= 24; ++frame) {
