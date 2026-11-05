@@ -672,18 +672,32 @@ Function IdsStayWhatTheyWere() Throws IOError
     Expect((again2[0] As? Mesh)?.Material() != (again2[2] As? Mesh)?.Material(), doubled)
 End Function
 
-// One geometry's numbers are a line an array, as std's Toml writes them, until it writes long ones an
-// element a line, when this comes out in favor of: one vertex changing at most 2 lines.
-@Test
-Function VerticesAreALineToAnArrayForNow() Throws IOError
-    Local world = Fresh()
-    Defer world.Free()
+Function ThreeVerticesWritten(middle: Float32): String[] Throws IOError
     Local made = Geometry()
     Local surface = made.AddSurface()
-    surface.AddVertex(Vertex(Vec3(0, 0, 0), Vec3(0, 1, 0), Vec2(0, 0), Vec2(0, 0)))
-    surface.AddVertex(Vertex(Vec3(1, 0, 0), Vec3(0, 1, 0), Vec2(0, 0), Vec2(0, 0)))
-    Local text = Try Scene.Text([Mesh(made)])
-    Expect(text.Contains("vertices = [[0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0], [1.0,"), text)
+    Local xs: Float32[] = [0, middle, 2]
+    For x In xs
+        surface.AddVertex(Vertex(Vec3(x, 0, 0), Vec3(0, 1, 0), Vec2(0, 0), Vec2(0, 0)))
+    End For
+    Return (Try Scene.Text([Mesh(made)])).Split("\n")
+End Function
+
+// A geometry's vertices are a line each, as std's Toml writes a long array, so one vertex changing is
+// one line changing, and that line has no other vertex on it.
+@Test
+Function OneVertexChangingIsOneLineChanging() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local before = Try ThreeVerticesWritten(1)
+    Local after = Try ThreeVerticesWritten(5)
+    Expect(before.Count == after.Count)
+    Local changed: String[] = []
+    For i = 0 To before.Count - 1
+        If before[i] != after[i] Then changed.Add(after[i])
+    End For
+    Expect(changed.Count == 1, "{changed.Count} lines changed")
+    Expect(changed[0].Contains("[5.0, "), changed[0])
+    Expect(!changed[0].Contains("[2.0, "), changed[0])
 End Function
 
 // Names of anything come back, in a path that can be told from another.

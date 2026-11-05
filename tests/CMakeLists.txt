@@ -155,7 +155,7 @@ if(FBENGINE_FB_TESTS)
 
   # A program that ends with the GPU going, each way it can, and has to end: Windows' ending a process
   # with it going seems to have waited for good on CI. An end of its own stops the GPU first, and says
-  # so; a panic and Process.Exit end by the runtime's _Exit, past what the engine can hook.
+  # so; a panic and Process.Exit end by the runtime's TerminateProcess, past what the engine can hook.
   if(WIN32)
     foreach(case IN ITEMS ends panics exits)
       add_test(NAME gpu.ends.${case}

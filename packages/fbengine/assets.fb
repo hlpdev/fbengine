@@ -336,7 +336,7 @@ Public Final Class Assets
             writer.Add(name, file.1, ZipMethod.STORE)
         End For
         Try
-            MountPakBytes(at, writer.Finish())
+            MountPakBytes(at, Try writer.Finish())
         Catch e As IOError
             Panic("files mounted at {at} can't be: {e.Message}")
         End Try
@@ -356,17 +356,9 @@ Public Final Class Assets
     @MainThread
     Package Static Method FromSource(): Bool => fromSource
 
-    /// Whether this program is one `fb run` or `fb test` runs: fb sets FUTUREBLITZ_RUN=1 for it, from
-    /// 1.2.3. Before that, whether `executable`, in the OS's folder `temp` for temporary files, is in a
-    /// folder of its own under temp's `futureblitz`, where only fb keeps one.
+    /// Whether this program is one `fb run` or `fb test` runs: fb sets FUTUREBLITZ_RUN=1 for it.
     @MainThread
-    Public Static Method RunByFb(executable: Path, temp: Path): Bool
-        If Env.Get("FUTUREBLITZ_RUN") == "1" Then Return True
-        // For fb before 1.2.3, which sets no variable: this goes once tools/verify.py's and CI's
-        // FB_VERSION are 1.2.3 or later, as it knows where fb keeps what it runs, which is fb's own.
-        Local own = executable.Parent().Parent()
-        Return own.FileName() == "futureblitz" && RealPath(own.Parent()) == RealPath(temp)
-    End Method
+    Public Static Method RunByFb(): Bool => Env.Get("FUTUREBLITZ_RUN") == "1"
 
     /// Mounts a release's files at res://: the pak `name`.pak beside the executable, or in a macOS
     /// bundle's Resources on macOS, the folder beside the executable's, or else, only for what
@@ -388,8 +380,7 @@ Public Final Class Assets
         Local resources = folder.Parent() / "Resources" / "{name}.pak"
         Local paks = [beside]
         If System.Platform == Platform.MACOS Then paks.Add(resources)
-        Local temp = Folders.Temp
-        Local fromBuilt = built != "" && temp != Null && RunByFb(Path(executable), Path(temp))
+        Local fromBuilt = built != "" && RunByFb()
         If fromBuilt
             If StalePak(beside, Path(built))
                 Print("warning: {beside} is older than {built}, as this game's been built again: " +
