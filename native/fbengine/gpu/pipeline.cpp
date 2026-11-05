@@ -275,7 +275,8 @@ VkPipelineColorBlendAttachmentState blend_state(fbe::gpu::blend_t blend) {
 
 VkPipeline make_pipeline(const fbe::gpu::device_t& gpu, const fbe::gpu::pipeline_desc_t& desc) {
     if (!refused_name.empty() && desc.shader->name == refused_name &&
-        (refused_samples == VK_SAMPLE_COUNT_FLAG_BITS_MAX_ENUM || desc.samples == refused_samples)) {
+        (refused_samples == VK_SAMPLE_COUNT_FLAG_BITS_MAX_ENUM ||
+         desc.samples == refused_samples)) {
         ++refused_count;
         fbe::fail(std::format("couldn't make a pipeline of {}", desc.shader->name));
         return VK_NULL_HANDLE;

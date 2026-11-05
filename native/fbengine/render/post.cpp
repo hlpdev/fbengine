@@ -311,9 +311,8 @@ std::vector<game_pass_t> game_passes(const scene::camera_t& camera, VkFormat for
         }
         // Any of them can be last, or between two, as which can be made says.
         if (pass_pipeline(*shader, format, samples, camera, into_nothing) == VK_NULL_HANDLE ||
-            (camera.passes.size() > 1 &&
-             pass_pipeline(*shader, between, VK_SAMPLE_COUNT_1_BIT, camera, true) ==
-                 VK_NULL_HANDLE)) {
+            (camera.passes.size() > 1 && pass_pipeline(*shader, between, VK_SAMPLE_COUNT_1_BIT,
+                                                       camera, true) == VK_NULL_HANDLE)) {
             shaders_own::refuse(code);
             continue;
         }

@@ -11346,7 +11346,8 @@ TEST_CASE("a pass reads the depth of a target let go of before its frame's recor
 
 // The screen's let go of as soon as its size changes, which can be between drawing and the frame's
 // recording, where a pass reads the depth it drew.
-TEST_CASE("a pass reads the depth of a screen resized before its frame's recorded", "[gpu][scene]") {
+TEST_CASE("a pass reads the depth of a screen resized before its frame's recorded",
+          "[gpu][scene]") {
     REQUIRE(fbe_window_set_headless(true));
     fbe_gpu_set_pipeline_cache("");
     require(fbe_window_open(32, 32, FBE_WINDOW_WINDOWED));
@@ -11521,8 +11522,8 @@ TEST_CASE("a pass that can't be between two says so once, and is left out", "[gp
     require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
     std::vector<std::uint32_t> words(fbe::test_shaders::game_pass.code.begin(),
                                      fbe::test_shaders::game_pass.code.end());
-    // A bound on its ids one higher, so its code isn't the good one's, and still SPIR-V, as its last
-    // pipeline's made.
+    // A bound on its ids one higher, so its code isn't the good one's, and still SPIR-V, as its
+    // last pipeline's made.
     ++words.at(3);
     const std::vector<std::uint8_t> bytes = cooked_shader(words);
     const std::uint64_t shader = fbe_shader_create(
@@ -11538,7 +11539,8 @@ TEST_CASE("a pass that can't be between two says so once, and is left out", "[gp
     const auto blue = [&] {
         require(fbe_render_world(scene.world, 1.0F));
         std::vector<std::uint8_t> pixels(std::size_t{ frame_size } * frame_size * 4);
-        require(fbe_texture_read(target, 0, pixels.data(), static_cast<std::int64_t>(pixels.size())));
+        require(
+            fbe_texture_read(target, 0, pixels.data(), static_cast<std::int64_t>(pixels.size())));
         fbe_frame_flip(false);
         const std::size_t row = std::size_t{ frame_size / 2 } * frame_size;
         return int{ pixels.at(((row + (frame_size / 2)) * 4) + 2) };

@@ -275,11 +275,12 @@ std::string refusal(std::uint32_t code) {
         return "";
     }
     const kept_code_t& kept = all().codes[code - 1];
-    return kept.pass ? std::format("no pipeline could be made of {}, so the camera's pass is left out",
-                                   kept.name)
-                     : std::format("no pipeline could be made of {}, so what draws with it draws as "
-                                   "a material with no shader of its own does",
-                                   kept.name);
+    return kept.pass
+               ? std::format("no pipeline could be made of {}, so the camera's pass is left out",
+                             kept.name)
+               : std::format("no pipeline could be made of {}, so what draws with it draws as "
+                             "a material with no shader of its own does",
+                             kept.name);
 }
 
 void refuse(std::uint32_t code) {
