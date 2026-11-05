@@ -827,3 +827,71 @@ Function AStoppedGpusModelIsLoadedAgain() Throws IOError
     Local texture = second.TextureOf(0)
     Expect(texture != Null && !texture.Freed())
 End Function
+
+// A model's own textures are saved as which of its images they are, however each is read, and read
+// back as the same ones.
+@Test
+Function ItsTexturesAreSavedAsItsImages() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local material =
+        "{{\"pbrMetallicRoughness\":{{\"baseColorTexture\":{{\"index\":0}}," +
+        "\"metallicRoughnessTexture\":{{\"index\":0}}}},\"normalTexture\":{{\"index\":1}}}}"
+    Local textures = "{{\"source\":1,\"sampler\":0}},{{\"source\":1,\"sampler\":1}}"
+    Local samplers = "{{\"wrapS\":33071,\"wrapT\":33071}},{{\"magFilter\":9728,\"wrapS\":33648}}"
+    Assets.MountFiles("res://kept", {"it.gltf": Dressed(material, textures, samplers)})
+    Defer Assets.Unmount("res://kept")
+    Local model = Try Assets.Load<Model>("res://kept/it.gltf")
+    Defer model.Free()
+    Local paint = model.Materials()[0]
+    Local color = paint.Texture(0)
+    Local rough = paint.Map(MaterialMap.METAL_ROUGH)
+    Local normal = paint.Map(MaterialMap.NORMAL)
+    Expect(color?.Path() == "res://kept/it.gltf#1", color?.Path() ?? "no path")
+    Expect(rough?.Path() == "res://kept/it.gltf#1:1", rough?.Path() ?? "no path")
+    Expect(normal?.Path() == "res://kept/it.gltf#1:2", normal?.Path() ?? "no path")
+    Local mesh = Mesh(model.Geometries()[0])
+    mesh.SetName("door")
+    mesh.SetMaterial(paint)
+    Local text = Try Scene.Text([mesh])
+    mesh.Free()
+    Local read = (Try Scene.FromText(text))[0] As? Mesh
+    Defer read?.Free()
+    Local again = read?.Material()
+    If again == Null Then Panic("its material")
+    Local isIt = !RefEquals(again, paint)
+    Expect(isIt, "it's a material of its own")
+    Local same = Function(one: Texture?, other: Texture?): Bool
+        Return one != Null && other != Null && RefEquals(one, other)
+    End Function
+    Expect(same(again.Texture(0), color), text)
+    Expect(same(again.Map(MaterialMap.METAL_ROUGH), rough), text)
+    Expect(same(again.Map(MaterialMap.NORMAL), normal), text)
+
+    // An image it doesn't have is an error, as a file that's gone is.
+    Local wrong = text.Replace("it.gltf#1:2", "it.gltf#9")
+    Local error = ExpectThrows<IOError>(Scene.FromText(wrong))
+    Expect((error?.Message ?? "").Contains("no image that's res://kept/it.gltf#9"),
+           error?.Message ?? "")
+    // A name that only looks like one is a file's.
+    For name In ["it.gltf#x", "it.gltf#1:x", "it.gltf#1:2:3"]
+        Local named = ExpectThrows<IOError>(Scene.FromText(text.Replace("it.gltf#1:2", name)))
+        Expect(!(named?.Message ?? "").Contains("no image that's"), named?.Message ?? "")
+    End For
+    // Opened as an editor does, what's lost says so, and is saved as it was.
+    Local gone = text.Replace("res://kept/it.gltf#1:2", "res://kept/gone.gltf#1:2")
+    gone = gone.Replace("res://kept/it.gltf#1\"", "res://kept/it.gltf#9\"")
+    Assets.MountFiles("res://keptscene", {"a.scene": gone.Bytes})
+    Defer Assets.Unmount("res://keptscene")
+    Local opened = Try Scene.Open("res://keptscene/a.scene")
+    Expect(opened.Problems.Count == 2, "{opened.Problems}")
+    Local kept = (opened.Roots[0] As? Mesh)?.Material()
+    Expect(kept?.Texture(0)?.Path() == "res://kept/it.gltf#9", gone)
+    Expect(kept?.Map(MaterialMap.NORMAL)?.Path() == "res://kept/gone.gltf#1:2", gone)
+    Local saved = Try Scene.Text(opened.Roots)
+    Expect(saved.Contains("res://kept/it.gltf#9") && saved.Contains("res://kept/gone.gltf#1:2"),
+           saved)
+    For root In opened.Roots
+        root.Free()
+    End For
+End Function
