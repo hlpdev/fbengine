@@ -875,3 +875,17 @@ Function TheGroundsPaintIsPatchesAboutNeutral()
     Expect(highest > 156)
     Expect(Abs(sum / count - 128) < 20)
 End Function
+
+// What draws with no person there doesn't pick among GPUs; playing does, and what draws nothing needn't.
+@Test
+Function WhatDrawsWithNoPersonDoesntPickAGpu()
+    For mode In ["--cooked", "--walk3d", "--end", "--hear", "--feel", "--frames"]
+        Expect(DrawsWithoutAPerson([mode, "x"]))
+    End For
+    Expect(!DrawsWithoutAPerson([]))
+    Expect(!DrawsWithoutAPerson(["--walk", "x"]))
+    Expect(!DrawsWithoutAPerson(["--check", "x"]))
+    Expect(MayDrawOn(0))
+    Expect(MayDrawOn(1))
+    Expect(!MayDrawOn(2))
+End Function

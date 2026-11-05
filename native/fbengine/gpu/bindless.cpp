@@ -302,6 +302,10 @@ std::uint32_t sampler_index(std::int32_t filter, std::int32_t wrap_u, std::int32
     return static_cast<std::uint32_t>((filter * wraps * wraps) + (wrap_u * wraps) + wrap_v);
 }
 
+float lod_bias_in_samplers() {
+    return lod_bias - lod_bias_left();
+}
+
 float lod_bias_left() {
     const float most = device() != nullptr ? device()->max_lod_bias : 0.0F;
     return lod_bias - std::clamp(lod_bias, -most, most);

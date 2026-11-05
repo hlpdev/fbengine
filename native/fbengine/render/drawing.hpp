@@ -97,8 +97,10 @@ struct sky_data_t {
     VkDeviceAddress mirrors;
     std::uint32_t mirror_count;
     std::uint32_t own_mirror;
+    float level;
+    float spare;
 };
-static_assert(sizeof(sky_data_t) == 104, "the sky shader reads a sky of 104 bytes");
+static_assert(sizeof(sky_data_t) == 112, "the sky shader reads a sky of 104 bytes");
 
 /// A layer as the scene shader reads it: its texture's and sampler's indices in the bindless set,
 /// how a bump layer scales the next layer's light, what turns its UVs, by rows, with in their last

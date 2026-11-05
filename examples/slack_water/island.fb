@@ -124,8 +124,8 @@ Function Iron(held: Texture[], color: Color): Material Throws IOError
 End Function
 
 /// The light all around, from straight up, through the haze at the horizon, to the sea below it, by
-/// height alone, so it's the same whichever way a sky or Environment takes as ahead: light past 1's
-/// what's kept in it, so a metal has something bright to reflect.
+/// height alone, so it's the same whichever way a sky or Environment takes as ahead, kept as light, in
+/// an HDR image, for a metal to reflect.
 Public Function SkyImage(): HdrImage
     Local width = 64
     Local height = 128
@@ -265,6 +265,7 @@ Public Final Class Island
     Field around: Environment
     Field lantern: Light
     Field lampLight: Light? = Null
+    Field lampBright = False
     Field lampUnlit: Material
     Field sizes: Vec3[] = []
     Field pipHead: Entity
@@ -423,6 +424,12 @@ Public Final Class Island
     @MainThread
     Public Method Update(clock: Float64)
         sea.SetPosition(Vec3(0.0, SeaHeight(clock), 0.0))
+        TurnSun(clock)
+    End Method
+
+    /// Turns the sun to where it is `clock` seconds in.
+    @MainThread
+    Public Method TurnSun(clock: Float64)
         Local height, turned = SunAt(clock)
         sun.SetRotation(-height, turned, 0.0)
     End Method
@@ -446,9 +453,6 @@ Public Final Class Island
     /// What the sun's light does now, its rotation.
     @MainThread Public Method SunTurned(): Quat => sun.Rotation()
 
-    /// The World's light all around.
-    @MainThread Public Method Around(): Environment? => scene.LitBy()
-
     /// Takes the normal maps off, or the light around, to see what they've done.
     @MainThread
     Public Method SetAround(on: Bool)
@@ -465,6 +469,14 @@ Public Final Class Island
         lantern.SetIntensity(on ? LANTERN_LIGHT : 0.0)
     End Method
 
+    /// What Pip's body is drawn in.
+    @MainThread Public Method PipBody(): Material? => model.Geometries()[0].Surface(0).Material()
+
+    /// Draws Pip's body in `material`.
+    @MainThread Public Method SetPipBody(material: Material?)
+        model.Geometries()[0].Surface(0).SetMaterial(material)
+    End Method
+
     /// Whether Pip's body has brass's maps, which its file hasn't: only a color.
     @MainThread Public Method PipHasMaps(): Bool
         Local body = model.Geometries()[0].Surface(0).Material()
@@ -477,6 +489,9 @@ Public Final Class Island
     /// Lights the lamp, bright, or dimmer.
     @MainThread
     Public Method LightLamp(bright: Bool)
+        // Each Step after the end asks for what it already is.
+        If lampLight != Null && lampBright == bright Then Return
+        lampBright = bright
         // Red past white, its blue short of it, so it stays warm as it rolls off.
         Local glow = bright ? Color(1.2, 0.55, 0.08) : Color(0.55, 0.28, 0.05)
         // Brighter than white, which is what bloom's for.
@@ -489,6 +504,9 @@ Public Final Class Island
         light.SetIntensity(bright ? 40.0 : 12.0)
         light.SetRange(bright ? 60.0 : 25.0)
     End Method
+
+    /// What the lamp's drawn in.
+    @MainThread Public Method LampMaterial(): Material? => lamp.Material()
 
     /// Where the lamp is, in the world, and the wheel.
     @MainThread Public Method LampAt(): Vec3 => lamp.Position(Space.WORLD)

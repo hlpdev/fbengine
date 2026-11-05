@@ -446,6 +446,7 @@ sky_data_t sky_data(const scene::camera_t& camera, const scene::view_t& view,
     data.mode = static_cast<std::uint32_t>(world.sky);
     data.sun = { sun.x, sun.y, sun.z };
     data.brightness = world.sky_brightness;
+    data.level = -gpu::lod_bias_in_samplers();
     data.flip = flipped ? -1.0F : 1.0F;
     data.mirrors = in_ring<std::array<float, 4>>(planes, failed).address;
     data.mirror_count = static_cast<std::uint32_t>(planes.size());
