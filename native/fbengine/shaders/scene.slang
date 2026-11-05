@@ -1218,8 +1218,9 @@ float4 prepassFragment(PrepassCorner corner) : SV_Target
                              : float2(0.0, 0.0);
     // As far as 16 bits have it, exactly, then what they lost of it, which render/prepass.cpp says.
     const float depth = clamp(corner.depth, 0.001, 60000.0);
-    const float place = pow(2.0, floor(log2(depth)) - 10.0);
-    const float kept = round(depth / place) * place;
+    // By its bits, rounding off the 13 a half hasn't, as a power of 2 from pow can be a float's step
+    // under, and Apple's GPUs store a half toward zero, which makes that a whole step of a half.
+    const float kept = asfloat((asuint(depth) + 0x1000u) & 0xFFFFE000u);
     return float4(kept, ((depth - kept) / kept) * 1024.0, moved);
 }
 
