@@ -98,6 +98,8 @@ instead); saves; depth of field.
 
       VK_LOADER_DRIVERS_SELECT='*nv-vk64*' SLACK_WATER_REAL_GPU=1 SLACK_WATER_CHECKS=1 SDL_VIDEO_DRIVER=offscreen fb run --release examples/slack_water -- --fps 0 300
 
-  A mid-range GPU's number is still open, and why the AMD was lost. On lavapipe, under GPU-assisted
-  validation, Slack Water has no out-of-bounds address or index, and sync validation's clean, which
-  doesn't say why.
+  A mid-range GPU means an RTX 3060-class one. As only the 4080 can be measured, its number is a third
+  of a 60 fps frame: a median GPU frame of 5.5 ms and a 99th percentile of 7 ms, at 1080p with vsync
+  off, by the command above (decided 2026-11-05). Why the AMD was lost is still open. On lavapipe,
+  under GPU-assisted validation, Slack Water has no out-of-bounds address or index, and sync
+  validation's clean, which doesn't say why.
