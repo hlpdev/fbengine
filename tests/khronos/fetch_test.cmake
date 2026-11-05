@@ -1,6 +1,9 @@
 # fetch.cmake's ways, none of which needs the network or waits: `cmake -P`, in a folder of its own, with
 # FOLDER set. Run with WRONG set, it fetches what isn't what its hash says, which is fatal; with NEVER
 # set, what's required and never there, which is too.
+# As the project's, since a script has no policies of its own: CMake before 4 takes fetch.cmake's
+# while(TRUE) as a variable named TRUE without this, and never tries once.
+cmake_minimum_required(VERSION 3.28)
 include("${CMAKE_CURRENT_LIST_DIR}/fetch.cmake")
 file(MAKE_DIRECTORY "${FOLDER}")
 file(WRITE "${FOLDER}/source.txt" "what's pinned")
