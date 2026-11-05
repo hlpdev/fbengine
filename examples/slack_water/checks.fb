@@ -64,3 +64,12 @@ Public Function PsnrOf(one: Image, other: Image): Float
     Local mean = sum / ((one.Width * one.Height * 3) As Float64)
     Return (10.0 * Log10(255.0 * 255.0 / mean)) As Float
 End Function
+
+/// Whether --fps may draw on a device: software always, and a real GPU only if `asked` is "1", with
+/// it the only one of the `devices` the loader shows.
+Public Function MayMeasureOn(software: Bool, asked: String?, devices: Int): Bool
+    Return software || (asked == "1" && devices == 1)
+End Function
+
+/// Whether a frame's cost means anything: a lost GPU says -1 for every frame, which is under any number.
+Public Function CostWasRead(lost: Bool, cost: Float): Bool => !lost && cost >= 0.0

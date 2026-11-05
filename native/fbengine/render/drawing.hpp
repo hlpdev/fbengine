@@ -157,7 +157,7 @@ struct camera_data_t {
     VkDeviceAddress draw_lights;
     VkDeviceAddress shadows;
     std::uint32_t shadow_atlas;
-    std::uint32_t shadow_spare;
+    float lod_bias;
     /// The rows of what turns its view's directions into the world's, which an environment's are
     /// in.
     std::array<std::array<float, 4>, 3> world_rows;

@@ -180,3 +180,16 @@ Public Function CanWade(fromX: Float, fromZ: Float, x: Float, z: Float, clock: F
     If flooded && OnRoad(x, z) Then Return False
     Return CanStep(GroundHeight(fromX, fromZ), GroundHeight(x, z), SeaHeight(clock))
 End Function
+
+/// How far the storm's come, `clock` seconds in, from 0 to 1: nothing until the water's rising, and all
+/// of it by the time the tide's in.
+Public Function StormAt(clock: Float64): Float
+    Return Clamp(((clock - RISING_AT) / (TIDE_IN_AT - RISING_AT)) As Float, 0.0, 1.0)
+End Function
+
+/// How high the sun is `clock` seconds in, in radians above the horizon, and how far around, as it
+/// lowers across the yard: its light's pitch is the first, and its yaw the second.
+Public Function SunAt(clock: Float64): (Float, Float)
+    Local through = Min(clock / TIDE_IN_AT, 1.0) As Float
+    Return (0.66 - 0.36 * through, 0.52 - 0.8 * through)
+End Function

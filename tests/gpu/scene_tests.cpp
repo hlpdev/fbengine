@@ -359,6 +359,62 @@ TEST_CASE("a layer reads the UV set it says, through what turns them", "[gpu][sc
     fbe_material_release(material);
 }
 
+// With its samplers biasing or not, as Metal's can't through MoltenVK, a layer's mipmaps are biased
+// the same: at 7 texels a pixel, a checker's mipmap is all gray; biased sharper, its own texels;
+// blurrier, gray again.
+TEST_CASE("the LOD bias reaches a layer through its samplers, or its shader", "[gpu][scene]") {
+    const bool samplers_can = GENERATE(true, false);
+    if (!samplers_can) {
+        fbe::gpu::inject(fbe::gpu::fault_t::NO_LOD_BIAS);
+    }
+    const scene_t scene;
+    if (samplers_can && fbe::gpu::device()->max_lod_bias == 0.0F) {
+        // A GPU whose samplers haven't any is the other case already.
+        return;
+    }
+    CHECK(fbe::gpu::lod_bias_left() == 0.0F);
+    const std::uint64_t material = unlit(1.0F, 1.0F, 1.0F);
+    const std::uint64_t texture = fbe_texture_create(64, 64, FBE_TEXTURE_RGBA8, true);
+    std::vector<std::uint8_t> pixels;
+    for (int y = 0; y < 64; ++y) {
+        for (int x = 0; x < 64; ++x) {
+            const std::uint8_t level = ((x + y) % 2) == 0 ? 255 : 0;
+            pixels.insert(pixels.end(), { level, level, level, 255 });
+        }
+    }
+    require(fbe_texture_write(texture, 0, 0, 64, 64, pixels.data(), 64 * 4));
+    require(fbe_texture_set_filter(texture, FBE_TEXTURE_LINEAR));
+    require(fbe_material_set_texture(material, 0, texture));
+    wall(scene.world, -1.0F, 2.0F, material);
+    // The wall's 4 across, the view's 1.15, so 0.2875 of its UVs show.
+    const float texels = 0.2875F * 64.0F;
+    const float scale = texels / (static_cast<float>(frame_size) * 7.0F);
+    require(fbe_material_set_layer_uv(material, 0, scale, scale, 0.0F, 0.0F, 0.0F));
+    const auto spread = [&scene] {
+        const fbe::golden::frame_t frame = scene.drawn();
+        int lowest = 255;
+        int highest = 0;
+        for (std::uint32_t y = 0; y < 8; ++y) {
+            for (std::uint32_t x = 0; x < 8; ++x) {
+                const rgba_t found = pixel(frame, (frame_size / 2) + x, (frame_size / 2) + y);
+                lowest = std::min<int>(lowest, found[0]);
+                highest = std::max<int>(highest, found[0]);
+            }
+        }
+        return highest - lowest;
+    };
+    CHECK(spread() <= 8);
+    require(fbe_gpu_set_lod_bias(-3.0F));
+    CHECK((fbe::gpu::lod_bias_left() != 0.0F) == !samplers_can);
+    CHECK(spread() > 16);
+    require(fbe_gpu_set_lod_bias(3.0F));
+    CHECK(spread() <= 8);
+    require(fbe_gpu_set_lod_bias(0.0F));
+    CHECK(spread() <= 8);
+    fbe_texture_release(texture);
+    fbe_material_release(material);
+}
+
 TEST_CASE("a bump layer shifts the next layer's UVs and scales its light", "[gpu][scene]") {
     const scene_t scene;
     const std::uint64_t material = unlit(1.0F, 1.0F, 1.0F);

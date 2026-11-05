@@ -87,3 +87,17 @@ instead); saves; depth of field.
   finishing early isn't minutes of nothing.
 - **The end.** Three seconds after it ends, a screen says how it ended and how many parts were fitted,
   and offers playing again or leaving, by the mouse, the keyboard, or a gamepad.
+- **The look.** PBR throughout, each surface with its albedo, normal, and roughness maps; a sky of its
+  own, baked for the light around, which is what brass reflects; a sun with shadows, lowering by the
+  clock; HDR, ACES, and bloom on the lamp; a grade as the storm comes, by the clock. Depth of field,
+  the first the design said to cut if it's long, isn't in.
+- **The number for 60 fps at 1080p.** On 2026-11-04, Slack Water lost the AMD integrated GPU of the
+  machine it's made on within its first frames, each run, and the machine froze and reset. So `--fps`
+  refuses a real GPU unless SLACK_WATER_REAL_GPU=1 and that GPU's the only device the loader shows,
+  which on that machine means the RTX 4080, by its driver:
+
+      VK_LOADER_DRIVERS_SELECT='*nv-vk64*' SLACK_WATER_REAL_GPU=1 SLACK_WATER_CHECKS=1 SDL_VIDEO_DRIVER=offscreen fb run --release examples/slack_water -- --fps 0 300
+
+  A mid-range GPU's number is still open, and why the AMD was lost. On lavapipe, under GPU-assisted
+  validation, Slack Water has no out-of-bounds address or index, and sync validation's clean, which
+  doesn't say why.
