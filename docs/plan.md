@@ -26,7 +26,7 @@ original 1.3.11, and ue5-additions.md what v5 adds; the steps below cover both.
 | **E6** | The modern renderer | E5 | Khronos's glTF sample models match their references, with shadows and post effects |
 | **E7** | Animation | E4 (E5 to draw it) | skinned and morphing sample models match their reference frames |
 | **E8** | Assets | E2, E4; a FutureBlitz build step for its last steps | a game runs from cooked paks, and reloads changed files in development |
-| **E9** | Audio (fbengine_audio) | E1 step 2 | done (2026-10-31; sounds following entities, 2026-11-02): sounds follow entities |
+| **E9** | Audio (fbengine_audio) | E1 step 2 | done (2026-10-31): sounds follow entities |
 | **E10** | Physics (fbengine_physics) | E1 step 2 | Jolt's sample scenes stay stable, deterministic runs repeat, and bodies drive entities |
 | **E11** | UI (fbengine_ui) | E3 | a sample game's menus, HUD, and console work by mouse, keyboard, and gamepad |
 | **E12** | Video (fbengine_video) | E3, E9 | a video plays into a texture with its sound in sync |
