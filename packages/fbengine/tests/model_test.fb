@@ -899,6 +899,18 @@ Function ItsTexturesAreSavedAsItsImages() Throws IOError, GraphicsError
     Expect(again.Texture(0)?.Path() == "res://kept/it.gltf#1", "it's lost what it draws")
 End Function
 
+// `file`, Dressed's, its red and green images named so, or swapped, red where green was.
+Function NamedImages(file: UInt8[], swapped: Bool = False): UInt8[]
+    Local text = String.FromUtf8(file) ?? ""
+    Local red = "{{\"uri\":\"{Picture(Color32(255, 0, 0, 255))}\"}}"
+    Local green = "{{\"uri\":\"{Picture(Color32(0, 255, 0, 255))}\"}}"
+    Local namedRed = "{{\"name\":\"red\"," + red.Slice(1, red.Length - 1) + "}}"
+    Local namedGreen = "{{\"name\":\"green\"," + green.Slice(1, green.Length - 1) + "}}"
+    text = text.Replace(red, "RED").Replace(green, "GREEN")
+    text = text.Replace("RED", swapped ? namedGreen : namedRed)
+    Return text.Replace("GREEN", swapped ? namedRed : namedGreen).Bytes
+End Function
+
 // `file`, its second image as `color`.
 Function Painted(file: UInt8[], color: Color32): UInt8[]
     Local text = String.FromUtf8(file) ?? ""
@@ -938,6 +950,12 @@ Function WhatsReadOfItsTexturesFollowsItsFile() Throws IOError, GraphicsError
     If paint == Null Then Panic("its material")
     Local was = paint.Texture(0)
     Expect(was?.ReadPixel(0, 0) == Color32(0, 255, 0, 255))
+    // A game's own material, and its copy, of the model's texture.
+    Local mine = Material()
+    Defer mine.Free()
+    mine.SetTexture(0, model.Textures()[1])
+    Local copy = mine.Clone()
+    Defer copy.Free()
     Local count = Texture.Count()
     Try WatcherStarted(folder.Path, "res://hot-paint")
 
@@ -953,15 +971,21 @@ Function WhatsReadOfItsTexturesFollowsItsFile() Throws IOError, GraphicsError
     Expect(map?.Path() == "res://hot-paint/it.gltf#1:1", map?.Path() ?? "no path")
     Local mapIsItsOwn = map != Null && RefEquals(map, model.TextureOf(0, ModelMap.NORMAL))
     Expect(mapIsItsOwn, "its map's not the model's now")
+    Expect(mine.Texture(0)?.ReadPixel(0, 0) == Color32(255, 255, 0, 255),
+           "a game's own didn't follow")
+    Expect(copy.Texture(0)?.ReadPixel(0, 0) == Color32(255, 255, 0, 255), "its copy didn't follow")
     // What it read has gone, so nothing's kept but what's read.
     Expect(Texture.Count() == count, "{Texture.Count()} textures, not {count}")
+    // A layer of what's no color, which takes only that.
+    paint.SetTexture(1, paint.Map(MaterialMap.NORMAL))
 
     // What's the same image, but can't be that map now, as #1:1 is now read as a color, stays.
     Local otherwise =
         "{{\"pbrMetallicRoughness\":{{\"baseColorTexture\":{{\"index\":0}}}}," +
         "\"emissiveTexture\":{{\"index\":1}},\"emissiveFactor\":[1,1,1]}}"
     old = model.Geometries()[0]
-    Try File.WriteBytesAtomic(folder.Path / "it.gltf", Dressed(otherwise, textures, samplers))
+    Try File.WriteBytesAtomic(folder.Path / "it.gltf",
+                              NamedImages(Dressed(otherwise, textures, samplers)))
     FlipUntil(Function(): Bool => !RefEquals(model.Geometries()[0], old))
     Local emits = model.TextureOf(0, ModelMap.EMISSIVE)
     Expect(emits?.Path() == "res://hot-paint/it.gltf#1:1" && emits?.Format() == TextureFormat.RGBA8,
@@ -969,5 +993,47 @@ Function WhatsReadOfItsTexturesFollowsItsFile() Throws IOError, GraphicsError
     Local stays = paint.Map(MaterialMap.NORMAL)
     Expect(stays?.Path() == "res://hot-paint/it.gltf#1:1", stays?.Path() ?? "no path")
     Expect(stays?.Format() == TextureFormat.RGBA8_LINEAR)
+    Expect(paint.Texture(1)?.Format() == TextureFormat.RGBA8_LINEAR, "a layer took another format")
     Expect(paint.Texture(0)?.ReadPixel(0, 0) == Color32(0, 255, 0, 255))
+
+    // Its images saved in another order: what's read of one goes by its name, not its number, so it
+    // isn't the red that's #1 now; and green, #0 now, is read by nothing, so it stays.
+    old = model.Geometries()[0]
+    Try File.WriteBytesAtomic(folder.Path / "it.gltf",
+                              NamedImages(Dressed(otherwise, textures, samplers), True))
+    FlipUntil(Function(): Bool => !RefEquals(model.Geometries()[0], old))
+    Local kept = paint.Texture(0)
+    Expect(kept?.ReadPixel(0, 0) == Color32(0, 255, 0, 255), "it's another image's")
+    Expect(kept?.Path() == "res://hot-paint/it.gltf#1", kept?.Path() ?? "no path")
+    Expect(model.TextureOf(0)?.ReadPixel(0, 0) == Color32(255, 0, 0, 255))
+End Function
+
+// A texture of its that a game's freed is left out of what follows it, and the rest still do.
+@Test
+Function AFreedTextureOfItsIsLeftOut() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local material = "{{\"pbrMetallicRoughness\":{{\"baseColorTexture\":{{\"index\":0}}}}}}"
+    Local file = Dressed(material, "{{\"source\":1}}")
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "it.gltf", file)
+    Assets.MountFolder("res://freed-paint", folder.Path)
+    Defer Assets.Unmount("res://freed-paint")
+    Try Assets.WatchFolders()
+    Defer Assets.StopWatching()
+    Local world = World()
+    Defer world.Free()
+    Local model = Try Assets.Load<Model>("res://freed-paint/it.gltf")
+    Defer model.Free()
+    model.Textures()[1]?.Free()
+    Local count = Texture.Count()
+    Try WatcherStarted(folder.Path, "res://freed-paint")
+    Local old = model.Geometries()[0]
+    Try File.WriteBytesAtomic(folder.Path / "it.gltf", Painted(file, Color32(255, 255, 0, 255)))
+    FlipUntil(Function(): Bool => !RefEquals(model.Geometries()[0], old))
+    Local reloaded = !RefEquals(model.Geometries()[0], old)
+    Expect(reloaded, "it didn't reload")
+    Expect(Texture.Count() == count, "{Texture.Count()} textures, not {count}")
+    Expect(model.TextureOf(0)?.ReadPixel(0, 0) == Color32(255, 255, 0, 255))
 End Function

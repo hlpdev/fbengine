@@ -749,8 +749,7 @@ FBE_API bool fbe_material_set_texture(uint64_t material, int32_t layer, uint64_t
 FBE_API uint64_t fbe_material_texture(uint64_t material, int32_t layer);
 // What a layer's UVs go through: scaled down, so a scale of 2 looks twice as big, turned back by an
 // angle in radians, then moved back by an offset in UV units; false for a scale of 0, or anything
-// not finite. Reading them
-// writes the five values in that order.
+// not finite. Reading them writes the five values in that order.
 FBE_API bool fbe_material_set_layer_uv(uint64_t material, int32_t layer, float scale_u,
                                        float scale_v, float angle, float offset_u, float offset_v);
 FBE_API bool fbe_material_layer_uv(uint64_t material, int32_t layer, float* values);
@@ -767,10 +766,11 @@ FBE_API bool fbe_material_set_layer(uint64_t material, int32_t layer, int32_t bl
 FBE_API int32_t fbe_material_layer_blend(uint64_t material, int32_t layer);
 FBE_API int32_t fbe_material_layer_uv_set(uint64_t material, int32_t layer);
 
-// Every material reading `from` reads `to` instead, in its layers, and in its maps where `to` is
-// what that map can read, as Model's reload does for what's held of a file that's changed. False if
-// `to` isn't a texture.
-FBE_API bool fbe_material_replace_texture(uint64_t from, uint64_t to);
+// Every material reading one of `count` textures in `from` reads that one of `to` instead, in one
+// pass: in a layer only if it's of the same format, and in a map only if it's one that map can read,
+// as Model's reload does for what's held of a file that's changed. False, changing nothing, for a
+// count below 0, a `from` of 0, or a `to` that isn't a texture.
+FBE_API bool fbe_material_replace_textures(const uint64_t* from, const uint64_t* to, int32_t count);
 
 // What an FBE_SHADING_PBR material is beyond its color, which with its layers is its base color:
 // how much of a metal it is and how rough, each 0 to 1, a dielectric as rough as can be at first;

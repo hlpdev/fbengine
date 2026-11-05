@@ -5,6 +5,7 @@ Import std.collections
 Import std.core
 Import std.ffi
 Import std.io
+Import std.text
 Import "./assets"
 Import "./c/fbe_model"
 Import "./c/fbe_gpu"
@@ -72,6 +73,8 @@ Public Final Class Model Implements Asset
     // Textures of images read with different samplers, past the first's, or as no color by a map
     // when another reads them as one.
     Field others: Texture[]
+    // Each image's name, or its URI for none, by the file's indices, as a reload finds them again.
+    Field imageNames: String[]
     // How many times the GPU had stopped when it was made.
     Field stops: UInt64
     Field skins: Skin[]
@@ -85,6 +88,7 @@ Public Final Class Model Implements Asset
         materials = []
         textures = []
         others = []
+        imageNames = []
         stops = fbe_gpu_stops()
         skins = []
         clips = []
@@ -115,8 +119,11 @@ Public Final Class Model Implements Asset
     /// the file says; what's new is made; what the file's lost is freed, and what a game's put under
     /// that goes up to what it was under, for a game's own entities are never freed. A Player on a
     /// root goes on, each clip it plays the new file's of that name, where it was, or stopped for
-    /// none. It gives True. It throws as FromLoad does, and an IOError of INVALID_DATA for a file
-    /// without a scene a Spawn was of, which leaves it as it was.
+    /// none. A material of anyone's that read one of its Textures reads the new file's of that image,
+    /// found by its name, or its URI, or else its number, where it can: a layer the same format, a map
+    /// what it can read; a World's sky and a camera's target aren't followed. It gives True. It throws
+    /// as FromLoad does, and an IOError of INVALID_DATA for a file without a scene a Spawn was of,
+    /// which leaves it as it was.
     @MainThread
     Public Method Reload(load: AssetLoad): Bool Throws IOError
         Local made = Model(load)
@@ -241,21 +248,59 @@ Public Final Class Model Implements Asset
     End Method
 
     // What's read of `before`'s textures by a material of anyone's, a scene's read of them or a game's,
-    // reads this one's of the same image now. One the file no longer has stays as it was.
+    // reads this one's of the same image now, in one pass: the image of the same name, or of the same
+    // number for a name that's none or not one image's. One the file no longer has, or a game's freed,
+    // stays as it was.
     @MainThread
     Method Followed(before: Model)
         Local old: Texture[] = before.others.Clone()
         For texture In before.textures
             If texture != Null Then old.Add(texture)
         End For
+        Local from: UInt64[] = []
+        Local to: UInt64[] = []
         For texture In old
+            If texture.Freed() Then Continue
             Local source = texture.Path()
-            Local now = source != Null ? TextureFrom(source) : Null
-            If now != Null &&
-               !fbe_material_replace_texture(texture.Live("Reload"), now.Live("Reload"))
-                Panic(LastError())
-            End If
+            If source == Null Then Continue
+            Local now = TextureFrom(SameImage(before, source))
+            If now == Null || now.Freed() Then Continue
+            from.Add(texture.Live("Reload"))
+            to.Add(now.Live("Reload"))
         End For
+        Local froms = Buffer<UInt64>(from.Count As Int64 + 1)
+        Local tos = Buffer<UInt64>(to.Count As Int64 + 1)
+        For at = 0 Until from.Count
+            froms[at] = from[at]
+            tos[at] = to[at]
+        End For
+        Local done = False
+        Unsafe
+            done = fbe_material_replace_textures(froms.Pointer(), tos.Pointer(),
+                                                 from.Count As Int32)
+        End Unsafe
+        If !done Then Panic(LastError())
+    End Method
+
+    // What `source`, a Texture's Path of `before`, is of this one: its image found by its name, if
+    // that's one image's in each, or else by its number.
+    Method SameImage(before: Model, source: String): String
+        Local marked = source.Split("#")
+        If marked.Count < 2 Then Return source
+        Local which = marked[marked.Count - 1].Split(":")
+        Local image = Int.Parse(which[0])
+        If image == Null || image < 0 || image >= before.imageNames.Count Then Return source
+        Local name = before.imageNames[image]
+        If name == "" || before.imageNames.Filter(Function(each: String) => each == name).Count != 1
+            Return source
+        End If
+        Local now = imageNames.IndexOf(name)
+        If now == Null || imageNames.Filter(Function(each: String) => each == name).Count != 1
+            Return source
+        End If
+        which[0] = "{now}"
+        marked[marked.Count - 1] = which.Join(":")
+        Return marked.Join("#")
     End Method
 
     // Which of its Textures, its own or another of an image, has `source` for its Path, or Null.
@@ -363,6 +408,9 @@ Public Final Class Model Implements Asset
             geometries.Add(Sourced(Geometry(geometry), "{load.Path()}#{at}"))
         End For
         For at = 0 Until info.Images
+            Unsafe
+                imageNames.Add(fbe_model_image_name(load.Handle, at).ToString())
+            End Unsafe
             If fbe_model_image_levels(load.Handle, at) == 0
                 textures.Add(Null)
                 Continue
@@ -618,6 +666,7 @@ Public Final Class Model Implements Asset
         materials = other.materials
         textures = other.textures
         others = other.others
+        imageNames = other.imageNames
         skins = other.skins
         clips = other.clips
         roots = other.roots
@@ -630,6 +679,7 @@ Public Final Class Model Implements Asset
         materials = []
         textures = []
         others = []
+        imageNames = []
         skins = []
         clips = []
         roots = []

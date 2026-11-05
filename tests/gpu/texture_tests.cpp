@@ -1080,3 +1080,48 @@ TEST_CASE("a file's own format says how to keep its pixels", "[gpu]") {
     CHECK(fbe_assets_free(load));
     stop_gpu();
 }
+
+// What Model's reload does to what reads its textures: each material's layers and maps of one take
+// the other, a layer only of the same format and a map only what it can read, held by what reads it
+// as any it's given is; and a texture of none, or what isn't one, is refused, changing nothing.
+TEST_CASE("textures replaced in every material are held as given, and none is refused", "[gpu]") {
+    start();
+    const std::uint64_t old = make(1, 1, FBE_TEXTURE_RGBA8, false);
+    const std::uint64_t now = make(1, 1, FBE_TEXTURE_RGBA8, false);
+    const std::uint64_t numbers = make(1, 1, FBE_TEXTURE_RGBA8_LINEAR, false);
+    const std::uint64_t material = fbe_material_create();
+    REQUIRE(fbe_material_set_texture(material, 0, old));
+    REQUIRE(fbe_material_set_map(material, FBE_MAP_NORMAL, numbers, 0));
+
+    // None, or what isn't a texture, changes nothing, the empty layers included.
+    const std::uint64_t none = 0;
+    CHECK_FALSE(fbe_material_replace_textures(&none, &now, 1));
+    CHECK(std::string(fbe_error()) == "a texture replaced is one, not none");
+    CHECK(fbe_material_texture(material, 1) == 0);
+    CHECK_FALSE(fbe_material_replace_textures(&old, &none, 1));
+    CHECK_FALSE(fbe_material_replace_textures(&old, &now, -1));
+    CHECK(fbe_material_texture(material, 0) == old);
+    CHECK(fbe_material_replace_textures(nullptr, nullptr, 0));
+
+    // Replaced, what was there is let go of by the material, and what's given held.
+    CHECK(fbe_material_replace_textures(&old, &now, 1));
+    CHECK(fbe_material_texture(material, 0) == now);
+    const std::int32_t held = fbe_texture_count();
+    CHECK(fbe_texture_release(old));
+    CHECK(fbe_texture_count() == held - 1);
+    CHECK(fbe_texture_release(now));
+    CHECK(fbe_texture_format(now) == FBE_TEXTURE_RGBA8);
+
+    // A layer takes only its own format, and a map only what it can read.
+    CHECK(fbe_material_replace_textures(&now, &numbers, 1));
+    CHECK(fbe_material_texture(material, 0) == now);
+    const std::uint64_t color = make(1, 1, FBE_TEXTURE_RGBA8, false);
+    CHECK(fbe_material_replace_textures(&numbers, &color, 1));
+    CHECK(fbe_material_map(material, FBE_MAP_NORMAL) == numbers);
+
+    CHECK(fbe_material_release(material));
+    CHECK(fbe_texture_release(numbers));
+    CHECK(fbe_texture_release(color));
+    CHECK(fbe_texture_count() == 0);
+    stop_gpu();
+}

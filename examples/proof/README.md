@@ -1,15 +1,17 @@
 # The proofs
 
-A sample for each engine requirement in [section 6](../../docs/research/scpcb-requirements.md#6-engine-requirements)
-of SCP:CB's requirements, as [E14](../../docs/plan.md#e14-the-proof) asks. Each runs on fbengine's own features and
-proves its item's named things with numbers worked out apart from its code; what a game owns (its random generator,
-its room file's reader, a map from a seed, a converter, its key table) is the sample's own code, never the engine's.
+A sample for each engine requirement in [section
+6](../../docs/research/scpcb-requirements.md#6-engine-requirements) of SCP:CB's requirements, as
+[E14](../../docs/plan.md#e14-the-proof) asks. Each runs on fbengine's own features and proves its
+item's named things with numbers worked out apart from its code; what a game owns (its random
+generator, its room file's reader, a map from a seed, a converter, its key table) is the sample's
+own code, never the engine's.
 
-Each prints what it did, line by line, and [tests/CMakeLists.txt](../../tests/CMakeLists.txt) checks those lines
-(`ctest -R proof`). With `--watch`, each opens a window to look at; under `--frames 40`, as the tests walk it, it
-has no window, and on its last frame it reads what it drew and prints it, so a test checks the frame as well as the
-numbers; the tests also see that Escape and closing the window end it. One that needs a GPU says so on a machine
-with none, and the test is skipped.
+Each prints what it did, line by line, and [tests/CMakeLists.txt](../../tests/CMakeLists.txt) checks
+those lines (`ctest -R proof`). With `--watch`, each opens a window to look at; under `--frames 40`,
+as the tests walk it, it has no window, and on its last frame it reads what it drew and prints it,
+so a test checks the frame as well as the numbers; the tests also see that Escape and closing the
+window end it. One that needs a GPU says so on a machine with none, and the test is skipped.
 
 | # | Pri | Requirement | Folder | What it shows |
 |---|---|---|---|---|
@@ -43,7 +45,8 @@ with none, and the test is skipped.
 | 28 | P2 | Text input | [text_input](text_input) | A console's line and a save's name, with text input on while one has the focus, and the raw keys and text a game reads itself |
 | 29 | P2 | A debug UI | [debug_ui_and_console](debug_ui_and_console) | Rows asked for each frame, watched values, sliders and switches, and commands typed into a console over the game |
 
-Item 30 (the updater, cpuid, DirectPlay, the launcher, and the rest) is dropped, so it has no sample.
+Item 30 (the updater, cpuid, DirectPlay, the launcher, and the rest) is dropped, so it has no
+sample.
 
 Two go past section 6:
 
@@ -58,8 +61,8 @@ Two go past section 6:
 fb run examples/proof/bump
 ```
 
-Add `-- --watch` for a window a person watches, and `-- --watch --frames 40` for that many frames with no window,
-as the tests walk it. `tools/show.py` opens them too.
+Add `-- --watch` for a window a person watches, and `-- --watch --frames 40` for that many frames
+with no window, as the tests walk it. `tools/show.py` opens them too.
 
 ## What takes a person
 
@@ -69,5 +72,5 @@ A flag can't show how long a flip waits, so timing it takes a window and a displ
 fb run examples/proof/frame_timing_and_input -- --watch
 ```
 
-Read "a second" on its first line. With vsync on, it's the display's refresh; press V to turn vsync off, and it goes
-well past it.
+Read "a second" on its first line. With vsync on, it's the display's refresh; press V to turn vsync
+off, and it goes well past it.
