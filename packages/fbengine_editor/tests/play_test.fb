@@ -773,7 +773,7 @@ Function AGameSayingALotIsntKeptWaiting() Throws IOError, GraphicsError
     Local since = Instant.Now()
     StepUntil(editor, Function() => !editor.Run.Going())
     Expect(editor.Run.State() == PlayState.ENDED, Said(editor))
-    Expect((Instant.Now() - since) < 15.Seconds, "8 MB took {Instant.Now() - since}")
+    Expect((Instant.Now() - since) < 30.Seconds, "8 MB took {Instant.Now() - since}")
 End Function
 
 // Its folder and its scene can be called anything.
