@@ -771,6 +771,24 @@ FBE_API bool fbe_camera_fxaa(uint64_t camera) {
     return found != nullptr && found->fxaa;
 }
 
+FBE_API bool fbe_camera_set_stored_values(uint64_t camera, bool on) {
+    camera_t* found = camera_of(camera);
+    if (found == nullptr) {
+        return false;
+    }
+    if (on && found->hdr) {
+        return fbe::fail("an HDR camera doesn't draw in stored values, which have no light past "
+                         "white to tonemap");
+    }
+    found->stored_values = on;
+    return true;
+}
+
+FBE_API bool fbe_camera_stored_values(uint64_t camera) {
+    const camera_t* found = camera_of(camera);
+    return found != nullptr && found->stored_values;
+}
+
 FBE_API bool fbe_camera_set_temporal_aa(uint64_t camera, bool on) {
     camera_t* found = camera_of(camera);
     if (found == nullptr) {

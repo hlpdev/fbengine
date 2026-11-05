@@ -295,7 +295,8 @@ Public Final Class Camera Extends Entity
     /// gamma are only what an HDR camera's image comes to in its target. All it draws goes through
     /// them, UNLIT and VERTEX materials and its clear color too: white's 0.869 through NEUTRAL, 0.673
     /// through ACES, and 0.5 through REINHARD, so what has to stay white wants NONE, or a camera of
-    /// its own. What multiplies what's behind it, in a camera that doesn't clear, draws nothing.
+    /// its own. What multiplies what's behind it, in a camera that doesn't clear, draws nothing. A
+    /// camera that draws in stored values panics at this.
     @MainThread @PanicsAtCaller
     Public Method SetHdr(hdr: Bool)
         If !fbe_camera_set_hdr(Live("SetHdr"), hdr) Then Failed("SetHdr")
@@ -350,6 +351,24 @@ Public Final Class Camera Extends Entity
     /// Whether its picture's antialiased from itself.
     @MainThread @PanicsAtCaller
     Public Method Fxaa(): Bool => fbe_camera_fxaa(Live("Fxaa"))
+
+    /// Sets whether it draws in stored values, as DirectX 7 blended them, rather than in linear
+    /// light, False at first: UNLIT and VERTEX materials write what they come to into its target's
+    /// bytes as they are, the screen's too, and what blends blends with those bytes, so half white
+    /// over black is 128, not 188. An sRGB texture decodes as it's sampled, so what's filtered between
+    /// its texels is by their light; one made linear filters what's stored. PBR materials are shaded
+    /// in linear light, and what they end with encoded; its clear color and sky are what they are on
+    /// any camera. An HDR camera panics at this, as stored values have nothing past white for a
+    /// tonemap, and SetHdr at a camera that does this; so TemporalAA does nothing here.
+    @NotEdited
+    @MainThread @PanicsAtCaller
+    Public Method SetStoredValues(on: Bool)
+        If !fbe_camera_set_stored_values(Live("SetStoredValues"), on) Then Failed("SetStoredValues")
+    End Method
+
+    /// Whether it draws in stored values.
+    @MainThread @PanicsAtCaller
+    Public Method StoredValues(): Bool => fbe_camera_stored_values(Live("StoredValues"))
 
     /// Sets whether an HDR camera antialiases over frames, False at first: its projection a part
     /// of a pixel off each frame, and what's drawn blended over what the frames before had there,

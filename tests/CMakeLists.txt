@@ -883,6 +883,11 @@ if(FBENGINE_FB_TESTS)
                            "behind by depth: [(]255, 0, 0, 255[)]"
                            "later by its order: [(]0, 255, 0, 255[)]"
                            "sorted far to near: [(]137, 188, 0, 255[)]"
+                           "in stored values, sorted far to near: [(]64, 128, 0, 255[)]"
+                           "forced alpha: [(]128, 128, 128, 255[)]"
+                           "blended by the texture's alpha: [(]128, 128, 128, 255[)]"
+                           "a room's stages, as they were: [(]120, 120, 120, 255[)]"
+                           "and in linear light again, forced alpha: [(]188, 188, 188, 255[)]"
                            "a sprite BILLBOARD, 32 across"
                            "a sprite FIXED, [56] across"
                            "a sprite UPRIGHT, 32 across")
@@ -914,7 +919,11 @@ if(FBENGINE_FB_TESTS)
                            "drawn into: [(]200, 100, 50, 255[)]"
                            "a part copied: [(]200, 100, 50, 255[)]"
                            "beside it: [(]0, 0, 0, 0[)]"
-                           "over itself: [(]200, 100, 50, 255[)]")
+                           "over itself: [(]200, 100, 50, 255[)]"
+                           "drawn back at half, on what's stored: [(]128, 0, 0, 255[)]"
+                           "the monitor in stored values, on the screen: [(]128, 0, 0, 255[)]"
+                           "and half of it, in linear light: [(]92, 0, 0, 255[)]"
+                           "and in stored values: [(]64, 0, 0, 255[)]")
   fbengine_add_drawn_proof(bump
                            "a flat map's left: [(]255, 0, 0, 255[)]"
                            "its right: [(]0, 255, 0, 255[)]"
@@ -948,7 +957,11 @@ if(FBENGINE_FB_TESTS)
                            "white comes to the gray: [(]128, 128, 128, 255[)]"
                            "by a curve: [(]160, 160, 160, 255[)]"
                            "its ends stay: [(]0, 0, 0, 255[)]"
-                           "and the other: [(]255, 255, 255, 255[)]")
+                           "and the other: [(]255, 255, 255, 255[)]"
+                           "on what's stored, brighter: [(]150, 150, 150, 255[)]"
+                           "white stays: [(]255, 255, 255, 255[)]"
+                           "on what's stored, darker: [(]50, 50, 50, 255[)]"
+                           "white comes to the gray: [(]128, 128, 128, 255[)]")
   fbengine_add_drawn_proof(seeded_random
                            "at first its state 4660"
                            "its first numbers 0[.]35565948, 0[.]7478714, 0[.]31705475, 0[.]40476227, 0[.]5803604"
@@ -1286,6 +1299,8 @@ if(FBENGINE_FB_TESTS)
       "grade-freed=Grade on a Camera that was freed"
       "exposure-negative=SetExposure on a Camera: a camera's exposure is 0 or more, not -1"
       "gamma-zero=SetGamma on a Camera: a camera's gamma is above 0, not 0"
+      "stored-on-hdr=SetStoredValues on a Camera: an HDR camera doesn't draw in stored values"
+      "hdr-on-stored=SetHdr on a Camera: a camera that draws in stored values isn't HDR"
       "tonemap-range=the value isn't one of Tonemap's"
       "exposure-freed=SetExposure on a Camera that was freed"
       "light-freed=SetColor on a Light that was freed"
