@@ -1,10 +1,12 @@
 name: Publish
 
-# Publishes every package, at the version their project.toml says, to a registry, through trusted
-# publishing: each package trusts this workflow on the registry, so there's no stored token. It
-# runs by hand, on the tag v<version>: `gh workflow run publish.yml --ref v0.1.0 -f
+# Publishes every library package, at the version their project.toml says, to a registry, through
+# trusted publishing: each package trusts this workflow on the registry, so there's no stored token.
+# It runs by hand, on the tag v<version>: `gh workflow run publish.yml --ref v0.1.0 -f
 # registry=staging`. Each target's DLLs are built first (native.yml), into the packages' target
 # archives; then fb's release adds each package from the registry, on each target, and runs it.
+# fbengine_editor is a program, which the registry doesn't take: it's built for each target with
+# its DLLs beside it and attached to the tag's GitHub release, which has to be made first.
 # Published to futureblitz, it's posted last in the Discord server's releases channel, through the
 # webhook DISCORD_RELEASES_WEBHOOK, pinging the role DISCORD_RELEASES_ROLE.
 
@@ -94,16 +96,78 @@ jobs:
               test -d "packages/$package/native/$target"
             done
           done
-          # fbengine first, since the others depend on it, and fbengine_editor last, as it depends on
-          # them. A package's first version is published from the user's `fb login`, as trusted
+          # In the order they depend on each other, as the registry refuses a dependency it hasn't
+          # got: fbengine; then what needs only it; then fbengine_video, which needs fbengine_audio
+          # too. A package's first version is published from the user's `fb login`, as trusted
           # publishing only publishes packages already on the registry that trust this workflow.
-          fb publish packages/fbengine --registry "$INDEX"
-          for package in packages/*/; do
-            if [ "$package" != packages/fbengine/ ] && [ "$package" != packages/fbengine_editor/ ]; then
-              fb publish "$package" --registry "$INDEX"
-            fi
+          for package in fbengine fbengine_audio fbengine_physics fbengine_ui fbengine_tools \
+                         fbengine_video; do
+            fb publish "packages/$package" --registry "$INDEX"
           done
-          fb publish packages/fbengine_editor --registry "$INDEX"
+
+  # The editor, built for each target as a release's programs are, with the DLLs it loads beside it,
+  # packed, and attached to the tag's release.
+  editor:
+    name: editor ${{ matrix.target }}
+    needs: [version, native]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x64
+            os: windows-2025
+          - target: linux-x64
+            os: ubuntu-22.04
+          - target: linux-arm64
+            os: ubuntu-22.04-arm
+          - target: macos-arm64
+            os: macos-15
+          - target: macos-x64
+            os: macos-15-intel
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: native-${{ matrix.target }}
+
+      - uses: ./.github/actions/install-fb
+        with:
+          version: ${{ env.FB_VERSION }}
+
+      - name: Build and attach
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tar -xf "native-$TARGET.tar"
+          if ! gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "::error::There's no release v$VERSION to attach the editor to: make it first"
+            exit 1
+          fi
+          name="fbengine_editor-$VERSION-$TARGET"
+          mkdir -p "$RUNNER_TEMP/$name"
+          cp packages/fbengine_editor/README.md packages/fbengine_editor/LICENSE "$RUNNER_TEMP/$name/"
+          # Its DLLs are fbengine's, whose notices go with them.
+          cp -r packages/fbengine/notices "$RUNNER_TEMP/$name/notices"
+          fb --color never build packages/fbengine_editor --release -o "$RUNNER_TEMP/$name/fbengine_editor"
+          cd "$RUNNER_TEMP"
+          if [ "$TARGET" = windows-x64 ]; then
+            archive="$name.zip"
+            7z a -tzip "$archive" "$name" > /dev/null
+          else
+            archive="$name.tar.gz"
+            tar -czf "$archive" "$name"
+          fi
+          gh release upload "v$VERSION" "$archive" --clobber -R "$GITHUB_REPOSITORY"
 
   check:
     name: check ${{ matrix.target }}
@@ -163,7 +227,7 @@ jobs:
   # engine role is pinged.
   discord:
     name: discord
-    needs: [version, check]
+    needs: [version, check, editor]
     if: inputs.registry == 'futureblitz'
     runs-on: ubuntu-24.04
     steps:

@@ -224,6 +224,22 @@ if(FBENGINE_FB_TESTS)
              COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_simdjson.py" "${PROJECT_BINARY_DIR}")
     set_tests_properties(tools.check_simdjson PROPERTIES
                          PASS_REGULAR_EXPRESSION "targets read the simdjson fastgltf fetched")
+    # Each DLL's notices name every library it links, and that check fails as it should.
+    add_test(NAME tools.check_notices
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_notices.py" "${PROJECT_SOURCE_DIR}")
+    set_tests_properties(tools.check_notices PROPERTIES
+                         PASS_REGULAR_EXPRESSION "name every library they link")
+    add_test(NAME tools.check_notices_test
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_notices_test.py")
+    set_tests_properties(tools.check_notices_test PROPERTIES PASS_REGULAR_EXPRESSION "cases hold")
+    # Each library's `fb publish --dry-run` passes, in publish.yml's order, with a folder of its own
+    # for the registry, so nothing's uploaded.
+    add_test(NAME tools.check_publish
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_publish.py" "${FBENGINE_FB}"
+                     "${PROJECT_SOURCE_DIR}")
+    set_tests_properties(tools.check_publish PROPERTIES
+                         PASS_REGULAR_EXPRESSION "libraries' dry runs passed, in publish.yml's order"
+                         TIMEOUT 900)
   endif()
   add_test(NAME models.golden
            COMMAND fbengine_gpu_tests "the sample models' frames match their golden images")
