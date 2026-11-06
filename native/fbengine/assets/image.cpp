@@ -17,6 +17,7 @@
 #include <ktx.h>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stb_image.h>
 #include <string_view>
 #include <utility>
@@ -75,10 +76,19 @@ result_t<image_t> decode_stb(std::span<const std::uint8_t> bytes, const image_op
         return std::unexpected(
             invalid(name, std::format("won't decode: {}", stbi_failure_reason())));
     }
-    const auto past = [](int side) { return std::cmp_greater(side, most_side); };
-    if (past(width) || past(height)) {
-        return std::unexpected(invalid(name, std::format("is {} by {}, past the {} an image can be",
-                                                         width, height, most_side)));
+    // What it says it is, and what it decodes to, has texels, and no more than an image can.
+    const auto unlike_an_image = [&name](int across, int high) -> std::optional<error_t> {
+        if (across < 1 || high < 1) {
+            return invalid(name, std::format("is {} by {}, which has no texels", across, high));
+        }
+        if (std::cmp_greater(across, most_side) || std::cmp_greater(high, most_side)) {
+            return invalid(name, std::format("is {} by {}, past the {} an image can be", across,
+                                             high, most_side));
+        }
+        return std::nullopt;
+    };
+    if (const std::optional<error_t> unlike = unlike_an_image(width, height)) {
+        return std::unexpected(*unlike);
     }
     bool wide = stbi_is_16_bit_from_memory(data, size) != 0;
     void* decoded = wide ? static_cast<void*>(stbi_load_16_from_memory(
@@ -92,6 +102,9 @@ result_t<image_t> decode_stb(std::span<const std::uint8_t> bytes, const image_op
     // stb_image's texels are malloc's, which its free lets go, kept as they are.
     const std::shared_ptr<const void> texels(
         decoded, [](const void* made) { stbi_image_free(const_cast<void*>(made)); });
+    if (const std::optional<error_t> unlike = unlike_an_image(width, height)) {
+        return std::unexpected(*unlike);
+    }
     std::uint32_t format = formats::rgba16;
     if (!wide) {
         format = options.srgb ? formats::rgba8_srgb : formats::rgba8;
@@ -329,6 +342,20 @@ result_t<image_t> decode_ktx2(std::span<const std::uint8_t> bytes, const image_o
         code = ktxTexture_GetImageOffset(base, level, 0, 0, &offset);
         if (code != KTX_SUCCESS) {
             return std::unexpected(invalid(name, std::format("has no level {}", level)));
+        }
+        // Its first image, and its last, of its last layer and its last face or slice, are within
+        // the texels: a level's size is its format's and its sizes', which libktx doesn't hold to
+        // what the file has of it, and its offset is from where the first level is, which a level
+        // before that wraps round.
+        const std::uint32_t slices =
+            texture->numFaces == 6 ? 6U : std::max(texture->baseDepth >> level, 1U);
+        ktx_size_t last = 0;
+        const ktx_size_t size = ktxTexture_GetImageSize(base, level);
+        if (ktxTexture_GetImageOffset(base, level, std::max(texture->numLayers, 1U) - 1, slices - 1,
+                                      &last) != KTX_SUCCESS ||
+            !within(offset, size, texture->dataSize) || !within(last, size, texture->dataSize)) {
+            return std::unexpected(invalid(
+                name, std::format("has level {} past its texels, of more than it has", level)));
         }
         image.levels.push_back({
             .width = std::max(texture->baseWidth >> level, 1U),
