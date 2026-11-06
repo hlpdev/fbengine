@@ -17,8 +17,11 @@ Import "./project"
 // waits for the last of its output, and how long stopping holds up a frame for it, in seconds; and how
 // much of a stream is read at once, which is as much as it gets a frame.
 Const MOST_LINES = 1000
-// How high a line of it is, in the UI's units.
-Const LINE_HEIGHT: Float32 = 20.0
+// How high a line of it is, in the UI's units, and how much of one is shown: past that it's cut,
+// with a marker, its whole text still the log's, so one very long line costs a frame no more.
+Const LINE_HEIGHT: Float32 = 22.0
+Const SHOWN_CHARS: Int = 300
+Const CUT_MARKER = " …"
 Const MOST_LINE_BYTES = 65536
 Const LAST_OUTPUT: Float64 = 1.0
 Const STOP_WAIT: Float64 = 0.05
@@ -435,6 +438,20 @@ Function HeadingOf(state: PlayState): String
     End Select
 End Function
 
+/// `line` as the output pane shows it: whole, or its first SHOWN_CHARS characters and a marker.
+Public Function ShownOf(line: String): String
+    // A String's Length is its bytes, which are its characters at most.
+    If line.Length <= SHOWN_CHARS Then Return line
+    Local shown = ""
+    Local count = 0
+    For letter In line.Chars
+        If count == SHOWN_CHARS Then Return shown + CUT_MARKER
+        shown += "{letter}"
+        count += 1
+    End For
+    Return shown
+End Function
+
 /// What a run says, in a pane: what it's got to, and its lines, the newest showing. Only the rows in
 /// view are made, each a line high, between what stands for those above and below, so however much a
 /// game says, a frame lays out only what fits.
@@ -530,7 +547,7 @@ Public Final Class OutputPane Extends Widget
             rows.RemoveAt(rows.Count - 1)
         End While
         For i = 0 Until wanted
-            rows[i].SetText(lines[start + i])
+            rows[i].SetText(ShownOf(lines[start + i]))
         End For
         above.SetHeight(Sizing.Fixed((start As Float32) * LINE_HEIGHT))
         below.SetHeight(Sizing.Fixed((Max(lines.Count - last - 1, 0) As Float32) * LINE_HEIGHT))
