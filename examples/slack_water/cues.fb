@@ -55,8 +55,8 @@ Public Enum Surface
 End Enum
 
 // How far you walk to a step, in meters, and how far a move can be before it's the water carrying you.
-Const STRIDE: Float = 1.8
-Const FARTHEST_MOVE: Float = 1.0
+Public Const STRIDE: Float = 1.8
+Public Const FARTHEST_MOVE: Float = 1.0
 // How long it is from one gull to the next, and one creak to the next, at least, and how much longer
 // it can be.
 Const GULL_AT_LEAST: Float = 5.0
