@@ -458,7 +458,7 @@ TEST_CASE("a KTX2 whose texels take more than its levels have isn't loaded", "[a
 
 // The fuzz test's: libktx's offsets are from where the first level in the file starts, the
 // smallest, so a level that says it starts before that has one that wraps round, which isn't
-// loaded.
+// loaded, as it's out of a KTX2's order.
 TEST_CASE("a KTX2 level before its texels isn't loaded", "[assets]") {
     const bytes_t ktx = ktx2(8, 4, 3, 2, 1, true, pattern, [](ktxTexture2*) {});
     REQUIRE(decoded(ktx).levels.size() == 3);
@@ -467,7 +467,7 @@ TEST_CASE("a KTX2 level before its texels isn't loaded", "[assets]") {
     REQUIRE(u32_of(ktx, offset_at(2)) < u32_of(ktx, offset_at(1)));
     bytes_t before = ktx;
     put_u64(before, offset_at(1), u32_of(ktx, offset_at(2)) - 14);
-    REQUIRE(message(before).contains("has level 1 past its texels"));
+    REQUIRE(message(before).contains("has level 1 out of the order"));
 }
 
 // ASan's, in the fuzz test: libktx allocates what a KTX2's levels say they inflate to before it
@@ -502,6 +502,29 @@ TEST_CASE("a KTX2's levels inflate to no more than its texels could be", "[asset
     bytes_t raw = ktx2(4, 4, 1, 1, 1, false, pattern, [](ktxTexture2*) {});
     put_u64(raw, 80 + 16, 63);
     REQUIRE(message(raw).contains("level 0 inflating to 63 bytes"));
+}
+
+// ASan's, in the fuzz test: libktx's texels are from where the last level starts to where level 0
+// ends, so a level before the one or past the other has it allocate what wraps round.
+TEST_CASE("a KTX2's levels are in the order a KTX2's are", "[assets]") {
+    const bytes_t ktx = ktx2(8, 4, 3, 1, 1, false, pattern, [](ktxTexture2*) {});
+    REQUIRE(decoded(ktx).levels.size() == 3);
+    const auto offset_at = [](std::size_t level) { return 80 + (level * 24); };
+    // Level 0 at the file's start, before the others, and level 2, the first, past level 0's end.
+    bytes_t first_first = ktx;
+    put_u64(first_first, offset_at(0), 0);
+    REQUIRE(message(first_first).contains("has level 0 out of the order"));
+    bytes_t last_last = ktx;
+    put_u64(last_last, offset_at(2), u32_of(ktx, offset_at(0)) + u32_of(ktx, offset_at(0) + 8));
+    put_u64(last_last, offset_at(2) + 8, 0);
+    REQUIRE(message(last_last).contains("out of the order"));
+    // Level 0 over level 1, a byte long, so level 1 ends past it: libktx would copy level 1 past
+    // the texels it allocated.
+    bytes_t past_last = ktx;
+    put_u64(past_last, offset_at(0), u32_of(ktx, offset_at(1)));
+    put_u64(past_last, offset_at(0) + 8, 1);
+    put_u64(past_last, offset_at(0) + 16, 1);
+    REQUIRE(message(past_last).contains("has level 1 out of the order"));
 }
 
 TEST_CASE("a KTX2 supercompressed but by Zstd isn't loaded", "[assets]") {

@@ -251,10 +251,21 @@ result_t<void> check_ktx2(std::span<const std::uint8_t> bytes, std::string_view 
     // be, of 16 bytes each, its mips and all.
     const std::uint64_t most_bytes = texels * 16 * 2;
     std::uint64_t inflated = 0;
+    // libktx's offsets are from where the last level starts, the first in the file, and its texels
+    // end where level 0 does, the last: each level's between them, or what it allocates wraps.
+    const std::uint64_t first = u64(bytes, header + ((count - 1) * level_index));
+    const std::uint64_t last_end = u64(bytes, header) + u64(bytes, header + 8);
     for (std::size_t level = 0; level < count; ++level) {
         const std::size_t at = header + (level * level_index);
         if (!within(u64(bytes, at), u64(bytes, at + 8), size)) {
             return std::unexpected(invalid(name, std::format("has level {} past its end", level)));
+        }
+    }
+    for (std::size_t level = 0; level < count; ++level) {
+        const std::size_t at = header + (level * level_index);
+        if (u64(bytes, at) < first || u64(bytes, at) + u64(bytes, at + 8) > last_end) {
+            return std::unexpected(invalid(
+                name, std::format("has level {} out of the order a KTX2's levels are in", level)));
         }
         const std::uint64_t length = u64(bytes, at + 16);
         if ((scheme == 0 && length != u64(bytes, at + 8)) || length > most_bytes - inflated) {
@@ -356,17 +367,16 @@ result_t<image_t> decode_ktx2(std::span<const std::uint8_t> bytes, const image_o
         if (code != KTX_SUCCESS) {
             return std::unexpected(invalid(name, std::format("has no level {}", level)));
         }
-        // Its first image, and its last, of its last layer and its last face or slice, are within
-        // the texels: a level's size is its format's and its sizes', which libktx doesn't hold to
-        // what the file has of it, and its offset is from where the first level is, which a level
-        // before that wraps round.
+        // Its last image, of its last layer and its last face or slice, ends within the texels: a
+        // level's size is its format's and its sizes', which libktx doesn't hold to what the file
+        // has of it.
         const std::uint32_t slices =
             texture->numFaces == 6 ? 6U : std::max(texture->baseDepth >> level, 1U);
         ktx_size_t last = 0;
         const ktx_size_t size = ktxTexture_GetImageSize(base, level);
         if (ktxTexture_GetImageOffset(base, level, std::max(texture->numLayers, 1U) - 1, slices - 1,
                                       &last) != KTX_SUCCESS ||
-            !within(offset, size, texture->dataSize) || !within(last, size, texture->dataSize)) {
+            !within(last, size, texture->dataSize)) {
             return std::unexpected(invalid(
                 name, std::format("has level {} past its texels, of more than it has", level)));
         }
