@@ -27,12 +27,14 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <functional>
 #include <limits>
 #include <memory>
 #include <numbers>
+#include <random>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -5932,6 +5934,56 @@ TEST_CASE("the light a shader's told of is linear, whatever its material's shadi
     CHECK(near(middle(scene.drawn()), { expected[0], expected[1], expected[2] }));
     CHECK(fbe_gpu_validation_errors() == 0);
     fbe_material_release(material);
+}
+
+// A game's shader's SPIR-V mutated: words flipped, set, their counts set to none or past the end,
+// and the end cut. Each is checked, and made where it's taken, reading nothing past what it has,
+// which ASan checks where it runs. FBE_FUZZ_ROUNDS asks for more than CI's 2000.
+TEST_CASE("a game's shader's mutants are checked without reading past them", "[gpu][scene]") {
+    const char* asked = std::getenv("FBE_FUZZ_ROUNDS");
+    const int rounds = asked != nullptr ? std::atoi(asked) : 2000;
+    const std::span<const std::uint32_t> seed = fbe::test_shaders::game_shader.code;
+    REQUIRE(seed.size() > 5);
+    std::mt19937 random(20261106);
+    const auto at = [&](std::size_t size) {
+        return std::uniform_int_distribution<std::size_t>(0, size - 1)(random);
+    };
+    int taken = 0;
+    for (int round = 0; round < rounds; ++round) {
+        CAPTURE(round);
+        std::vector<std::uint32_t> words(seed.begin(), seed.end());
+        const int changes = std::uniform_int_distribution<int>(1, 3)(random);
+        for (int change = 0; change < changes && words.size() > 5; ++change) {
+            // Past the header's five words, which say it's SPIR-V.
+            const std::size_t where = 5 + at(words.size() - 5);
+            switch (at(5)) {
+            case 0:
+                words[where] ^= 1U << at(32);
+                break;
+            case 1:
+                words[where] = static_cast<std::uint32_t>(random());
+                break;
+            case 2:
+                // An instruction's count: none, or more words than there are.
+                words[where] = (words[where] & 0xFFFFU) | (at(2) == 0 ? 0U : 0xFFFFU << 16U);
+                break;
+            case 3:
+                words[where] = std::array<std::uint32_t, 4>{ 0, 1, 2, 0xFFFFFFFF }.at(at(4));
+                break;
+            default:
+                words.resize(where);
+                break;
+            }
+        }
+        const std::vector<std::uint8_t> bytes = cooked_shader(words);
+        if (fbe_shader_check(bytes.data(), static_cast<std::int64_t>(bytes.size()))) {
+            ++taken;
+        }
+    }
+    // Some are taken, and some refused, or it's not the check that's tried.
+    CAPTURE(taken);
+    CHECK(taken > 0);
+    CHECK(taken < rounds);
 }
 
 TEST_CASE("a shader no pipeline can be made of draws as the scene's own, and isn't tried again",
