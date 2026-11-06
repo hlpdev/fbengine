@@ -673,7 +673,7 @@ if(FBENGINE_FB_TESTS)
   # Slang release the engine's own are.
   get_directory_property(fbengine_tests_here TESTS)
   foreach(test IN LISTS fbengine_tests_here)
-    if(test MATCHES "^examples\.slack_water\.")
+    if(test MATCHES "^examples[.]slack_water[.]")
       set_property(TEST "${test}" APPEND PROPERTY ENVIRONMENT "FBENGINE_SLANGC=${FBENGINE_SLANGC}")
     endif()
   endforeach()

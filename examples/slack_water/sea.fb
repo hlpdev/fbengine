@@ -20,6 +20,9 @@ Const TILE: Float = 48.0
 Const OTHER_TILE: Float = 19.0
 Const SPEED: Float = 0.9
 Const OTHER_SPEED: Float = 0.55
+// Which way each goes in the world.
+Const WAY: Vec2 = Vec2(0.92, 0.39)
+Const OTHER_WAY: Vec2 = Vec2(-0.45, 0.89)
 // The map of the ground under it: its texels, and how far below 0 the lowest it holds is, as a half
 // float of a texture holds nothing below 0.
 Const GROUND_SIDE: Int = 512
@@ -64,6 +67,26 @@ Public Function NormalTexel(slopeX: Float, slopeY: Float): (UInt8, UInt8, UInt8)
     Return (Round((-slopeX * size * 0.5 + 0.5) * 255.0) As UInt8,
             Round((-slopeY * size * 0.5 + 0.5) * 255.0) As UInt8,
             Round((size * 0.5 + 0.5) * 255.0) As UInt8)
+End Function
+
+/// Where each tile of waves is sampled from `clock` seconds in, in tiles, from 0 to 1: what's at a
+/// place is what was its speed's distance back along its way, the second's in its turned frame, as
+/// water.slang turns it; each worked out in 64 bits and wrapped to its tile, so neither jumps however
+/// long it's been.
+Public Function WaveOffsets(clock: Float64): (Vec2, Vec2)
+    Local wrapped = Function(meters: Float64, tile: Float): Float
+        Local tiles = meters / (tile As Float64)
+        Return (tiles - Floor(tiles)) As Float
+    End Function
+    Local back = -clock * (SPEED As Float64)
+    Local otherBack = -clock * (OTHER_SPEED As Float64)
+    // The second's way, turned as its place is: x 0.8 - z 0.6, x 0.6 + z 0.8.
+    Local turnedX = (OTHER_WAY.x * 0.8 - OTHER_WAY.y * 0.6) As Float64
+    Local turnedZ = (OTHER_WAY.x * 0.6 + OTHER_WAY.y * 0.8) As Float64
+    Return (Vec2(wrapped(back * (WAY.x As Float64), TILE),
+                 wrapped(back * (WAY.y As Float64), TILE)),
+            Vec2(wrapped(otherBack * turnedX, OTHER_TILE),
+                 wrapped(otherBack * turnedZ, OTHER_TILE)))
 End Function
 
 /// The waves' tile of normals, row by row, with no alpha: its top and bottom, and left and right, are
@@ -193,12 +216,19 @@ End Function
 Public Final Class Sea
     Field sheet: Mesh
     Field water: Material
-    Field mostRough: Float = 0.0
+    Field mostPatched: Float = 0.0
+    Field tile: Texture
+    Field patches: Texture
+    Field kept: Float = 1.0
+    Field otherKept: Float = 1.0
+    Field clock: Float64 = 0.0
 
-    New(sheet: Mesh, water: Material, mostRough: Float)
+    New(sheet: Mesh, water: Material, mostPatched: Float, tile: Texture, patches: Texture)
         Self.sheet = sheet
         Self.water = water
-        Self.mostRough = mostRough
+        Self.mostPatched = mostPatched
+        Self.tile = tile
+        Self.patches = patches
         Update(0.0)
     End New
 
@@ -230,8 +260,6 @@ Public Final Class Sea
         water.SetMapUv(MaterialMap.METAL_ROUGH, UvTurn(Vec2(patchScale, patchScale), 0.0,
                                                        Vec2(0.0, 0.0)))
         water.SetShader(Try Assets.Load<Shader>(Res.Water))
-        water.SetParameter(1, Vec4(TILE, 0.92, 0.39, SPEED))
-        water.SetParameter(2, Vec4(OTHER_TILE, -0.45, 0.89, OTHER_SPEED))
         water.SetParameter(3, Vec4(deep.x, deep.y, deep.z, 0.0))
         Local shallow = Linear(SHALLOW)
         water.SetParameter(4, Vec4(shallow.x, shallow.y, shallow.z, 0.0))
@@ -241,7 +269,7 @@ Public Final Class Sea
         Local sheet = Mesh(Geometry.Plane(1))
         sheet.SetScale(Vec3(SHEET, 1.0, SHEET))
         sheet.SetMaterial(water)
-        Return Sea(sheet, water, ROUGHNESS * mostPatched)
+        Return Sea(sheet, water, mostPatched, tile, patches)
     End Method
 
     /// Sets it as it is `clock` seconds into the slack water.
@@ -252,6 +280,10 @@ Public Final Class Sea
         // Its time, from 0 to an hour and back, so a float's steps stay small.
         Local time = (clock % 3600.0) As Float
         water.SetParameter(0, Vec4(height, time, (SIDE As Float) * 0.5, SHEET))
+        Self.clock = clock
+        Local one, other = WaveOffsets(clock)
+        water.SetParameter(1, Vec4(TILE, one.x, one.y, kept))
+        water.SetParameter(2, Vec4(OTHER_TILE, other.x, other.y, otherKept))
     End Method
 
     /// Stills it, a mirror, to see what's in it, or sets it going again.
@@ -263,11 +295,48 @@ Public Final Class Sea
     End Method
 
     /// How rough it's drawn at most: its roughness, times the most its patches of wind make it.
-    @MainThread Public Method MostRough(): Float => mostRough
+    @MainThread Public Method MostRough(): Float => water.Roughness() * mostPatched
+
+    /// Sets how rough it is, to see a rougher one's said to be.
+    @MainThread
+    Public Method SetRoughness(roughness: Float)
+        water.SetMetalRough(0.0, roughness)
+    End Method
+
+    /// How rough it's drawn at first.
+    @MainThread Public Method Roughness(): Float => ROUGHNESS
+
+    /// Keeps each tile of waves' slopes, or not, to see each alone.
+    @MainThread
+    Public Method SetTilesKept(kept: Bool, otherKept: Bool)
+        Self.kept = kept ? 1.0 : 0.0
+        Self.otherKept = otherKept ? 1.0 : 0.0
+        Update(clock)
+    End Method
+
+    /// Draws its waves from `tile` in place of its own, or its own again for Null, to see what it
+    /// makes of a tile.
+    @MainThread
+    Public Method SetWaveTile(tile: Texture?)
+        water.SetTexture(1, tile ?? Self.tile)
+    End Method
+
+    /// Takes the patches of wind off its roughness, or puts them back.
+    @MainThread
+    Public Method SetPatched(on: Bool)
+        water.SetMap(MaterialMap.METAL_ROUGH, on ? patches : Null)
+    End Method
 
     /// How high it's drawn.
     @MainThread Public Method DrawnAt(): Float => sheet.Position().y
 
     /// What it's drawn with.
     @MainThread Public Method Shown(): Material => water
+
+    /// Draws it with `material` in place of its own, or its own again for Null, to see what another
+    /// makes of it.
+    @MainThread
+    Public Method SetDrawnWith(material: Material?)
+        sheet.SetMaterial(material ?? water)
+    End Method
 End Class

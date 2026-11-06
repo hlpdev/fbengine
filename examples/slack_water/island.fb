@@ -501,6 +501,9 @@ Public Final Class Island
         sunShown.From(cameras.Count > 0 ? cameras[0].Position() : Vec3(0.0, 0.0, 0.0))
     End Method
 
+    /// The sea around it.
+    @MainThread Public Method Waters(): Sea => sea
+
     /// What grows on it.
     @MainThread Public Method Grown(): Plants => plants
 

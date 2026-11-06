@@ -56,6 +56,28 @@ Function AFlatNormalIsWhatAMapSaysIsFlat()
 End Function
 
 @Test
+Function WavesNeverJumpThoughItsBeenAnHour()
+    // A tile apart is the same, so how far apart two are is the nearer way round.
+    Local apart = Function(one: Vec2, other: Vec2): Float
+        Local x = Abs(one.x - other.x)
+        Local y = Abs(one.y - other.y)
+        Return Max(Min(x, 1.0 - x), Min(y, 1.0 - y))
+    End Function
+    For around In [3600.0, 7200.0, 86400.0]
+        Local one, other = WaveOffsets(around - 0.01)
+        Local oneLater, otherLater = WaveOffsets(around + 0.01)
+        // At most a tile's thousandth past what 0.02 s goes.
+        Expect(apart(one, oneLater) < 0.001 + 0.9 * 0.02 / 48.0)
+        Expect(apart(other, otherLater) < 0.001 + 0.55 * 0.02 / 19.0)
+        Expect(apart(one, oneLater) > 0.0)
+    End For
+    Local early, _ = WaveOffsets(0.0)
+    Local later, _ = WaveOffsets(1.0)
+    // Going back along its way: what's at a place is what was behind it.
+    Expect(Abs(apart(early, later) - 0.9 * 0.92 / 48.0) < 0.0001)
+End Function
+
+@Test
 Function TheSunsWayIsAWay()
     For clock In [0.0, 100.0, 1000.0]
         Local way = WayToSun(clock)

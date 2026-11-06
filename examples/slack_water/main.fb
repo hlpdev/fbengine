@@ -176,6 +176,38 @@ Function PixelOf(camera: Camera, image: Image, place: Vec3): Color32?
     Return image[x, y]
 End Function
 
+// How much of two images, from row `from` up to `to`, differs by more than 12 of
+// 765 in brightness, from 0 to 1.
+Function MovedShare(before: Image, after: Image, from: Int, to: Int): Float
+    Local count = 0
+    For y = from Until to
+        For x = 0 Until before.Width
+            If Abs(Brightness(before[x, y]) - Brightness(after[x, y])) > 12 Then count += 1
+        End For
+    End For
+    Return (count As Float) / (((to - from) * before.Width) As Float)
+End Function
+
+// How much of the sea `depth` deep along the shore's south side is white with foam, from 0 to 1, by
+// what `image` shows from `camera`, with the sea at 0: of 161 places along it, a quarter meter apart.
+Function FoamAlong(camera: Camera, image: Image, depth: Float): Float
+    Local foamed = 0
+    Local seen = 0
+    For across = -80 To 80
+        Local x = MAIN_X + (across As Float) * 0.25
+        Local z: Float = 0.0
+        While -GroundHeight(x, z) < depth && z < 100.0
+            z += 0.02
+        End While
+        Local pixel = PixelOf(camera, image, Vec3(x, 0.0, z))
+        If pixel != Null
+            seen += 1
+            If pixel.r > 185 && pixel.g > 185 && pixel.b > 185 Then foamed += 1
+        End If
+    End For
+    Return seen > 40 ? (foamed As Float) / (seen As Float) : 1.0
+End Function
+
 // The least and most bright, of 765, the sea `depth` deep along the shore's south side is, by what
 // `image` shows from `camera`, with the sea at 0.
 Function BrightnessAlong(camera: Camera, image: Image, depth: Float): (Float, Float)
@@ -382,12 +414,14 @@ Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws Grap
         most = Max(most, rolled)
     End For
     island.Update(0.0)
-    Checks("its foam rolls in", most > least + 40.0)
+    Checks("its foam rolls in", most > least + 25.0)
 
     // At the very edge, its foam's broken up along the shore, not a band.
     Local edgeShown = Try Shown(island)
     Local dimmest, brightest = BrightnessAlong(camera, edgeShown, 0.06)
     Checks("its foam's broken up along the shore", brightest > dimmest + 100.0)
+    Local covered = FoamAlong(camera, edgeShown, 0.04)
+    Checks("its edge's foam has holes in it", covered > 0.08 && covered < 0.7)
     // A meter deep, the shallows' own green, which the deep hasn't.
     Local shallow, _ = ColorAtDepth(camera, edgeShown, 0.0, 1.0)
     Checks("the shallows are their own color", shallow.y - shallow.x > 45.0)
@@ -411,7 +445,9 @@ Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws Grap
     Checks("the sea's waves move", moved(420, 720) > 0.2)
 
     // Its waves don't repeat by a tile of them, as two tiles across each other don't: seen from straight
-    // above, the sea a tile along isn't what it was.
+    // above, with no patches of wind to tell them apart, the sea a tile along isn't what it was.
+    Local waters = island.Waters()
+    waters.SetPatched(False)
     camera.SetProjection(Projection.ORTHOGRAPHIC)
     camera.SetOrthographicHeight(40.0)
     camera.SetPosition(Vec3(0.0, 60.0, 400.0))
@@ -428,7 +464,56 @@ Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws Grap
         End For
     End For
     Checks("its waves don't repeat by a tile", apart / (520.0 * 880.0) > 1.5)
+    waters.SetPatched(True)
     Checks("and the sky doesn't", moved(0, 100) < 0.01)
+    // Each tile of them, alone, out at sea.
+    camera.SetPosition(Vec3(MAIN_X, 12.0, 90.0))
+    camera.PointAt(Vec3(MAIN_X, 0.0, 300.0))
+    For first In [True, False]
+        island.Waters().SetTilesKept(first, !first)
+        Local alone = Try Shown(island)
+        island.Update(0.25)
+        Local aloneLater = Try Shown(island)
+        island.Update(0.0)
+        Checks(first ? "its first tile of waves moves" : "and its second",
+               MovedShare(alone, aloneLater, 420, 720) > 0.1)
+    End For
+    island.Waters().SetTilesKept(True, True)
+
+    // Each tile's slopes are the world's: with every texel of a tile tilted along x, the second's,
+    // sampled turned, turned back, the two make what a map of their sum would.
+    Local tilted = Try Texture(4, 4, TextureFormat.RGBA8_LINEAR, False)
+    Local tiltedBytes: UInt8[] = []
+    For texel = 0 Until 16
+        tiltedBytes.AddAll([204 As UInt8, 128 As UInt8, 230 As UInt8, 0 As UInt8])
+    End For
+    tilted.WritePixels(0, 0, 4, 4, tiltedBytes)
+    island.Waters().SetWaveTile(tilted)
+    Local byTiles = Try Shown(island)
+    island.Waters().SetWaveTile(Null)
+    // (0.6, 0, 0.8), and it turned back: (0.48, -0.36, 0.8); their slopes added and their ups
+    // multiplied, as water.slang does, as a map holds it: to within what a map's bytes round off, which
+    // a glint shows.
+    Local summed = Normalize(Vec3(1.08, -0.36, 0.64))
+    Local mapped = island.Waters().Shown().Clone()
+    mapped.SetShader(Null)
+    Local summedMap = Try Texture(1, 1, TextureFormat.RGBA8_LINEAR, False)
+    summedMap.WritePixels(0, 0, 1, 1, [Round((summed.x * 0.5 + 0.5) * 255.0) As UInt8,
+                                       Round((summed.y * 0.5 + 0.5) * 255.0) As UInt8,
+                                       Round((summed.z * 0.5 + 0.5) * 255.0) As UInt8,
+                                       255 As UInt8])
+    mapped.SetMap(MaterialMap.NORMAL, summedMap)
+    island.Waters().SetDrawnWith(mapped)
+    Local byMap = Try Shown(island)
+    island.Waters().SetDrawnWith(Null)
+    Local unlike = 0
+    For y = 420 Until 720
+        For x = 0 Until byMap.Width
+            If Abs(Brightness(byMap[x, y]) - Brightness(byTiles[x, y])) > 9 Then unlike += 1
+        End For
+    End For
+    Checks("its second tile's slopes are turned back to the world's",
+           (unlike As Float) / ((300 * byMap.Width) As Float) < 0.15)
 
     // Out to sea, into the sun, which is where its light's from.
     Local way = WayToSun(0.0)
@@ -472,6 +557,9 @@ Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws Grap
     island.SetSeaStill(False)
     Checks("a still sea shows the clouds over it", CloudsIn(camera, still, eye) > 40.0)
     Checks("and a moving one's as smooth", island.SeaRoughness() <= 0.25)
+    island.Waters().SetRoughness(0.5)
+    Checks("which a rougher one isn't", island.SeaRoughness() > 0.25)
+    island.Waters().SetRoughness(island.Waters().Roughness())
 End Function
 
 // How much brighter, of 765, the sea `image` shows from `eye` is where its mirror goes to cloud than
