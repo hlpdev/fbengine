@@ -678,6 +678,24 @@ Function CheckLandmarks(folder: Path, island: Island, camera: Camera) Throws Gra
     island.Drawn(camera)
     Try Screen.Save(folder / "boat.png")
     Flip(False)
+    // From over it, nothing of the sea's seen inside it: what's between its gunwales is its own.
+    camera.SetPosition(boat + Vec3(0.0, 3.5, 0.01))
+    camera.PointAt(boat)
+    island.Drawn(camera)
+    Local over = Try Screen.ToImage()
+    Flip(False)
+    Local sea = 0
+    Local looked = 0
+    For across = -2 To 2
+        For along = -8 To 8
+            Local inside = PixelOf(camera, over, boat + Vec3((across As Float) * 0.08, 0.0,
+                                                             (along As Float) * 0.08))
+            If inside == Null Then Continue
+            looked += 1
+            If (inside.b As Int) > (inside.r As Int) + 30 Then sea += 1
+        End For
+    End For
+    Checks("nothing of the sea's seen in the boat, of {looked}", looked > 60 && sea == 0)
     island.Update(TIDE_IN_AT)
     Checks("which rides the sea up",
            Abs(marks.BoatAt().y - boatLow - (SeaHeight(TIDE_IN_AT) - SeaHeight(0.0))) < 0.2)

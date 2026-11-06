@@ -1068,7 +1068,7 @@ Function TheBoatRidesTheSeaAndRisesAndFallsOnIt()
     For step = 0 To 50
         Local clock = TIDE_IN_AT * 1.2 * (step As Float64) / 50.0
         For swell In [0.0, 0.4, 1.9]
-            Expect(Abs(BoatHeight(clock, swell) - SeaHeight(clock) - 0.08) <= BOB + 0.0001)
+            Expect(Abs(BoatHeight(clock, swell) - SeaHeight(clock) - RIDES) <= BOB + 0.0001)
         End For
     End For
     // On a still sea, by its own swell, up and down.
@@ -1080,6 +1080,9 @@ Function TheBoatRidesTheSeaAndRisesAndFallsOnIt()
         highest = Max(highest, height)
     End For
     Expect(highest - lowest > BOB * 1.5)
+    // However it swells, its floorboards are over the sea, and its keel's in it.
+    Expect(RIDES - BOB - KEEL + FLOORBOARDS > 0.0)
+    Expect(RIDES + BOB - KEEL < 0.0)
 End Function
 
 @Test

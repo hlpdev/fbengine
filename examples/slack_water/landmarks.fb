@@ -38,10 +38,17 @@ Const BOB_RATE: Float = 1.7
 /// comes on.
 Public Function LighthouseLit(clock: Float64): Float => Clamp(StormAt(clock) * 1.4 - 0.2, 0.0, 1.0)
 
+/// How far the boat's middle rides over the sea: its keel, KEEL under that, in it by a little.
+Public Const RIDES: Float = 0.12
+/// How far the boat's keel is under its middle, and its floorboards over its keel, whose tops are over
+/// the sea however it swells, so the sea, a plane through all of it, isn't seen in it.
+Public Const KEEL: Float = 0.18
+Public Const FLOORBOARDS: Float = 0.13
+
 /// Where the boat is `clock` seconds in, `swell` seconds into its own rising and falling: on the sea's
 /// height then, a little over it.
 Public Function BoatHeight(clock: Float64, swell: Float64): Float
-    Return SeaHeight(clock) + 0.08 + BOB * (Sin(swell * BOB_RATE) As Float)
+    Return SeaHeight(clock) + RIDES + BOB * (Sin(swell * BOB_RATE) As Float)
 End Function
 
 /// What moves on its own in real time, whatever the flow's clock does as it waits: the lamp's turn and
@@ -380,11 +387,16 @@ Function Jetty(wood: Material, boards: Material, iron: Material): (Pivot, Pivot)
     paint.SetColor(Color(0.55, 0.66, 0.74))
     paint.SetTwoSided(True)
     Local hull = Gathered()
-    Local down = Vec3(0.0, -0.18, 0.0)
+    Local down = Vec3(0.0, -KEEL, 0.0)
     hull.PutAt(paint, BoatHull(), down)
     Local gunwale = Turned([Vec2(0.83, 0.47), Vec2(0.9, 0.47), Vec2(0.9, 0.54), Vec2(0.83, 0.54),
                             Vec2(0.83, 0.47)], 24)
     hull.PutAt(boards, gunwale, down, Quat(0.0, 0.0, 0.0, 1.0), Vec3(0.7, 1.0, 2.2))
+    // Its floorboards, along its bottom.
+    For across In [-0.14, 0.0, 0.14]
+        hull.PutAt(boards, Beveled(Vec3(0.072, 0.012, 0.75), 0.006),
+                   Vec3(across, FLOORBOARDS - KEEL, 0.0))
+    End For
     For along In [-0.9, 0.0, 0.85]
         Local wide = 0.6 * (1.0 - Abs(along) * 0.28)
         hull.PutAt(boards, Beveled(Vec3(wide, 0.025, 0.11), 0.01), Vec3(0.0, 0.2, along))
