@@ -168,8 +168,24 @@ result_t<void> check_dfd(std::span<const std::uint8_t> bytes, std::uint32_t offs
                          std::uint32_t length, std::string_view name) {
     // Its size, then the block's header, 8 bytes, its model and planes, 16, and 16 a sample.
     constexpr std::uint32_t block = 4;
+    constexpr std::uint32_t block_header = 8;
     constexpr std::uint32_t samples = block + 24;
     constexpr std::uint32_t sample = 16;
+    // Its total size is what the header says it is, and its blocks fill it, each a block's header
+    // or more of whole words, as libktx walks them by their sizes: one of none has it loop forever,
+    // and one past the rest read past it.
+    if (length < block + block_header || u32(bytes, offset) != length) {
+        return std::unexpected(invalid(name, "has a data format descriptor of the wrong size"));
+    }
+    for (std::uint32_t at = block; at < length;) {
+        const std::uint32_t size = u32(bytes, offset + at + 4) >> 16U;
+        if (length - at < block_header || size < block_header || size % 4 != 0 ||
+            size > length - at) {
+            return std::unexpected(
+                invalid(name, "has a data format descriptor block of the wrong size"));
+        }
+        at += size;
+    }
     if (length < samples) {
         return {};
     }

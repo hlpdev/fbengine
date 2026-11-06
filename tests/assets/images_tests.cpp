@@ -527,6 +527,26 @@ TEST_CASE("a KTX2's levels are in the order a KTX2's are", "[assets]") {
     REQUIRE(message(past_last).contains("has level 1 out of the order"));
 }
 
+// The fuzz test's, which hung: libktx walks a data format descriptor's blocks by their sizes, so
+// one of no size, as the words past a block cut short read, has it loop forever; one past the rest
+// would have it read past them.
+TEST_CASE("a KTX2's data format descriptor's blocks fill it as they say", "[assets]") {
+    const bytes_t ktx = ktx2(8, 4, 3, 2, 1, true, pattern, [](ktxTexture2*) {});
+    const std::size_t dfd = u32_of(ktx, 48);
+    // Its total size, its block's size, and 4 samples, of 16 bytes each.
+    REQUIRE(u32_of(ktx, dfd) == u32_of(ktx, 52));
+    REQUIRE(ktx.at(dfd + 10) == 88);
+    for (const std::uint8_t size : { 72, 0, 90, 92 }) {
+        INFO(int{ size });
+        bytes_t block = ktx;
+        block.at(dfd + 10) = size;
+        REQUIRE(message(block).contains("data format descriptor block of the wrong size"));
+    }
+    bytes_t total = ktx;
+    put_u32(total, dfd, u32_of(ktx, dfd) + 4);
+    REQUIRE(message(total).contains("data format descriptor of the wrong size"));
+}
+
 TEST_CASE("a KTX2 supercompressed but by Zstd isn't loaded", "[assets]") {
     bytes_t zlib = ktx2(4, 4, 1, 1, 1, false, pattern, [](ktxTexture2*) {});
     put_u32(zlib, 44, 3);
