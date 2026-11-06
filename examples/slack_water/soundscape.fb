@@ -80,6 +80,9 @@ Public Final Class Soundscape
     // What's in the mill, in its room: creaks, parts fitted, the sluice, the works, and your steps while
     // you're in it; and its low-pass, which muffles it from outside.
     Field mill: Bus
+    // Your own steps while you're in the mill: its room, with no low-pass, as you're never outside
+    // them, so the first step in isn't muffled while the mill's low-pass opens.
+    Field stepsInside: Bus
     Field millCutoff: Float
     Field inMill: Bool = False
     Field atMill: Emitter
@@ -142,6 +145,8 @@ Public Final Class Soundscape
         outsideBeds.SetLowPass(cutoff)
         outsideEffects.SetLowPass(cutoff)
         mill = Bus(effects)
+        stepsInside = Bus(effects)
+        stepsInside.SetReverb(MillReverb())
         mill.SetReverb(MillReverb())
         millCutoff = OutsideCutoff(True)
         mill.SetLowPass(millCutoff)
@@ -392,7 +397,7 @@ Public Final Class Soundscape
         For sound In all
             If sound.Bus() != mill Then Return False
         End For
-        Return mill.ReverbHeard()
+        Return mill.ReverbHeard() && stepsInside.ReverbHeard() && stepsInside.LowPass() == 0.0
     End Method
 
     /// The calm theme's level and the storm's, now, and the music's ducking and inside's together.
@@ -434,7 +439,7 @@ Public Final Class Soundscape
                 onRoad.Play(sound)
             Default
                 // Your steps, in the mill's room while you're in it, and the effects' outside.
-                sound.SetBus(inMill ? mill : effects)
+                sound.SetBus(inMill ? stepsInside : effects)
                 sound.Play()
         End Select
     End Method
@@ -471,6 +476,7 @@ Public Final Class Soundscape
         outsideBeds.Free()
         outsideEffects.Free()
         mill.Free()
+        stepsInside.Free()
         ambience.Free()
         effects.Free()
         everything.Free()

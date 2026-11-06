@@ -890,7 +890,7 @@ Function Walked3d(island: Island, walk: String[], lines: String[],
     End Function)
     Defer game.Free()
     // Heard as a person would, mixed here, as nothing's to play it to.
-    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Try StartAudio(AudioDevice.MANUAL, 44100)
     Defer Audio.Stop()
     Local scape = Try Soundscape.Make(game, island)
     Defer scape.Free()
@@ -1045,7 +1045,7 @@ Function Listened() Throws GraphicsError, IOError, AudioError
     Local game = Game(island, Function(line: String)
     End Function)
     Defer game.Free()
-    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Try StartAudio(AudioDevice.MANUAL, 44100)
     Defer Audio.Stop()
     Local scape = Try Soundscape.Make(game, island)
     Defer scape.Free()
@@ -1141,7 +1141,9 @@ Function Listened() Throws GraphicsError, IOError, AudioError
     Checks("with the beds at nothing, it's silent", PeakOf(Audio.Mix(1024)) < 0.0005)
     // The mill's room: what's in it is on its bus, whose ring's heard; your steps ring there, after
     // they've ended, and not outside; and it's muffled from out, as the outside is from in.
-    Checks("what's in the mill is in its room, which rings", scape.MillOnItsBus())
+    Checks("the audio's stereo, as StartAudio starts it", Audio.Channels() == 2)
+    Checks("what's in the mill is in its room, which rings, and your steps in it",
+           scape.MillOnItsBus())
     For step = 1 To 60
         scape.Surroundings(0.0, True, 1.0 / 60.0)
         Audio.Mix(735)
@@ -1154,12 +1156,51 @@ Function Listened() Throws GraphicsError, IOError, AudioError
         Audio.Mix(735)
     End For
     Audio.Mix(rate)
-    scape.Play(Cue.STEP_1, door)
+    scape.Play(Cue.FLOOR_1, door)
     Audio.Mix(rate / 5)
     Local dry = RmsOf(Audio.Mix(rate * 2 / 5))
     Print("a step's ring, inside {ringing}, and out {dry}")
     Checks("your steps ring in the mill, and not outside", ringing > 0.0005 && ringing > 10.0 * dry)
     Checks("the mill's muffled from outside", scape.MillNow() == OutsideCutoff(True))
+    // A creak at the mill, from beside it, outside and in: from outside, its highs are 10 times less.
+    Local atWorks = scape.MillAt()
+    Listener.SetPosition(Vec3(atWorks.x, atWorks.y, atWorks.z + 1.0))
+    Local creakFrom = Function(inside: Bool): Float
+        For step = 1 To 60
+            scape.Surroundings(0.0, inside, 1.0 / 60.0)
+            Audio.Mix(735)
+        End For
+        Audio.Mix(rate)
+        scape.Play(Cue.CREAK, door)
+        Return HighBandOf(Audio.Mix(rate * 3 / 5), rate)
+    End Function
+    Local creakOutside = creakFrom(False)
+    Local creakInside = creakFrom(True)
+    Print("a creak's highs, from outside {creakOutside}, and in {creakInside}")
+    Checks("a creak's muffled from outside, by what's heard", creakInside > 10.0 * creakOutside)
+    // Item 1: the first step in is as bright as one long in, within 3 dB above 1 kHz.
+    For step = 1 To 60
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Audio.Mix(rate)
+    scape.Surroundings(0.0, True, 1.0 / 60.0)
+    scape.Play(Cue.FLOOR_1, door)
+    Local firstIn = HighBandOf(Audio.Mix(rate / 5), rate)
+    For step = 1 To 120
+        scape.Surroundings(0.0, True, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Audio.Mix(rate)
+    scape.Play(Cue.FLOOR_1, door)
+    Local longIn = HighBandOf(Audio.Mix(rate / 5), rate)
+    Print("a step's highs, the first frame in {firstIn}, and long in {longIn}")
+    Checks("the first step in is as bright as the rest",
+           firstIn > 0.708 * longIn && firstIn < 1.413 * longIn)
+    For step = 1 To 60
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
     Audio.Mix(rate)
     // Each cue, by itself, in its band, from nearby: the splash on the road, from outside, and the
     // rest at the mill's works, from inside it, where they are.
@@ -1309,6 +1350,38 @@ Function AlikeViews(one: Path, other: Path, floor: Float) Throws IOError
         Print("{name}: {psnr} dB")
         Checks("{name} is alike in both", psnr >= floor)
     End For
+End Function
+
+// How loud what's above 1 kHz is, of stereo `samples`' left, at `rate`: through four one-pole
+// high-passes, 24 dB an octave, so what's an octave or two below hardly counts.
+Function HighBandOf(samples: Float[], rate: Int): Float
+    Local kept = 1.0 / (1.0 + 6.2831853 * 1000.0 / (rate As Float))
+    Local count = samples.Count / 2
+    Local band: Float[] = []
+    For at = 0 Until count
+        band.Add(samples[at * 2])
+    End For
+    For stage = 1 To 4
+        Local out = 0.0
+        Local last = 0.0
+        For at = 0 Until count
+            Local input = band[at]
+            out = kept * (out + input - last)
+            last = input
+            band[at] = out
+        End For
+    End For
+    Local sum = 0.0
+    For value In band
+        sum += value * value
+    End For
+    Return Sqrt(sum / Max(count As Float, 1.0))
+End Function
+
+// Starts the audio on `device`, at `rate`, or its own for 0, in stereo whatever its output is, as the
+// mill's reverb, Freeverb's, can only be heard in stereo, and a surround output would leave it dry.
+Function StartAudio(device: AudioDevice, rate: Int32 = 0) Throws AudioError
+    Try Audio.Start(device, rate, 2)
 End Function
 
 // How loud the music, the beds, and a gull are, each by itself, from the door: the others at nothing.
@@ -1957,7 +2030,7 @@ Function EndShown(folder: Path) Throws GraphicsError, IOError, AudioError, Input
     Defer EndGraphics()
     Defer Assets.StopWatching()
     Defer island.Free()
-    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Try StartAudio(AudioDevice.MANUAL, 44100)
     Defer Audio.Stop()
     Local session = Try Session.Make(island)
     Defer session.Free()
@@ -2085,10 +2158,10 @@ Function Played() Throws GraphicsError, IOError, InputError, AudioError
     // A machine with no sound still plays it, in silence.
     Local device = AudioDevice.DEFAULT
     Try
-        Try Audio.Start(device)
+        Try StartAudio(device)
     Catch e As AudioError
         PrintError("no sound: {e.Message}")
-        Try Audio.Start(AudioDevice.SILENT)
+        Try StartAudio(AudioDevice.SILENT)
     End Try
     Defer Audio.Stop()
     Local session = Try Session.Make(island)
