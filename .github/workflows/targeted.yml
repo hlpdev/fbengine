@@ -1,0 +1,206 @@
+# Runs only what a fix touches, as CI builds and runs it, without the rest of CI's hours:
+#
+#   gh workflow run targeted.yml --ref <branch> -f tests='^gpu\.an HDR camera|^scene\.'
+#   gh workflow run targeted.yml --ref <branch> -f native=true -f packages=true
+#
+# `tests` is a ctest -R pattern, run as ci.yml's gpu job runs its tests, on its four runners; one
+# that names nothing fails, and none skips the job. `native` is native.yml, each of the five
+# targets' DLLs and their export check, which `tests` and `packages` run too: Linux's examples
+# link native.yml's DLLs, as ci.yml's gpu job has them, since fb links for an older glibc than a
+# runner's. `packages` is ci.yml's test job, on those DLLs, with no GPU: the only one an Intel Mac
+# runs. Each runner needs only its own target's DLLs, so one target's failing fails only its own.
+# It has no display step and no format job.
+name: Targeted
+
+on:
+  workflow_dispatch:
+    inputs:
+      tests:
+        description: The tests to run on each GPU runner, a ctest -R pattern; none skips them
+        type: string
+        default: ''
+      native:
+        description: Build each target's DLLs, as native.yml does
+        type: boolean
+        default: false
+      packages:
+        description: Run ci.yml's test job, which builds the DLLs too, on all five targets
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  FB_VERSION: 1.2.3
+
+jobs:
+  native:
+    if: inputs.native || inputs.packages || inputs.tests != ''
+    uses: ./.github/workflows/native.yml
+
+  # As ci.yml's test job. A target whose DLLs weren't made fails at their download, alone.
+  test:
+    name: test ${{ matrix.target }}
+    needs: native
+    if: ${{ !cancelled() && inputs.packages }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x64
+            os: windows-2025
+          - target: linux-x64
+            os: ubuntu-22.04
+          - target: linux-arm64
+            os: ubuntu-22.04-arm
+          - target: macos-arm64
+            os: macos-15
+          - target: macos-x64
+            os: macos-15-intel
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: native-${{ matrix.target }}
+
+      - uses: ./.github/actions/install-fb
+        with:
+          version: ${{ env.FB_VERSION }}
+
+      - name: Test
+        env:
+          SDL_VIDEO_DRIVER: offscreen
+          FBENGINE_NO_GPU: '1'
+          FBENGINE_ENDS_AT_ONCE: '8'
+        run: |
+          tar -xf native-${{ matrix.target }}.tar
+          fb --version
+          for package in packages/*/; do fb test "$package"; done
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' packages/fbengine/project.toml)"
+          output="$(fb --color never run examples/hello | tr -d '\r')"
+          printf '%s\n' "$output"
+          test "$(printf '%s\n' "$output" | tail -n 1)" = "fbengine $version"
+
+  gpu:
+    name: gpu ${{ matrix.target }}
+    needs: native
+    # Whatever another target's DLLs did: only Linux's runners use theirs, and those fail at their
+    # download if they weren't made.
+    if: ${{ !cancelled() && inputs.tests != '' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x64
+            os: windows-2025
+            shell: msys2 {0}
+          - target: linux-x64
+            os: ubuntu-24.04
+            shell: bash
+          - target: linux-arm64
+            os: ubuntu-24.04-arm
+            shell: bash
+          - target: macos-arm64
+            os: macos-15
+            shell: bash
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        if: runner.os == 'Linux'
+        with:
+          name: native-${{ matrix.target }}
+
+      - name: Install MinGW and the Vulkan loader
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          path-type: inherit
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-vulkan-loader
+            mingw-w64-ucrt-x86_64-vulkan-validation-layers
+
+      # As ci.yml's: mesa-dist-win's MSVC lavapipe, and the layers, in the registry, as the loader
+      # ignores VK_DRIVER_FILES and a layer path for an administrator.
+      - name: Install lavapipe (Windows)
+        if: runner.os == 'Windows'
+        env:
+          MSYS2_ARG_CONV_EXCL: '*'
+          MESA: https://github.com/pal1000/mesa-dist-win/releases/download/26.2.4/mesa3d-26.2.4-release-msvc.7z
+          MESA_SHA256: 351fc8c8b695878ffb3eaa044b3ead08672a48b1a045e3c3e3975811df0f6695
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/mesa.7z" "$MESA"
+          echo "$MESA_SHA256  $RUNNER_TEMP/mesa.7z" | sha256sum -c
+          7z x -y "-o$RUNNER_TEMP/mesa" "$RUNNER_TEMP/mesa.7z" > /dev/null
+          manifest="$(cygpath -w "$RUNNER_TEMP/mesa/x64/lvp_icd.x86_64.json")"
+          test -f "$manifest"
+          reg add 'HKLM\SOFTWARE\Khronos\Vulkan\Drivers' /v "$manifest" /t REG_DWORD /d 0 /f
+          layer="$(find /ucrt64 -name VkLayer_khronos_validation.json | head -n 1)"
+          test -n "$layer"
+          reg add 'HKLM\SOFTWARE\Khronos\Vulkan\ExplicitLayers' /v "$(cygpath -w "$layer")" /t REG_DWORD /d 0 /f
+
+      - name: Install lavapipe (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libvulkan1 mesa-vulkan-drivers vulkan-validationlayers
+          sudo apt-get install -y libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
+            libxfixes-dev libxss-dev libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols \
+            libegl-dev libdrm-dev libgbm-dev libdbus-1-dev libudev-dev libibus-1.0-dev
+          echo "VK_DRIVER_FILES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | paste -sd: -)" >> "$GITHUB_ENV"
+
+      - name: Install MoltenVK (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install ninja vulkan-loader molten-vk vulkan-validationlayers
+          echo "VK_ADD_LAYER_PATH=$(brew --prefix)/share/vulkan/explicit_layer.d" >> "$GITHUB_ENV"
+          echo "VK_DRIVER_FILES=$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json" >> "$GITHUB_ENV"
+          echo "VULKAN_LIBRARIES=$(brew --prefix)/lib" >> "$GITHUB_ENV"
+
+      - uses: ./.github/actions/install-fb
+        with:
+          version: ${{ env.FB_VERSION }}
+
+      - name: Restore Khronos's files
+        uses: actions/cache/restore@v6
+        with:
+          path: build/khronos
+          key: khronos-${{ runner.os }}-${{ hashFiles('tests/khronos/files.cmake') }}
+          restore-keys: khronos-${{ runner.os }}-
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DFBENGINE_REQUIRE_KHRONOS=ON
+
+      # All of a run's failures, not ci.yml's first, as what's asked for is few. The pattern comes
+      # through the environment, so it's never the shell's, and MSYS2 doesn't take it for a path.
+      - name: Build and test
+        env:
+          FBENGINE_ENDS_AT_ONCE: '8'
+          SDL_VIDEO_DRIVER: offscreen
+          FBE_GPU_VALIDATION: '1'
+          MSYS2_ARG_CONV_EXCL: '*'
+          TESTS: ${{ inputs.tests }}
+        run: |
+          echo "VK_DRIVER_FILES=$VK_DRIVER_FILES"
+          export VK_LOADER_DEBUG=error,warn
+          cmake --build build --parallel
+          if [ "$RUNNER_OS" = Linux ]; then tar -xf native-${{ matrix.target }}.tar; fi
+          DYLD_FALLBACK_LIBRARY_PATH="${VULKAN_LIBRARIES:-}" ctest --test-dir build --output-on-failure \
+            --no-tests=error -R "$TESTS"
