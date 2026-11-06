@@ -191,6 +191,9 @@ std::uint32_t texture_capacity();
 
 /// Points the set's texture `index` at `view`, sampled in SHADER_READ_ONLY_OPTIMAL.
 void write_texture(std::uint32_t index, VkImageView view);
+/// Points every one of the set's textures at `view`, as write_texture does, so an index no texture
+/// has samples it, not whatever a descriptor never written holds, which a real device faults on.
+void write_every_texture(VkImageView view);
 
 /// The screen, for a window `window` pixels big: made again if the size it should be, its own or
 /// the window's, or its samples changed, its handle, or the old one's, or 0, if it can't be made.

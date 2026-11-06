@@ -1165,6 +1165,8 @@ bool start_textures() {
     if (slot == UINT32_MAX || !make(slot, { .format = FBE_TEXTURE_RGBA8_LINEAR, .engine = true })) {
         return false;
     }
+    // And in every slot no texture has yet, so an index past them samples white too.
+    fbe::gpu::write_every_texture(textures[slot].view);
     const std::array<std::uint8_t, 4> white{ 255, 255, 255, 255 };
     return upload(handle_of(slot), textures[slot], 0, 0, 1, 1, white.data(), 4);
 }

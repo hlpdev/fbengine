@@ -323,6 +323,44 @@ TEST_CASE("a freed texture's slot waits for the frames that could draw it", "[gp
     stop_gpu();
 }
 
+// An index no texture has had, past those made, samples white, as a draw with no texture does: a
+// descriptor never written is what a real device faults on, where lavapipe reads it as nothing.
+TEST_CASE("a slot no texture has had samples white", "[gpu]") {
+    start();
+    const std::uint64_t made = make(1, 1, FBE_TEXTURE_RGBA8, false);
+    const std::uint32_t past = fbe::gpu::texture_capacity() - 1;
+    REQUIRE(fbe::texture::index_of(made) < past);
+    const quad_t quad{
+        .rect = { -1.0F, -1.0F, 1.0F, 1.0F },
+        .uv = { 0.0F, 0.0F, 1.0F, 1.0F },
+        .texture = past,
+        .sampler =
+            fbe::gpu::sampler_index(FBE_TEXTURE_NEAREST, FBE_TEXTURE_CLAMP, FBE_TEXTURE_CLAMP),
+    };
+    const fbe::golden::frame_t frame = draw({ .width = 4, .height = 4 }, { quad });
+    for (std::uint32_t channel = 0; channel < 4; ++channel) {
+        CHECK(at(frame, 2, 2, channel) == 255);
+    }
+    stop_gpu();
+}
+
+// Not a check, a measure: pointing every one of the set's textures at a view, as starting does,
+// shown on every run.
+TEST_CASE("pointing every texture slot at one view, timed", "[gpu]") {
+    start();
+    const std::uint64_t texture = make(1, 1, FBE_TEXTURE_RGBA8, false);
+    const fbe::texture::texture_t* found = fbe::texture::find(texture);
+    REQUIRE(found != nullptr);
+    const auto started = std::chrono::steady_clock::now();
+    fbe::gpu::write_every_texture(found->view);
+    const std::chrono::duration<double, std::milli> took =
+        std::chrono::steady_clock::now() - started;
+    WARN(fbe::gpu::texture_capacity() << " texture slots pointed at one view: " << took.count()
+                                      << " ms, on " << fbe_gpu_device_name(fbe_gpu_device()));
+    // Nothing draws before stopping frees every texture, and the next start points them at white.
+    stop_gpu();
+}
+
 TEST_CASE("stopping the GPU frees every texture, and new ones are made after", "[gpu]") {
     start();
     const std::uint64_t texture = make(2, 2, FBE_TEXTURE_RGBA8, true);
