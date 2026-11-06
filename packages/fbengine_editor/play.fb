@@ -17,6 +17,8 @@ Import "./project"
 // waits for the last of its output, and how long stopping holds up a frame for it, in seconds; and how
 // much of a stream is read at once, which is as much as it gets a frame.
 Const MOST_LINES = 1000
+// How high a line of it is, in the UI's units.
+Const LINE_HEIGHT: Float32 = 20.0
 Const MOST_LINE_BYTES = 65536
 Const LAST_OUTPUT: Float64 = 1.0
 Const STOP_WAIT: Float64 = 0.05
@@ -433,12 +435,20 @@ Function HeadingOf(state: PlayState): String
     End Select
 End Function
 
-/// What a run says, in a pane: what it's got to, and its lines, the newest showing.
+/// What a run says, in a pane: what it's got to, and its lines, the newest showing. Only the rows in
+/// view are made, each a line high, between what stands for those above and below, so however much a
+/// game says, a frame lays out only what fits.
 Public Final Class OutputPane Extends Widget
     Field run: GameRun
     Field heading: Label
     Field scroller: ScrollView
     Field list: Node
+    Field above: Node
+    Field below: Node
+    // The lines it holds, the log's, and the rows made of them, from the line `first` on.
+    Field lines: String[] = []
+    Field rows: Label[] = []
+    Field first: Int = -1
     Field shown: Int = 0
     Field cleared: Int = 0
 
@@ -448,54 +458,89 @@ Public Final Class OutputPane Extends Widget
         heading = Label("", "output.state")
         scroller = ScrollView("output.scroller")
         list = Node("output.list")
+        above = Node("output.above")
+        below = Node("output.below")
         Super.New("pane", "pane.output")
         heading.SetTranslates(False)
         Add(heading)
         scroller.SetHeight(Sizing.Fill())
         scroller.Add(list)
+        list.Add(above)
+        list.Add(below)
         Add(scroller)
     End New
 
-    /// What it shows, line by line.
-    Public Method ShownLines(): String[]
-        Local lines: String[] = []
-        For row In list.Children()
-            lines.Add((row As? Label)?.Text() ?? "")
-        End For
-        Return lines
-    End Method
+    /// What it holds, line by line, which it shows as it's scrolled.
+    Public Method ShownLines(): String[] => lines.Clone()
+
+    /// How many rows it's made, for a test that it makes only what fits.
+    Public Method RowsMade(): Int => rows.Count
 
     /// What it says the run's got to.
     Public Method Heading(): String => heading.Text()
 
-    /// Shows what's new.
+    /// Shows what's new, and the rows in view, as it's scrolled.
     Public Method Update()
         heading.SetText(HeadingOf(run.State()))
         Local log = run.Log
         // It follows what's new only if that's where it's been left, so what's above can be read.
         Local following = scroller.Offset() >= scroller.MaxOffset() - 1.0
+        Local again = False
         If log.Cleared() != cleared
             following = True
             cleared = log.Cleared()
             shown = 0
-            For row In list.Children()
-                list.Remove(row)
-            End For
+            lines = []
+            again = True
         End If
         Local total = log.Total()
-        If total == shown Then Return
-        Local lines = log.Lines()
-        For at = Max(lines.Count - (total - shown), 0) To lines.Count - 1
-            Local row = Label(lines[at])
+        If total != shown
+            lines = log.Lines()
+            shown = total
+            again = True
+            If following Then scroller.SetOffset(Max((lines.Count As Float32) * LINE_HEIGHT - View(), 0.0))
+        End If
+        Windowed(again)
+    End Method
+
+    // How high its view is, or the window's before it's laid out.
+    Method View(): Float32
+        Local view = scroller.Box().Height
+        If view <= 0.0 Then view = Window.Open() ? Window.Height() As Float32 : 0.0
+        Return view
+    End Method
+
+    // Makes the rows in view, reusing those there are; `again` when what's held has changed.
+    Method Windowed(again: Bool)
+        Local count = Ceil(View() / LINE_HEIGHT) As Int + 2
+        Local start = Min(Floor(scroller.Offset() / LINE_HEIGHT) As Int,
+                          Max(lines.Count - count, 0))
+        Local last = Min(start + count, lines.Count) - 1
+        If !again && start == first && last - start + 1 == rows.Count Then Return
+        first = start
+        Local wanted = Max(last - start + 1, 0)
+        While rows.Count < wanted
+            Local row = Label("", "output.line")
             row.SetStyleName("output.line")
             row.SetTranslates(False)
-            list.Add(row)
+            row.SetHeight(Sizing.Fixed(LINE_HEIGHT))
+            rows.Add(row)
+        End While
+        While rows.Count > wanted
+            rows.RemoveAt(rows.Count - 1)
+        End While
+        For i = 0 Until wanted
+            rows[i].SetText(lines[start + i])
         End For
-        shown = total
-        Local rows = list.Children()
-        For at = 0 To rows.Count - MOST_LINES - 1
-            list.Remove(rows[at])
-        End For
-        If following Then scroller.SetOffset(Inf)
+        above.SetHeight(Sizing.Fixed((start As Float32) * LINE_HEIGHT))
+        below.SetHeight(Sizing.Fixed((Max(lines.Count - last - 1, 0) As Float32) * LINE_HEIGHT))
+        If list.Children().Count != rows.Count + 2
+            list.RemoveAll()
+            list.Add(above)
+            For row In rows
+                list.Add(row)
+            End For
+            list.Add(below)
+        End If
     End Method
 End Class

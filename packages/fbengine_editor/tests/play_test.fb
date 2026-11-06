@@ -476,6 +476,10 @@ Function ThePaneShowsOnlyWhatsNewAndTheMostItKeeps() Throws IOError, GraphicsErr
     Local shown = editor.Output.ShownLines()
     Expect(shown == log.Lines() && shown.Count == 1000 && shown[0] == "line 1501" &&
            shown[999] == "line 2500")
+    // It makes only the rows in view, however many it holds: a window's height of them, and two.
+    Local fits = (Window.Height() / 20) + 3
+    Expect(editor.Output.RowsMade() <= fits,
+           "it made {editor.Output.RowsMade()} of what fit in {fits}")
     For at = 1 To 3
         log.Say("more {at}")
     End For
@@ -781,9 +785,12 @@ Function AGameSayingALotIsntKeptWaiting() Throws IOError, GraphicsError
         frames += 1
     End While
     Expect(editor.Run.State() == PlayState.ENDED, Said(editor))
-    // Here, 35 frames for 124 reads of 64 KB, each that long to take in, 18 s in all: more than
-    // three a frame. One a frame would be as many frames as reads.
+    // Here, 24 frames for 123 reads of 64 KB, half a second in all, the pane making only the rows in
+    // view: five a frame. One a frame would be as many frames as reads.
     Local reads = editor.Run.Reads() - readsBefore
+    Local fits = (Window.Height() / 20) + 3
+    Expect(editor.Output.RowsMade() <= fits,
+           "it made {editor.Output.RowsMade()} of what fit in {fits}")
     Expect(frames * 3 < reads * 2, "{frames} frames for {reads} reads, in {Instant.Now() - since}")
 End Function
 
