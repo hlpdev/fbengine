@@ -46,6 +46,10 @@ Const TIDE_SWING: Float = 0.6
 Const TIDE_SWING_RATE: Float = 0.03
 Const TIDE_WINDOW: Float64 = 1.0
 
+// The most the sea rises in a step that the boat rides up on, in metres; more, as the flood's surge
+// steps it, lifts the boat with it, as the wave's front would, so its floorboards stay over the sea.
+Const SURGE_LIFT: Float = 0.03
+
 // Driftwood: how heavy it is for its size, as a fraction of water, and how much the water holds it,
 // along and up and down.
 Const DRIFTWOOD: Float = 0.55
@@ -373,7 +377,10 @@ Public Final Class Afloat
         While owed >= STEP * 0.999 && taken < MOST_STEPS
             Local through = ((taken + 1) As Float) / (due As Float)
             Local at = clockFrom + (target - clockFrom) * (through As Float64)
+            Local was = SeaHeight(clock)
             clock = Round(at * CLOCK_GRAIN) / CLOCK_GRAIN
+            Local risen = SeaHeight(clock) - was
+            If risen > SURGE_LIFT Then boat.SetPosition(boat.Position() + Vec3(0, risen, 0))
             Buoy()
             Walk(you, youFrom, youTo, through, due)
             Walk(pip, pipFrom, pipTo, through, due)
