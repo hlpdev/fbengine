@@ -84,8 +84,9 @@ FBE_API bool fbe_texture_write(uint64_t texture, int32_t x, int32_t y, int32_t w
 // apart, in its format's bytes, in turn as fbe_texture_write does, so a game can make its own
 // mipmaps. It does nothing to the other levels, which are the game's: until a write of the first
 // level by fbe_texture_write, a copy into it, or a write of its CPU copy, each of which makes them
-// all again from the first. False if there's no such level, `width` by `height` isn't its size, the
-// pitch is under a row of it, or it's a multisampled target or of a file's own format.
+// all again from the first. False if there's no such level, `width` by `height` isn't its size,
+// `pixels` is null, the pitch is under a row of it, or it's a multisampled target or of a file's
+// own format.
 FBE_API bool fbe_texture_write_level(uint64_t texture, int32_t level, int32_t width, int32_t height,
                                      const uint8_t* pixels, int32_t pitch);
 

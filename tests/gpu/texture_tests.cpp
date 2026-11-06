@@ -319,9 +319,16 @@ TEST_CASE("a level that isn't there, of another size, or with a short pitch, is 
     CHECK(!fbe_texture_write_level(texture, 2, 1, 0, pixels.data(), 4));
     CHECK(!fbe_texture_write_level(texture, 1, 2, 1, pixels.data(), 7));
     CHECK(!fbe_texture_write_level(texture, 1, 2, 1, nullptr, 8));
+    CHECK(std::string(fbe_error()) == "there are no pixels to write into level 1");
     CHECK(!fbe_texture_write_level(0, 0, 4, 2, pixels.data(), 16));
     CHECK(fbe::texture::read(texture, 0) == std::vector<std::uint8_t>(32, 0));
     CHECK(fbe::texture::read(texture, 1) == std::vector<std::uint8_t>(8, 0));
+    // A multisampled target is drawn into, its one level too.
+    const std::uint64_t multisampled = fbe_texture_create_target(4, 2, FBE_TEXTURE_RGBA8, 4, false);
+    REQUIRE(multisampled != 0);
+    CHECK(!fbe_texture_write_level(multisampled, 0, 4, 2, pixels.data(), 16));
+    CHECK(std::string(fbe_error()) == "a multisampled target is drawn into, not written");
+    CHECK(fbe_texture_release(multisampled));
     stop_gpu();
 }
 
@@ -652,6 +659,9 @@ TEST_CASE("a file's BC7 is sampled, and nothing else", "[gpu]") {
     CHECK(fbe_texture_pixels(texture, nullptr) == nullptr);
     std::array<std::uint8_t, 16> read{};
     CHECK(!fbe_texture_read(texture, 0, read.data(), 16));
+    const std::array<std::uint8_t, 64> level{};
+    CHECK(!fbe_texture_write_level(texture, 0, 4, 4, level.data(), 16));
+    CHECK(std::string(fbe_error()).starts_with("a texture of a file's own format is only sampled"));
     const std::uint64_t other = make(4, 4, FBE_TEXTURE_RGBA8, false);
     CHECK(!fbe_texture_copy(other, 0, 0, texture, 0, 0, 4, 4));
     CHECK(!fbe_texture_copy(texture, 0, 0, other, 0, 0, 4, 4));

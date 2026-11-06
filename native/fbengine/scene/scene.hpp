@@ -629,8 +629,12 @@ void remove_instances(std::uint32_t entity);
 void copy_instances(std::uint32_t from, std::uint32_t to);
 /// Its clusters, worked out again if they're stale.
 const std::vector<instance_cluster_t>& instance_clusters(instances_t& found);
-/// The box its instances are in, in its space: false for none.
+/// The box its instances are in, in its space, by its clusters, so by its geometry's cull box if it
+/// has one, as drawing and shadows cull them: false for none.
 bool instances_bounds(instances_t& found, vec3_t& min, vec3_t& max);
+/// The box its instances are in, in its space, by its geometry's bounds whatever its cull box, as
+/// Bounds and InView give it: false for none.
+bool instances_own_bounds(instances_t& found, vec3_t& min, vec3_t& max);
 /// Which of its geometry's levels of detail a cluster draws, by the size of the biggest of it where
 /// it's nearest, none for nothing.
 std::uint32_t cluster_lod(const instances_t& found, const instance_cluster_t& cluster,

@@ -299,6 +299,26 @@ bool instances_bounds(instances_t& found, vec3_t& min, vec3_t& max) {
     return true;
 }
 
+bool instances_own_bounds(instances_t& found, vec3_t& min, vec3_t& max) {
+    const scene_t& s = scene();
+    if (found.geometry == none || !s.geometries[found.geometry].has_cull_box) {
+        return instances_bounds(found, min, max);
+    }
+    if (found.items.empty()) {
+        return false;
+    }
+    // Every instance at once, each by its geometry's bounds, not the cull box its clusters take.
+    vec3_t low;
+    vec3_t high;
+    geometry_bounds(found.geometry, low, high);
+    instance_cluster_t all;
+    all.count = static_cast<std::uint32_t>(found.items.size());
+    work_out_cluster(found, all, (low + high) * 0.5F, (high - low) * 0.5F);
+    min = all.low;
+    max = all.high;
+    return true;
+}
+
 } // namespace fbe::scene
 
 using fbe::scene::instances_t;

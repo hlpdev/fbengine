@@ -36,6 +36,7 @@ Import "./map"
 Import "./res" As Res
 Import "./plants"
 Import "./screens"
+Import "./sea"
 Import "./sky"
 Import "./soundscape"
 Import "./walks"
@@ -990,14 +991,20 @@ Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws Grap
     Checks("which a rougher one isn't", island.SeaRoughness() > 0.25)
     island.Waters().SetRoughness(island.Waters().Roughness())
 
-    // An hour in, its foam goes on as it was: from just before to just after, no more of the shore
-    // that's shown changes than in as long half an hour in.
+    // Where each of what drifts in its foam wraps to its start, the foam goes on as it was: from just
+    // before to just after, no more of the shore that's shown changes than in as long where none
+    // wraps. So sea.fb's period and water.slang's can't drift apart.
     camera.SetPosition(Vec3(MAIN_X - 16.0, 4.5, shoreZ + 9.0))
     camera.PointAt(Vec3(MAIN_X + 2.0, 0.0, shoreZ - 1.0))
-    Local hour = Try ChangedOver(island, 3599.99, 3600.01)
-    Local halfHour = Try ChangedOver(island, 1799.99, 1800.01)
+    Local unwrapped = Try ChangedOver(island, 1799.999, 1800.001)
+    For drift In [("coarse froth", FROTH_DRIFT), ("fine froth", FINE_FROTH_DRIFT),
+                  ("streaking", STREAKS_DRIFT)]
+        Local wraps = FROTH_PERIOD / drift.1
+        Local across = Try ChangedOver(island, wraps - 0.001, wraps + 0.001)
+        Checks("where its {drift.0} wraps, at {wraps} s, its foam doesn't jump",
+               across < unwrapped * 2 + 200)
+    End For
     island.Update(0.0)
-    Checks("an hour in, its foam doesn't jump", hour < halfHour * 2 + 200)
 End Function
 
 // How much brighter, of 765, the sea `image` shows from `eye` is where its mirror goes to cloud than

@@ -7817,6 +7817,20 @@ TEST_CASE("an Instances' clusters draw the level their size in the view has", "[
         require(fbe_entity_set_position(made, 0.0F, 0.0F, -390.0F, FBE_SPACE_WORLD));
         CHECK(geometries().empty());
     }
+    SECTION("by its cull box, if it has one, as what's moved by its shader is that big") {
+        group_at(all, -90.0F);
+        require(fbe_instances_set(made, all.data(), 128));
+        CHECK(geometries() == std::vector{ coarse });
+        // Four times its bounds each way: as big in the view as its own level asks, at 90.
+        const fbe_aabb_t bigger{
+            .min = { .x = -4.0F, .y = -4.0F, .z = -4.0F },
+            .max = { .x = 4.0F, .y = 4.0F, .z = 4.0F },
+        };
+        require(fbe_geometry_set_cull_box(fine, &bigger));
+        CHECK(geometries() == std::vector{ fine });
+        require(fbe_geometry_clear_cull_box(fine));
+        CHECK(geometries() == std::vector{ coarse });
+    }
     SECTION("each cluster its own") {
         group_at(all, -10.0F);
         group_at(all, -100.0F);
@@ -11308,14 +11322,31 @@ TEST_CASE("an Instances is culled by its geometry's cull box, as what its shader
     const std::uint64_t made =
         cubes_at(scene.world, material, { instance_at(-30.0F, 0.0F, -10.0F) });
     const std::uint64_t geometry = fbe_instances_geometry(made);
-    SECTION("by its bounds, it's culled") {
+    const fbe_aabb_t moved{
+        .min = { .x = -1.0F, .y = -1.0F, .z = -1.0F },
+        .max = { .x = 31.0F, .y = 1.0F, .z = 1.0F },
+    };
+    SECTION("by its bounds, it's culled, until a box is set after it's drawn") {
         CHECK(near(middle(scene.drawn()), { 0, 0, 255 }));
+        // Its clusters, worked out as it was drawn, are worked out again by the box.
+        require(fbe_geometry_set_cull_box(geometry, &moved));
+        CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
+    }
+    SECTION("its Bounds and InView are by its geometry's bounds, not the box") {
+        room_to_move(geometry);
+        CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
+        fbe_aabb_t own{};
+        require(fbe_geometry_bounds(geometry, &own));
+        fbe_aabb_t bounds{};
+        require(fbe_entity_bounds(made, &bounds));
+        CHECK(bounds.min.x == own.min.x - 30.0F);
+        CHECK(bounds.max.x == own.max.x - 30.0F);
+        CHECK(bounds.min.y == own.min.y);
+        CHECK(bounds.max.z == own.max.z - 10.0F);
+        const auto size = static_cast<float>(frame_size);
+        CHECK(fbe_camera_entity_in_view(scene.camera, size, size, made) == 0);
     }
     SECTION("by a box that takes its move, it's drawn") {
-        const fbe_aabb_t moved{
-            .min = { .x = -1.0F, .y = -1.0F, .z = -1.0F },
-            .max = { .x = 31.0F, .y = 1.0F, .z = 1.0F },
-        };
         require(fbe_geometry_set_cull_box(geometry, &moved));
         CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
         // And by its bounds again once it's cleared.

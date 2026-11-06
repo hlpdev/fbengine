@@ -1650,8 +1650,11 @@ FBE_API bool fbe_texture_write_level(uint64_t texture, int32_t level, int32_t wi
                                      found->width, found->height, level_width, level_height, width,
                                      height));
     }
+    if (pixels == nullptr) {
+        return fbe::fail(std::format("there are no pixels to write into level {}", level));
+    }
     const std::int64_t row = std::int64_t{ width } * fbe::texture::pixel_size(found->format);
-    if (pixels == nullptr || pitch < row) {
+    if (pitch < row) {
         return fbe::fail(std::format("a row of {} pixels is {} bytes, more than the pitch {}",
                                      width, row, pitch));
     }
