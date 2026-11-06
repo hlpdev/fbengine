@@ -1154,12 +1154,16 @@ Function Checked(folder: Path) Throws GraphicsError, IOError
     Checks("blinking, its eyes shut", allDown && pupilsTop <= whitesTop)
 End Function
 
+// What's kept in the assets that's written by hand, not made by the tools: the ground's shader.
+Const WRITTEN: String[] = ["ground.slang"]
+
 // Whether two folders' files are the same: every byte, but for PNGs, whose pixels are, as a PNG's
-// bytes are its zlib's.
+// bytes are its zlib's; what's written by hand is only in what's kept.
 Function Matched(made: Path, kept: Path) Throws IOError
     Local same = True
     Local names: String[] = []
     For entry In Try Dir.Entries(kept)
+        If WRITTEN.Contains(entry.Name()) Then Continue
         names.Add(entry.Name())
     End For
     Local madeNames: String[] = []

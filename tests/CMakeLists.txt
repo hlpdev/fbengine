@@ -684,6 +684,10 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(examples.slack_water.assets_match PROPERTIES RESOURCE_LOCK slack_water
                        FIXTURES_REQUIRED slack_water_made
                        ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen" TIMEOUT 300)
+  # Its ground has a shader of its own, which each of its builds compiles with the pinned slangc.
+  get_property(fbengine_tests DIRECTORY PROPERTY TESTS)
+  list(FILTER fbengine_tests INCLUDE REGEX "^examples\\.slack_water\\.")
+  set_property(TEST ${fbengine_tests} APPEND PROPERTY ENVIRONMENT "FBENGINE_SLANGC=${FBENGINE_SLANGC}")
   foreach(name IN ITEMS sprites_over_a_scene pixels_of_images_and_textures
           textures_by_their_settings)
     add_test(NAME proof.${name}_no_gpu
