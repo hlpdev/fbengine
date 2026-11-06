@@ -251,6 +251,31 @@ def check_line_ends():
     for path in [ROOT / "CMakeLists.txt", *(ROOT / "cmake").glob("*.cmake"), *(ROOT / "tests").glob("CMakeLists.txt")]:
         if b"\r" in path.read_bytes():
             fail(f"{path.relative_to(ROOT)} has a carriage return")
+# Vulkan's entries that are core only from 1.3, which a device of 1.2 has by an extension: what calls
+# them goes through the device device.cpp makes, which has whichever's there.
+DEVICE_ENTRIES = ["vkCmdBeginRendering", "vkCmdEndRendering", "vkCmdPipelineBarrier2"]
+
+
+def direct_entries(root):
+    """Where native code calls one of DEVICE_ENTRIES itself, but device.cpp, which chooses them."""
+    found = []
+    called = re.compile(r"\b(" + "|".join(DEVICE_ENTRIES) + r")(KHR)?\s*\(")
+    for path in sorted((root / "native").rglob("*")):
+        if path.suffix not in (".h", ".hpp", ".c", ".cpp") or path.name == "device.cpp":
+            continue
+        for number, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            code = line.split("//", 1)[0]
+            if called.search(code):
+                found.append(f"{path.relative_to(root).as_posix()}:{number}")
+    return found
+
+
+def check_device_entries():
+    step("the device's entries")
+    for where in direct_entries(ROOT):
+        fail(f"{where} calls Vulkan 1.3's entry itself, not the device's")
+
+
 def check_metal(build):
     step("the shaders' Metal")
     if run([sys.executable, str(ROOT / "tools" / "check_msl.py"), str(build)]) != 0:
@@ -317,6 +342,7 @@ def main():
             check_tests(build, options.only)
         check_bindings()
         check_line_ends()
+        check_device_entries()
         check_metal(build)
         check_format()
         if not options.no_tidy and built:
@@ -337,6 +363,7 @@ def main():
         check_exports()
     check_bindings()
     check_line_ends()
+    check_device_entries()
     check_metal(build)
     check_format()
     if not options.no_tidy and built:

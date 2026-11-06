@@ -139,6 +139,15 @@ Public Final Class Cooker
     ///
     /// It reads only those: a texture of its own, or a global that isn't `static`, which the scene's
     /// pipelines don't bind, throws one of INVALID_DATA.
+    ///
+    /// A full-screen pass, for Camera.AddPass, says `#define FBE_PASS` first and writes
+    /// `float4 pass(float2 uv, float4 color, float depth)`, which gives each pixel of the camera's
+    /// viewport, from `uv`, 0 to 1 across it from its top left, the `color` drawn there so far, in
+    /// linear light after the tonemap and grade, and the `depth` of what's drawn there, how far in
+    /// front of the camera along its view, in meters, or its far for nothing, both colors premultiplied
+    /// by their alpha. It has
+    /// `parameter(index)`, `layer(index, uv)`, of its Material; `colorAt(uv)`, `depthAt(uv)`; and
+    /// `pixelSize()`, in UV.
     @MainThread
     Public Static Method CookShader(from: Path, to: Path) Throws IOError
         Try CookShaderReading(from, to, SlangcNamed())
@@ -166,9 +175,13 @@ Public Final Class Cooker
         End For
         // Slang's errors say the game's file and its lines, not the scratch copy's.
         Local where = from.Text.Replace("\\", "/")
-        Try File.WriteText(scratch.Path / "fbe_game_shader.slang", "#line 1 \"{where}\"\n{text}")
+        // A full-screen pass says so as a shader that moves vertices does.
+        Local pass = SaysPass(text)
+        Try File.WriteText(scratch.Path / (pass ? "fbe_game_pass.slang" : "fbe_game_shader.slang"),
+                           "#line 1 \"{where}\"\n{text}")
         Try File.WriteText(scratch.Path / "fbe_own.slang",
-                           "#define FBE_OWN_SHADER\n#include \"scene.slang\"\n")
+                           pass ? "#include \"pass.slang\"\n"
+                                : "#define FBE_OWN_SHADER\n#include \"scene.slang\"\n")
         Local compiled = scratch.Path / "own.spv"
         Local depfile = scratch.Path / "own.d"
         Local version = ""
@@ -240,8 +253,23 @@ Public Final Class Cooker
         Return forward.Replace(scratch.Text + "\\", "fbengine's ").Trim()
     End Method
 
+    // Whether a shader's text defines FBE_PASS, on a line of its own, not in a comment.
+    Static Method SaysPass(text: String): Bool
+        For line In text.SplitLines()
+            Local said = line.Trim()
+            If said == "#define FBE_PASS" || said.StartsWith("#define FBE_PASS ") ||
+               said.StartsWith("#define FBE_PASS\t")
+                Return True
+            End If
+        End For
+        Return False
+    End Method
+
     // What a shader that doesn't write what the scene's shader calls is missing, by what Slang said.
     Static Method Unwritten(said: String): String
+        If said.Contains("undefined identifier 'pass'")
+            Return "it says FBE_PASS, and has no `float4 pass(float2 uv, float4 color, float depth)`: "
+        End If
         If said.Contains("undefined identifier 'shade'")
             Return "it has no `float4 shade(Surface surface)`: "
         End If

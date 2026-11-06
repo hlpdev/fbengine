@@ -7,14 +7,20 @@
 #include "gpu/graph.hpp"
 #include "gpu/pipeline.hpp"
 #include "gpu/vulkan.hpp"
+#include "render/drawing.hpp"
 #include "render/render.hpp"
+#include "scene/camera.hpp"
 #include "scene/scene.hpp"
+#include "shader/shader.hpp"
+#include "texture/texture.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <span>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace fbe::render {
@@ -70,6 +76,51 @@ struct tonemap_data_t {
     std::array<float, 4> power{};
     std::array<float, 4> bloom_rect{};
 };
+
+/// What shaders/pass.slang's PassLayer is.
+struct pass_layer_t {
+    std::uint32_t texture = 0;
+    std::uint32_t sampler = 0;
+};
+
+/// What shaders/pass.slang's PassData is.
+struct pass_data_t {
+    float width = 0.0F;
+    float height = 0.0F;
+    std::uint32_t nearest = 0;
+    std::uint32_t linear = 0;
+    std::array<float, 4> viewport{};
+    float depth_offset = 0.0F;
+    float depth_scale = 0.0F;
+    std::uint32_t perspective = 0;
+    /// A bit for each of its layers that has a texture.
+    std::uint32_t layers_there = 0;
+    std::array<pass_layer_t, FBE_MATERIAL_LAYERS> layers{};
+    std::array<std::array<float, 4>, FBE_MATERIAL_PARAMETERS> parameters{};
+};
+static_assert(sizeof(pass_data_t) == 240, "a pass reads its data 240 bytes long");
+
+/// What shaders/pass.slang's PassPush is.
+struct pass_push_t {
+    VkDeviceAddress data = 0;
+    std::uint32_t color = 0;
+    std::uint32_t depth = 0;
+};
+
+/// A full-screen pass's pipeline: into `format` of `samples`, over what's in its target if its
+/// camera doesn't clear and it's the last, as the tonemap is.
+VkPipeline pass_pipeline(const gpu::shader_t& shader, VkFormat format,
+                         VkSampleCountFlagBits samples, const scene::camera_t& camera,
+                         bool between = false) {
+    return gpu::pipeline({
+        .shader = &shader,
+        .vertex = "passVertex",
+        .fragment = "passFragment",
+        .color = format,
+        .samples = samples,
+        .blend = between || camera.clears_color ? gpu::blend_t::NONE : gpu::blend_t::PREMULTIPLIED,
+    });
+}
 
 /// A size in texels.
 struct texels_t {
@@ -242,6 +293,141 @@ gpu::resource_t add_bloom(const scene::camera_t& camera, gpu::resource_t image, 
 }
 
 } // namespace
+
+std::vector<game_pass_t> game_passes(const scene::camera_t& camera, VkFormat format,
+                                     VkSampleCountFlagBits samples, VkFormat between,
+                                     bool into_nothing) {
+    std::vector<game_pass_t> ready;
+    for (const std::uint64_t material : camera.passes) {
+        const std::uint64_t has = fbe_material_shader(material);
+        const std::uint32_t code = shaders_own::pass_code_of(has);
+        if (code == 0) {
+            shaders_own::not_a_pass(shaders_own::code_of(has));
+            continue;
+        }
+        const gpu::shader_t* shader = shaders_own::shader_of(code);
+        if (shader == nullptr) {
+            continue;
+        }
+        // Any of them can be last, or between two, as which can be made says.
+        if (pass_pipeline(*shader, format, samples, camera, into_nothing) == VK_NULL_HANDLE ||
+            (camera.passes.size() > 1 && pass_pipeline(*shader, between, VK_SAMPLE_COUNT_1_BIT,
+                                                       camera, true) == VK_NULL_HANDLE)) {
+            shaders_own::refuse(code);
+            continue;
+        }
+        ready.push_back({ .material = material, .shader = shader });
+    }
+    return ready;
+}
+
+bool add_game_passes(const scene::camera_t& camera, std::span<const game_pass_t> passes,
+                     gpu::resource_t source, gpu::resource_t into, VkFormat format,
+                     VkSampleCountFlagBits samples, const picture_t& picture, std::uint64_t target,
+                     const scene::view_t& view, VkRect2D scissor, bool into_nothing) {
+    const std::uint64_t depth_read = texture::depth_read_of(target);
+    const texture::texture_t* drawn = texture::find(target);
+    const texture::texture_t* read = texture::find(depth_read);
+    if (depth_read == 0 || drawn == nullptr || read == nullptr) {
+        return false;
+    }
+    const VkExtent2D size{ .width = picture.target.width, .height = picture.target.height };
+    // Both as they are now, as the graph has a texture it's given: a screen let go of before the
+    // frame's recorded, as a resize does, keeps its images till the frames that drew it are done.
+    if (!gpu::add_pass({
+            .name = "pass depth",
+            .record =
+                [drawn = *drawn, read = *read](VkCommandBuffer commands) {
+                    texture::record_depth_read(commands, drawn, read);
+                },
+        })) {
+        return false;
+    }
+    const scene::mat4_t projection = scene::draw_projection(camera, view);
+    const bool perspective = camera.projection == FBE_PROJECTION_PERSPECTIVE;
+    const std::uint32_t depth_index = texture::index_of(depth_read);
+    gpu::resource_t from = source;
+    for (std::size_t at = 0; at < passes.size(); ++at) {
+        const bool last = at + 1 == passes.size();
+        const gpu::resource_t next = last ? into : gpu::transient_resource(picture.target);
+        if (next == gpu::no_resource) {
+            return false;
+        }
+        VkPipeline pipeline =
+            pass_pipeline(*passes[at].shader, last ? format : picture.format,
+                          last ? samples : VK_SAMPLE_COUNT_1_BIT, camera, !last || into_nothing);
+        if (pipeline == VK_NULL_HANDLE) {
+            return false;
+        }
+        const scene::material_t& material =
+            scene::scene().materials[scene::material_slot(passes[at].material)];
+        pass_data_t data{
+            .width = static_cast<float>(size.width),
+            .height = static_cast<float>(size.height),
+            .nearest = gpu::sampler_2d_index(FBE_TEXTURE_NEAREST, false),
+            .linear = gpu::sampler_2d_index(FBE_TEXTURE_LINEAR, false),
+            .viewport = { static_cast<float>(scissor.offset.x), static_cast<float>(scissor.offset.y),
+                          static_cast<float>(scissor.extent.width),
+                          static_cast<float>(scissor.extent.height), },
+            .depth_offset = projection.at(2, 2),
+            .depth_scale = projection.at(3, 2),
+            .perspective = perspective ? 1U : 0U,
+            .parameters = material.parameters,
+        };
+        std::vector<std::pair<gpu::resource_t, gpu::use_t>> uses{ { from, gpu::use_t::SAMPLED } };
+        // Each at its own index, as layer(index, uv) reads it.
+        for (std::uint32_t index = 0; index < material.layers.size(); ++index) {
+            const scene::layer_t& layer = material.layers.at(index);
+            const texture::texture_t* image =
+                layer.texture != target ? texture::find(layer.texture) : nullptr;
+            if (image == nullptr) {
+                continue;
+            }
+            data.layers.at(index) = {
+                .texture = texture::index_of(layer.texture),
+                .sampler = texture::sampler_of(*image),
+            };
+            data.layers_there |= 1U << index;
+            const gpu::resource_t used = gpu::texture_resource(layer.texture);
+            if (used == gpu::no_resource) {
+                return false;
+            }
+            if (std::ranges::find(uses, used, [](const auto& each) { return each.first; }) ==
+                uses.end()) {
+                uses.emplace_back(used, gpu::use_t::SAMPLED);
+            }
+        }
+        bool no_room = false;
+        const std::array one{ data };
+        const VkDeviceAddress address = in_ring<pass_data_t>(one, no_room).address;
+        if (no_room) {
+            return false;
+        }
+        if (!gpu::add_pass({
+                .name = "game pass",
+                .colors = { {
+                    .target = next,
+                    .clear = !last || into_nothing,
+                    .stored = camera.stored_values,
+                }, },
+                .uses = std::move(uses),
+                .record =
+                    [address, from, depth_index, pipeline, scissor](VkCommandBuffer commands) {
+                        const pass_push_t push{
+                            .data = address,
+                            .color = gpu::resource_index(from),
+                            .depth = depth_index,
+                        };
+                        vkCmdSetScissor(commands, 0, 1, &scissor);
+                        record_triangle(commands, pipeline, push);
+                    },
+            })) {
+            return false;
+        }
+        from = next;
+    }
+    return true;
+}
 
 bool add_post_passes(const scene::camera_t& camera, gpu::resource_t image, gpu::resource_t into,
                      VkExtent2D size, VkFormat format, VkSampleCountFlagBits samples,

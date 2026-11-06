@@ -70,21 +70,40 @@ constexpr std::array<entry_t, 10> entries{
     },
 };
 
+/// What a game's full-screen pass runs by, in place of those.
+constexpr std::array<entry_t, 2> pass_entries{
+    {
+        { .name = "passVertex", .model = model_vertex },
+        { .name = "passFragment", .model = model_fragment },
+    },
+};
+
 struct kept_code_t {
     std::vector<std::uint32_t> words;
     std::string name;
     gpu::shader_t shader;
     bool refused = false;
+    /// Whether it's a full-screen pass's, not a material's.
+    bool pass = false;
+    /// Whether a camera's been told it isn't a pass.
+    bool said_not_a_pass = false;
 };
 
 struct shader_t {
     std::uint32_t references = 0;
     std::uint32_t code = 0;
+    /// The name it was made with, its own, as the same bytes are one code by whichever name came
+    /// first.
+    std::string path;
 };
+
+/// How many times refuse and not_a_pass have said something.
+std::uint32_t said = 0;
 
 struct shaders_t {
     handle_slots_t slots{ SHADER_KIND };
-    std::vector<shader_t> kept;
+    /// Where none moves as more are made, so the text fbe_shader_path gives of one stays.
+    std::deque<shader_t> kept;
     std::deque<kept_code_t> codes;
 };
 
@@ -190,7 +209,9 @@ std::optional<std::vector<std::uint32_t>> words_of(const std::uint8_t* bytes, st
         fail("the cooked shader's SPIR-V isn't SPIR-V");
         return std::nullopt;
     }
-    for (const entry_t& entry : entries) {
+    const bool pass = has_entry(words, pass_entries[1].name, pass_entries[1].model);
+    for (const entry_t& entry : std::span<const entry_t>(
+             pass ? std::span<const entry_t>(pass_entries) : std::span<const entry_t>(entries))) {
         if (!has_entry(words, entry.name, entry.model)) {
             fail(std::format("the cooked shader's SPIR-V hasn't the scene's {}: cook it again",
                              entry.name));
@@ -223,17 +244,28 @@ std::uint32_t keep(std::vector<std::uint32_t> words, const char* name) {
     kept.words = std::move(words);
     kept.name = std::move(named);
     kept.shader = { .name = kept.name, .code = kept.words };
+    kept.pass = has_entry(kept.words, pass_entries[1].name, pass_entries[1].model);
     return static_cast<std::uint32_t>(shaders.codes.size());
 }
 
-} // namespace
-
-std::uint32_t code_of(std::uint64_t shader) {
+std::uint32_t any_code_of(std::uint64_t shader) {
     if (shader == 0) {
         return 0;
     }
     const auto slot = all().slots.find(shader);
     return slot ? all().kept[*slot].code : 0;
+}
+
+} // namespace
+
+std::uint32_t code_of(std::uint64_t shader) {
+    const std::uint32_t code = any_code_of(shader);
+    return code != 0 && !all().codes[code - 1].pass ? code : 0;
+}
+
+std::uint32_t pass_code_of(std::uint64_t shader) {
+    const std::uint32_t code = any_code_of(shader);
+    return code != 0 && all().codes[code - 1].pass ? code : 0;
 }
 
 const gpu::shader_t* shader_of(std::uint32_t code) {
@@ -242,15 +274,42 @@ const gpu::shader_t* shader_of(std::uint32_t code) {
                : nullptr;
 }
 
+std::string refusal(std::uint32_t code) {
+    if (code == 0 || code > all().codes.size()) {
+        return "";
+    }
+    const kept_code_t& kept = all().codes[code - 1];
+    return kept.pass
+               ? std::format("no pipeline could be made of {}, so the camera's pass is left out",
+                             kept.name)
+               : std::format("no pipeline could be made of {}, so what draws with it draws as "
+                             "a material with no shader of its own does",
+                             kept.name);
+}
+
 void refuse(std::uint32_t code) {
     if (code != 0 && code <= all().codes.size() && !all().codes[code - 1].refused) {
         all().codes[code - 1].refused = true;
+        ++said;
+        // NOLINTNEXTLINE(modernize-use-std-print): that allocates, and needs MinGW's libstdc++exp.
+        std::fprintf(stderr, "fbengine: %s: %s\n", refusal(code).c_str(), fbe_error());
+    }
+}
+
+void not_a_pass(std::uint32_t code) {
+    if (code != 0 && code <= all().codes.size() && !all().codes[code - 1].said_not_a_pass) {
+        all().codes[code - 1].said_not_a_pass = true;
+        ++said;
         // NOLINTNEXTLINE(modernize-use-std-print): that allocates, and needs MinGW's libstdc++exp.
         std::fprintf(stderr,
-                     "fbengine: no pipeline could be made of %s, so what draws with it draws as a "
-                     "material with no shader of its own does: %s\n",
-                     all().codes[code - 1].name.c_str(), fbe_error());
+                     "fbengine: %s is a camera's pass, and doesn't say FBE_PASS now, so it's left "
+                     "out\n",
+                     all().codes[code - 1].name.c_str());
     }
+}
+
+std::uint32_t times_said() {
+    return said;
 }
 
 void release(std::uint64_t shader) {
@@ -296,13 +355,11 @@ FBE_API uint64_t fbe_shader_create(const uint8_t* bytes, int64_t size, const cha
         return 0;
     }
     own::shaders_t& shaders = own::all();
-    // Room first, as a slot made needs its place.
-    shaders.kept.reserve(shaders.kept.size() + 1);
     const std::uint32_t slot = shaders.slots.make();
     if (slot == shaders.kept.size()) {
         shaders.kept.emplace_back();
     }
-    shaders.kept[slot] = { .references = 1, .code = code };
+    shaders.kept[slot] = { .references = 1, .code = code, .path = name != nullptr ? name : "" };
     return shaders.slots.handle(slot);
 } catch (const std::bad_alloc&) {
     fail("out of memory");
@@ -326,6 +383,15 @@ FBE_API bool fbe_shader_release(uint64_t shader) {
     return true;
 }
 
+FBE_API bool fbe_shader_is_pass(uint64_t shader) {
+    return fbe::shaders_own::pass_code_of(shader) != 0;
+}
+
+FBE_API const char* fbe_shader_path(uint64_t shader) {
+    const std::uint32_t slot = own::slot_of(shader);
+    return slot != none ? own::all().kept[slot].path.c_str() : "";
+}
+
 FBE_API bool fbe_shader_alive(uint64_t shader) {
     return own::all().slots.find(shader).has_value();
 }
@@ -345,6 +411,7 @@ FBE_API bool fbe_shader_replace(uint64_t shader, const uint8_t* bytes, int64_t s
         return false;
     }
     own::all().kept[slot].code = code;
+    own::all().kept[slot].path = name != nullptr ? name : "";
     return true;
 } catch (const std::bad_alloc&) {
     return fail("out of memory");

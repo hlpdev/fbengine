@@ -8,6 +8,7 @@
 #include "morph/morph.hpp"
 #include "scene/math.hpp"
 #include "scene/scene.hpp"
+#include "shader/shader.hpp"
 
 #include <algorithm>
 #include <array>
@@ -177,6 +178,9 @@ void remove_camera(std::uint32_t entity) {
     scene_t& s = scene();
     const std::uint32_t index = s.entities.component[entity];
     release_texture(s.cameras[index].target);
+    for (const std::uint64_t pass : s.cameras[index].passes) {
+        fbe_material_release(pass);
+    }
     if (index != s.cameras.size() - 1) {
         s.cameras[index] = s.cameras.back();
         s.entities.component[s.cameras[index].entity] = index;
@@ -541,6 +545,52 @@ FBE_API bool fbe_camera_draw_projection(uint64_t camera, float target_width, flo
     const fbe::scene::mat4_t m = fbe::scene::draw_projection(*found, view);
     std::ranges::copy(m.m, matrix->m);
     return true;
+}
+
+FBE_API bool fbe_camera_add_pass(uint64_t camera, uint64_t material) {
+    camera_t* found = camera_of(camera);
+    if (found == nullptr) {
+        return false;
+    }
+    if (std::ranges::find(found->passes, material) != found->passes.end()) {
+        return fbe::fail("a camera's pass is added once");
+    }
+    if (fbe::shaders_own::pass_code_of(fbe_material_shader(material)) == 0) {
+        return fbe::fail("a camera's pass is a material with a pass's shader, one that says "
+                         "`#define FBE_PASS`");
+    }
+    found->passes.reserve(found->passes.size() + 1);
+    if (!fbe_material_retain(material)) {
+        return false;
+    }
+    found->passes.push_back(material);
+    return true;
+}
+
+FBE_API bool fbe_camera_remove_pass(uint64_t camera, uint64_t material) {
+    camera_t* found = camera_of(camera);
+    if (found == nullptr) {
+        return false;
+    }
+    const auto at = std::ranges::find(found->passes, material);
+    if (at == found->passes.end()) {
+        return fbe::fail("that isn't one of the camera's passes");
+    }
+    found->passes.erase(at);
+    fbe_material_release(material);
+    return true;
+}
+
+FBE_API int32_t fbe_camera_pass_count(uint64_t camera) {
+    const camera_t* found = camera_of(camera);
+    return found != nullptr ? static_cast<std::int32_t>(found->passes.size()) : -1;
+}
+
+FBE_API uint64_t fbe_camera_pass(uint64_t camera, int32_t index) {
+    const camera_t* found = camera_of(camera);
+    return found != nullptr && index >= 0 && std::cmp_less(index, found->passes.size())
+               ? found->passes[static_cast<std::size_t>(index)]
+               : 0;
 }
 
 FBE_API bool fbe_camera_projection_matrix(uint64_t camera, float target_width, float target_height,

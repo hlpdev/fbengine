@@ -92,7 +92,7 @@ fbengine_add_shaders(TARGETS fbengine_gpu_tests NAMESPACE fbe::test_shaders
                      SHADERS gpu/shaders/triangle.slang gpu/shaders/textured.slang
                              gpu/shaders/shape.slang gpu/shaders/points.slang
                              gpu/shaders/spheres.slang gpu/shaders/poles.slang
-                             gpu/shaders/game_shader.slang
+                             gpu/shaders/game_shader.slang gpu/shaders/game_pass.slang
                      INCLUDES gpu/shaders/own)
 catch_discover_tests(fbengine_gpu_tests TEST_PREFIX "gpu." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}"
@@ -152,6 +152,18 @@ if(FBENGINE_FB_TESTS)
                            "FBENGINE_FAKE_SLANGC=$<TARGET_FILE:fbengine_fake_slangc>;FBENGINE_WRONG_SLANGC=$<TARGET_FILE:fbengine_wrong_slangc>;FBENGINE_FAKE_SLANGC_LOG=${CMAKE_CURRENT_BINARY_DIR}/fake_slangc.log;FBENGINE_FAKE_SLANGC_SPV=${CMAKE_CURRENT_BINARY_DIR}/test_shaders/game_shader.spv;FBENGINE_SLANGC=${FBENGINE_SLANGC};SDL_VIDEO_DRIVER=offscreen;FBENGINE_TEST_FONTS=${harfbuzz_SOURCE_DIR}/test/api/fonts;FBENGINE_OWN_TEST_FONTS=${CMAKE_CURRENT_SOURCE_DIR}/fonts;FBENGINE_PACKAGES=${PROJECT_SOURCE_DIR}/packages")
     endif()
   endforeach()
+  # A pass and a material's shader cooked as a game's are, at test time, so they're always this
+  # build's, for the editor's tests, which can't cook, as it doesn't depend on fbengine_tools.
+  set(fbengine_cooked_shaders "${CMAKE_CURRENT_BINARY_DIR}/cooked_shaders")
+  add_test(NAME tools.cooked_shaders
+           COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/cooked_shaders"
+                   -- "${CMAKE_CURRENT_SOURCE_DIR}/cooked_shaders" "${fbengine_cooked_shaders}")
+  set_tests_properties(tools.cooked_shaders PROPERTIES FIXTURES_SETUP cooked_shaders TIMEOUT 300
+                       ENVIRONMENT "FBENGINE_SLANGC=${FBENGINE_SLANGC};FBENGINE_PACKAGES=${PROJECT_SOURCE_DIR}/packages"
+                       PASS_REGULAR_EXPRESSION "\ncooked 2 shaders\r?\n$")
+  set_tests_properties(fbengine_editor.package PROPERTIES FIXTURES_REQUIRED cooked_shaders)
+  set_property(TEST fbengine_editor.package APPEND PROPERTY ENVIRONMENT
+               "FBENGINE_COOKED_SHADERS=${fbengine_cooked_shaders}")
 
   # A program that ends with the GPU going, each way it can, and has to end: Windows' ending a process
   # with it going seems to have waited for good on CI. An end of its own stops the GPU first, and says
@@ -953,9 +965,9 @@ if(FBENGINE_FB_TESTS)
                            "out of the fog: [(]255, 255, 255, 255[)]"
                            "per vertex, range over distance, its middle: [(]113, 113, 113, 255[)]"
                            "and its corner: [(]113, 113, 113, 255[)]"
-                           "within its range: [(]240, 240, 240, 255[)]"
+                           "within its range: [(]255, 255, 255, 255[)]"
                            "the ambient light: [(]128, 128, 128, 255[)]"
-                           "nine lights, eight lighting: [(]192, 192, 192, 255[)]"
+                           "nine lights, eight lighting: [(]158, 158, 158, 255[)]"
                            "forced alpha: [(]188, 188, 188, 255[)]"
                            "AUTO without a texture's alpha OPAQUE"
                            "so opaque: [(]255, 255, 255, 255[)]"
@@ -1385,6 +1397,7 @@ if(FBENGINE_FB_TESTS)
       "lit-by-freed=LitBy on a World that was freed"
       "map-as-color=SetMap on a Material: a material's metal-rough, normal, and occlusion maps are RGBA8_LINEAR"
       "tangent-w=SetTangents on a Geometry: a tangent's w is 1 or -1, not 0.25"
+      "remove-pass-none=RemovePass on a Camera: that isn't one of the camera's passes"
       "layer-uv-zero=SetLayerUv on a Material: a layer's UV scale is finite and not 0, not \\(0, 1\\)"
       "layer-texture-out-of-range=SetTexture on a Material: a material's layers are 0 to 7"
       "joints-wrong-count=SetJoints on a Geometry: a surface of 24 vertices has as many joints, or none, not 1"

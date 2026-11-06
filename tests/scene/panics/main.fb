@@ -85,6 +85,8 @@ Select arguments[0]
     Case "render-bad-tween"
         Camera()
         RenderWorld(2)
+    Case "remove-pass-none"
+        Camera().RemovePass(Material())
     Case "layer-uv-zero"
         Material().SetLayerUv(0, UvTurn(Vec2(0, 1), 0, Vec2(0, 0)))
     Case "layer-texture-out-of-range"

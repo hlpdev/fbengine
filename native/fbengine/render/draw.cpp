@@ -909,25 +909,38 @@ bool draw_camera(std::uint32_t slot, float tween) {
     const VkFormat drawn_format = camera.stored_values && found->stored_view != VK_NULL_HANDLE
                                       ? VK_FORMAT_R8G8B8A8_UNORM
                                       : target_format;
-    // FXAA reads what's done, so it goes through an image of its own, as near the target as there
-    // is.
-    const bool srgb_target =
-        drawn_format == VK_FORMAT_R8G8B8A8_SRGB || drawn_format == VK_FORMAT_B8G8R8A8_SRGB;
-    const bool float_target = target_format == VK_FORMAT_R16G16B16A16_SFLOAT;
-    std::int32_t picture_format = srgb_target ? FBE_TEXTURE_RGBA8 : FBE_TEXTURE_RGBA8_LINEAR;
-    VkFormat picture_vk_format = srgb_target ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
-    if (float_target) {
-        picture_format = FBE_TEXTURE_RGBA16F;
-        picture_vk_format = VK_FORMAT_R16G16B16A16_SFLOAT;
-    }
-    const bool aside = camera.hdr || camera.fxaa;
-    VkFormat format = drawn_format;
-    if (aside) {
-        format = camera.hdr ? VK_FORMAT_R16G16B16A16_SFLOAT : picture_vk_format;
-    }
     const VkSampleCountFlagBits samples = found->samples;
     const std::uint32_t target_width = found->width;
     const std::uint32_t target_height = found->height;
+    // A game's passes and FXAA read what's done, so it goes through images of their own, as near
+    // the target as there are.
+    const bool srgb_target =
+        drawn_format == VK_FORMAT_R8G8B8A8_SRGB || drawn_format == VK_FORMAT_B8G8R8A8_SRGB;
+    const bool float_target = target_format == VK_FORMAT_R16G16B16A16_SFLOAT;
+    picture_t picture{
+        .target = {
+            .width = target_width,
+            .height = target_height,
+            .format = srgb_target ? FBE_TEXTURE_RGBA8 : FBE_TEXTURE_RGBA8_LINEAR,
+        },
+        .format = srgb_target ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM,
+    };
+    if (float_target) {
+        picture.target.format = FBE_TEXTURE_RGBA16F;
+        picture.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    }
+    // The last of a game's passes goes into the target, or what FXAA reads.
+    const std::vector<game_pass_t> passes =
+        camera.passes.empty() ? std::vector<game_pass_t>{}
+                              : game_passes(camera, camera.fxaa ? picture.format : drawn_format,
+                                            camera.fxaa ? VK_SAMPLE_COUNT_1_BIT : samples,
+                                            picture.format, camera.fxaa);
+    const bool read_after = !passes.empty() || camera.fxaa;
+    const bool aside = camera.hdr || read_after;
+    VkFormat format = drawn_format;
+    if (aside) {
+        format = camera.hdr ? VK_FORMAT_R16G16B16A16_SFLOAT : picture.format;
+    }
     scene::view_t view;
     bool shows = false;
     std::uint32_t own = none;
@@ -1041,7 +1054,7 @@ bool draw_camera(std::uint32_t slot, float tween) {
                        pass->scissor.extent.height == target_height;
     const std::array<float, 4> clear_rgba = cleared_with(camera);
     // An HDR image is all the camera's, so all of it's cleared: to nothing, if what's in its target
-    // shows through.
+    // shows through; and so with what's read after it.
     pass->clear_color = camera.clears_color && !whole && !aside;
     pass->clear_depth = camera.clears_depth && !whole;
     pass->clear_rgba = clear_rgba;
@@ -1078,10 +1091,19 @@ bool draw_camera(std::uint32_t slot, float tween) {
     const gpu::transient_t image_target{
         .width = target_width,
         .height = target_height,
-        .format = camera.hdr ? FBE_TEXTURE_RGBA16F : picture_format,
+        .format = camera.hdr ? FBE_TEXTURE_RGBA16F : picture.target.format,
         .samples = static_cast<std::uint32_t>(samples),
     };
     if (aside && !gpu::reserve_transient(image_target)) {
+        return false;
+    }
+    // What's read and what's written of them at once: what the camera's done, by the tonemap or
+    // being drawn there, and each that follows it.
+    const std::size_t pictures = (camera.hdr || samples == VK_SAMPLE_COUNT_1_BIT ? 1U : 0U) +
+                                 (passes.empty() ? 0U : passes.size() - 1U) +
+                                 (!passes.empty() && camera.fxaa ? 1U : 0U);
+    if (read_after && pictures > 0 &&
+        !gpu::reserve_transient(picture.target, pictures > 1 ? 2U : 1U)) {
         return false;
     }
     const gpu::resource_t image = aside ? gpu::transient_resource(image_target) : into;
@@ -1104,31 +1126,37 @@ bool draw_camera(std::uint32_t slot, float tween) {
     if (!drawn || !aside) {
         return drawn;
     }
-    if (!camera.hdr) {
-        return add_fxaa(camera, image, into, full_size, drawn_format, samples, pass->scissor);
+    gpu::resource_t done = image;
+    if (camera.hdr) {
+        const gpu::resource_t resolved =
+            temporal ? add_resolve(*history, camera, view, image, prepass, *pass) : image;
+        if (resolved == gpu::no_resource) {
+            return false;
+        }
+        if (!read_after) {
+            return add_post_passes(camera, resolved, into, full_size, target_format, samples,
+                                   pass->scissor);
+        }
+        done = gpu::transient_resource(picture.target);
+        if (done == gpu::no_resource ||
+            !add_post_passes(camera, resolved, done, full_size, picture.format,
+                             VK_SAMPLE_COUNT_1_BIT, pass->scissor, true)) {
+            return false;
+        }
     }
-    const gpu::resource_t resolved =
-        temporal ? add_resolve(*history, camera, view, image, prepass, *pass) : image;
-    if (resolved == gpu::no_resource) {
-        return false;
+    if (!passes.empty()) {
+        const gpu::resource_t after = camera.fxaa ? gpu::transient_resource(picture.target) : into;
+        if (after == gpu::no_resource ||
+            !add_game_passes(camera, passes, done, after,
+                             camera.fxaa ? picture.format : drawn_format,
+                             camera.fxaa ? VK_SAMPLE_COUNT_1_BIT : samples, picture, target, view,
+                             pass->scissor, camera.fxaa)) {
+            return false;
+        }
+        done = after;
     }
-    if (!camera.fxaa) {
-        return add_post_passes(camera, resolved, into, full_size, target_format, samples,
-                               pass->scissor);
-    }
-    const gpu::transient_t picture_target{
-        .width = target_width,
-        .height = target_height,
-        .format = picture_format,
-    };
-    if (!gpu::reserve_transient(picture_target)) {
-        return false;
-    }
-    const gpu::resource_t picture = gpu::transient_resource(picture_target);
-    return picture != gpu::no_resource &&
-           add_post_passes(camera, resolved, picture, full_size, picture_vk_format,
-                           VK_SAMPLE_COUNT_1_BIT, pass->scissor, true) &&
-           add_fxaa(camera, picture, into, full_size, target_format, samples, pass->scissor);
+    return !camera.fxaa ||
+           add_fxaa(camera, done, into, full_size, drawn_format, samples, pass->scissor);
 }
 
 } // namespace fbe::render

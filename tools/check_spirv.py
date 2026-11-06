@@ -224,9 +224,11 @@ def main():
     if not check_itself():
         return 1
     build = pathlib.Path(sys.argv[1])
-    # And a game's shader as CookShader compiles one, which the tests build, as check_msl.py reads it.
-    shaders = sorted((build / "native" / "fbengine" / "engine_shaders").glob("*.spv")) + sorted(
-        (build / "tests").rglob("game_shader.spv"))
+    # And a game's shader and pass as CookShader compiles them, which the tests build, as check_msl.py
+    # reads them.
+    shaders = sorted((build / "native" / "fbengine" / "engine_shaders").glob("*.spv"))
+    shaders += sorted((build / "tests").rglob("game_shader.spv"))
+    shaders += sorted((build / "tests").rglob("game_pass.spv"))
     if not shaders:
         print(f"no shaders built in {sys.argv[1]}")
         return 1

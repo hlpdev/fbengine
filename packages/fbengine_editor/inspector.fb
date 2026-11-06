@@ -930,6 +930,7 @@ Public Final Class SceneInspector Extends Widget
                                  Set<String>())
             AddMetalRough(materials)
             AddTextures(materials)
+            AddShaders(materials)
         End If
         AddComponents()
     End Method
@@ -1128,6 +1129,7 @@ Public Final Class SceneInspector Extends Widget
             AddSection<Camera>("Camera", cameras, Function(camera: Camera) => there(camera), seen)
             AddRanges(cameras)
             AddPicture(cameras)
+            AddPasses(cameras)
         End If
         Local meshes = EachIs<Mesh>(entities)
         If meshes != Null Then AddSection<Mesh>("Mesh", meshes, Function(mesh: Mesh) => there(mesh),
@@ -1370,6 +1372,27 @@ Public Final Class SceneInspector Extends Widget
                 Return "{texture.Path() ?? "That"} is stored as a color, and a {Spaced(title)}'s numbers: its import settings can say it isn't sRGB"
             End Function))
         End For
+    End Method
+
+    // A camera's full-screen passes, by their shaders' files, in the order they run, for one camera,
+    // as code adds them.
+    Method AddPasses(cameras: Camera[])
+        If cameras.Count != 1 || cameras[0].Freed() Then Return
+        Local passes = cameras[0].Passes()
+        If passes.Count == 0 Then Return
+        Local named = ""
+        For pass In passes
+            If named != "" Then named += ", "
+            named += pass.Shader()?.Path() ?? "a shader from no file"
+        End For
+        Added(NoteRow("Passes", named))
+    End Method
+
+    // The shader of its own a material draws with, by its file, for one material.
+    Method AddShaders(materials: Material[])
+        If materials.Count != 1 || materials[0].Freed() Then Return
+        Local shader = materials[0].Shader()
+        If shader != Null Then Added(NoteRow("Shader", shader.Path() ?? "a shader from no file"))
     End Method
 
     // What an HDR camera's bloom and color grade are, each a number or a vector, set together.

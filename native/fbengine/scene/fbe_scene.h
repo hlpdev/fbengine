@@ -561,6 +561,15 @@ FBE_API float fbe_camera_gamma(uint64_t camera);
 // firefly, counts for about as much as they do, and doesn't flicker. A viewport under 16 pixels on
 // its short side has none. Each is finite.
 FBE_API bool fbe_camera_set_bloom(uint64_t camera, float intensity, float threshold);
+// A camera's full-screen passes, in the order they were added, after its tonemap and grade, or for
+// a camera that isn't HDR, after what it draws. Each is a material, which it holds, whose shader is
+// a pass's, and whose parameters and layers are what that reads; added twice, or with another
+// shader, is false. A pass no pipeline can be made of says so once, on the error stream, and is
+// left out. With none, a camera does nothing it wouldn't.
+FBE_API bool fbe_camera_add_pass(uint64_t camera, uint64_t material);
+FBE_API bool fbe_camera_remove_pass(uint64_t camera, uint64_t material);
+FBE_API int32_t fbe_camera_pass_count(uint64_t camera);
+FBE_API uint64_t fbe_camera_pass(uint64_t camera, int32_t index);
 FBE_API float fbe_camera_bloom_intensity(uint64_t camera);
 FBE_API float fbe_camera_bloom_threshold(uint64_t camera);
 // An HDR camera's color grade, after its tonemap and before its gamma, as a color decision list has

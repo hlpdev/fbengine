@@ -405,9 +405,9 @@ float3 whole(float3 normal)
 }
 
 // A light at a place: the way to it, and the light that reaches it. Per pixel, as glTF's
-// KHR_lights_punctual has it, which ends at its range, as clusters need; per vertex, as
-// fixed-function hardware's did, whole within its range and falling as range over distance past it,
-// with no end, in encoded values.
+// KHR_lights_punctual has it, which ends at its range, as clusters need; per vertex, as DirectX 7's
+// fixed function did with Blitz's attenuation of 1 / range, range over distance, with no end and
+// past 1 within it, in encoded values: only what the lights come to is clamped.
 void lightAt(Light light, float3 place, bool perVertex, out float3 way, out float3 color)
 {
     float falling = 1.0;
@@ -423,7 +423,7 @@ void lightAt(Light light, float3 place, bool perVertex, out float3 way, out floa
         way = apart > 0.0 ? to / apart : float3(0.0, 0.0, 1.0);
         if (perVertex)
         {
-            falling = min(light.range / max(apart, 0.0001), 1.0);
+            falling = light.range / max(apart, 0.0001);
         }
         else
         {
@@ -656,7 +656,8 @@ Corner drawnInstanceCorner(uint index, uint instance)
     const float3 c = float3(one.rows[0].z, one.rows[1].z, one.rows[2].z);
     const float3 x = cross(b, c);
     const float3 turned = x * given.x + cross(c, a) * given.y + cross(a, b) * given.z;
-    const float3 normal = whole(dot(a, x) < 0.0 ? -turned : turned);
+    const bool mirrors = dot(a, x) < 0.0;
+    const float3 normal = whole(mirrors ? -turned : turned);
     const float4 color = float4(vertex.color[0], vertex.color[1], vertex.color[2], vertex.color[3]) *
                          one.color;
     float4 tangent = float4(0.0, 0.0, 0.0, 0.0);
@@ -666,7 +667,7 @@ Corner drawnInstanceCorner(uint index, uint instance)
         const Tangent stored = tangentAt(draw.tangents, index);
         const float4 along = float4(stored.xyzw[0], stored.xyzw[1], stored.xyzw[2], 0.0);
         tangent = float4(dot(one.rows[0], along), dot(one.rows[1], along), dot(one.rows[2], along),
-                         stored.xyzw[3] * (dot(a, x) < 0.0 ? -1.0 : 1.0));
+                         stored.xyzw[3] * (mirrors ? -1.0 : 1.0));
     }
     return litCorner(camera, draw, push.draw, position, normal, vertex, color, tangent);
 }

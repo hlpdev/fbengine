@@ -552,11 +552,12 @@ bool make(std::uint32_t slot, const spec_t& spec) {
                           flag<VkImageAspectFlags>(VK_IMAGE_ASPECT_COLOR_BIT), texture.msaa,
                           texture.msaa_memory, texture.msaa_view,
                           stores ? &texture.stored_msaa_view : nullptr)) ||
-        (spec.depth && !make_attachment(texture, fbe::texture::depth_format,
-                                        attached | flag<VkImageUsageFlags>(
-                                                       VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT),
-                                        flag<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT),
-                                        texture.depth, texture.depth_memory, texture.depth_view))) {
+        (spec.depth &&
+         !make_attachment(texture, fbe::texture::depth_format,
+                          attached | flag<VkImageUsageFlags>(VK_IMAGE_USAGE_TRANSFER_SRC_BIT) |
+                              flag<VkImageUsageFlags>(VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT),
+                          flag<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT), texture.depth,
+                          texture.depth_memory, texture.depth_view))) {
         destroy(texture);
         return false;
     }
@@ -1091,6 +1092,131 @@ std::uint64_t create_engine_target(std::uint32_t width, std::uint32_t height, st
     });
 }
 
+std::uint64_t depth_read_of(std::uint64_t target) {
+    texture_t* found = find(target);
+    if (found == nullptr) {
+        return 0;
+    }
+    if (found->depth_read != 0 && find(found->depth_read) != nullptr) {
+        return found->depth_read;
+    }
+    const std::uint32_t width = found->width;
+    const std::uint32_t height = found->height;
+    const std::uint32_t slot = take_slot();
+    if (slot == UINT32_MAX) {
+        return 0;
+    }
+    // taking a slot can move the pool.
+    found = find(target);
+    texture_t& made = textures[slot];
+    made = {
+        .format = FBE_TEXTURE_FROM_FILE,
+        .vk_format = depth_format,
+        .width = width,
+        .height = height,
+        .filter = FBE_TEXTURE_NEAREST,
+        .wrap_u = FBE_TEXTURE_CLAMP,
+        .wrap_v = FBE_TEXTURE_CLAMP,
+        .references = 1,
+        .engine = true,
+    };
+    const auto usage = flag<VkImageUsageFlags>(VK_IMAGE_USAGE_SAMPLED_BIT) |
+                       flag<VkImageUsageFlags>(VK_IMAGE_USAGE_TRANSFER_DST_BIT) |
+                       flag<VkImageUsageFlags>(VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
+    if (!make_attachment(made, depth_format, usage,
+                         flag<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT), made.image,
+                         made.memory, made.view)) {
+        destroy(made);
+        free_slots.push_back(slot);
+        return 0;
+    }
+    fbe::gpu::barrier(fbe::gpu::upload_commands(),
+                      depth_barrier(made.image, VK_IMAGE_LAYOUT_UNDEFINED,
+                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, transfer, 0));
+    fbe::gpu::write_texture(slot, made.view);
+    live[slot] = true;
+    found->depth_read = handle_of(slot);
+    return found->depth_read;
+}
+
+void record_depth_read(VkCommandBuffer commands, const texture_t& target,
+                       const texture_t& depth_read) {
+    const texture_t* read = &depth_read;
+    const auto tests = flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT) |
+                       flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT);
+    const auto written = flag<VkAccessFlags2>(VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+    const auto all = flag<VkAccessFlags2>(VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT) | written;
+    const auto shaders = flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
+    const auto sampled = flag<VkAccessFlags2>(VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    const auto aspect = flag<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT);
+    const auto moved = [&](VkImage image, VkImageLayout from, VkImageLayout to,
+                           VkPipelineStageFlags2 before_stages, VkAccessFlags2 before,
+                           VkPipelineStageFlags2 after_stages, VkAccessFlags2 after) {
+        VkImageMemoryBarrier2 barrier =
+            fbe::gpu::color_transition(image, from, to, before_stages, before, after_stages, after);
+        barrier.subresourceRange.aspectMask = aspect;
+        fbe::gpu::barrier(commands, barrier);
+    };
+    if (target.samples == VK_SAMPLE_COUNT_1_BIT) {
+        moved(target.depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+              VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, tests, written, transfer,
+              flag<VkAccessFlags2>(VK_ACCESS_2_TRANSFER_READ_BIT));
+        moved(read->image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, shaders,
+              0, transfer, transfer_write);
+        const VkImageSubresourceLayers layers{
+            .aspectMask = aspect,
+            .layerCount = 1,
+        };
+        const VkImageCopy region{
+            .srcSubresource = layers,
+            .dstSubresource = layers,
+            .extent = { .width = target.width, .height = target.height, .depth = 1 },
+        };
+        vkCmdCopyImage(commands, target.depth, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, read->image,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        moved(target.depth, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+              VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, transfer,
+              flag<VkAccessFlags2>(VK_ACCESS_2_TRANSFER_READ_BIT), tests, all);
+        moved(read->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, transfer, transfer_write, shaders, sampled);
+        return;
+    }
+    // One of its samples, as depths don't average: a pass that resolves it and draws nothing, which
+    // Vulkan has done as color's is.
+    const auto output =
+        flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
+    const auto resolving = flag<VkAccessFlags2>(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+    const auto reading = flag<VkAccessFlags2>(VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT);
+    moved(target.depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+          VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, tests, written, tests | output,
+          all | reading);
+    moved(read->image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+          shaders, 0, output, resolving);
+    const VkRenderingAttachmentInfo attachment{
+        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+        .imageView = target.depth_view,
+        .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        .resolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT,
+        .resolveImageView = read->view,
+        .resolveImageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+    };
+    const VkRenderingInfo rendering{
+        .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+        .renderArea = { .extent = { .width = target.width, .height = target.height } },
+        .layerCount = 1,
+        .pDepthAttachment = &attachment,
+    };
+    gpu::device()->begin_rendering(commands, &rendering);
+    gpu::device()->end_rendering(commands);
+    moved(read->image, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, output, resolving, shaders, sampled);
+    moved(target.depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+          VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, tests | output, all | reading, tests,
+          all);
+}
+
 std::uint64_t create_engine_texture(std::uint32_t width, std::uint32_t height, std::int32_t format,
                                     bool mipmaps) {
     if (gpu::device() == nullptr) {
@@ -1453,6 +1579,10 @@ FBE_API bool fbe_texture_release(uint64_t texture) {
     }
     if (--textures[slot].references > 0) {
         return true;
+    }
+    if (textures[slot].depth_read != 0) {
+        fbe_texture_release(textures[slot].depth_read);
+        textures[slot].depth_read = 0;
     }
     // Its handles are caught now; its image and slot wait for the frames that could draw it. What
     // was written into its CPU copy and not sent goes with it.

@@ -36,6 +36,7 @@ find_program(FBENGINE_SLANGC slangc PATHS "${slang_SOURCE_DIR}/bin" NO_DEFAULT_P
 set(fbengine_shader_sources
     "${PROJECT_SOURCE_DIR}/native/fbengine/shaders/scene.slang"
     "${PROJECT_SOURCE_DIR}/native/fbengine/shaders/own_shader.slang"
+    "${PROJECT_SOURCE_DIR}/native/fbengine/shaders/pass.slang"
     "${PROJECT_SOURCE_DIR}/native/fbengine/shaders/bindless.slang"
     "${PROJECT_SOURCE_DIR}/native/fbengine/shaders/pbr.slang")
 set(fbengine_shader_stamped "${fbengine_slang_version}")

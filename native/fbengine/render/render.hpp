@@ -5,6 +5,7 @@
 
 #include "fbengine.h"
 #include "gpu/graph.hpp"
+#include "gpu/shader.hpp"
 #include "gpu/vulkan.hpp"
 #include "scene/camera.hpp"
 #include "scene/math.hpp"
@@ -12,6 +13,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace fbe::render {
@@ -66,6 +68,35 @@ void forget_unused_histories();
 std::size_t history_count();
 /// A camera's history's textures' width, 0 for none, for tests.
 std::uint32_t history_width(std::uint64_t camera);
+
+/// A camera's full-screen pass, ready to run: the material it reads, and its code.
+struct game_pass_t {
+    std::uint64_t material = 0;
+    const gpu::shader_t* shader = nullptr;
+};
+
+/// The camera's full-screen passes that can be made, the last into `format` of `samples`, over
+/// what's there unless `into_nothing`, and, with others, into `between` of one sample; each of the
+/// others, or one that isn't a pass now, saying so once.
+std::vector<game_pass_t> game_passes(const scene::camera_t& camera, VkFormat format,
+                                     VkSampleCountFlagBits samples, VkFormat between,
+                                     bool into_nothing);
+
+/// An image a camera's picture goes through on its way to its target: what it's made as, and its
+/// format, which a transient's isn't known as until it's recorded.
+struct picture_t {
+    gpu::transient_t target;
+    VkFormat format = VK_FORMAT_UNDEFINED;
+};
+
+/// What's in `source`, what the camera drew, through its full-screen passes in turn, into `into`,
+/// of `format` and `samples`, each between in a `picture`. They read the depth of `target`, the
+/// camera's. `into_nothing`, for one of its own that a later pass reads, clears that first and
+/// blends nothing. False, with fbe_error's why, if it can't.
+bool add_game_passes(const scene::camera_t& camera, std::span<const game_pass_t> passes,
+                     gpu::resource_t source, gpu::resource_t into, VkFormat format,
+                     VkSampleCountFlagBits samples, const picture_t& picture, std::uint64_t target,
+                     const scene::view_t& view, VkRect2D scissor, bool into_nothing);
 
 /// Adds the passes that bring a camera's HDR image to `into`, a target of `size`, `format`, and
 /// `samples`, in `scissor`, blending it by its alpha if the camera doesn't clear what's there;
