@@ -102,7 +102,8 @@ std::uint32_t said = 0;
 
 struct shaders_t {
     handle_slots_t slots{ SHADER_KIND };
-    std::vector<shader_t> kept;
+    /// Where none moves as more are made, so the text fbe_shader_path gives of one stays.
+    std::deque<shader_t> kept;
     std::deque<kept_code_t> codes;
 };
 
@@ -354,8 +355,6 @@ FBE_API uint64_t fbe_shader_create(const uint8_t* bytes, int64_t size, const cha
         return 0;
     }
     own::shaders_t& shaders = own::all();
-    // Room first, as a slot made needs its place.
-    shaders.kept.reserve(shaders.kept.size() + 1);
     const std::uint32_t slot = shaders.slots.make();
     if (slot == shaders.kept.size()) {
         shaders.kept.emplace_back();

@@ -1,6 +1,7 @@
 // Materials' own shaders: Slang a game writes, compiled by its build step, drawn in the scene's
 // pipelines. fbengine_tools has what compiles one, and how to write one.
 
+Import std.collections
 Import std.core
 Import std.ffi
 Import std.io
@@ -16,6 +17,9 @@ Import "./window"
 // One wrapper for each shader the game holds, by its handle's slot; it goes when the game lets go
 // of it, and a Material's Shader gets a new one.
 Global shaders: Weak<Shader>[] = []
+// The file each material, by its handle, has a shader from that couldn't be loaded, as a scene opened
+// in spite of it says, so a save keeps it.
+Global lostShaders: Map<UInt64, String> = {}
 
 /// A shader of a game's own, for Materials to draw with: a `.slang` file in its assets, which its
 /// build step compiles (fbengine_tools' CookShader), so `Assets.Load<Shader>("res://water.slang")`
@@ -149,6 +153,16 @@ Extend Material
     Public Method SetShader(shader: Shader?)
         Local drawn: UInt64 = shader != Null ? shader.Live("SetShader") : 0
         If !fbe_material_set_shader(Live("SetShader"), drawn) Then Failed("SetShader")
+        lostShaders.Remove(Live("SetShader"))
+    End Method
+
+    // The file of the shader it has that couldn't be loaded, which it draws without, or Null.
+    Package Method LostShader(): String? => lostShaders.Get(Live("LostShader"))
+
+    // That its shader is the file at `path`, which couldn't be loaded, so it draws without one.
+    Package Method SetLostShader(path: String)
+        If !fbe_material_set_shader(Live("SetLostShader"), 0) Then Failed("SetLostShader")
+        lostShaders[Live("SetLostShader")] = path
     End Method
 
     /// The shader it draws with, Null for the scene's own.

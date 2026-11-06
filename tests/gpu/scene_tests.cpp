@@ -10966,6 +10966,20 @@ TEST_CASE("a shader's path is its own, as the same bytes by another name are", "
     require(fbe_shader_replace(second, bytes.data(), static_cast<std::int64_t>(bytes.size()),
                                "res://c.slang"));
     CHECK(std::string_view(fbe_shader_path(second)) == "res://c.slang");
+    // The text it gave stays as more are made, of names too long to be kept inline.
+    const char* kept = fbe_shader_path(first);
+    std::vector<std::uint64_t> more;
+    for (int at = 0; at < 100; ++at) {
+        const std::string name = std::format("res://a shader made after, number {}.slang", at);
+        more.push_back(
+            fbe_shader_create(bytes.data(), static_cast<std::int64_t>(bytes.size()), name.c_str()));
+        REQUIRE(more.back() != 0);
+    }
+    CHECK(std::string_view(kept) == "res://a.slang");
+    CHECK(kept == fbe_shader_path(first));
+    for (const std::uint64_t made : more) {
+        require(fbe_shader_release(made));
+    }
     require(fbe_shader_release(first));
     CHECK(std::string_view(fbe_shader_path(first)).empty());
     require(fbe_shader_release(second));

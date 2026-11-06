@@ -535,14 +535,83 @@ Function ASceneKeepsPassesAndShaders() Throws IOError, GraphicsError
     Expect(readOwn.Parameter(0) == Vec4(1, 2, 3, 4))
     // The same text again: nothing's lost or added on the way.
     Expect(Try Scene.Text(roots) == text, Try Scene.Text(roots))
-    // A material that isn't a pass's can't be one.
+    // A material that isn't a pass's isn't run as one, and is said to be a Problem, the rest read.
     Local wrong = text.Replace("res://scene-shaders/inverts.slang",
                                "res://scene-shaders/flat.slang")
     Try File.WriteText(folder.Path / "wrong.scene", wrong)
-    Expect(ExpectThrows<IOError>(Scene.Load("res://scene-kept/wrong.scene")) != Null)
+    Local opened = Try Scene.Open("res://scene-kept/wrong.scene")
+    Expect(opened.Problems.Count == 1 && opened.Problems[0].Contains("isn't one"),
+           opened.Problems.Join("; "))
+    Local wrongCamera = opened.Roots[0] As? Camera
+    If wrongCamera == Null Then Panic("its camera")
+    Expect(wrongCamera.Passes().Count == 0)
+    For root In opened.Roots
+        root.Free()
+    End For
     For root In roots
         root.Free()
     End For
     camera.Free()
     mesh.Free()
+End Function
+
+// A pass whose file's cooked again as a material's shader, as hot reload takes it: its camera
+// doesn't run it, a scene still saves it, and reads it back as a Problem, kept where it was among the
+// camera's passes for the next save, not the whole file refused.
+@Test
+Function APassReloadedAsNoneStillSavesAndLoads() Throws IOError, GraphicsError
+    If NoSlangc() Then Skip("no slangc here")
+    If Env.Get("FBENGINE_NO_GPU") == "1" Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local source = Try TempDir()
+    Local folder = Try TempDir()
+    Try File.WriteText(source.Path / "inverts.slang", INVERTS)
+    Try Cooker.CookShader(source.Path / "inverts.slang", folder.Path / "first.slang")
+    Try Cooker.CookShader(source.Path / "inverts.slang", folder.Path / "second.slang")
+    Try File.WriteText(source.Path / "flat.slang", FLAT)
+    Try Cooker.CookShader(source.Path / "flat.slang", source.Path / "flat.cooked")
+    Assets.MountFolder("res://reloaded-pass", folder.Path)
+    Defer Assets.Unmount("res://reloaded-pass")
+    Local world = World()
+    Defer world.Free()
+    World.SetCurrent(world)
+    Local first = Try Assets.Load<Shader>("res://reloaded-pass/first.slang")
+    Defer first.Free()
+    Local second = Try Assets.Load<Shader>("res://reloaded-pass/second.slang")
+    Defer second.Free()
+    Local camera = Camera()
+    camera.AddPass(first)
+    camera.AddPass(second)
+    Try File.WriteBytesAtomic(folder.Path / "second.slang",
+                              Try File.ReadBytes(source.Path / "flat.cooked"))
+    Try Assets.Reload("res://reloaded-pass/second.slang")
+    Local since = Instant.Now()
+    While second.IsPass() && (Instant.Now() - since) < 20.Seconds
+        Flip(False)
+        Sleep(5.Milliseconds)
+    End While
+    Expect(!second.IsPass() && first.IsPass())
+    Expect(camera.Passes().Count == 2)
+    Local text = Try Scene.Text([camera])
+    Try File.WriteText(folder.Path / "kept.scene", text)
+    // A game's load takes it.
+    For root In Try Scene.Load("res://reloaded-pass/kept.scene")
+        root.Free()
+    End For
+    Local opened = Try Scene.Open("res://reloaded-pass/kept.scene")
+    Local said = opened.Problems.Join("; ")
+    Expect(opened.Problems.Count == 1 && said.Contains("entity.pass1") &&
+           said.Contains("isn't one"),
+           said)
+    Local read = opened.Roots[0] As? Camera
+    If read == Null Then Panic("its camera")
+    Expect(read.Passes().Count == 1)
+    Expect(read.Passes()[0].Shader()?.Path() == "res://reloaded-pass/first.slang")
+    // Saved again, both, in their order: the one it doesn't run second, as it was.
+    Local again = Try Scene.Text(opened.Roots)
+    Expect(again == text, again)
+    For root In opened.Roots
+        root.Free()
+    End For
+    camera.Free()
 End Function

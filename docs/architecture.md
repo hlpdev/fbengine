@@ -169,7 +169,18 @@ good modern engine on its own. Every structural choice is checked against both.
   only; resolved before bloom, by motion at the nearest depth of 3 by 3, Catmull-Rom, clamped to 3
   by 3 in YCoCg, 0.1 of what's now once settled. What has no motion of its own: particles, what
   blends, other orders, morphs, an Instances' own instances, reflections. +0.14 ms and +6.7 ms.
-- **FXAA**: after the tonemap, from the picture alone, +0.02 ms and +0.94 ms.
+- **FXAA**: after the tonemap and a game's own passes, from the picture alone, +0.02 ms and +0.94 ms.
+- **A game's own passes**: `Camera.AddPass` runs a Shader whose file says `#define FBE_PASS` as a
+  full-screen pass, cooked as a game's other shaders are. Its `pass(uv, color, depth)` gets what's
+  drawn so far, the camera's depth in meters (its first sample's, if the camera has samples), and
+  its UV across the camera's viewport, plus the parameters and layers of the Material AddPass gives
+  back, each layer at its own index. Colors in and out are premultiplied by their alpha, and in
+  stored values they're the bytes. Passes run in the order they were added, after the tonemap and
+  grade and before FXAA, on any camera, into a target or the screen. Each but the last goes into an
+  image of its own, as near the target's format as there is, at one sample a pixel. A pass no
+  pipeline can be made of, last or between two, is reported once by name and left out, and so is
+  one reloaded as no pass. With none added, nothing more is drawn. A scene file keeps them by their
+  shaders' files.
 - **Extract, then draw**: after UpdateWorld, the scene is read into render lists (visible
   objects, sorted), so drawing never reads the live scene; a render thread can take drawing over
   later without changing the API.
