@@ -634,8 +634,10 @@ if(FBENGINE_FB_TESTS)
                        ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
   # Its flow, and its tools' sounds and materials, by their numbers, with nothing drawn.
+  # From the game's folder, as its tests read its tools' sounds.fb by their path.
   add_test(NAME examples.slack_water.rules
-           COMMAND "${FBENGINE_FB}" --color never test "${PROJECT_SOURCE_DIR}/examples/slack_water")
+           COMMAND "${FBENGINE_FB}" --color never test "${PROJECT_SOURCE_DIR}/examples/slack_water"
+           WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/examples/slack_water")
   set_tests_properties(examples.slack_water.rules PROPERTIES RESOURCE_LOCK slack_water TIMEOUT 300)
   add_test(NAME examples.slack_water.tools_rules
            COMMAND "${FBENGINE_FB}" --color never test

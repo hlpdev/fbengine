@@ -72,6 +72,21 @@ Function NothingClips()
     End For
 End Function
 
+// A tone of whole cycles, looped on itself in a line, doesn't swell where its ends are crossfaded, as
+// equal power would, by up to 1.41.
+@Test
+Function ALoopOfATonesEndsDoesntSwell()
+    Local tone: Float[] = []
+    For at = 0 Until 22050 * 2
+        tone.Add(Sin(((at As Float) / 22050.0 * 45.0 * 6.283185307179586) As Float64) As Float)
+    End For
+    Local loudest = 0.0
+    For sample In Looped(tone, 0.25, True)
+        loudest = Max(loudest, Abs(sample))
+    End For
+    Expect(loudest <= 1.01)
+End Function
+
 // What's played once ends at nothing, so it doesn't click as it stops.
 @Test
 Function WhatsPlayedOnceEndsAtNothing()

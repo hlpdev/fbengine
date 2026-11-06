@@ -60,10 +60,10 @@ Const GULL_TRIES: Int = 16
 
 // How much of the mix what's all around you takes, and the wheel, so that with everything at its
 // loudest at once, it doesn't clip.
-Const AMBIENCE: Float = 0.24
-Const WHEEL: Float = 0.2
+Const AMBIENCE: Float = 0.2
+Const WHEEL: Float = 0.15
 // The mill's works, running, heard from inside, where they are.
-Const WORKS: Float = 0.12
+Const WORKS: Float = 0.1
 // How far a gust takes the wind over its level, in the storm at its height, and how much higher the
 // wind's pitched then.
 Const GUSTS: Float = 0.3
@@ -86,9 +86,11 @@ Public Function CueLevel(cue: Cue): Float
         Case Cue.SPLASH
             Return 0.3
         Case Cue.SLUICE
-            Return 0.3
-        Default
+            Return 0.2
+        Case Cue.FIT
             Return 0.25
+        Default
+            Return 0.2
     End Select
 End Function
 
@@ -104,12 +106,16 @@ End Function
 /// falling, by up to GUSTS either way at its height, by its Swells.
 Public Function Gust(clock: Float64): Float => 1.0 + GUSTS * StormAt(clock) * Swells(clock)
 
-/// The wind's swells, from -1 to 1, `clock` seconds in: three slow waves at 0.9, 2.39, and 5.29
-/// radians a second, which at no lag from a second to the ten minutes a game can last all come round
-/// together, to within 0.14 of where they were; none is the sound's own swell, at 0.9 and 2.3.
+/// The rates of the wind's swells, in radians a second, slowest first.
+Public Function GustRates(): Float[] => [0.77, 2.17, 5.29]
+
+/// The wind's swells, from -1 to 1, `clock` seconds in: three slow waves at GustRates, which at no lag
+/// from a second to the ten minutes a game can last all come round together, to within 0.14 of where
+/// they were; and none is the wind sound's own swell, tools/sounds.fb's WIND_SWELL and WIND_SWELL_TOO.
 Public Function Swells(clock: Float64): Float
-    Return 0.5 * (Sin(clock * 0.9) As Float) + 0.3 * (Sin(clock * 2.39 + 1.0) As Float) +
-           0.2 * (Sin(clock * 5.29 + 2.0) As Float)
+    Local rates = GustRates()
+    Return 0.5 * (Sin(clock * rates[0]) As Float) + 0.3 * (Sin(clock * rates[1] + 1.0) As Float) +
+           0.2 * (Sin(clock * rates[2] + 2.0) As Float)
 End Function
 
 /// How high the wind's pitched, `clock` seconds in: as it was made until the storm, and up to

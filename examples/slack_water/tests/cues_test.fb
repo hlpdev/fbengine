@@ -2,8 +2,10 @@
 
 Import std.collections
 Import std.core
+Import std.io
 Import std.math
 Import std.test
+Import std.text
 Import slack_water.cues
 Import slack_water.flow
 Import slack_water.ground
@@ -97,15 +99,7 @@ Function StepsAreOnWhatsPaintedThere()
             Local z = down - half
             Local baked = BakedAt(heights, across, down)
             If baked.0 < 0.0 || OnRoad(x, z) Then Continue
-            Local parts = CoverParts(x, z, baked.0, baked.1)
-            // What's most seen, painted as CoverAt paints it: turf, then trodden ground, then sand.
-            Local sand = parts.0
-            Local trodden = parts.2 * (1.0 - sand)
-            Local turf = parts.1 * (1.0 - parts.2) * (1.0 - sand)
-            Local rock = (1.0 - parts.1) * (1.0 - parts.2) * (1.0 - sand)
-            Local wanted = Surface.ROCK
-            If Max(trodden, turf) > rock Then wanted = Surface.TURF
-            If sand >= Max(Max(trodden, turf), rock) Then wanted = Surface.SAND
+            Local wanted = Underfoot(CoverParts(x, z, baked.0, baked.1))
             Local heard = SurfaceAt(heights, x, z, False, 0.0)
             Expect(heard == wanted)
             found[wanted == Surface.SAND ? 0 : wanted == Surface.TURF ? 1 : 2] += 1
@@ -122,12 +116,49 @@ Function StepsAreOnWhatsPaintedThere()
     Expect(SurfaceAt(heights, door.x, door.y + 2.0, False, 0.0) == Surface.TURF)
 End Function
 
-// CUES is how many cues there are: each number to it is one, and SLUICE, the last, is CUES less one.
+// CUES is how many cues there are, by Cue's own members, numbered 0 to CUES less one, each with a level.
 @Test
 Function CuesCountsThem()
-    Expect((Cue.SLUICE As Int) == CUES - 1)
-    For number = 0 Until CUES
-        Expect(CueLevel(number As Cue) > 0.0)
+    Local count = 0
+    For Member m In Cue
+        Local number = m.Value As Int
+        Expect(number >= 0 && number < CUES)
+        Expect(CueLevel(m.Value) > 0.0)
+        count += 1
+    End For
+    Expect(count == CUES)
+End Function
+
+// The terrain's heights past its edges are the nearest edge's: west and south of its corner too.
+@Test
+Function PastTheCornerIsTheEdge()
+    Local heights = TerrainHeights()
+    Expect(HeightIn(heights, -3.0, -5.0) == HeightIn(heights, 0.0, 0.0))
+    Expect(HeightIn(heights, -0.5, 10.25) == HeightIn(heights, 0.0, 10.25))
+    Local far = (SIDE As Float) + 4.0
+    Expect(HeightIn(heights, far, far) == HeightIn(heights, SIDE As Float, SIDE As Float))
+    // And what's underfoot there is the corner's, as the player can stand off the grid's south-west.
+    Local half = (SIDE As Float) / 2.0
+    Expect(SurfaceAt(heights, -half - 5.0, -half - 5.0, False, -10.0) ==
+           SurfaceAt(heights, -half, -half, False, -10.0))
+End Function
+
+// The game's gusts share no rate with the wind sound's own swell, which tools/sounds.fb says, read from
+// the game's folder, where its tests run.
+@Test
+Function TheGustsAreApartFromTheWindsOwnSwell() Throws IOError
+    Local found: Float[] = []
+    For line In (Try File.ReadText(Path("tools/sounds.fb"))).Split("\n")
+        If line.StartsWith("Public Const WIND_SWELL")
+            found.Add(Float.Parse(line.Split("=")[1].Trim()) ?? -1.0)
+        End If
+    End For
+    Expect(found.Count == 2)
+    For rate In found
+        Expect(rate > 0.0)
+        For gust In GustRates()
+            Expect(Abs(gust - rate) > 0.05)
+        End For
     End For
 End Function
 
@@ -139,6 +170,10 @@ Function WhatsMostSeenIsUnderfoot()
     Expect(Underfoot((0.0, 0.9, 0.0)) == Surface.TURF)
     Expect(Underfoot((0.0, 0.0, 0.6)) == Surface.TURF)
     Expect(Underfoot((0.3, 0.0, 0.0)) == Surface.ROCK)
+    // Ties go to what's painted last, on top: sand over trodden ground, trodden ground over turf.
+    Expect(Underfoot((0.5, 0.0, 1.0)) == Surface.SAND)
+    Expect(Underfoot((0.0, 1.0, 0.5)) == Surface.TURF)
+    Expect(Underfoot((0.2, 0.0, 0.0)) == Surface.ROCK)
 End Function
 
 // The water carrying you isn't walking.
@@ -346,7 +381,8 @@ Function TheMillsPartsAndSluiceAreHeardOnceEach()
     Expect(WorksLevel(0.6) > 0.0 && WorksLevel(0.6) < WorksLevel(1.0))
 End Function
 
-// What can sound at once, each at the tools' peak, doesn't clip: to the end, and at the flood.
+// What can sound at once, each at the tools' peak, doesn't clip: to the end, the sluice opening as the
+// wheel and works start, a part being fitted, and the flood.
 @Test
 Function NothingAtOnceClips()
     Local loudestBeds = 0.0
@@ -356,8 +392,13 @@ Function NothingAtOnceClips()
                           SurfLevel(clock, False))
     End For
     Local toTheEnd = loudestBeds * 0.7 + WheelLevel(1.0) * 0.7 + WorksLevel(1.0) * 0.6 +
-                     CueLevel(Cue.STEP_1) * 0.7 + CueLevel(Cue.CREAK) * 0.6
+                     CueLevel(Cue.STEP_1) * 0.7 + CueLevel(Cue.CREAK) * 0.6 +
+                     CueLevel(Cue.SLUICE) * 0.7
     Expect(toTheEnd < 1.0)
+    // A part fitted, before the wheel turns.
+    Local fitting = loudestBeds * 0.7 + CueLevel(Cue.FIT) * 0.6 + CueLevel(Cue.STEP_1) * 0.7 +
+                    CueLevel(Cue.CREAK) * 0.6
+    Expect(fitting < 1.0)
     Local floodBeds = 0.0
     For tick = 0 To 9
         Local clock = FLOOD_AT + (tick As Float64) * 0.1

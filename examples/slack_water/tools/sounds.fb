@@ -42,16 +42,22 @@ Final Class Smooth
     End Method
 End Class
 
-// `samples` with their last `fade` seconds faded over their first, so they loop without a click, at
-// equal power, as what's faded isn't the same.
-Public Function Looped(samples: Float[], fade: Float): Float[]
+// `samples` with their last `fade` seconds faded over their first, so they loop without a click: at
+// equal power, for noise, whose two ends aren't the same; or, `alike`, in a line, for what's the same
+// material either side, as a tone or a beat is, which equal power would swell by up to 1.41.
+Public Function Looped(samples: Float[], fade: Float, alike: Bool = False): Float[]
     Local count = (fade * (RATE As Float)) As Int
     Local whole = samples.Count - count
     Local looped: Float[] = []
     For at = 0 Until whole
         If at < count
-            Local mix = (at As Float) / (count As Float) * TAU / 4.0
-            looped.Add(samples[at] * Sine(mix) + samples[whole + at] * Cosine(mix))
+            Local part = (at As Float) / (count As Float)
+            If alike
+                looped.Add(samples[at] * part + samples[whole + at] * (1.0 - part))
+            Else
+                looped.Add(samples[at] * Sine(part * TAU / 4.0) +
+                           samples[whole + at] * Cosine(part * TAU / 4.0))
+            End If
         Else
             looped.Add(samples[at])
         End If
@@ -123,6 +129,10 @@ End Function
 // How many samples `seconds` are.
 Function Samples(seconds: Float): Int => (seconds * (RATE As Float)) As Int
 
+// The rates of the wind sound's own swell, in radians a second, which the game's gusts keep apart from.
+Public Const WIND_SWELL: Float = 0.9
+Public Const WIND_SWELL_TOO: Float = 2.3
+
 // Wind: noise, swelling, through a filter that opens as it does.
 Public Function Wind(): Float[]
     Local hiss = Hiss(1)
@@ -130,7 +140,7 @@ Public Function Wind(): Float[]
     Local made: Float[] = []
     For at = 0 Until Samples(7.0)
         Local t = (at As Float) / (RATE As Float)
-        Local swell = 0.55 + 0.25 * Sine(t * 0.9) + 0.2 * Sine(t * 2.3 + 1.0)
+        Local swell = 0.55 + 0.25 * Sine(t * WIND_SWELL) + 0.2 * Sine(t * WIND_SWELL_TOO + 1.0)
         made.Add(low.Next(hiss.Next(), 0.02 + swell * 0.05) * (0.8 + swell))
     End For
     Return Leveled(Looped(made, 1.0), 0.7)
@@ -213,7 +223,7 @@ Public Function Wheel(): Float[]
         Local thump = Sine(beat * TAU * 3.0) * Decay(-beat * 9.0) * 0.8
         made.Add(thump + low.Next(hiss.Next(), 0.1) * 0.5)
     End For
-    Return Leveled(Looped(made, 0.25), 0.7)
+    Return Leveled(Looped(made, 0.25, True), 0.7)
 End Function
 
 // A step on rock: a click and a little noise, a seed for each of three.
@@ -294,7 +304,7 @@ Public Function Works(): Float[]
         Local knock = Sine(turn * TAU * 60.0) * Decay(-turn * 25.0)
         made.Add(click * 0.8 + hum * 0.3 + knock * 0.5)
     End For
-    Return Leveled(Looped(made, 0.25), 0.6)
+    Return Leveled(Looped(made, 0.25, True), 0.6)
 End Function
 
 // A step on sand: grains giving way, a crunch of noise in short bursts, darker as it settles, a seed for

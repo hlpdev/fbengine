@@ -248,12 +248,13 @@ Public Function CoverParts(x: Float, z: Float, height: Float, slope: Float): (Fl
 End Function
 
 /// How high the terrain's grid of `heights` is at (`x`, `z`), meters from its corner: between its
-/// samples, a meter apart, as the terrain draws it and its cover's baked by.
+/// samples, a meter apart, as the terrain draws it and its cover's baked by; past its edges, as high
+/// as the nearest edge.
 Public Function HeightIn(heights: Float[], x: Float, z: Float): Float
-    Local left = Min(Floor(x) As Int, SIDE - 1)
-    Local top = Min(Floor(z) As Int, SIDE - 1)
-    Local u = x - (left As Float)
-    Local v = z - (top As Float)
+    Local left = Clamp(Floor(x) As Int, 0, SIDE - 1)
+    Local top = Clamp(Floor(z) As Int, 0, SIDE - 1)
+    Local u = Clamp(x - (left As Float), 0.0, 1.0)
+    Local v = Clamp(z - (top As Float), 0.0, 1.0)
     Local row = SIDE + 1
     Local near = heights[top * row + left] * (1.0 - u) + heights[top * row + left + 1] * u
     Local far = heights[(top + 1) * row + left] * (1.0 - u) +
