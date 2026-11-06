@@ -715,9 +715,11 @@ bool upload_level(std::uint64_t handle, const texture_t& texture, std::uint32_t 
     }
     vmaFlushAllocation(fbe::gpu::device()->allocator, staging.memory, 0, VK_WHOLE_SIZE);
     const VkBufferImageCopy region{
-        .imageSubresource = { .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                              .mipLevel = level,
-                              .layerCount = 1 },
+        .imageSubresource = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .mipLevel = level,
+            .layerCount = 1,
+        },
         .imageExtent = { .width = width, .height = height, .depth = 1 },
     };
     if (fbe::gpu::in_graph(handle)) {
@@ -1626,11 +1628,14 @@ FBE_API bool fbe_texture_write_level(uint64_t texture, int32_t level, int32_t wi
         return fbe::fail(
             std::format("the texture has {} levels, and no level {}", found->levels, level));
     }
-    const std::uint32_t across = std::max(found->width >> static_cast<std::uint32_t>(level), 1U);
-    const std::uint32_t down = std::max(found->height >> static_cast<std::uint32_t>(level), 1U);
-    if (std::cmp_not_equal(width, across) || std::cmp_not_equal(height, down)) {
+    const std::uint32_t level_width =
+        std::max(found->width >> static_cast<std::uint32_t>(level), 1U);
+    const std::uint32_t level_height =
+        std::max(found->height >> static_cast<std::uint32_t>(level), 1U);
+    if (std::cmp_not_equal(width, level_width) || std::cmp_not_equal(height, level_height)) {
         return fbe::fail(std::format("level {} of a {}x{} texture is {}x{}, not {}x{}", level,
-                                     found->width, found->height, across, down, width, height));
+                                     found->width, found->height, level_width, level_height, width,
+                                     height));
     }
     const std::int64_t row = std::int64_t{ width } * fbe::texture::pixel_size(found->format);
     if (pixels == nullptr || pitch < row) {
@@ -1643,8 +1648,8 @@ FBE_API bool fbe_texture_write_level(uint64_t texture, int32_t level, int32_t wi
     if (found == nullptr) {
         return false;
     }
-    return upload_level(texture, *found, static_cast<std::uint32_t>(level), across, down, pixels,
-                        static_cast<std::uint32_t>(pitch));
+    return upload_level(texture, *found, static_cast<std::uint32_t>(level), level_width,
+                        level_height, pixels, static_cast<std::uint32_t>(pitch));
 }
 
 FBE_API bool fbe_texture_set_alpha(uint64_t texture, bool alpha) {

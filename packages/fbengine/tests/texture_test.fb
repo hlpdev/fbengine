@@ -1,6 +1,7 @@
 // Textures, made and written through the FB API, on the GPU ctest's tests use; a machine with no
 // Vulkan sets FBENGINE_NO_GPU to 1 and skips them.
 
+Import std.collections
 Import std.core
 Import std.image
 Import std.io

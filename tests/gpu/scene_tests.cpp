@@ -11010,8 +11010,10 @@ TEST_CASE("an Instances is culled by its geometry's cull box, as what its shader
         CHECK(near(middle(scene.drawn()), { 0, 0, 255 }));
     }
     SECTION("by a box that takes its move, it's drawn") {
-        const fbe_aabb_t moved{ .min = { .x = -1.0F, .y = -1.0F, .z = -1.0F },
-                                .max = { .x = 31.0F, .y = 1.0F, .z = 1.0F } };
+        const fbe_aabb_t moved{
+            .min = { .x = -1.0F, .y = -1.0F, .z = -1.0F },
+            .max = { .x = 31.0F, .y = 1.0F, .z = 1.0F },
+        };
         require(fbe_geometry_set_cull_box(geometry, &moved));
         CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
         // And by its bounds again once it's cleared.
