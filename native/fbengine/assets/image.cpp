@@ -246,11 +246,24 @@ result_t<void> check_ktx2(std::span<const std::uint8_t> bytes, std::string_view 
         !within(u64(bytes, 64), u64(bytes, 72), size)) {
         return std::unexpected(invalid(name, "has a part past its end"));
     }
+    // What its levels inflate to, which libktx allocates before it reads them: what each is, if
+    // it's not supercompressed, as the format has it, and in all no more than its texels could
+    // be, of 16 bytes each, its mips and all.
+    const std::uint64_t most_bytes = texels * 16 * 2;
+    std::uint64_t inflated = 0;
     for (std::size_t level = 0; level < count; ++level) {
         const std::size_t at = header + (level * level_index);
         if (!within(u64(bytes, at), u64(bytes, at + 8), size)) {
             return std::unexpected(invalid(name, std::format("has level {} past its end", level)));
         }
+        const std::uint64_t length = u64(bytes, at + 16);
+        if ((scheme == 0 && length != u64(bytes, at + 8)) || length > most_bytes - inflated) {
+            return std::unexpected(invalid(
+                name, std::format("has level {} inflating to {} bytes, more than its texels could "
+                                  "be",
+                                  level, length)));
+        }
+        inflated += length;
     }
     return check_dfd(bytes, u32(bytes, 48), u32(bytes, 52), name);
 }

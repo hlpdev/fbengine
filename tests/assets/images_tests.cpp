@@ -470,6 +470,40 @@ TEST_CASE("a KTX2 level before its texels isn't loaded", "[assets]") {
     REQUIRE(message(before).contains("has level 1 past its texels"));
 }
 
+// ASan's, in the fuzz test: libktx allocates what a KTX2's levels say they inflate to before it
+// reads them, so what they say is held to what they are, uncompressed, and to what its texels could
+// be, of 16 bytes each, Zstd's or not.
+TEST_CASE("a KTX2's levels inflate to no more than its texels could be", "[assets]") {
+    for (const bool zstd : { false, true }) {
+        INFO(zstd);
+        const bytes_t ktx = ktx2(4, 4, 2, 1, 1, false, pattern, [zstd](ktxTexture2* texture) {
+            if (zstd) {
+                REQUIRE(ktxTexture2_DeflateZstd(texture, 3) == KTX_SUCCESS);
+            }
+        });
+        REQUIRE(decoded(ktx).levels.size() == 2);
+        // A level's uncompressedByteLength: as a wrapped sum's, a terabyte, and one byte past an
+        // image of 4 by 4 of 16 bytes a texel, mips and all, with the other level's 16.
+        const std::uint64_t first = 80 + 16;
+        for (const std::uint64_t length : { ~std::uint64_t{ 0 } - 34, std::uint64_t{ 1 } << 40U,
+                                            std::uint64_t{ (16 * 16 * 2) - 16 + 1 } }) {
+            INFO(length);
+            bytes_t inflating = ktx;
+            put_u64(inflating, first, length);
+            REQUIRE(message(inflating).contains("more than its texels could be"));
+        }
+        // Two levels each of half of what wraps round.
+        bytes_t halves = ktx;
+        put_u64(halves, first, std::uint64_t{ 1 } << 63U);
+        put_u64(halves, first + 24, std::uint64_t{ 1 } << 63U);
+        REQUIRE(message(halves).contains("more than its texels could be"));
+    }
+    // Uncompressed, a level's is what it is.
+    bytes_t raw = ktx2(4, 4, 1, 1, 1, false, pattern, [](ktxTexture2*) {});
+    put_u64(raw, 80 + 16, 63);
+    REQUIRE(message(raw).contains("level 0 inflating to 63 bytes"));
+}
+
 TEST_CASE("a KTX2 supercompressed but by Zstd isn't loaded", "[assets]") {
     bytes_t zlib = ktx2(4, 4, 1, 1, 1, false, pattern, [](ktxTexture2*) {});
     put_u32(zlib, 44, 3);
