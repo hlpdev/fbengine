@@ -361,7 +361,12 @@ Public Final Class Island
 
         Local sea = Try Sea.Make(held)
         Local sunShown = Try SunShown.Make(held)
-        Local plants = Try Plants.Make()
+        // On the ground as it's drawn, from its samples, not as its noise has it between them.
+        Local drawnAt = Function(x: Float, z: Float): Float
+            Local point = ground.SurfacePoint(Vec3(x, 100.0, z))
+            Return point != Null ? point.y : GroundHeight(x, z)
+        End Function
+        Local plants = Try Plants.Make(drawnAt, held)
 
         Local mill, wheel, lamp, lantern = Try BuildMill(held)
         Local parts = Try BuildParts(held)
@@ -503,6 +508,12 @@ Public Final Class Island
 
     /// The sea around it.
     @MainThread Public Method Waters(): Sea => sea
+
+    /// Moves the wind's beat on by `seconds` of real time.
+    @MainThread
+    Public Method Sway(seconds: Float64)
+        plants.Sway(seconds)
+    End Method
 
     /// What grows on it.
     @MainThread Public Method Grown(): Plants => plants

@@ -277,31 +277,95 @@ Function SavedAs(island: Island, folder: Path, name: String): Image Throws Graph
     Return image
 End Function
 
-// How many pixels of the upper half of what the island shows change over 0.4 s from `from`.
-Function Swayed(island: Island, from: Float64): Int Throws GraphicsError, IOError
-    island.Update(from)
+// How many pixels of what the island shows, in the rows from `from` up to `to`, differ by more than
+// `by` of 765 between how it is now and once `change` has been done.
+Function ChangedBy(island: Island, change: Func(), from: Int, to: Int,
+                   by: Int): Int Throws GraphicsError,
+                                        IOError
     Local before = Try Shown(island)
-    island.Update(from + 0.4)
+    change()
     Local after = Try Shown(island)
-    Local moved = 0
-    For y = 0 Until 360
+    Local count = 0
+    For y = from Until to
         For x = 0 Until before.Width
-            If Abs(Brightness(before[x, y]) - Brightness(after[x, y])) > 40 Then moved += 1
+            If Abs(Brightness(before[x, y]) - Brightness(after[x, y])) > by Then count += 1
         End For
     End For
-    Return moved
+    Return count
+End Function
+
+// How many triangles the island's drawn with from where the camera is.
+Function TrianglesDrawn(island: Island): Int64
+    island.Render()
+    Flip(False)
+    island.Render()
+    Local drawn = Gpu.Counters().Triangles
+    Flip(False)
+    Return drawn
+End Function
+
+// Whether a place's kept clear: by the mill, on the road, what's blocked, or near a clear spot.
+Function InTheClear(at: Vec3): Bool
+    If ByTheMill(at.x, at.z) || OnRoad(at.x, at.z) || Blocked(at.x, at.z) Then Return True
+    For spot In ClearSpots()
+        If Length(Vec2(at.x, at.z) - spot) < 1.5 Then Return True
+    End For
+    Return False
+End Function
+
+// How many of an image's sky pixels are shut in by what isn't sky, out of reach of its edges'.
+Function EnclosedSky(image: Image): Int
+    Local width = image.Width
+    Local height = image.Height
+    Local reached: Bool[] = []
+    reached.Resize(width * height, False)
+    Local next: Int[] = []
+    Local reach = Function(x: Int, y: Int)
+        If x < 0 || y < 0 || x >= width || y >= height Then Return
+        Local at = y * width + x
+        If reached[at] || !IsSky(image[x, y]) Then Return
+        reached[at] = True
+        next.Add(at)
+    End Function
+    For x = 0 Until width
+        reach(x, 0)
+        reach(x, height - 1)
+    End For
+    For y = 0 Until height
+        reach(0, y)
+        reach(width - 1, y)
+    End For
+    While next.Count > 0
+        Local at = next.RemoveLast()
+        Local x = at % width
+        Local y = at / width
+        reach(x - 1, y)
+        reach(x + 1, y)
+        reach(x, y - 1)
+        reach(x, y + 1)
+    End While
+    Local shut = 0
+    For y = 0 Until height
+        For x = 0 Until width
+            If IsSky(image[x, y]) && !reached[y * width + x] Then shut += 1
+        End For
+    End For
+    Return shut
 End Function
 
 // What grows, saved to look at, and what it's for, by the pixels and where it is.
 Function SavePlants(folder: Path, camera: Camera, island: Island) Throws GraphicsError, IOError
     Local grown = island.Grown()
+    grown.Sway(10.0)
     Local eye = Vec3(MAIN_X - 24.0, GroundHeight(MAIN_X - 24.0, 18.0) + 1.7, 18.0)
     camera.SetPosition(eye)
     camera.PointAt(Vec3(MAIN_X, GroundHeight(MAIN_X, 0.0) + 1.0, 0.0))
     Local with = Try SavedAs(island, folder, "plants")
-    grown.SetShown(False)
+    grown.SetGrassShown(False)
     Local without = Try Shown(island)
-    grown.SetShown(True)
+    Local nearWithout = Try TrianglesDrawn(island)
+    grown.SetGrassShown(True)
+    Local nearWith = Try TrianglesDrawn(island)
     Local changed = 0
     For y = 380 Until 720
         For x = 0 Until with.Width
@@ -309,63 +373,191 @@ Function SavePlants(folder: Path, camera: Camera, island: Island) Throws Graphic
         End For
     End For
     Checks("grass is drawn on the green", (changed As Float) / ((340 * with.Width) As Float) > 0.04)
-    Checks("in thousands of tufts", grown.TuftCount() > 2000)
-    Local levels, levelCount = grown.TuftLevels()
-    Checks("thinner as it's further off, and none at all past that",
-           levelCount == 3 && levels.Count == 4 && levels[0] > levels[1] && levels[1] > levels[2] &&
-           levels[2] > 0 && levels[3] == 0)
+    Local tufts = grown.Tufts()
+    Checks("in thousands of tufts", tufts.Count > 2000)
+    Local levels, levelCount, nearVertices = grown.TuftLevels()
+    Print("the grass: {tufts.Count} tufts, {nearVertices} vertices near, triangles by level {levels}; " +
+          "from here {nearWith - nearWithout} triangles of it, of {nearWith}")
+    Checks("a tuft's levels have fewer blades, then a card, then none",
+           levelCount == 4 && levels.Count == 5 && levels[0] > levels[1] && levels[1] > levels[2] &&
+           levels[2] > levels[3] && levels[3] > 0 && levels[4] == 0)
+    // From high over the island, every tuft's past its last level, so the grass draws nothing.
+    camera.SetPosition(Views()[0].1)
+    camera.PointAt(Views()[0].2)
+    grown.SetGrassShown(False)
+    Local farWithout = Try TrianglesDrawn(island)
+    grown.SetGrassShown(True)
+    Local farWith = Try TrianglesDrawn(island)
+    // As an Instances' levels go by its clusters' size, what's far off is a card a tuft, at most.
+    Checks("near, it's blades, and from far off, cards at most",
+           nearWith > nearWithout + 50000 &&
+           farWith - farWithout <= (tufts.Count * levels[3]) As Int64)
+    camera.SetPosition(eye)
+    camera.PointAt(Vec3(MAIN_X, GroundHeight(MAIN_X, 0.0) + 1.0, 0.0))
 
-    // None of it where it's kept clear: the mill and a meter round it, the road, and the parts.
+    // Every tuft on the ground as it's drawn, a little into it.
+    Local grounded = True
+    For tuft In tufts
+        Local drawn = island.GroundDrawnAt(tuft.At.x, tuft.At.z)
+        If drawn == Null || Abs(tuft.At.y - drawn) > 0.031 Then grounded = False
+    End For
+    Checks("every tuft's on the ground as it's drawn", grounded)
+
+    // None of it where it's kept clear: by the mill, the road, what's blocked, the parts' spots, the
+    // door, and where the road's ends are landed on.
     Local clear = True
-    For place In TuftPlaces()
-        Local x = place.0.x
-        Local z = place.0.z
-        If OnRoad(x, z) || (x > MAIN_X - MILL_W - 2.2 && x < MAIN_X + 10.5 && Abs(z) < MILL_D + 2.2)
-            clear = False
-        End If
-        For spot In [GearSpot(), PaddleSpot(), BeltSpot(), DoorSpot()]
-            If Length(Vec2(x, z) - spot) < 1.5 Then clear = False
-        End For
+    For tuft In tufts
+        If InTheClear(tuft.At) Then clear = False
+    End For
+    For plant In grown.Trees()
+        If InTheClear(plant) Then clear = False
+    End For
+    For plant In grown.Shrubs()
+        If InTheClear(plant) Then clear = False
     End For
     Checks("none of it where it's kept clear", clear)
 
     Local trees = grown.Trees()
     Local byTheMill = trees.Count == 3
     For tree In trees
-        If Length(Vec2(tree.x - MAIN_X, tree.z)) > 30.0 || KeptClear(tree.x, tree.z) Then byTheMill = False
+        If Length(Vec2(tree.x - MAIN_X, tree.z)) > 30.0 Then byTheMill = False
     End For
-    Checks("three trees stand by the mill, clear of it", byTheMill)
+    Checks("three trees stand by the mill", byTheMill)
     Checks("and shrubs grow about it", grown.Shrubs().Count >= 5)
 
-    // They sway, and harder as the storm comes: what's seen of a tree against the sky changes more
-    // in the storm's wind than in the calm's, over as long.
+    // A tree, square to the wind, so what it bends goes across the view.
     Local tree = trees[0]
-    // Square to the wind, so what it bends goes across the view.
     camera.SetPosition(tree + Vec3(-3.9, 1.5, 9.2))
     camera.PointAt(tree + Vec3(0.0, 3.6, 0.0))
-    Local calm = Try Swayed(island, 0.0)
-    Local stormy = Try Swayed(island, TIDE_IN_AT - 0.4)
-    island.Update(0.0)
     Try SavedAs(island, folder, "tree")
-    Checks("trees sway in the wind", calm > 200)
-    Checks("harder in the storm", stormy > calm + calm / 2)
-    // From the top, not the roots: its trunk a meter up, over the grass, stays where it stands as it
-    // sways in the storm.
-    island.Update(TIDE_IN_AT - 0.4)
-    Local leaning = Try Shown(island)
-    island.Update(TIDE_IN_AT)
-    Local leant = Try Shown(island)
+    // It sways: at one beat, the storm's wind moves it further from where it'd stand with none than
+    // the calm's does.
     island.Update(0.0)
-    Local foot = tree + Vec3(0.0, 1.0, 0.0)
-    Local footBefore = PixelOf(camera, leaning, foot)
-    Local footAfter = PixelOf(camera, leant, foot)
-    // Bark's red's over its green, as no grass or leaf's; and it's the same bark, as what stands still
-    // is.
-    Checks("its roots stay put",
+    Local calm = Try ChangedBy(island, Function()
+        grown.SetWindless(True)
+    End Function, 0, 400, 40)
+    grown.SetWindless(False)
+    island.Update(TIDE_IN_AT)
+    Local stormy = Try ChangedBy(island, Function()
+        grown.SetWindless(True)
+    End Function, 0, 400, 40)
+    grown.SetWindless(False)
+    Checks("trees sway in the wind", calm > 200)
+    Checks("harder in the storm, at one beat", stormy > calm + calm / 4)
+    // Its normals lean as it bends.
+    Local leaning = Try ChangedBy(island, Function()
+        grown.SetBentNormals(False)
+    End Function, 0, 400, 6)
+    grown.SetBentNormals(True)
+    Checks("its normals follow its bend", leaning > 100)
+
+    // Its trunk bends as its leaves do: with them hidden, in the storm, its top moves, and its foot
+    // doesn't.
+    grown.SetCanopiesShown(False)
+    // A meter up its trunk, which leans a tenth of that with the wind as it's built.
+    Local foot = tree + Vec3(WIND.x * 0.1, 1.0, WIND.y * 0.1)
+    Local footBefore = PixelOf(camera, Try Shown(island), foot)
+    Local topMoved = Try ChangedBy(island, Function()
+        grown.Sway(3.0)
+    End Function, 0, 400, 40)
+    Local footAfter = PixelOf(camera, Try Shown(island), foot)
+    grown.SetCanopiesShown(True)
+    Checks("its trunk bends as its leaves do", topMoved > 40)
+    Checks("and its roots stay put",
            footBefore != Null && footAfter != Null && footBefore.r >= footBefore.g &&
-           Abs((footBefore.r As Int) - (footAfter.r As Int)) +
-           Abs((footBefore.g As Int) - (footAfter.g As Int)) +
+           Abs((footBefore.r As Int) - (footAfter.r As Int)) + Abs((footBefore.g As Int) -
+                                                                   (footAfter.g As Int)) +
            Abs((footBefore.b As Int) - (footAfter.b As Int)) < 20)
+    island.Update(0.0)
+
+    // Its canopy has holes, from below: the sky shows through within where its leaves are.
+    camera.SetPosition(tree + Vec3(0.6, 1.2, 0.4))
+    camera.PointAt(tree + Vec3(0.3, 9.0, 0.2))
+    Local under = Try SavedAs(island, folder, "under_a_tree")
+    grown.SetCanopiesShown(False)
+    Local bare = Try Shown(island)
+    grown.SetCanopiesShown(True)
+    Local leafy = 0
+    Local through = 0
+    For y = 0 Until under.Height
+        For x = 0 Until under.Width
+            Local seen = under[x, y]
+            Local sky = bare[x, y]
+            If IsSky(sky)
+                If Abs(Brightness(seen) - Brightness(sky)) > 40 Then leafy += 1 Else through += 1
+            End If
+        End For
+    End For
+    Checks("its canopy has holes the sky shows through",
+           leafy > 20000 && (through As Float) / ((leafy + through) As Float) > 0.1)
+    // Bent by the storm, its wood doesn't tear: no more sky's shut inside it than when it's still.
+    grown.SetCanopiesShown(False)
+    island.Update(TIDE_IN_AT)
+    Local woodBent = Try Shown(island)
+    grown.SetWindless(True)
+    Local woodStill = Try Shown(island)
+    grown.SetWindless(False)
+    grown.SetCanopiesShown(True)
+    island.Update(0.0)
+    Local woodMoved = 0
+    For y = 0 Until woodBent.Height
+        For x = 0 Until woodBent.Width
+            If IsSky(woodBent[x, y]) != IsSky(woodStill[x, y]) Then woodMoved += 1
+        End For
+    End For
+    Checks("bent by the storm, its wood doesn't tear",
+           woodMoved > 2000 && EnclosedSky(woodBent) <= EnclosedSky(woodStill) + 30)
+
+    // Just off the view on the side the wind comes from, in the storm, its leaves bend into it: it's
+    // drawn, as its box takes its bend. The view's square to the wind, which goes left to right across
+    // it, from far off and narrow, so its edge goes nearly straight back, and slid along it till all of
+    // the leaves' box, unbent, is past that edge. What's counted is leaves against the sky, as their
+    // shadow's cast wherever they are.
+    island.Update(TIDE_IN_AT)
+    Local wide = camera.FieldOfView()
+    camera.SetFieldOfView(0.12)
+    Local across = Normalize(Vec3(WIND.x, 0.0, WIND.y))
+    Local ahead = Cross(Vec3(0.0, 1.0, 0.0), across)
+    Local box = grown.CanopyBoxes()[0]
+    Local offEdge = 0.0
+    While offEdge < 30.0
+        Local from = tree + Vec3(0.0, 2.0, 0.0) - ahead * 100.0 + across * offEdge
+        camera.SetPosition(from)
+        camera.PointAt(from + ahead * 100.0 + Vec3(0.0, 3.0, 0.0))
+        Local past = True
+        For corner = 0 Until 8
+            Local at = Vec3((corner & 1) == 0 ? box.Min.x : box.Max.x,
+                            (corner & 2) == 0 ? box.Min.y : box.Max.y,
+                            (corner & 4) == 0 ? box.Min.z : box.Max.z)
+            Local seen = camera.Project(at)
+            If seen != Null && seen.x >= 0.0 Then past = False
+        End For
+        If past Then Break
+        offEdge += 0.05
+    End While
+    // Its leaves alone, so nothing else that sways is counted, through a gust's whole beat: at its
+    // hardest, they bend past their box's edge into the view.
+    grown.SetShown(False)
+    grown.SetCanopyShown(0, True)
+    grown.SetWindless(True)
+    Local edgeStill = Try Shown(island)
+    grown.SetWindless(False)
+    Local entered = 0
+    For step = 0 Until 24
+        grown.Sway(0.25)
+        Local edgeShown = Try Shown(island)
+        Local here = 0
+        For y = 0 Until edgeShown.Height
+            For x = 0 Until 160
+                If IsSky(edgeStill[x, y]) && !IsSky(edgeShown[x, y]) Then here += 1
+            End For
+        End For
+        entered = Max(entered, here)
+    End For
+    grown.SetShown(True)
+    camera.SetFieldOfView(wide)
+    island.Update(0.0)
+    Checks("just off the view, a tree bent into it is drawn", entered > 30)
 End Function
 
 // The sea and the sky, saved to look at, and what each of them's for, by the pixels.
@@ -1990,6 +2182,12 @@ Function EndAndAgain(session: Session, said: String, wheelAtFirst: Quat) Throws 
     Local island = session.island
     Local flow = session.game.Story()
     Checks("nothing's shown just after it ends", !session.ending.Showing())
+    // The wind's beat goes on in real seconds after the end, as it did before it.
+    Local beat = island.Grown().Phase()
+    Try Stepped(session, 10)
+    Local went = island.Grown().Phase() - beat
+    Checks("after the end, the wind's beat goes on in real seconds",
+           Abs((went < 0.0 ? went + (BEAT As Float64) : went) - 1.0) < 0.05)
     Try Stepped(session, 35)
     Checks("it's shown after a while", session.ending.Showing())
     Checks("it says how it ended: {said}", session.ending.Says() == said)
