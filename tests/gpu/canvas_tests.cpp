@@ -2011,7 +2011,7 @@ TEST_CASE("the timed frame's textures fit the smallest set there is", "[gpu]") {
     require(fbe_window_open(1280, 720, FBE_WINDOW_WINDOWED));
     fbe::gpu::inject(fbe::gpu::fault_t::PROMISED_DESCRIPTORS);
     require(fbe_gpu_start());
-    CHECK(fbe::gpu::texture_capacity() == 1180);
+    CHECK(fbe::gpu::texture_capacity() == 1212 - fbe::gpu::sampler_slots - fbe::gpu::samples_slots);
     for (std::size_t at = 0; at < room_for_cards(); ++at) {
         card();
     }

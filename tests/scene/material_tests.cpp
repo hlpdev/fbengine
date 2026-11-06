@@ -315,19 +315,22 @@ TEST_CASE("a shader binds only what the scene's pipelines have") {
         words.insert(words.end(), { (4U << 16U) | 71U, 9, kind, value });
         return cooked(fbe_version(), words);
     };
-    const std::vector<std::uint8_t> good = decorated(33, 1);
+    // The bindless set's bindings, as gpu/vulkan.hpp has them: its samplers, 0, its multisampled
+    // images, 1, and its textures, 2.
+    const std::vector<std::uint8_t> good = decorated(33, 2);
     const std::uint64_t made = shader_of(good);
     CHECK(made != 0);
     fbe_shader_release(made);
     CHECK(fbe_shader_check(good.data(), static_cast<std::int64_t>(good.size())));
     CHECK(shader_of(decorated(33, 0)) != 0);
+    CHECK(shader_of(decorated(33, 1)) != 0);
     CHECK(shader_of(decorated(34, 0)) != 0);
-    // A global's, as Slang gives one, a texture's, and a set of its own.
-    CHECK(shader_of(decorated(33, 2)) == 0);
-    CHECK(error_says("don't bind"));
+    // A global's, as Slang gives one, past the set's, a texture's, and a set of its own.
     CHECK(shader_of(decorated(33, 3)) == 0);
+    CHECK(error_says("don't bind"));
+    CHECK(shader_of(decorated(33, 4)) == 0);
     CHECK(shader_of(decorated(34, 1)) == 0);
-    const std::vector<std::uint8_t> bad = decorated(33, 2);
+    const std::vector<std::uint8_t> bad = decorated(33, 3);
     CHECK_FALSE(fbe_shader_check(bad.data(), static_cast<std::int64_t>(bad.size())));
     CHECK(error_says("don't bind"));
     // A check keeps nothing, and refuses what creating it does.
