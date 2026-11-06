@@ -297,6 +297,9 @@ bool fail_vulkan(std::string_view doing, VkResult result);
 /// Whether the GPU was lost, as a driver's crash or reset loses it: nothing runs on it from then
 /// on, and what needs it fails, saying so, until it's stopped and started again.
 bool lost();
+/// Whether the validation layer checks the GPU's synchronization too, as it does wherever it
+/// validates and can.
+bool validating_synchronization();
 /// Keeps that the GPU was lost if `result` says it was; whether it was.
 bool lose(VkResult result);
 /// Keeps for fbe_error() that the GPU was lost, and returns false.

@@ -63,6 +63,8 @@ fbe::gpu::fault_t injected = fbe::gpu::fault_t::NONE;
 std::uint64_t stops = 0;
 
 bool validating = false;
+/// Whether the validation layer checks synchronization too.
+bool synchronizing = false;
 std::int32_t validation_errors = 0;
 /// Whether the GPU was lost, until it's stopped.
 bool gpu_lost = false;
@@ -175,6 +177,7 @@ bool make_instance() {
     validating = wants_validation() && has_validation_layer() &&
                  has_extension(extensions, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     const bool sync = validating && has_sync_validation();
+    synchronizing = sync;
     if (validating) {
         layers.push_back(validation_layer);
         enabled.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
@@ -808,6 +811,10 @@ bool remake_frame(const device_t& gpu, frame_t& frame) {
 
 bool lost() {
     return gpu_lost;
+}
+
+bool validating_synchronization() {
+    return synchronizing;
 }
 
 bool lose(VkResult result) {
