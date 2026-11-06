@@ -101,7 +101,8 @@ Public Final Class Audio
     End Method
 
     /// The seconds the device mixes at a time, which what's mixed is heard about that much later
-    /// than, or 0 when the audio's stopped or on MANUAL.
+    /// than: on MANUAL, the period Start was given, as a game that mixes it itself has its own
+    /// device mix that much at a time; or 0 when the audio's stopped, or its device is lost.
     @MainThread Public Static Method Period(): Float64 => fbe_audio_period()
 
     /// Stops the mix, which finishes every Channel, and lets its device go; stopped already, it does
