@@ -601,9 +601,8 @@ Public Final Class Island
         Local you = Vec3(MAIN_X, FloorAt(MAIN_X, 0.0), 0.0)
         Try
             afloat = Try Afloat.Make(boat, down, landmarks.RopeOnBoat(), landmarks.BollardTop(),
-                                     props,
-                                     logs, GroundUnder(spots), Statics(), you,
-                                     pip.Position(Space.WORLD))
+                                     RIDES, props, logs, GroundOver(spots, GroundHeight), Statics(),
+                                     you, pip.Position(Space.WORLD))
         Catch error As ShapeError
             Throw GraphicsError(error.Message)
         End Try
@@ -612,42 +611,6 @@ Public Final Class Island
         line.SetMaterial(Material(Color(0.55, 0.46, 0.32)))
         rope = line
         ShowRope()
-    End Method
-
-    // The ground as triangles, of a metre each, as the terrain's are, over each of `spots`, out as
-    // far as it says each way.
-    Method GroundUnder(spots: (Vec2, Float)[]): (Vec3[], Int32[])
-        Local points: Vec3[] = []
-        Local corners: Int32[] = []
-        For spot In spots
-            Local middle, reach = spot
-            Local fromX = Floor(middle.x - reach) As Int
-            Local fromZ = Floor(middle.y - reach) As Int
-            Local across = (Ceil(reach * 2.0) As Int) + 1
-            Local first = points.Count
-            For z = 0 To across
-                For x = 0 To across
-                    Local placeX = (fromX + x) As Float
-                    Local placeZ = (fromZ + z) As Float
-                    points.Add(Vec3(placeX, GroundHeight(placeX, placeZ), placeZ))
-                End For
-            End For
-            For z = 0 Until across
-                For x = 0 Until across
-                    Local a = (first + z * (across + 1) + x) As Int32
-                    Local b = a + 1
-                    Local c = a + (across + 1) As Int32
-                    Local d = c + 1
-                    corners.Add(a)
-                    corners.Add(c)
-                    corners.Add(b)
-                    corners.Add(b)
-                    corners.Add(c)
-                    corners.Add(d)
-                End For
-            End For
-        End For
-        Return (points, corners)
     End Method
 
     // What's solid and still, as boxes, by their middles, half sizes, and turns: the mill, the
@@ -948,6 +911,7 @@ Public Final Class Island
     @MainThread
     Public Method Reset()
         afloat?.Reset()
+        ShowRope()
         lamp.SetMaterial(lampUnlit)
         Local light = lampLight
         If light != Null Then light.Free()

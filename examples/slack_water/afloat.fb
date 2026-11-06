@@ -1,9 +1,10 @@
 // What moves as bodies, of fbengine_physics: the rowboat on the sea, roped to the jetty's bollard,
-// riding the tide and the swell and swinging on its rope; the barrels and crates by the mill, which you
-// and Pip knock over; and the driftwood along the shores, which the flood lifts and floats, and which
-// settles as the water falls. It's stepped in real time, in steps of a 60th of a second, whatever the
-// flow's clock does as it waits, so it's the same each run, to the bit; the sea's height is the tide's,
-// by that clock, and its swell, by real time.
+// riding the tide and rolling and pitching in the swell, and swinging on its rope; the barrels and
+// crates by the mill, which you and Pip knock over; and the driftwood along the shores, which the flood
+// lifts and floats, and which settles as the water falls. It's stepped in real time, in steps of a 60th
+// of a second, whatever the flow's clock does as it waits, and given the clock, and where you and Pip
+// are, a step at a time, so it's the same each run to the bit however the frames that step it fall.
+// The sea's height is the tide's, by that clock, as the sea's drawn, flat.
 
 Import std.collections
 Import std.core
@@ -11,60 +12,128 @@ Import std.math
 Import std.time
 Import fbengine
 Import fbengine_physics
+Import "./flow"
 Import "./ground"
 
 // A step, and the most taken for one frame, so a slow one never makes the next slower.
 Const STEP: Float64 = 1.0 / 60.0
 Const MOST_STEPS: Int = 8
+// The clock, as each step's given it, is to this part of a second, so steps given it a frame at a time
+// get the same clock whether the frames are long or short.
+Const CLOCK_GRAIN: Float64 = 4096.0
 // Earth's pull, and water's weight, in kilograms a cubic metre.
 Const PULL: Float = 9.81
 Const WATER: Float = 1000.0
-// The swell: how high, and how fast, as the boat bobbed before it was a body.
-Const SWELL: Float = 0.05
+// The swell, which rolls and pitches the boat, as the sea's drawn flat, with waves in its normals: how
+// fast it goes, and how hard it turns the boat, in newton metres, about its length and across it.
 Const SWELL_RATE: Float = 1.3
+Const ROLL: Float = 80.0
+Const PITCH: Float = 250.0
 
-// The boat: its weight, in kilograms, how far into the sea its keel goes as it floats, and how much
-// the water holds it back, by how fast it goes, up and down and along: up and down, half what would
-// stop it bouncing at all, as what floats it is a spring of its weight over its draft.
+// The boat: its weight, in kilograms, and how much the water holds it back, by how fast it goes, up and
+// down and along: up and down, half what would stop it bouncing at all, as what floats it is a spring
+// of its weight over its draft.
 Const BOAT_MASS: Float = 140.0
-Const BOAT_DRAFT: Float = 0.06
 Const BOAT_HEAVE: Float = 12.0
 Const BOAT_DRAG: Float = 0.35
 // How much longer its rope is than from the bollard to the boat as it's tied; how hard the tide pulls
-// it as the water rises, in newtons for each metre a second; and how far either way of straight out
-// from its bollard it pulls, swinging it, in radians, and how slowly, by the tide's clock.
+// it as the water rises, in newtons for each metre a second; how far either way of straight out from
+// its bollard it pulls, swinging it, in radians, and how slowly, by the tide's clock; and over how
+// long of the clock the rise is taken, so the flood's step isn't one.
 Const SLACK: Float = 0.6
 Const TIDE_PULL: Float = 6000.0
 Const TIDE_SWING: Float = 0.6
 Const TIDE_SWING_RATE: Float = 0.03
+Const TIDE_WINDOW: Float64 = 1.0
 
 // Driftwood: how heavy it is for its size, as a fraction of water, and how much the water holds it,
 // along and up and down.
 Const DRIFTWOOD: Float = 0.55
 Const LOG_DRAG: Float = 0.8
 Const LOG_HEAVE: Float = 8.0
-// A barrel's and a crate's weight, in kilograms.
+// A barrel's and a crate's weight, in kilograms, and how much the ground and what's on it hold each
+// other.
 Const BARREL_MASS: Float = 45.0
 Const CRATE_MASS: Float = 25.0
-// You and Pip, as what pushes: how tall, how wide, and how far off the ground, from the knee, so what
-// you walk into tips over rather than sliding along whole; and how much the ground and what's on it
-// hold each other.
-Const WALKER_HIGH: Float = 1.0
-Const WALKER_RADIUS: Float = 0.3
-Const WALKER_KNEE: Float = 0.5
 Const GRIP: Float = 0.8
-Const PIP_HIGH: Float = 0.6
-Const PIP_RADIUS: Float = 0.25
-// How far you or Pip go in a frame that's a jump, not a walk.
-Const JUMP: Float = 2.0
+// How much a barrel rolling on its side is slowed, as it would be on sand.
+Const ROLLING: Float = 2.0
+
+/// You and Pip, as what pushes, each a capsule this tall from end to end and this wide: yours from the
+/// knee up, so what you walk into tips over rather than sliding along whole, and Pip's from the ground.
+Public Const WALKER_HIGH: Float = 1.0
+Public Const WALKER_RADIUS: Float = 0.3
+Public Const WALKER_KNEE: Float = 0.5
+Public Const PIP_HIGH: Float = 0.6
+Public Const PIP_RADIUS: Float = 0.25
+// How hard each pushes, in newtons, at most, as a person leans on a barrel, so what's against a wall
+// is pressed, not flung or pushed through; and the fastest either goes from step to step, three times
+// a walk, past which it's put where it's going at once, pushing nothing.
+Const YOU_PUSH: Float = 400.0
+Const PIP_PUSH: Float = 250.0
+Const WALK_MOST: Float = 12.0
 
 /// How high the swell lifts the sea at (`x`, `z`), `time` seconds of real time in: two sines across it,
-/// so nothing bobs quite with its neighbor.
+/// so nothing rolls quite with its neighbor. The sea's drawn flat, so it rolls and pitches the boat,
+/// not lifts it.
 Public Function SwellAt(x: Float, z: Float, time: Float64): Float
     Local t = time As Float
-    Return SWELL * (Sin(t * SWELL_RATE + x * 0.21 + z * 0.17) * 0.65 +
-                    Sin(t * SWELL_RATE * 1.6 - x * 0.13 + z * 0.29) * 0.35)
+    Return 0.65 * Sin(t * SWELL_RATE + x * 0.21 + z * 0.17) +
+           0.35 * Sin(t * SWELL_RATE * 1.6 - x * 0.13 + z * 0.29)
 End Function
+
+/// How fast the sea's rising `clock` seconds in, in metres a second of the clock, over the window
+/// before it where the one after crosses the flood's step, so that isn't a rise.
+Public Function TideRising(clock: Float64): Float
+    If clock < FLOOD_AT && clock + TIDE_WINDOW >= FLOOD_AT
+        Return (SeaHeight(clock) - SeaHeight(clock - TIDE_WINDOW)) / (TIDE_WINDOW As Float)
+    End If
+    Return (SeaHeight(clock + TIDE_WINDOW) - SeaHeight(clock)) / (TIDE_WINDOW As Float)
+End Function
+
+/// The ground, as triangles of a metre each, as the terrain's are, by `height`, over each of `spots`,
+/// out as far as it says each way: one grid over all the metres any of them covers, so none's there
+/// twice.
+Public Function GroundOver(spots: (Vec2, Float)[], height: Func(Float, Float): Float): (Vec3[],
+                                                                                        Int32[])
+    // Each metre by a number of its own, x and z each from -CELLS to CELLS.
+    Local cells = Set<Int64>()
+    For spot In spots
+        Local middle, reach = spot
+        For z = Floor(middle.y - reach) As Int Until Ceil(middle.y + reach) As Int
+            For x = Floor(middle.x - reach) As Int Until Ceil(middle.x + reach) As Int
+                cells.Add(((z + CELLS) As Int64) * ((2 * CELLS + 1) As Int64) +
+                          ((x + CELLS) As Int64))
+            End For
+        End For
+    End For
+    Local points: Vec3[] = []
+    Local numbered: Map<(Int, Int), Int32> = {}
+    Local corner = Function(x: Int, z: Int): Int32
+        Local had = numbered.Get((x, z))
+        If had != Null Then Return had
+        Local at = points.Count
+        points.Add(Vec3(x As Float, height(x As Float, z As Float), z As Float))
+        numbered[(x, z)] = at
+        Return at
+    End Function
+    Local corners: Int32[] = []
+    Local sorted = cells.ToArray()
+    sorted.Sort()
+    For cell In sorted
+        Local x = ((cell % ((2 * CELLS + 1) As Int64)) As Int) - CELLS
+        Local z = ((cell / ((2 * CELLS + 1) As Int64)) As Int) - CELLS
+        Local a = corner(x, z)
+        Local b = corner(x + 1, z)
+        Local c = corner(x, z + 1)
+        Local d = corner(x + 1, z + 1)
+        corners.AddAll([a, c, b, b, c, d])
+    End For
+    Return (points, corners)
+End Function
+
+// How far out the ground's metres go from the middle, each way.
+Const CELLS: Int = 100000
 
 // A point a body floats by, in its own frame; how far under it, in the world, it's in the water
 // from, as a log's underside is under its axis however it's rolled; how much of its weight in water
@@ -76,28 +145,26 @@ Struct Floater
     Field deep: Float
 End Struct
 
-// What floats, its points, how the water drags it, and whether the tide pulls it, as it does the
-// boat, swinging it on its rope.
+// What floats, its points, how the water drags it, whether the tide pulls it and the swell rolls it, as
+// they do the boat.
 Final Class Floating
     Field body: Body
     Field points: Floater[]
     Field drag: Float
     Field heave: Float
-    Field pulled: Bool
+    Field boat: Bool
 
-    New(body: Body, points: Floater[], drag: Float, heave: Float, pulled: Bool)
+    New(body: Body, points: Floater[], drag: Float, heave: Float, boat: Bool)
         Self.body = body
         Self.points = points
         Self.drag = drag
         Self.heave = heave
-        Self.pulled = pulled
+        Self.boat = boat
     End New
 End Class
 
-/// What the bodies are made of, as Afloat takes them: the boat's root, where its rope's tied on it in
-/// its own frame, the bollard's top in the world, and its hull's points; each barrel and crate, by
-/// kind, 0 a barrel and 1 a crate, and size; each log, its length and radius; and the static ground,
-/// as triangles over where they are, and boxes, by their middles, half sizes, and turns.
+/// The bodies: the boat, roped to its bollard; the barrels and crates; the logs; and you and Pip, which
+/// push them; on the ground, and among what's static.
 Public Final Class Afloat
     Field world: PhysicsWorld
     Field boat: Body
@@ -110,20 +177,26 @@ Public Final Class Afloat
     Field floating: Floating[] = []
     Field props: Body[] = []
     Field logs: Body[] = []
-    Field you: Body
-    Field pip: Body
+    Field you: Character
+    Field pip: Character
     Field youAt: Vec3
     Field pipAt: Vec3
+    Field youStart: Vec3
+    Field pipStart: Vec3
+    // The clock the last step was given, and the one the next frame's steps go to.
     Field clock: Float64 = 0.0
+    Field target: Float64 = 0.0
     Field time: Float64 = 0.0
     Field owed: Float64 = 0.0
     Field spent: Float64 = 0.0
     Field steps: Int64 = 0
     // Each body as it was made, to put back.
     Field starts: (Body, Vec3, Quat)[] = []
+    // The lowest the boat's ridden over the sea, at the end of a step, since it was last asked.
+    Field lowest: Float = 1000.0
 
     New(world: PhysicsWorld, boat: Body, rope: Joint, bollard: Vec3, tie: Vec3, length: Float,
-        you: Body, pip: Body)
+        you: Character, pip: Character, youAt: Vec3, pipAt: Vec3)
         Self.world = world
         Self.boat = boat
         Self.rope = rope
@@ -134,25 +207,30 @@ Public Final Class Afloat
         away = out * (1.0 / Max(Distance(out, Vec3(0, 0, 0)), 0.001))
         Self.you = you
         Self.pip = pip
-        youAt = you.Position()
-        pipAt = pip.Position()
+        Self.youAt = youAt
+        Self.pipAt = pipAt
+        youStart = youAt
+        pipStart = pipAt
     End New
 
-    /// The bodies, of `boat`, tied at `tie` in its frame to `bollard`, floating by `hull`'s points;
-    /// `props`; `logs`; on `ground`, triangles by three of its indices into its vertices, and `boxes`.
+    /// The bodies, of `boat`, riding `rides` over the sea, tied at `tie` in its frame to `bollard`,
+    /// floating by `hull`'s points; `props`, by kind, 0 a barrel and 1 a crate, and size, a barrel's
+    /// radius and height or a crate's half sizes; `logs`, by length and radius; on `ground`, triangles
+    /// by three of its indices into its vertices, and `boxes`, by their middles, half sizes, and turns;
+    /// with you at `youAt` and Pip at `pipAt`, on the ground.
     @MainThread
-    Public Static Method Make(boat: Entity, hull: Vec3[], tie: Vec3, bollard: Vec3,
+    Public Static Method Make(boat: Entity, hull: Vec3[], tie: Vec3, bollard: Vec3, rides: Float,
                               props: (Entity, Int, Vec3)[], logs: (Entity, Float, Float)[],
                               ground: (Vec3[], Int32[]), boxes: (Vec3, Vec3, Quat)[],
                               youAt: Vec3, pipAt: Vec3): Afloat Throws ShapeError
         Local world = PhysicsWorld()
-        // Stepped by hand, a step at a time, so the water's forces go on before each.
         Body(world, Try Shape.Mesh(ground.0, ground.1), Motion.STATIC,
              Vec3(0, 0, 0)).SetFriction(GRIP)
         For box In boxes
             Body(world, Shape.Box(box.1 * 2.0), Motion.STATIC, box.0, box.2).SetFriction(GRIP)
         End For
-        // The boat, of its hull's points, by what floats it: eight along its bottom, by its keel.
+        // The boat, of its hull's points, floated at eight along its bottom, by its keel, so it rides
+        // `rides` over the sea: each holds a quarter of its weight all under, half of it as it floats.
         Local shell = Try Shape.ConvexHull(hull)
         Local floated = Body(world, shell, Motion.DYNAMIC, boat)
         floated.SetMass(BOAT_MASS)
@@ -164,21 +242,30 @@ Public Final Class Afloat
             wide = Max(wide, Abs(point.x))
             longest = Max(longest, Abs(point.z))
         End For
+        Local bottom = low + 0.02
+        Local draft = Max(-(rides + bottom), 0.01)
         Local points: Floater[] = []
         For along In [-0.6, -0.2, 0.2, 0.6]
             For across In [-0.45, 0.45]
-                points.Add(Floater(Vec3(across * wide, low + 0.02, along * longest), 0.0,
-                                   2.0 * BOAT_MASS / 8.0, BOAT_DRAFT * 2.0))
+                points.Add(Floater(Vec3(across * wide, bottom, along * longest), 0.0,
+                                   2.0 * BOAT_MASS / 8.0, 2.0 * draft))
             End For
         End For
         Local tied = floated.Position() + floated.Rotation() * tie
         Local length = Distance(tied, bollard) + SLACK
         Local rope = Joint.Distance(floated, Null, tied, bollard)
         rope.SetLimits(0, length)
-        // You and Pip, pushing what you walk into.
-        Local you = Body(world, Shape.Capsule(WALKER_HIGH, WALKER_RADIUS), Motion.KINEMATIC, youAt)
-        Local pip = Body(world, Shape.Capsule(PIP_HIGH, PIP_RADIUS), Motion.KINEMATIC, pipAt)
-        Local made = Afloat(world, floated, rope, bollard, tie, length, you, pip)
+        // You and Pip, pushing what you walk into, as hard as a person leans, stopped by what's static.
+        Local you = Character(world, Shape.Capsule(WALKER_HIGH, WALKER_RADIUS),
+                              youAt + Vec3(0, WALKER_KNEE + WALKER_HIGH * 0.5, 0))
+        you.SetStrength(YOU_PUSH)
+        // Pushing, never stepping up onto what it walks into.
+        you.SetStepHeight(0.0)
+        Local pip = Character(world, Shape.Capsule(PIP_HIGH, PIP_RADIUS),
+                              pipAt + Vec3(0, PIP_HIGH * 0.5, 0))
+        pip.SetStrength(PIP_PUSH)
+        pip.SetStepHeight(0.0)
+        Local made = Afloat(world, floated, rope, bollard, tie, length, you, pip, youAt, pipAt)
         made.floating.Add(Floating(floated, points, BOAT_DRAG, BOAT_HEAVE, True))
         For prop In props
             Local thing, kind, size = prop
@@ -189,6 +276,8 @@ Public Final Class Afloat
                 Local body = Body(world, barrel, Motion.DYNAMIC, thing)
                 body.SetMass(BARREL_MASS)
                 body.SetFriction(GRIP)
+                // A barrel on its side rolls to a stop, as staves and hoops on sand do.
+                body.SetAngularDamping(ROLLING)
                 made.props.Add(body)
             Else
                 Local body = Body(world, Shape.Box(size * 2.0), Motion.DYNAMIC, thing)
@@ -202,8 +291,7 @@ Public Final Class Afloat
             Local wood = Shape.Compound([ShapePart(Shape.Cylinder(long, radius), Vec3(0, 0, 0),
                                                    Quat.FromAxisAngle(Vec3(0, 0, 1), Pi / 2))])
             Local body = Body(world, wood, Motion.DYNAMIC, thing)
-            Local mass = DRIFTWOOD * WATER * Pi * radius * radius * long
-            body.SetMass(mass)
+            body.SetMass(DRIFTWOOD * WATER * Pi * radius * radius * long)
             made.logs.Add(body)
             // Held up at two points along its axis, each half its weight in water when it's all under,
             // from its underside, its radius under, however it's rolled.
@@ -222,59 +310,75 @@ Public Final Class Afloat
         Return made
     End Method
 
-    /// Puts each body back where it was made, still, for another game, and the swell's time to 0.
+    /// Puts each body back where it was made, still, and you and Pip where you began, for another
+    /// game, the swell's time to 0, and what's drawn of them there at once.
     @MainThread
     Public Method Reset()
         For start In starts
             Local body, place, turn = start
             body.Teleport(place, turn)
         End For
+        youAt = youStart
+        pipAt = pipStart
+        you.SetPosition(youStart + Vec3(0, WALKER_KNEE + WALKER_HIGH * 0.5, 0))
+        pip.SetPosition(pipStart + Vec3(0, PIP_HIGH * 0.5, 0))
         owed = 0.0
         time = 0.0
+        clock = target
+        world.Sync()
     End Method
 
-    /// Sets the tide's clock, `clock` seconds in, for the sea's height.
+    /// Sets the tide's clock, `clock` seconds in, for the sea's height, which the next frame's steps
+    /// go to, a step at a time.
     @MainThread Public Method SetClock(clock: Float64)
-        Self.clock = clock
+        target = clock
     End Method
 
-    /// Where you are and Pip is, on the ground, for what you each knock over.
+    /// The tide's clock, as the last step was given it.
+    @MainThread Public Method Clock(): Float64 => clock
+
+    /// Where you are and Pip is, on the ground, for what you each knock over, which the next frame's
+    /// steps go to, a step at a time.
     @MainThread
     Public Method SetWalkers(you: Vec3, pip: Vec3)
         youAt = you
         pipAt = pip
     End Method
 
-    /// The tide's clock, as SetClock set it.
-    @MainThread Public Method Clock(): Float64 => clock
+    /// You and Pip, as what pushes.
+    @MainThread Public Method Walkers(): (Character, Character) => (you, pip)
 
-    /// How high the sea is at (`x`, `z`) now.
+    /// How high the sea is at (`x`, `z`) now: as it's drawn, the tide's height, flat.
     @MainThread
-    Public Method WaterAt(x: Float, z: Float): Float => SeaHeight(clock) + SwellAt(x, z, time)
+    Public Method WaterAt(x: Float, z: Float): Float => SeaHeight(clock)
 
-    /// Moves it all on `seconds` of real time, in as many steps as are due.
+    /// Moves it all on `seconds` of real time, in as many steps as are due: each given the clock, and
+    /// you and Pip, as far through the frame as it is.
     @MainThread
     Public Method Step(seconds: Float)
         Local began = Instant.Now()
         owed += seconds As Float64
-        // How many steps are due, so you and Pip go where you've walked across them, not in the first.
         Local due = 0
         Local left = owed
         While left >= STEP * 0.999 && due < MOST_STEPS
             left -= STEP
             due += 1
         End While
+        Local clockFrom = clock
         Local youFrom = you.Position()
         Local pipFrom = pip.Position()
-        Local youTo = youAt + Vec3(0, WALKER_KNEE + WALKER_HIGH * 0.5 + WALKER_RADIUS, 0)
-        Local pipTo = pipAt + Vec3(0, PIP_HIGH * 0.5 + PIP_RADIUS, 0)
+        Local youTo = youAt + Vec3(0, WALKER_KNEE + WALKER_HIGH * 0.5, 0)
+        Local pipTo = pipAt + Vec3(0, PIP_HIGH * 0.5, 0)
         Local taken = 0
         While owed >= STEP * 0.999 && taken < MOST_STEPS
+            Local through = ((taken + 1) As Float) / (due As Float)
+            Local at = clockFrom + (target - clockFrom) * (through As Float64)
+            clock = Round(at * CLOCK_GRAIN) / CLOCK_GRAIN
             Buoy()
-            Local through = ((taken + 1) As Float) / (Max(due, 1) As Float)
-            Walk(you, youFrom, youTo, through)
-            Walk(pip, pipFrom, pipTo, through)
+            Walk(you, youFrom, youTo, through, due)
+            Walk(pip, pipFrom, pipTo, through, due)
             world.Step(STEP)
+            lowest = Min(lowest, boat.Position().y - SeaHeight(clock))
             owed -= STEP
             time += STEP
             taken += 1
@@ -284,52 +388,70 @@ Public Final Class Afloat
         spent += (Instant.Now() - began).TotalSeconds
     End Method
 
-    // Moves `walker` a step on its way from `from` to `to`, `through` of it by the step's end; one
-    // that's jumped, as the flood puts you ashore, it puts there at once, pushing nothing.
-    Method Walk(walker: Body, from: Vec3, to: Vec3, through: Float)
-        If Distance(from, to) > JUMP
-            walker.Teleport(to, Quat.Identity)
+    // Moves `walker` a step on its way from `from` to `to`, `through` of it by the step's end, in a
+    // frame of `due` steps, pushing as hard as it can; one that's going faster than WALK_MOST, as the
+    // flood puts you ashore, it puts there at once, pushing nothing.
+    Method Walk(walker: Character, from: Vec3, to: Vec3, through: Float, due: Int)
+        If Distance(from, to) > WALK_MOST * (due As Float) * (STEP As Float)
+            walker.SetPosition(to)
             Return
         End If
-        walker.MoveTo(from + (to - from) * through, Quat.Identity, STEP As Float)
+        Local aim = from + (to - from) * through
+        Local going = (aim - walker.Position()) * (1.0 / (STEP As Float))
+        Local fast = Distance(going, Vec3(0, 0, 0))
+        If fast > WALK_MOST Then going = going * (WALK_MOST / fast)
+        walker.Move(going, STEP As Float)
     End Method
 
     // Pushes what's in the water up, at each of its points, by how far under it is, and holds it
-    // back, by how fast each point goes.
+    // back, by how fast each point goes about its body's center of mass; pulls the boat out from its
+    // bollard as the tide rises; and rolls and pitches it in the swell.
     Method Buoy()
-        Local rising = SeaHeight(clock + 1.0) - SeaHeight(clock)
+        Local sea = SeaHeight(clock)
+        Local rising = TideRising(clock)
         For each In floating
             Local body = each.body
             Local place = body.Position()
+            Local middle = body.CenterOfMass()
             Local turn = body.Rotation()
             Local going = body.Velocity()
             Local turning = body.AngularVelocity()
             Local wet = False
             For point In each.points
                 Local at = place + turn * point.at
-                Local under = WaterAt(at.x, at.z) - at.y + point.below
+                Local under = sea - at.y + point.below
                 If under <= 0 Then Continue
                 wet = True
                 Local share = Min(under / point.deep, 1.0)
-                Local moving = going + Cross(turning, at - place)
+                Local moving = going + Cross(turning, at - middle)
                 Local push = Vec3(0, point.holds * PULL * share, 0) -
                              Vec3(moving.x * each.drag, moving.y * each.heave,
                                   moving.z * each.drag) *
                              (point.holds * share)
                 body.AddForceAt(push, at)
             End For
-            // The tide pulls the boat out from its bollard as it rises, swinging either way of straight
-            // out as it goes.
-            If each.pulled && wet && rising > 0
+            If !each.boat || !wet Then Continue
+            If rising > 0
                 Local swing = TIDE_SWING * (Sin(clock * TIDE_SWING_RATE) As Float)
                 Local way = Quat.FromAxisAngle(Vec3(0, 1, 0), swing) * away
                 body.AddForce(way * (TIDE_PULL * rising))
             End If
+            body.AddTorque(turn * Vec3(0, 0, ROLL * SwellAt(place.x, place.z, time)))
+            body.AddTorque(turn * Vec3(PITCH * SwellAt(place.x + 1.3, place.z - 0.7, time), 0, 0))
         End For
     End Method
 
     /// The boat.
     @MainThread Public Method Boat(): Body => boat
+
+    /// The lowest the boat's middle has ridden over the sea, at the end of any step, since this was
+    /// last asked, which starts it again.
+    @MainThread
+    Public Method LowestRide(): Float
+        Local was = lowest
+        lowest = 1000.0
+        Return was
+    End Method
 
     /// The barrels and crates, as Make had them.
     @MainThread Public Method Props(): Body[] => props

@@ -66,6 +66,9 @@ FBE_PHYSICS_API bool fbe_body_set_motion(uint64_t body, int32_t motion);
 // Where `body` is, and how it's turned; false if it isn't a body.
 FBE_PHYSICS_API bool fbe_body_position(uint64_t body, fbe_body_vec3_t* position);
 FBE_PHYSICS_API bool fbe_body_rotation(uint64_t body, fbe_body_quat_t* rotation);
+// Where `body`'s center of mass is, in the world, which a shape off its origin, as a compound's
+// part, has elsewhere than its position; false if it isn't a body.
+FBE_PHYSICS_API bool fbe_body_center_of_mass(uint64_t body, fbe_body_vec3_t* center);
 
 // Puts `body` at `position`, or turns it to `rotation`, at once, waking it; false if it isn't a
 // body, or is a character's, or the vector or rotation isn't finite, or the rotation is 0.

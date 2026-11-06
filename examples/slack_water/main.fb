@@ -811,8 +811,8 @@ Function CheckBodies(folder: Path, island: Island, camera: Camera) Throws Graphi
     Tide(island, 0.0, 0.0, 3.0)
     Local boat = bodies.Boat().Position()
     Local tied, bollard = bodies.RopeEnds()
-    Checks("the boat floats on the slack water, on its rope",
-           Abs(boat.y - (bodies.WaterAt(boat.x, boat.z) + RIDES)) < 0.15 &&
+    Checks("the boat floats on the slack water, {boat.y - SeaHeight(0.0)} m over it, on its rope",
+           Abs(boat.y - (SeaHeight(0.0) + RIDES)) < 0.02 &&
            Distance(tied, bollard) < bodies.RopeLength() + 0.05)
     Local start = JettyStart()
     Local end = JettyEnd()
@@ -824,21 +824,36 @@ Function CheckBodies(folder: Path, island: Island, camera: Camera) Throws Graphi
     Try Screen.Save(folder / "boat_low_tide.png")
     Flip(False)
     Checks("and it's seen, at low tide", Try SeenIn(island, camera, low, marks.Boat(), boat))
-    // The tide comes in, in a minute of real time, as the flow's clock goes at thirty times, the boat
-    // never under the jetty's deck.
+    // The tide comes in, in a minute of real time, as the flow's clock goes at thirty times: the boat
+    // never under the jetty's deck, and its floorboards over the sea at every step, as they're drawn,
+    // with nothing of the sea seen in it when they're lowest.
     Local under = False
+    bodies.LowestRide()
+    Local lowest: Float = 1000.0
+    Local seaInIt = 0
+    Local lookedIn = 0
     For second = 1 To 60
         Tide(island, TIDE_IN_AT * ((second - 1) As Float64) / 60.0,
              TIDE_IN_AT * (second As Float64) / 60.0, 1.0)
         Local at = bodies.Boat().Position()
         If at.x > end.x - 0.5 && at.x < start.x && Abs(at.z - end.y) < 1.9 Then under = True
+        Local ride = bodies.LowestRide()
+        If ride < lowest
+            lowest = ride
+            Local seen = Try SeaInBoat(island, camera, at)
+            seaInIt = seen.0
+            lookedIn = seen.1
+        End If
     End For
-    Checks("and keeps clear of the jetty", !under)
+    Checks("and keeps clear of the jetty as the tide comes in", !under)
+    Local boards = lowest - KEEL + FLOORBOARDS
+    Checks("its floorboards over the sea all the while, {boards} m at the lowest", boards > 0.0)
+    Checks("and nothing of the sea seen in it then, of {lookedIn}", lookedIn > 60 && seaInIt == 0)
     Tide(island, TIDE_IN_AT, TIDE_IN_AT, 3.0)
     Local high = bodies.Boat().Position()
     tied, bollard = bodies.RopeEnds()
     Checks("it's risen with the tide, {high.y - boat.y} m, on its rope",
-           Abs(high.y - (bodies.WaterAt(high.x, high.z) + RIDES)) < 0.15 &&
+           Abs(high.y - (SeaHeight(TIDE_IN_AT) + RIDES)) < 0.02 &&
            Distance(tied, bollard) < bodies.RopeLength() + 0.05)
     Checks("and swung on it, {Distance(Vec2(high.x, high.z), Vec2(boat.x, boat.z))} m",
            Distance(Vec2(high.x, high.z), Vec2(boat.x, boat.z)) > 0.2)
@@ -870,7 +885,14 @@ Function CheckBodies(folder: Path, island: Island, camera: Camera) Throws Graphi
     // As the water falls, each settles near where it lay: at rest on the sand, or, where the slack
     // water's over its sand, as most of them are, afloat on it, riding the swell.
     Local lay = bodies.Logs().Map(Function(log: Body) => log.Position())
-    Tide(island, TIDE_IN_AT, 0.0, 60.0)
+    Local back = False
+    For second = 1 To 60
+        Tide(island, TIDE_IN_AT * ((60 - second + 1) As Float64) / 60.0,
+             TIDE_IN_AT * ((60 - second) As Float64) / 60.0, 1.0)
+        Local at = bodies.Boat().Position()
+        If at.x > end.x - 0.5 && at.x < start.x && Abs(at.z - end.y) < 1.9 Then back = True
+    End For
+    Checks("and keeps clear of the jetty as it goes out", !back)
     Tide(island, 0.0, 0.0, 5.0)
     Local resting = 0
     Local riding = 0
@@ -914,7 +936,46 @@ Function CheckBodies(folder: Path, island: Island, camera: Camera) Throws Graphi
         "the bodies take {each * 1000.0} ms a step, {each * 60.0 * 100.0}% of a frame at 60 fps, " +
         "over {steps} steps")
     Checks("which is under a twentieth of a frame", each * 60.0 < 0.05)
+    // At their worst: everything awake, the flood coming in fast over the driftwood and the boat, and
+    // you walking back and forth through the barrels and crates.
     island.Reset()
+    Local props = island.Props()[1].0.Position(Space.WORLD)
+    Local worstSpent = bodies.Spent()
+    Local worstSteps = bodies.Steps()
+    For frame = 1 To 100
+        Local across = props.x - 1.5 + 3.0 * Abs(Sin((frame As Float) * 0.08))
+        Local along = props.z - 1.0 + 2.0 * Abs(Cos((frame As Float) * 0.05))
+        island.SetWalker(Vec3(across, island.FloorAt(across, along), along))
+        island.Update(TIDE_IN_AT * (frame As Float64) / 100.0)
+        island.Animate(0.1)
+    End For
+    Local worst = (bodies.Spent() - worstSpent) / (Max(bodies.Steps() - worstSteps, 1) As Float64)
+    Print("at their worst, all awake, flooded and pushed, the bodies take {worst * 1000.0} ms a step, " +
+          "{worst * 60.0 * 100.0}% of a frame at 60 fps")
+    Checks("which is under a tenth of a frame", worst * 60.0 < 0.1)
+    island.Reset()
+End Function
+
+// From over the boat at `boat`: how many of the points between its gunwales show the sea, and how many
+// were looked at.
+Function SeaInBoat(island: Island, camera: Camera, boat: Vec3): (Int, Int) Throws GraphicsError
+    camera.SetPosition(boat + Vec3(0.0, 3.5, 0.01))
+    camera.PointAt(boat)
+    island.Drawn(camera)
+    Local over = Try Screen.ToImage()
+    Flip(False)
+    Local sea = 0
+    Local looked = 0
+    For across = -2 To 2
+        For along = -8 To 8
+            Local inside = PixelOf(camera, over, boat + Vec3((across As Float) * 0.08, 0.0,
+                                                             (along As Float) * 0.08))
+            If inside == Null Then Continue
+            looked += 1
+            If (inside.b As Int) > (inside.r As Int) + 30 Then sea += 1
+        End For
+    End For
+    Return (sea, looked)
 End Function
 
 // Each of `pieces`' share of a frame of the whole island, from above, as `camera` sees it.

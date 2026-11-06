@@ -48,6 +48,10 @@ struct body_t {
     [[nodiscard]] JPH::Vec3 position() const {
         return JPH::Vec3(body().GetPosition()) - JPH::Vec3(0.0F, padding, 0.0F);
     }
+
+    [[nodiscard]] JPH::Vec3 center_of_mass() const {
+        return JPH::Vec3(body().GetCenterOfMassPosition()) - JPH::Vec3(0.0F, padding, 0.0F);
+    }
 };
 
 pool_t<body_t>& bodies() {
@@ -392,6 +396,11 @@ FBE_PHYSICS_API bool fbe_body_set_motion(uint64_t body, int32_t motion_type) {
 FBE_PHYSICS_API bool fbe_body_position(uint64_t body, fbe_body_vec3_t* position) {
     const fp_mode_t fp_mode;
     return get_vec3(body, position, [](const body_t& b) { return b.position(); });
+}
+
+FBE_PHYSICS_API bool fbe_body_center_of_mass(uint64_t body, fbe_body_vec3_t* center) {
+    const fp_mode_t fp_mode;
+    return get_vec3(body, center, [](const body_t& b) { return b.center_of_mass(); });
 }
 
 FBE_PHYSICS_API bool fbe_body_rotation(uint64_t body, fbe_body_quat_t* rotation) {

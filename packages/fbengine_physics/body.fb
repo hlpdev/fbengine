@@ -308,6 +308,12 @@ Public Final Class Body
     /// Where the body is: its shape's origin, in the world.
     @MainThread Public Method Position(): Vec3 => GetVec3(Live("Body.Position"), fbe_body_position)
 
+    /// Where its center of mass is, in the world: its Position for a shape centered on its origin,
+    /// and elsewhere for one that isn't, as a compound's part off its origin is. What it turns about,
+    /// and what a point on it moves by, with its Velocity and AngularVelocity.
+    @MainThread Public Method CenterOfMass(): Vec3 =>
+        GetVec3(Live("Body.CenterOfMass"), fbe_body_center_of_mass)
+
     /// Puts the body at `position` at once, waking it, as a teleport does: it doesn't pass
     /// through what's between. A kinematic body moved by its velocity pushes what it meets.
     @MainThread Public Method SetPosition(position: Vec3)
