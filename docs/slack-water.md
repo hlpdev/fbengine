@@ -104,6 +104,14 @@ instead); saves; depth of field.
   lavapipe, takes hundreds of frames to tell, so `--frames` says it only with SLACK_WATER_COSTS=1:
   the lighthouse 0.4%, the jetty 1.2%, the boat 1.5%, and what's along the shores 2.8%, of 522 draws
   and 148k triangles, a frame's time wandering 0.6%.
+- **The island's shape.** On GroundHeight, so walks and what's placed follow it: the headland a ridge
+  of two summits; outcrops of ridged crags, terraced in strata of 1.6 m, on the headland and the far
+  islet's peak, parted along its walks; 40,000 drops of rain run down a height grid at start, by a fixed
+  seed, cutting lines down the slopes above 2.5 m, kept off the yard, the road, and the lighthouse's
+  pad (0.06 s on the machine it's made on); boulders, Lumpy, four tenths sunk, on the slopes and
+  solid, one mesh, 3 draws; and a rock shelf on the main island's south shore, its pools holding the
+  sea at slack water, all of it under the high water. Wherever a walk goes, the ground's no steeper
+  than 1.1, the far islet's own dome.
 - **The tests' time.** The release is cooked once, by `examples.slack_water.cook`, which each test of
   it needs, and which fails past 120 s, saying what each file took; a fresh cook was 3 s on the
   machine it's made on. `--frames` says what each part of it took; it was 21 s there.

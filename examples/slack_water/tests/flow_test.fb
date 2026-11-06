@@ -546,14 +546,16 @@ Function PipLooksAndBlinks()
     Expect(BlinkWeight(4.5) == 0.0)
 End Function
 
-// From one step of the ground to the next, nothing's a cliff, even at a shore.
+// From one step of the ground to the next, nothing's a cliff on a shore, up to where the outcrops can
+// be.
 @Test
 Function TheShoresArentSteps()
     For x = -60 To 69
         Local fx = x As Float
         For z = -40 To 40
             Local fz = z As Float
-            If GroundHeight(fx, fz) < 0.0 || InMill(fx, fz) Then Continue
+            Local height = GroundHeight(fx, fz)
+            If height < 0.0 || height > SHORES || InMill(fx, fz) Then Continue
             Expect(Abs(GroundHeight(fx + 0.1, fz) - GroundHeight(fx, fz)) < 0.15)
             Expect(Abs(GroundHeight(fx, fz + 0.1) - GroundHeight(fx, fz)) < 0.15)
         End For
@@ -877,7 +879,7 @@ Function WhatCoversTheGroundGoesByItsHeightAndSlope()
     Local rock = CoverOver(10.0, 1.4)
     Local turf = CoverOver(10.0, 0.1)
     Local tide = CoverOver(1.7, 1.4)
-    Local rockBelow = CoverOver(3.0, 1.4)
+    Local rockBelow = CoverOver(2.2, 1.4)
     // Sand's warm and bright; wet, it's darker, and it shines.
     Expect(sand.0.x > 0.65 && sand.0.x > sand.0.z + 0.15)
     Expect(wet.0.x < sand.0.x * 0.7)
@@ -1127,6 +1129,85 @@ Function WhatsWashedUpLiesOnTheGround()
     For spot In ShoreSpots()
         For end In Underside(spot)
             Expect(Abs(GroundHeight(end.x, end.z) - end.y) < 0.03, "{spot.0} {spot.1}: {end}")
+        End For
+    End For
+End Function
+
+// Wherever a walk goes or stands, the ground's walkable, whatever the outcrops and the rain have done to
+// the rest.
+@Test
+Function WhereTheWalksGoIsWalkable()
+    For spot In KeptSpots()
+        Local dx = GroundHeight(spot.x + 0.5, spot.y) - GroundHeight(spot.x - 0.5, spot.y)
+        Local dz = GroundHeight(spot.x, spot.y + 0.5) - GroundHeight(spot.x, spot.y - 0.5)
+        Local slope = Sqrt(dx * dx + dz * dz)
+        Expect(slope < WALKABLE, "{spot}: {slope}")
+        Expect(!Blocked(spot.x, spot.y) || InMill(spot.x, spot.y), "{spot}")
+    End For
+    Expect(KeptSpots().Count > 60)
+End Function
+
+@Test
+Function TheOutcropsAreSteepAndTheRainCutsTheSlopes()
+    // Somewhere on the far islet's peak and the headland, the ground's a cliff.
+    Local steepest = 0.0
+    For x = 40 To 70
+        For z = -80 To 30
+            Local fx = x As Float
+            Local fz = z As Float
+            Local slope = Abs(GroundHeight(fx + 0.5, fz) - GroundHeight(fx - 0.5, fz))
+            steepest = Max(steepest, slope)
+        End For
+    End For
+    Expect(steepest > 1.5, "{steepest}")
+    // And the rain's cut lines down the slopes, but nowhere a walk goes.
+    Local cut = 0
+    For x = -100 To 100 Step 2
+        For z = -100 To 100 Step 2
+            Local fx = x As Float
+            Local fz = z As Float
+            If GroundHeight(fx, fz) < BaseHeightOf(fx, fz) - 0.05 Then cut += 1
+        End For
+    End For
+    Expect(cut > 50, "{cut}")
+    For spot In KeptSpots()
+        Expect(Abs(GroundHeight(spot.x, spot.y) - BaseHeightOf(spot.x, spot.y)) < 0.0001, "{spot}")
+        Expect(ErosionShownAt(spot.x, spot.y) == 0.0, "{spot}")
+    End For
+    Expect(ErosionSeconds() < 2.0)
+End Function
+
+@Test
+Function TheShelfHasPoolsThatHoldTheSeaAtSlackWater()
+    Local shelf = 0
+    Local pools = 0
+    For x = -70 To -20
+        For z = 15 To 60
+            Local fx = x As Float
+            Local fz = z As Float
+            Local height = GroundHeight(fx, fz)
+            If ShelfAt(fx, fz, height) > 0.9
+                shelf += 1
+                If height < 0.0 && PoolAt(fx, fz) < -0.1 Then pools += 1
+            End If
+        End For
+    End For
+    Expect(shelf > 30, "{shelf}")
+    Expect(pools > 3 && pools < shelf / 2, "{pools} of {shelf}")
+    // All of it's under the high water.
+    Expect(SHELF < SeaHeight(TIDE_IN_AT))
+End Function
+
+@Test
+Function BouldersLieOnTheSlopesAwayFromTheWalks()
+    Local boulders = BoulderSpots()
+    Expect(boulders.Count >= 10 && boulders.Count <= 60, "{boulders.Count}")
+    For boulder In boulders
+        Expect(Blocked(boulder.0.x, boulder.0.y))
+        For spot In KeptSpots()
+            Local dx = spot.x - boulder.0.x
+            Local dz = spot.y - boulder.0.y
+            Expect(Sqrt(dx * dx + dz * dz) > boulder.1 + 1.0, "{boulder.0} by {spot}")
         End For
     End For
 End Function
