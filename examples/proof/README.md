@@ -22,7 +22,7 @@ from the code, and `tests/CMakeLists.txt` checks those lines.
 | 13 | P1 | Skinned animation, bones under game control | [skinned_animation_with_bones_under_game_control](skinned_animation_with_bones_under_game_control/main.fb) |
 | 14 | P1 | What a game gets of a converter's glTF | [models_as_a_converter_writes_them](models_as_a_converter_writes_them/main.fb) |
 | 15 | P1 | Audio: channels, streams, and position | [streamed_and_positional_sound](streamed_and_positional_sound/main.fb) |
-| 16 | P1 | Textures by their settings and files | [textures_by_their_settings](textures_by_their_settings/main.fb) |
+| 16 | P1 | Textures by their settings and files, and sound files by their bytes | [textures_by_their_settings](textures_by_their_settings/main.fb), and [streamed_and_positional_sound](streamed_and_positional_sound/main.fb) for Ogg Vorbis and WAV .cwm files by backslashed paths |
 | 17 | P1 | Pixel access | [pixels_of_images_and_textures](pixels_of_images_and_textures/main.fb) |
 | 18 | P1 | Graphics modes | [display_modes](display_modes/main.fb) |
 | 19 | P1 | INI reading and writing | [ini_settings](ini_settings/main.fb) |

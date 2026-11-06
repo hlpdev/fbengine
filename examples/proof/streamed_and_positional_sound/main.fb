@@ -1,11 +1,13 @@
 // A game's sound: sounds decoded from Ogg Vorbis and made in code, Channels with volume, pan, and
-// pitch, pause and resume, 64 at once mixed at 44100, streams that loop, music crossfaded, and sound
-// in the world, following entities. Mixed on no device, it prints what it heard, by numbers, then
+// pitch, pause and resume, 64 at once mixed at 44100, streams that loop, music crossfaded, a game's
+// sound files by their bytes, whatever their names, and sound in the world, following entities.
+// Mixed on no device, it prints what it heard, by numbers, then
 // plays a sound on the null backend, as a device's pace has it. With --watch, it plays through the
 // real output, for a person to hear; --frames, as a test runs it, keeps that to the null backend.
 
 Import std.collections
 Import std.core
+Import std.io
 Import std.math
 Import std.os
 Import std.time
@@ -209,6 +211,37 @@ Function ProvedStreams() Throws SoundError
     Audio.Mix(4410)
 End Function
 
+// A game's sound files, by their bytes: Ogg Vorbis and WAV named .cwm, as SCP's are, by paths of
+// backslashes in any case, and music a sidecar says to stream.
+Function ProvedFiles() Throws IOError
+    Assets.MountFiles("res://game", {
+        "SFX/SCP/990/cwm1.cwm": Embed("tone.ogg"),
+        "SFX/SCP/990/cwm2.cwm": Held(16384),
+        "SFX/Music/theme.cwm": Embed("tone.ogg"),
+        "SFX/Music/theme.cwm.toml": "streamed = true".Bytes,
+    })
+    Defer Assets.Unmount("res://game")
+    Local ogg = Try Assets.Load<Sound>("res://GAME\\sfx\\scp\\990\\CWM1.CWM")
+    Defer ogg.Free()
+    Local once = ogg.Play()
+    Print("an Ogg Vorbis .cwm: streamed {ogg.Streamed()}, {ogg.Length()} seconds, " +
+          "heard {Loudest(Audio.Mix(4410)) > 0.01}")
+    once.Stop()
+    Local wav = Try Assets.Load<Sound>("res://game\\SFX\\SCP\\990\\Cwm2.cwm")
+    Defer wav.Free()
+    wav.SetLoop(True)
+    Local held = wav.Play()
+    Print("a WAV .cwm: {wav.SampleRate()} Hz, heard {Heard()}")
+    held.Stop()
+    Local theme = Try Assets.Load<Sound>("res://game\\sfx\\MUSIC\\theme.cwm")
+    Defer theme.Free()
+    Local playing = theme.Play()
+    Print("a .cwm a sidecar streams: streamed {theme.Streamed()}, {theme.Length()} seconds, " +
+          "heard {Loudest(Audio.Mix(4410)) > 0.01}")
+    playing.Stop()
+    Audio.Mix(4410)
+End Function
+
 Function ProvedTheWorld() Throws SoundError
     Local world = World()
     World.SetCurrent(world)
@@ -267,10 +300,11 @@ Function ProvedTheWorld() Throws SoundError
     Audio.Mix(4410)
 End Function
 
-Function Proved() Throws AudioError, SoundError
+Function Proved() Throws AudioError, IOError, SoundError
     Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
     Try ProvedChannels()
     Try ProvedStreams()
+    Try ProvedFiles()
     Try ProvedTheWorld()
     Audio.Stop()
 
