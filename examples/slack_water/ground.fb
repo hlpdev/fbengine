@@ -663,9 +663,14 @@ Public Function KeptClear(x: Float, z: Float): Bool
     Return Abs(z - JETTY_Z) < 4.0 && x < JettyStart().x + 2.0 && x > JettyEnd().x - 2.0
 End Function
 
+/// How high driftwood's ends lie at least, over slack water: past its swell, a twentieth of a meter, by
+/// three times that, so it's dry till the flood comes.
+Public Const BEACHED: Float = 0.2
+
 /// Where what's washed up lies along the shores, each on sand above the sea at slack water: where it
 /// is, what it is (0 driftwood, 1 rope, 2 a rock), how it's turned, and how big. Never on the road or
 /// the causeway's shores, by the parts' spots or the landings, by the jetty, or where anything's solid.
+/// Driftwood's beached, the ground at both its ends BEACHED or higher.
 Public Function ShoreSpots(): (Vec2, Int, Float, Float)[]
     Local spots: (Vec2, Int, Float, Float)[] = []
     Local half = (SIDE As Float) / 2.0 - EDGE
@@ -682,12 +687,28 @@ Public Function ShoreSpots(): (Vec2, Int, Float, Float)[]
             If KeptClear(x, z) Then Continue
             // Only some of what passes, so it's scattered.
             If Hash(column + 300, row + 700) > 0.45 Then Continue
-            Local kind = (Hash(column + 50, row + 60) * 3.0) As Int
-            spots.Add((Vec2(x, z), Min(kind, 2), Hash(column + 70, row + 80) * 6.283,
-                       0.6 + Hash(column + 90, row + 10) * 0.8))
+            Local kind = Min((Hash(column + 50, row + 60) * 3.0) As Int, 2)
+            Local yaw = Hash(column + 70, row + 80) * 6.283
+            Local size = 0.6 + Hash(column + 90, row + 10) * 0.8
+            // A log's beached: the ground at both its ends over slack water's swell, so it lies till
+            // the flood floats it; turned along the shore, as the sea leaves them, if it's not as it
+            // fell, and not there if neither way.
+            If kind == 0
+                If !Beached(x, z, yaw, size) Then yaw += Pi / 2.0
+                If !Beached(x, z, yaw, size) Then Continue
+            End If
+            spots.Add((Vec2(x, z), kind, yaw, size))
         End For
     End For
     Return spots
+End Function
+
+// Whether a log at (`x`, `z`), turned `yaw` and `size` big, has the ground at both its ends BEACHED or
+// higher.
+Function Beached(x: Float, z: Float, yaw: Float, size: Float): Bool
+    Local end = Quat.FromEuler(0.0, yaw, 0.0) * Vec3(0.95 * 1.4 * size, 0.0, 0.0)
+    Return GroundHeight(x - end.x, z - end.z) >= BEACHED &&
+           GroundHeight(x + end.x, z + end.z) >= BEACHED
 End Function
 
 /// How steep ground may be where a walk goes, a meter up to this many along: as steep as the far

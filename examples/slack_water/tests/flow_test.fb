@@ -1133,6 +1133,21 @@ Function WhatsWashedUpLiesOnTheGround()
     End For
 End Function
 
+// Driftwood's beached, both its ends a sixth of a meter or more over slack water, past its swell of a
+// twentieth, so it's not afloat till the flood.
+@Test
+Function DriftwoodLiesBeached()
+    Local logs = 0
+    For spot In ShoreSpots()
+        If spot.1 != 0 Then Continue
+        logs += 1
+        For end In Underside(spot)
+            Expect(end.y >= 0.16, "{spot.0}: {end}")
+        End For
+    End For
+    Expect(logs >= 5, "{logs}")
+End Function
+
 // Wherever a walk goes or stands, the ground's walkable, whatever the outcrops and the rain have done to
 // the rest.
 @Test
