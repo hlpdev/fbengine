@@ -5,9 +5,11 @@
 #
 # `tests` is a ctest -R pattern, run as ci.yml's gpu job runs its tests, on its four runners; one
 # that names nothing fails, and none skips the job. `native` is native.yml, each of the five
-# targets' DLLs and their export check; Linux's packages' and examples' tests in `tests` link them,
-# as ci.yml's gpu job has them. `packages` is ci.yml's test job, on those DLLs, with no GPU: the
-# only one an Intel Mac runs. It has no display step and no format job.
+# targets' DLLs and their export check, which `tests` and `packages` run too: Linux's examples
+# link native.yml's DLLs, as ci.yml's gpu job has them, since fb links for an older glibc than a
+# runner's. `packages` is ci.yml's test job, on those DLLs, with no GPU: the only one an Intel Mac
+# runs. Each runner needs only its own target's DLLs, so one target's failing fails only its own.
+# It has no display step and no format job.
 name: Targeted
 
 on:
@@ -34,14 +36,14 @@ env:
 
 jobs:
   native:
-    if: inputs.native || inputs.packages
+    if: inputs.native || inputs.packages || inputs.tests != ''
     uses: ./.github/workflows/native.yml
 
-  # As ci.yml's test job.
+  # As ci.yml's test job. A target whose DLLs weren't made fails at their download, alone.
   test:
     name: test ${{ matrix.target }}
     needs: native
-    if: inputs.packages
+    if: ${{ !cancelled() && inputs.packages }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -89,8 +91,9 @@ jobs:
   gpu:
     name: gpu ${{ matrix.target }}
     needs: native
-    # Run when native was skipped too, which would otherwise skip this.
-    if: ${{ !cancelled() && inputs.tests != '' && (needs.native.result == 'success' || needs.native.result == 'skipped') }}
+    # Whatever another target's DLLs did: only Linux's runners use theirs, and those fail at their
+    # download if they weren't made.
+    if: ${{ !cancelled() && inputs.tests != '' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     strategy:
@@ -116,7 +119,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - uses: actions/download-artifact@v8
-        if: inputs.native && runner.os == 'Linux'
+        if: runner.os == 'Linux'
         with:
           name: native-${{ matrix.target }}
 
@@ -194,11 +197,10 @@ jobs:
           FBE_GPU_VALIDATION: '1'
           MSYS2_ARG_CONV_EXCL: '*'
           TESTS: ${{ inputs.tests }}
-          NATIVE: ${{ inputs.native }}
         run: |
           echo "VK_DRIVER_FILES=$VK_DRIVER_FILES"
           export VK_LOADER_DEBUG=error,warn
           cmake --build build --parallel
-          if [ "$RUNNER_OS" = Linux ] && [ "$NATIVE" = true ]; then tar -xf native-${{ matrix.target }}.tar; fi
+          if [ "$RUNNER_OS" = Linux ]; then tar -xf native-${{ matrix.target }}.tar; fi
           DYLD_FALLBACK_LIBRARY_PATH="${VULKAN_LIBRARIES:-}" ctest --test-dir build --output-on-failure \
             --no-tests=error -R "$TESTS"
