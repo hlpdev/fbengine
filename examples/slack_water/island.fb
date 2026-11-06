@@ -148,8 +148,9 @@ Public Function GroundCover(heights: Float[]): (Image, Image)
     Local rough = Image(side, side)
     Local half = (SIDE As Float) / 2.0
     Local most = (SIDE As Float) - 1.0
+    // Its rows from the terrain's far edge, as a terrain's v runs against z.
     For y = 0 Until side
-        Local z = ((y As Float) + 0.5) / (COVER_PER_METER As Float)
+        Local z = (SIDE As Float) - ((y As Float) + 0.5) / (COVER_PER_METER As Float)
         For x = 0 Until side
             Local across = ((x As Float) + 0.5) / (COVER_PER_METER As Float)
             Local height = HeightIn(heights, across, z)

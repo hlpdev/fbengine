@@ -648,6 +648,12 @@ Public Function SandAt(x: Float, z: Float, height: Float, slope: Float): Float
     Return Sand(height, slope, Patches(x, z))
 End Function
 
+/// How much of what shows at (`x`, `z`), `height` high with `slope`, is sand, from 0 to 1, as CoverAt
+/// paints it: sand, but not where the rock shelf's over it.
+Public Function SandShownAt(x: Float, z: Float, height: Float, slope: Float): Float
+    Return SandAt(x, z, height, slope) * (1.0 - ShelfAt(x, z, height) * 0.9)
+End Function
+
 /// Whether (`x`, `z`) is kept clear of what's washed up: the road and the causeway's shores, within 3 m
 /// of a part's spot or a landing, by the jetty, and where anything's solid.
 Public Function KeptClear(x: Float, z: Float): Bool

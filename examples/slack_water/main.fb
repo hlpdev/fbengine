@@ -185,13 +185,26 @@ End Function
 // by what `image` shows of it from `camera`, with the sea at `height`, its channels' bytes summed
 // over how many were seen; and how many.
 Function ColorAtDepth(camera: Camera, image: Image, height: Float, depth: Float): (Vec3, Int)
+    Return ColorAtDepth(camera, image, height, depth, Vec2(MAIN_X, 0.0), Vec2(0.0, 1.0), 20.0, 1.0)
+End Function
+
+// The same, along the shore that's out from `from` toward `outward`, every `spacing` meters for `wide`
+// meters each side of it.
+Function ColorAtDepth(camera: Camera, image: Image, height: Float, depth: Float, from: Vec2,
+                      outward: Vec2, wide: Float, spacing: Float): (Vec3, Int)
     Local sum = Vec3(0.0, 0.0, 0.0)
     Local seen = 0
-    For across = -20 To 20
-        Local x = MAIN_X + (across As Float)
-        Local z: Float = 0.0
-        While height - GroundHeight(x, z) < depth && z < 100.0
-            z += 0.05
+    Local beside = Vec2(-outward.y, outward.x)
+    Local count = (wide * 2.0 / spacing) As Int
+    For at = 0 To count
+        Local across = (at As Float) * spacing - wide
+        Local x = from.x + beside.x * across
+        Local z = from.y + beside.y * across
+        Local out: Float = 0.0
+        While height - GroundHeight(x, z) < depth && out < 100.0
+            x += outward.x * 0.05
+            z += outward.y * 0.05
+            out += 0.05
         End While
         Local pixel = PixelOf(camera, image, Vec3(x, height, z))
         If pixel != Null
@@ -206,6 +219,36 @@ End Function
 Function SeaAtDepth(camera: Camera, image: Image, height: Float, depth: Float): (Float, Int)
     Local color, seen = ColorAtDepth(camera, image, height, depth)
     Return (color.x + color.y + color.z, seen)
+End Function
+
+// The same, along the shore out from `from` toward `outward`, 5 meters each side of it.
+Function SeaAtDepth(camera: Camera, image: Image, height: Float, depth: Float, from: Vec2,
+                    outward: Vec2): (Float, Int)
+    Local color, seen = ColorAtDepth(camera, image, height, depth, from, outward, 5.0, 0.25)
+    Return (color.x + color.y + color.z, seen)
+End Function
+
+// Where the main rock's coast is sandy, the first round it from the south that's sand from slack
+// water's edge up to high water's, and not the shelf: where its edge is at slack water, and its angle
+// round the mill.
+Function SandyShore(): (Float, Float, Float)
+    For step = 0 Until 126
+        Local angle = Pi / 2.0 + (step As Float) * 0.05
+        Local reach = CoastAt(angle)
+        Local sandy = True
+        Local inward: Float = 0.5
+        While sandy && inward < 30.0
+            Local x = MAIN_X + Cos(angle) * (reach - inward)
+            Local z = Sin(angle) * (reach - inward)
+            Local height = GroundHeight(x, z)
+            If height > SeaHeight(TIDE_IN_AT) + 0.2 Then Break
+            sandy = SandShownAt(x, z, height, 0.1) > 0.6 && ShelfAt(x, z, height) == 0.0
+            inward += 0.5
+        End While
+        If sandy && inward < 30.0 Then Return (MAIN_X + Cos(angle) * reach, Sin(angle) * reach,
+                                               angle)
+    End For
+    Return (MAIN_X, 30.0, Pi / 2.0)
 End Function
 
 // How far apart two colors are, by their channels' bytes.
@@ -240,10 +283,45 @@ Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws Grap
     camera.SetPosition(Vec3(MAIN_X - 16.0, 4.5, shoreZ + 9.0))
     camera.PointAt(Vec3(MAIN_X + 2.0, 0.0, shoreZ - 1.0))
     Local shore = Try SavedAs(island, folder, "shore")
-    Local edge, edges = SeaAtDepth(camera, shore, 0.0, 0.05)
-    Local deep, deeps = SeaAtDepth(camera, shore, 0.0, 2.2)
-    Checks("the sea has foam at its edge, none where it's deep",
+    // Its foam, over a sandy shore, where it shows: the first round the main rock from the south
+    // that's sand up to high water, seen along the coast with the sun behind, so its glare's not on the
+    // deep water.
+    Local sandy = SandyShore()
+    Local outward = Vec2(Cos(sandy.2), Sin(sandy.2))
+    Local beside = Vec2(-outward.y, outward.x)
+    Local onSand = Function(up: Float, out: Float, along: Float): Vec3
+        Return Vec3(sandy.0 - beside.x * along + outward.x * out, up,
+                    sandy.1 - beside.y * along + outward.y * out)
+    End Function
+    Local sandyAt = Vec3(sandy.0 + beside.x * 2.0 - outward.x, 0.0,
+                         sandy.1 + beside.y * 2.0 - outward.y)
+    camera.SetPosition(onSand(4.5, 22.0, 12.0))
+    camera.PointAt(sandyAt)
+    Local foamy = Try SavedAs(island, folder, "shore_sand")
+    Local inland = Vec2(sandy.0 - outward.x * 40.0, sandy.1 - outward.y * 40.0)
+    Local edge, edges = SeaAtDepth(camera, foamy, 0.0, 0.05, inland, outward)
+    Local deep, deeps = SeaAtDepth(camera, foamy, 0.0, 2.2, inland, outward)
+    Checks("the sea has foam at its edge, none where it's deep, {edge} against {deep}",
            edges > 10 && deeps > 10 && edge > deep + 40.0)
+    // It goes up the shore with the tide: where its edge was is under it, and where it's come to,
+    // the sea shows over the sand, bluer than it is dry. Its foam there's a thin line, as the shore's
+    // steeper at the top of the sand.
+    camera.SetPosition(onSand(6.0, 9.0, 16.0))
+    Local low = Try Shown(island)
+    island.Update(TIDE_IN_AT)
+    Local flooded = Try SavedAs(island, folder, "shore_sand_high")
+    Local high = SeaHeight(TIDE_IN_AT)
+    Local wasEdge, _ = ColorAtDepth(camera, low, 0.0, 0.05, inland, outward, 5.0, 0.25)
+    Local nowOver, _ = ColorAtDepth(camera, flooded, 0.0, 0.05, inland, outward, 5.0, 0.25)
+    Local nowEdge, _ = ColorAtDepth(camera, flooded, high, 0.05, inland, outward, 5.0, 0.25)
+    Local dryEdge, _ = ColorAtDepth(camera, low, high, 0.05, inland, outward, 5.0, 0.25)
+    Checks(
+        "its edge goes up the shore with the tide, {Apart(wasEdge, nowOver)} apart where it was, " +
+        "{nowEdge.z} blue where it is against {dryEdge.z} dry",
+        Apart(wasEdge, nowOver) > 100.0 && nowEdge.z > dryEdge.z + 8.0)
+    island.Update(0.0)
+    camera.SetPosition(Vec3(MAIN_X - 16.0, 4.5, shoreZ + 9.0))
+    camera.PointAt(Vec3(MAIN_X + 2.0, 0.0, shoreZ - 1.0))
 
     // It hides what's under it by how deep it is, which shows by taking that away.
     island.SetGroundHidden(True)
@@ -255,15 +333,6 @@ Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws Grap
     Local deepBare, _ = ColorAtDepth(camera, bare, 0.0, 2.2)
     Checks("the ground shows through what's shallow", Apart(shallowWith, shallowBare) > 30.0)
     Checks("and not through what's deep", Apart(deepWith, deepBare) < 25.0)
-
-    // It goes up the shore with the tide.
-    camera.SetPosition(Vec3(MAIN_X - 16.0, 6.0, shoreZ + 9.0))
-    island.Update(TIDE_IN_AT)
-    Local high = Try Shown(island)
-    Local wasEdge, _ = SeaAtDepth(camera, high, SeaHeight(TIDE_IN_AT), SeaHeight(TIDE_IN_AT) + 0.05)
-    Local nowEdge, _ = SeaAtDepth(camera, high, SeaHeight(TIDE_IN_AT), 0.05)
-    Checks("its foam goes up the shore with the tide", nowEdge > wasEdge + 70.0)
-    island.Update(0.0)
 
     // Its normals move, which only the sea shows.
     camera.SetPosition(Vec3(MAIN_X - 16.0, 4.5, shoreZ + 9.0))
