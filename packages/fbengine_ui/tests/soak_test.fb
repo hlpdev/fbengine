@@ -56,8 +56,10 @@ End Function
 
 // What the HUD and the console are given to show: numbers, and text no font has all of.
 Function Shown(frame: Int): String
-    Local texts = ["{frame}", "fps {60 - frame % 7}", "a\u{301}\u{301}\u{301}\u{301}", "\u{202E}evil\u{202C}",
-                   "\u{05E9}\u{05DC}\u{05D5}\u{05DD} abc", "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}",
+    Local texts = ["{frame}", "fps {60 - frame % 7}", "a\u{301}\u{301}\u{301}\u{301}",
+                   "\u{202E}evil\u{202C}",
+                   "\u{05E9}\u{05DC}\u{05D5}\u{05DD} abc",
+                   "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}",
                    "", "\n\n", "x".Repeated(300), "\u{FEFF}\u{200B}\u{FFFD}"]
     Return texts[frame % texts.Count]
 End Function
@@ -100,7 +102,8 @@ Function AMenuConsoleAndHudRunForThousandsOfFramesWithoutGrowing() Throws Graphi
     Local console = Console()
     console.SetHeight(Sizing.Fixed(150.0))
     console.SetMaxLines(200)
-    console.Register("echo", "says what it's given", Function(each: Console, words: String[]) => " ".Join(words))
+    console.Register("echo", "says what it's given",
+                     Function(each: Console, words: String[]) => " ".Join(words))
     root.Add(console)
     Local panel = DebugPanel()
     panel.SetAnchors(Anchors.Point(1.0, 0.0))

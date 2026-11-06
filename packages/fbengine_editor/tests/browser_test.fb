@@ -601,8 +601,10 @@ Function MangledScene(saved: String): String
     End For
     Local pieces = ["[[entity]]", "\"", "]", "=", "\n", "nan", "1e39", "-1",
                     "geometry = \"res://sub/ball.gltf#5\"", "geometry = \"res://sub/ball.gltf#-1\"",
-                    "geometry = \"res://sub/ball.gltf#99999999999\"", "geometry = \"res://sub/bad.gltf#0\"",
-                    "geometry = \"res://sub/ball.gltf\"", "geometry = \"res://#\"", "kind = \"MESH\"",
+                    "geometry = \"res://sub/ball.gltf#99999999999\"",
+                    "geometry = \"res://sub/bad.gltf#0\"",
+                    "geometry = \"res://sub/ball.gltf\"", "geometry = \"res://#\"",
+                    "kind = \"MESH\"",
                     "path = \"Cube/Cube\"", "<<<<<<< HEAD"]
     For change = 1 To 1 + MangleNext(3)
         Local at = MangleNext(chars.Count + 1)
@@ -644,7 +646,8 @@ Function MangledScenesOpenOrSayWhy() Throws IOError, GraphicsError
             Local opening = editor.SceneFile() == "res://mangled.scene"
             If !opening
                 refused += 1
-                Expect(editor.Edited.Entities().Count == before, "round {round} changed what's edited")
+                Expect(editor.Edited.Entities().Count == before,
+                       "round {round} changed what's edited")
             Else
                 // Opened, with what was lost said.
                 opened += 1

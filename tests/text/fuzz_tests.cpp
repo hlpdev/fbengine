@@ -93,12 +93,7 @@ void tried(std::uint64_t font, std::string_view text, float scale) {
 /// Texts a game could be given: what a player types, a file's lines, a translator's mistakes.
 std::vector<std::string> nasty() {
     std::vector<std::string> texts = {
-        "",
-        "\n\n\n",
-        "\r\n\r\n",
-        "\t\v\f\x1C\x1D\x1E\x85",
-        std::string("a\0b\0c", 5),
-        "\x80",
+        "", "\n\n\n", "\r\n\r\n", "\t\v\f\x1C\x1D\x1E\x85", std::string("a\0b\0c", 5), "\x80",
         "\xBF\xBF\xBF",
         "\xC0\x80",                 // an overlong NUL
         "\xC1\xBF",                 // an overlong '\x7F'
@@ -110,20 +105,21 @@ std::vector<std::string> nasty() {
         "\xF4\x90\x80\x80",         // past U+10FFFF
         "\xF8\x88\x80\x80\x80",     // five bytes
         "\xFC\x84\x80\x80\x80\x80", // six
-        "\xFE\xFF",
-        "\xEF\xBB\xBF" "a BOM",
-        "abc\xE2\x82",              // cut short at its end
-        "\xE2\x82" "abc",           // and at its start
-        "\xEF\xBF\xBE\xEF\xBF\xBF", // U+FFFE, U+FFFF
-        "\xE2\x80\xAE" "evil" "\xE2\x80\xAC",                  // RLO, PDF
-        "\xE2\x80\xAE\xE2\x80\xAE\xE2\x80\xAE" "unclosed",     // overrides never closed
-        "\xE2\x81\xA6\xE2\x81\xA7\xE2\x81\xA8" "isolates",     // LRI RLI FSI, never closed
-        "\xE2\x81\xA9\xE2\x81\xA9\xE2\x80\xAC\xE2\x80\xAC",    // closings with nothing open
+        "\xFE\xFF", "\xEF\xBB\xBF\x61 BOM",
+        "abc\xE2\x82",                     // cut short at its end
+        "\xE2\x82\x61\x62\x63",            // and at its start
+        "\xEF\xBF\xBE\xEF\xBF\xBF",        // U+FFFE, U+FFFF
+        "\xE2\x80\xAE\x65vil\xE2\x80\xAC", // RLO, PDF
+        // NOLINTNEXTLINE(misc-misleading-bidirectional): left open, as the test means
+        "\xE2\x80\xAE\xE2\x80\xAE\xE2\x80\xAEunclosed", // overrides never closed
+        // NOLINTNEXTLINE(misc-misleading-bidirectional): left open, as the test means
+        "\xE2\x81\xA6\xE2\x81\xA7\xE2\x81\xA8isolates",     // LRI RLI FSI, never closed
+        "\xE2\x81\xA9\xE2\x81\xA9\xE2\x80\xAC\xE2\x80\xAC", // closings with nothing open
         "\xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D abc \xD9\x85\xD8\xB1\xD8\xAD\xD8\xA8\xD8\xA7 123",
         "\xF0\x9F\x91\xA8\xE2\x80\x8D\xF0\x9F\x91\xA9\xE2\x80\x8D\xF0\x9F\x91\xA7", // a ZWJ family
         "\xE2\x80\x8D\xE2\x80\x8D\xE2\x80\x8C\xE2\x80\x8C",                         // joiners alone
-        "\xEF\xB8\x8F\xEF\xB8\x8E\xEF\xB8\x8F",                                     // selectors alone
-        "\xF3\xA0\x80\x81\xF3\xA0\x81\xA1",                                         // tags
+        "\xEF\xB8\x8F\xEF\xB8\x8E\xEF\xB8\x8F", // selectors alone
+        "\xF3\xA0\x80\x81\xF3\xA0\x81\xA1",     // tags
     };
     // Combining marks by the thousand, on one base, and alone.
     std::string marks = "a";
@@ -135,6 +131,7 @@ std::vector<std::string> nasty() {
     // Thousands of bidi embeddings, deeper than the algorithm's 125 levels.
     std::string deep;
     for (int i = 0; i < 2000; ++i) {
+        // NOLINTNEXTLINE(misc-misleading-bidirectional): left open, as the test means
         deep += (i % 2 == 0) ? "\xE2\x80\xAB" : "\xE2\x81\xA7";
     }
     texts.push_back(deep + "x");
@@ -153,8 +150,19 @@ std::vector<std::string> nasty() {
 /// Random bytes, mostly UTF-8's own, so they make sequences, broken and whole.
 std::string random_text(random_t& random) {
     static constexpr std::array<std::string_view, 12> pieces = {
-        "a", " ", "\n", "\xCC\x81", "\xD9\x85", "\xE2\x80\xAE", "\xE2\x81\xA9", "\xF0\x9F\x98\x80",
-        "\xE2\x80\x8D", "\xEF\xB8\x8F", "\xED\xA0\x80", "\xF4\x8F\xBF\xBF"
+        "a",
+        " ",
+        "\n",
+        "\xCC\x81",
+        "\xD9\x85",
+        // NOLINTNEXTLINE(misc-misleading-bidirectional): left open, as the test means
+        "\xE2\x80\xAE",
+        "\xE2\x81\xA9",
+        "\xF0\x9F\x98\x80",
+        "\xE2\x80\x8D",
+        "\xEF\xB8\x8F",
+        "\xED\xA0\x80",
+        "\xF4\x8F\xBF\xBF",
     };
     std::string text;
     const std::size_t length = random.below(64);
@@ -177,13 +185,12 @@ std::vector<std::uint8_t> damaged(const std::vector<std::uint8_t>& font, random_
         bytes.resize(1 + random.below(bytes.size()));
         return bytes;
     }
-    static constexpr std::array<std::uint32_t, 6> edges = { 0, 1, 0x7FFF, 0xFFFF, 0x7FFFFFFF,
-                                                            0xFFFFFFFF };
+    constexpr std::array<std::uint32_t, 6> edges = { 0, 1, 0x7FFF, 0xFFFF, 0x7FFFFFFF, 0xFFFFFFFF };
     const std::size_t changes = 1 + random.below(kind == 1 ? 16 : 4);
     for (std::size_t change = 0; change < changes; ++change) {
         // The table directory's first 1 KB most of the time, where the offsets and lengths are.
-        const std::size_t reach = random.below(2) == 0 ? std::min<std::size_t>(1024, bytes.size())
-                                                       : bytes.size();
+        const std::size_t reach =
+            random.below(2) == 0 ? std::min<std::size_t>(1024, bytes.size()) : bytes.size();
         const std::size_t at = random.below(reach);
         if (kind == 1) {
             bytes[at] = static_cast<std::uint8_t>(random.next());
@@ -213,8 +220,10 @@ std::vector<std::filesystem::path> fonts() {
 void used(std::uint64_t font, random_t& random) {
     fbe_text_set_system_fallback(font, false);
     static constexpr std::array<std::string_view, 4> texts = {
-        "Hello, world", "\xD9\x85\xD8\xB1\xD8\xAD\xD8\xA8\xD8\xA7", "a\xCC\x81\xCC\x81 \xF0\x9F\x98\x80",
-        "\xE2\x80\xAE" "abc\n123"
+        "Hello, world",
+        "\xD9\x85\xD8\xB1\xD8\xAD\xD8\xA8\xD8\xA7",
+        "a\xCC\x81\xCC\x81 \xF0\x9F\x98\x80",
+        "\xE2\x80\xAE\x61\x62\x63\n123",
     };
     tried(font, texts[random.below(texts.size())], 1.0F);
     tried(font, random_text(random), 3.0F);
@@ -236,14 +245,15 @@ TEST_CASE("damaged fonts are refused or laid out with, never read past") {
         for (int round = 0; round < 1000; ++round) {
             INFO("round " << round);
             const std::vector<std::uint8_t> bytes = damaged(font, random);
-            const std::int32_t style = static_cast<std::int32_t>(random.below(4));
-            const std::uint64_t loaded = fbe_text_load_font_bytes(
-                bytes.data(), static_cast<std::int64_t>(bytes.size()), "damaged.ttf", 0, 16.0F, style);
+            const auto style = static_cast<std::int32_t>(random.below(4));
+            const std::uint64_t loaded =
+                fbe_text_load_font_bytes(bytes.data(), static_cast<std::int64_t>(bytes.size()),
+                                         "damaged.ttf", 0, 16.0F, style);
             if (loaded != 0) {
                 used(loaded, random);
                 ++loads;
             } else {
-                CHECK(std::string(fbe_error()).size() > 0);
+                CHECK_FALSE(std::string(fbe_error()).empty());
             }
         }
         // Enough load to reach shaping and rasterizing, or the damage is all at the door.
@@ -260,8 +270,12 @@ TEST_CASE("bytes that are no font, and faces past a collection's, are refused") 
             byte = static_cast<std::uint8_t>(random.next());
         }
         // Sometimes with a font's magic first, so FreeType reads further.
-        static constexpr std::array<std::uint32_t, 4> magic = { 0x00010000, 0x4F54544F, 0x74746366,
-                                                                0x774F4646 };
+        static constexpr std::array<std::uint32_t, 4> magic = {
+            0x00010000,
+            0x4F54544F,
+            0x74746366,
+            0x774F4646,
+        };
         if (bytes.size() >= 4 && random.below(2) == 0) {
             const std::uint32_t chosen = magic[random.below(magic.size())];
             for (std::size_t i = 0; i < 4; ++i) {
@@ -300,7 +314,8 @@ TEST_CASE("texts that are broken, huge, or all marks are laid out safely and soo
     }
     random_t random(0x7E47ULL);
     for (int round = 0; round < 3000; ++round) {
-        tried(round % 2 == 0 ? sans : marks, random_text(random), 1.0F + static_cast<float>(round % 4));
+        tried(round % 2 == 0 ? sans : marks, random_text(random),
+              1.0F + static_cast<float>(round % 4));
     }
     fbe_text_free_font(sans);
     fbe_text_free_font(marks);
@@ -313,9 +328,14 @@ TEST_CASE("a scale past reason is refused, and one that's tiny lays out nothing 
     REQUIRE(font != 0);
     fbe_text_set_system_fallback(font, false);
     fbe::text::layout_t laid;
-    for (const float scale : { 0.0F, -1.0F, -0.0F, std::numeric_limits<float>::quiet_NaN(),
-                               std::numeric_limits<float>::infinity(),
-                               -std::numeric_limits<float>::infinity() }) {
+    for (const float scale : {
+             0.0F,
+             -1.0F,
+             -0.0F,
+             std::numeric_limits<float>::quiet_NaN(),
+             std::numeric_limits<float>::infinity(),
+             -std::numeric_limits<float>::infinity(),
+         }) {
         INFO("scale " << scale);
         CHECK_FALSE(fbe::text::lay_out(font, "W", scale, laid));
     }
@@ -324,11 +344,16 @@ TEST_CASE("a scale past reason is refused, and one that's tiny lays out nothing 
         tried(font, "Hello\nworld", scale);
     }
     // A font made at sizes past reason is refused as it's made.
-    for (const float size : { 0.0F, -3.0F, std::numeric_limits<float>::quiet_NaN(),
-                              std::numeric_limits<float>::infinity() }) {
+    for (const float size : {
+             0.0F,
+             -3.0F,
+             std::numeric_limits<float>::quiet_NaN(),
+             std::numeric_limits<float>::infinity(),
+         }) {
         CHECK(fbe_text_resize_font(font, size, 0) == 0);
     }
-    const std::uint64_t tiny = fbe_text_resize_font(font, std::numeric_limits<float>::denorm_min(), 0);
+    const std::uint64_t tiny =
+        fbe_text_resize_font(font, std::numeric_limits<float>::denorm_min(), 0);
     if (tiny != 0) {
         tried(tiny, "tiny", 1.0F);
         fbe_text_free_font(tiny);
@@ -352,9 +377,8 @@ TEST_CASE("the corpus of what broke text once is laid out safely") {
             tried(sans, std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()),
                   1.0F);
         } else if (entry.path().extension() == ".font") {
-            const std::uint64_t loaded =
-                fbe_text_load_font_bytes(bytes.data(), static_cast<std::int64_t>(bytes.size()),
-                                         "corpus.ttf", 0, 16.0F, 0);
+            const std::uint64_t loaded = fbe_text_load_font_bytes(
+                bytes.data(), static_cast<std::int64_t>(bytes.size()), "corpus.ttf", 0, 16.0F, 0);
             if (loaded != 0) {
                 used(loaded, random);
             }

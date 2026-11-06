@@ -228,7 +228,8 @@ Function BindingsThatArentBindingsAreRefused()
     For level = 1 To 2000
         tooDeep += "["
     End For
-    Local texts = ["jump = [1, 2, 3]", "jump = [{{ kind = 1 }}]", "jump = [\"space\"]", "move = {{ x = 1 }}",
+    Local texts = ["jump = [1, 2, 3]", "jump = [{{ kind = 1 }}]", "jump = [\"space\"]",
+                   "move = {{ x = 1 }}",
                    "move = {{ x = [{{ code = 32 }}] }}", "jump = []" + "\n" + "jump = []", tooDeep,
                    "jump = [" + "{{ code = 32 }}, ".Repeated(20000) + "]", "\u{FEFF}jump = []"]
     For text In texts
@@ -237,7 +238,8 @@ Function BindingsThatArentBindingsAreRefused()
         Try
             Try controls.Load(text)
         Catch e As InputError
-            Expect(controls.Save() == was, "changed as it was refused: a text of {text.Length} bytes")
+            Expect(controls.Save() == was,
+                   "changed as it was refused: a text of {text.Length} bytes")
         End Try
     End For
 End Function
