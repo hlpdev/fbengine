@@ -267,11 +267,12 @@ Public Final Class Plants
             Local tall = 4.6 + (at As Float) * 0.6
             Local bark = sways(Color(0.22, 0.16, 0.11), tall, (at As Float) * 2.3 + 0.5)
             bark.SetMetalRough(0.0, 0.9)
-            Local trunk = Mesh(Geometry.Cylinder(8))
+            // Its trunk at its own size, its base at 0, so it bends as its leaves do, by how high up.
+            Local wood = Geometry()
+            wood.Add(Geometry.Cylinder(8), Mat4.Translation(Vec3(0.0, tall * 0.31, 0.0)) *
+                     Mat4.Scale(Vec3(0.2, tall * 0.31, 0.2)))
+            Local trunk = Mesh(wood)
             trunk.SetMaterial(bark)
-            // The cylinder's -1 to 1: up from 0, as the shader wants its base.
-            trunk.Geometry()?.Translate(Vec3(0.0, 1.0, 0.0))
-            trunk.SetScale(Vec3(0.2, tall * 0.5 * 0.62, 0.2))
             trunk.SetPosition(trees[at] - Vec3(0.0, 0.2, 0.0))
             shown.Add(trunk)
             Local leaves = sways(Color(0.1, 0.2, 0.04), tall, (at As Float) * 2.3 + 0.5)

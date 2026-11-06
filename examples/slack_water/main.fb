@@ -308,7 +308,8 @@ Function SavePlants(folder: Path, camera: Camera, island: Island) Throws Graphic
     // They sway, and harder as the storm comes: what's seen of a tree against the sky changes more
     // in the storm's wind than in the calm's, over as long.
     Local tree = trees[0]
-    camera.SetPosition(tree + Vec3(7.0, 1.5, 7.0))
+    // Square to the wind, so what it bends goes across the view.
+    camera.SetPosition(tree + Vec3(-3.9, 1.5, 9.2))
     camera.PointAt(tree + Vec3(0.0, 3.6, 0.0))
     Local calm = Try Swayed(island, 0.0)
     Local stormy = Try Swayed(island, TIDE_IN_AT - 0.4)
@@ -316,6 +317,23 @@ Function SavePlants(folder: Path, camera: Camera, island: Island) Throws Graphic
     Try SavedAs(island, folder, "tree")
     Checks("trees sway in the wind", calm > 200)
     Checks("harder in the storm", stormy > calm + calm / 2)
+    // From the top, not the roots: its trunk a meter up, over the grass, stays where it stands as it
+    // sways in the storm.
+    island.Update(TIDE_IN_AT - 0.4)
+    Local leaning = Try Shown(island)
+    island.Update(TIDE_IN_AT)
+    Local leant = Try Shown(island)
+    island.Update(0.0)
+    Local foot = tree + Vec3(0.0, 1.0, 0.0)
+    Local footBefore = PixelOf(camera, leaning, foot)
+    Local footAfter = PixelOf(camera, leant, foot)
+    // Bark's red's over its green, as no grass or leaf's; and it's the same bark, as what stands still
+    // is.
+    Checks("its roots stay put",
+           footBefore != Null && footAfter != Null && footBefore.r >= footBefore.g &&
+           Abs((footBefore.r As Int) - (footAfter.r As Int)) +
+           Abs((footBefore.g As Int) - (footAfter.g As Int)) +
+           Abs((footBefore.b As Int) - (footAfter.b As Int)) < 20)
 End Function
 
 // The sea and the sky, saved to look at, and what each of them's for, by the pixels.
