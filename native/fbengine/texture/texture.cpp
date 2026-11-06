@@ -1632,7 +1632,7 @@ FBE_API bool fbe_texture_write_level(uint64_t texture, int32_t level, int32_t wi
         std::max(found->width >> static_cast<std::uint32_t>(level), 1U);
     const std::uint32_t level_height =
         std::max(found->height >> static_cast<std::uint32_t>(level), 1U);
-    if (std::cmp_not_equal(width, level_width) || std::cmp_not_equal(height, level_height)) {
+    if (std::int64_t{ width } != level_width || std::int64_t{ height } != level_height) {
         return fbe::fail(std::format("level {} of a {}x{} texture is {}x{}, not {}x{}", level,
                                      found->width, found->height, level_width, level_height, width,
                                      height));
