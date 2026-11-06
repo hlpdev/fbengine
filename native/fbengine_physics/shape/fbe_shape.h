@@ -5,7 +5,8 @@
 // theirs while they're there, so a shape can be freed as soon as its bodies are made. Each is in
 // its own space, in std.math's axes and meters: a primitive centered on its origin, a capsule's
 // and a cylinder's length along Y, and a convex hull's, a mesh's, and a compound's parts where
-// they're given.
+// they're given. Sizes are at most 1e5, and points and parts at most 1e5 from 0 each way, past
+// which what a body of the shape weighs, and turns by, is more than a float holds.
 
 #include "../physics/fbe_physics.h"
 
@@ -50,17 +51,17 @@ typedef struct fbe_shape_part_t {
 
 // NOLINTEND(modernize-macro-to-enum, modernize-use-using)
 
-// A box `size` across, each more than 0.
+// A box `size` across, each more than 0 and at most 1e5.
 FBE_PHYSICS_API uint64_t fbe_shape_box(const fbe_shape_vec3_t* size);
 
-// A sphere of `radius`, more than 0.
+// A sphere of `radius`, more than 0 and at most 1e5.
 FBE_PHYSICS_API uint64_t fbe_shape_sphere(float radius);
 
-// A capsule `height` from end to end, along Y, at least twice its `radius`, which is more than 0;
-// one just twice its radius is a sphere.
+// A capsule `height` from end to end, along Y, at most 2e5 and at least twice its `radius`, which
+// is more than 0; one just twice its radius is a sphere.
 FBE_PHYSICS_API uint64_t fbe_shape_capsule(float height, float radius);
 
-// A cylinder `height` from end to end, along Y, of `radius`, both more than 0.
+// A cylinder `height` from end to end, along Y, of `radius`, both more than 0 and at most 1e5.
 FBE_PHYSICS_API uint64_t fbe_shape_cylinder(float height, float radius);
 
 // The smallest convex shape around `count` points; 0 if they don't make one, as fewer than three
@@ -70,14 +71,14 @@ FBE_PHYSICS_API uint64_t fbe_shape_convex_hull(const fbe_shape_vec3_t* points, i
 
 // A mesh of triangles, three of `indices` each into `vertices`, counter-clockwise seen from their
 // front; 0 if there are none, `index_count` isn't three times a number, an index is past the
-// vertices, or a vertex isn't finite. Triangles of no area are left out, and the rest keep their
+// vertices, or a vertex is out of range. Triangles of no area are left out, and the rest keep their
 // numbers, from 0, in the order they're given. Only a static or kinematic body is a mesh, or a
 // compound with one in it.
 FBE_PHYSICS_API uint64_t fbe_shape_mesh(const fbe_shape_vec3_t* vertices, int32_t vertex_count,
                                         const uint32_t* indices, int32_t index_count);
 
 // The `count` parts as one shape, at least one; 0 if a part's shape isn't one, or where it is
-// isn't finite.
+// is out of range.
 FBE_PHYSICS_API uint64_t fbe_shape_compound(const fbe_shape_part_t* parts, int32_t count);
 
 // Frees `shape`, which the bodies made of it keep; false if it isn't a shape.

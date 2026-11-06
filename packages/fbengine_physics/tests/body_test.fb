@@ -296,7 +296,7 @@ Function TheCApiRefusesBodiesItDoesntTake()
                "a dynamic body has no mesh in its shape, which only a static or kinematic body has")
         Expect(fbe_body_add(world, ball, FBE_BODY_DYNAMIC, AddressOf(nowhere),
                             AddressOf(unturned)) == 0)
-        Expect(Error() == "a vector is finite")
+        Expect(Error() == "a position is at most 1e9 from 0 each way, not (nan, 0, 0)")
         Expect(fbe_body_add(world, ball, FBE_BODY_DYNAMIC, AddressOf(at),
                             AddressOf(nothing)) == 0)
         Expect(Error() == "a rotation is finite, and not 0")

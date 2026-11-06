@@ -1533,9 +1533,13 @@ catch_discover_tests(fbengine_physics_tests TEST_PREFIX "physics."
 
 # fbengine_physics' steps, through its DLL, which the tests find where CMake built it.
 add_executable(fbengine_physics_step_tests physics/step_tests.cpp physics/determinism_tests.cpp
-               physics/casts_tests.cpp)
+               physics/casts_tests.cpp physics/state_fuzz_tests.cpp physics/input_fuzz_tests.cpp
+               physics/soak_tests.cpp)
 target_link_libraries(fbengine_physics_step_tests PRIVATE fbengine_physics_native
                       Catch2::Catch2WithMain)
+if(WIN32)
+  target_link_libraries(fbengine_physics_step_tests PRIVATE psapi)
+endif()
 fbengine_set_warnings(fbengine_physics_step_tests)
 catch_discover_tests(fbengine_physics_step_tests TEST_PREFIX "physics."
                      DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_physics_native>")
@@ -1544,7 +1548,7 @@ catch_discover_tests(fbengine_physics_step_tests TEST_PREFIX "physics."
 file(GLOB fbengine_physics_sources CONFIGURE_DEPENDS
      "${PROJECT_SOURCE_DIR}/native/fbengine_physics/*/*.cpp")
 add_executable(fbengine_physics_internal_tests physics/contacts_tests.cpp
-               ${fbengine_physics_sources} physics/float_mode_tests.cpp)
+               ${fbengine_physics_sources} physics/float_mode_tests.cpp physics/leak_tests.cpp)
 target_include_directories(fbengine_physics_internal_tests PRIVATE
                            "${PROJECT_SOURCE_DIR}/native/fbengine_physics")
 target_compile_definitions(fbengine_physics_internal_tests PRIVATE FBE_PHYSICS_BUILDING
@@ -1785,9 +1789,13 @@ fbengine_set_warnings(fbengine_app_tests)
 catch_discover_tests(fbengine_app_tests TEST_PREFIX "app."
                      DL_PATHS "${fbengine_test_dll_paths}")
 
-# fbengine_video, through its DLL, against its test videos with bytes changed at random.
-add_executable(fbengine_video_tests video/mutation_tests.cpp)
+# fbengine_video, through its DLL, against its test videos with bytes changed at random, and its
+# player's calls given anything, and soaked.
+add_executable(fbengine_video_tests video/mutation_tests.cpp video/player_tests.cpp)
 target_link_libraries(fbengine_video_tests PRIVATE fbengine_video_native Catch2::Catch2WithMain)
+if(WIN32)
+  target_link_libraries(fbengine_video_tests PRIVATE psapi)
+endif()
 target_compile_definitions(fbengine_video_tests PRIVATE
                            FBE_VIDEO_MEDIA="${PROJECT_SOURCE_DIR}/packages/fbengine_video/tests/media")
 fbengine_set_warnings(fbengine_video_tests)

@@ -243,3 +243,104 @@ Function AKinematicSensorNoticesStaticBodiesWhicheverCameFirst()
         world.Free()
     End For
 End Function
+
+// A stack of boxes, each touching the one under it, on the floor, and balls dropped on it.
+Function Stacked(world: PhysicsWorld): Body[]
+    Local all: Body[] = []
+    For i = 0 To 5
+        all.Add(Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.DYNAMIC, Vec3(0, 0.5 + (i As Float32), 0)))
+    End For
+    For i = 0 To 5
+        all.Add(Body(world, Shape.Sphere(0.4), Motion.DYNAMIC, Vec3((i As Float32) * 0.3 - 0.75, 8 + (i As Float32), 0)))
+    End For
+    Return all
+End Function
+
+// What a game does going through what began, as one that breaks what's hit would: each body that
+// began touching another is freed, but the floor, even one a contact before freed already, and
+// what it touched is used.
+@Test
+Function BodiesFreedGoingThroughWhatBeganAreForgottenAndTheStepsGoOn()
+    Local world, floor = Floored()
+    Defer world.Free()
+    Local all = Stacked(world)
+    Local freed = 0
+    For i = 1 To 240
+        world.Step(1.0 / 60)
+        For contact In world.Began()
+            // Either may have gone in a contact before this one.
+            Local hit = contact.A == floor ? contact.B : contact.A
+            Local other = contact.A == floor ? contact.A : contact.B
+            If !hit.Freed()
+                hit.Free()
+                freed += 1
+            End If
+            hit.Free()
+            Expect(hit.Freed())
+            If !other.Freed() Then Expect(other.Position().y > -1)
+        End For
+        // Nothing freed ends touching, or is touched.
+        For separation In world.Ended()
+            Expect(!separation.A.Freed() && !separation.B.Freed())
+        End For
+        For body In all
+            If !body.Freed()
+                For touched In body.Touching()
+                    Expect(!touched.Freed())
+                End For
+            End If
+        End For
+    End For
+    Expect(freed == all.Count, "{freed} of {all.Count} freed")
+    Expect(world.Bodies() == 1)
+    Expect(floor.Touching().Count == 0)
+End Function
+
+// The same, going through what ended, as a game that frees what's knocked off would.
+@Test
+Function BodiesFreedGoingThroughWhatEndedAreForgottenAndTheStepsGoOn()
+    Local world, floor = Floored()
+    Defer world.Free()
+    Local all = Stacked(world)
+    Local freed = 0
+    For i = 1 To 240
+        world.Step(1.0 / 60)
+        For separation In world.Ended()
+            For body In [separation.A, separation.B]
+                If !body.Freed() && body != floor
+                    body.Free()
+                    freed += 1
+                End If
+            End For
+        End For
+        For contact In world.Began()
+            Expect(!contact.A.Freed() && !contact.B.Freed())
+        End For
+    End For
+    // The balls bounce off the stack and the floor, and end touching them.
+    Expect(freed > 0)
+    Expect(world.Bodies() == all.Count - freed + 1)
+End Function
+
+// A world freed while the game goes through what began frees all its bodies, which what's left of
+// what began still names, as freed, so freeing one again does nothing.
+@Test
+Function AWorldFreedGoingThroughWhatBeganFreesTheBodiesItNames()
+    Local world, floor = Floored()
+    Local all = Stacked(world)
+    Local began: Contact[] = []
+    For i = 1 To 240
+        world.Step(1.0 / 60)
+        began = world.Began()
+        If began.Count > 1 Then Break
+    End For
+    Expect(began.Count > 1)
+    world.Free()
+    For contact In began
+        Expect(contact.A.Freed() && contact.B.Freed())
+        contact.A.Free()
+    End For
+    For body In all
+        Expect(body.Freed())
+    End For
+End Function

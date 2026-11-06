@@ -181,7 +181,7 @@ Function TheCApiRefusesWhatItDoesntTake()
         ok = fbe_physics_set_gravity(world, AddressOf(nan))
     End Unsafe
     Expect(!ok)
-    Expect(Error() == "gravity is a finite vector")
+    Expect(Error() == "gravity is at most 1e6 each way, not (0, nan, 0)")
 
     Expect(fbe_physics_free(world))
     Expect(!fbe_physics_free(world))

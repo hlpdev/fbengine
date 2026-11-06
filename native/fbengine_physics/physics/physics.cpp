@@ -155,10 +155,6 @@ pool_t<world_t>& worlds() {
     return *pool;
 }
 
-bool finite(const fbe_physics_vec3_t& v) {
-    return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
-}
-
 } // namespace
 
 namespace fbe::physics {
@@ -188,9 +184,11 @@ bool normalized(float x, float y, float z, float w, JPH::Quat& made) {
     return true;
 }
 
-world_t::world_t(std::uint32_t max_bodies) {
-    system.Init(max_bodies, 0, std::max(max_bodies, fewest_pairs),
-                std::max(max_bodies / 2, fewest_pairs), broad_phase, object_vs_broad_phase, layers);
+world_t::world_t(std::uint32_t max_bodies)
+    : most_pairs(std::max(max_bodies, fewest_pairs)),
+      most_manifolds(std::max(max_bodies / 2, fewest_pairs)) {
+    system.Init(max_bodies, 0, most_pairs, most_manifolds, broad_phase, object_vs_broad_phase,
+                layers);
     system.SetContactListener(&contact_listener);
 }
 
@@ -300,8 +298,9 @@ FBE_PHYSICS_API bool fbe_physics_set_gravity(uint64_t world, const fbe_physics_v
     if (found == nullptr) {
         return false;
     }
-    if (!finite(*gravity)) {
-        return fail("gravity is a finite vector");
+    if (!within(gravity->x, gravity->y, gravity->z, most_gravity)) {
+        return fail(std::format("gravity is at most 1e6 each way, not ({}, {}, {})", gravity->x,
+                                gravity->y, gravity->z));
     }
     found->system.SetGravity(JPH::Vec3(gravity->x, gravity->y, gravity->z));
     return true;

@@ -45,8 +45,9 @@ End Struct
 /// each keeps its own, so a Shape can be freed as soon as its bodies are made. It's in its own
 /// space, in std.math's axes and meters: a primitive centered on its origin, a capsule's and a
 /// cylinder's length along Y, and a convex hull's, a mesh's, and a compound's parts where they're
-/// given. Boxes, spheres, capsules, and cylinders collide fastest, convex hulls next; a mesh is
-/// for what doesn't move on its own, as a level's walls and floors.
+/// given, sizes at most 1e5 and points at most 1e5 from 0 each way. Boxes, spheres, capsules, and
+/// cylinders collide fastest, convex hulls next; a mesh is for what doesn't move on its own, as a
+/// level's walls and floors.
 ///
 /// # Examples
 ///
@@ -68,7 +69,7 @@ Public Final Class Shape
         Self.kind = kind
     End New
 
-    /// A box `size` across, each more than 0.
+    /// A box `size` across, each more than 0 and at most 1e5.
     @MainThread Public Static Method Box(size: Vec3): Shape
         Local across = fbe_shape_vec3_t(size.x, size.y, size.z)
         Local handle: UInt64 = 0
@@ -78,19 +79,19 @@ Public Final Class Shape
         Return Made(handle, ShapeKind.BOX, "Box")
     End Method
 
-    /// A sphere of `radius`, more than 0.
+    /// A sphere of `radius`, more than 0 and at most 1e5.
     @MainThread Public Static Method Sphere(radius: Float): Shape
         Return Made(fbe_shape_sphere(radius), ShapeKind.SPHERE, "Sphere")
     End Method
 
-    /// A capsule `height` from end to end, along Y, at least twice its `radius`, which is more than
-    /// 0: a cylinder with half a sphere on each end, as a character's body often is. One just twice
-    /// its radius is a sphere.
+    /// A capsule `height` from end to end, along Y, at most 2e5 and at least twice its `radius`,
+    /// which is more than 0: a cylinder with half a sphere on each end, as a character's body often
+    /// is. One just twice its radius is a sphere.
     @MainThread Public Static Method Capsule(height: Float, radius: Float): Shape
         Return Made(fbe_shape_capsule(height, radius), ShapeKind.CAPSULE, "Capsule")
     End Method
 
-    /// A cylinder `height` from end to end, along Y, of `radius`, both more than 0.
+    /// A cylinder `height` from end to end, along Y, of `radius`, both more than 0 and at most 1e5.
     @MainThread Public Static Method Cylinder(height: Float, radius: Float): Shape
         Return Made(fbe_shape_cylinder(height, radius), ShapeKind.CYLINDER, "Cylinder")
     End Method

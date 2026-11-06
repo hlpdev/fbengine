@@ -114,7 +114,8 @@ Public Final Class PhysicsWorld
     @MainThread Public Method MaxBodies(): Int32 =>
         fbe_physics_max_bodies(Live("PhysicsWorld.MaxBodies")) As Int32
 
-    /// Sets the world's gravity, in meters a second a second, which is (0, -9.81, 0) at first.
+    /// Sets the world's gravity, in meters a second a second, at most 1e6 each way, which is
+    /// (0, -9.81, 0) at first.
     @MainThread Public Method SetGravity(gravity: Vec3)
         Local g = fbe_physics_vec3_t(gravity.x, gravity.y, gravity.z)
         Local ok = False
@@ -514,7 +515,8 @@ Public Final Class PhysicsWorld
     /// where they were and moving as they were, so its steps go on exactly as they did from there.
     /// It's a PhysicsStateError, leaving the world as it is, if the state isn't this world's, the
     /// world has other bodies, joints, or characters now than it had then, or it was saved by
-    /// another version of fbengine_physics, or changed since.
+    /// another version of fbengine_physics, or changed since, or, made to look whole, isn't one the
+    /// world could be in.
     @MainThread Public Method Restore(state: PhysicsState) Throws PhysicsStateError
         Local world = Live("PhysicsWorld.Restore")
         Local bytes = state.Kept()

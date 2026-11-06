@@ -36,8 +36,8 @@ typedef struct fbe_joint_vec3_t {
 // NOLINTEND(modernize-macro-to-enum, modernize-use-using)
 
 // Holds body `a` to body `b`, or with `b` 0 to the world, as they are: welded, so neither moves on
-// the other. Each of these is 0 if a body isn't one, they're of two worlds, neither moves, or a
-// vector isn't finite or, for an axis, is 0.
+// the other. Each of these is 0 if a body isn't one, they're of two worlds, neither moves, a point
+// is more than 1e5 from a body it's on each way, or an axis is 0.
 FBE_PHYSICS_API uint64_t fbe_joint_fixed(uint64_t a, uint64_t b);
 
 // Holds `a` and `b` together at `point`, about which either turns any way, as a ball in a socket.
@@ -71,9 +71,9 @@ FBE_PHYSICS_API int32_t fbe_joint_kind(uint64_t joint);
 // out of range.
 FBE_PHYSICS_API bool fbe_joint_set_limits(uint64_t joint, float low, float high);
 
-// Makes a hinge's, a slider's, or a distance joint's limits springs, of `frequency` a second, or 0
-// for none, rigid, as at first, damped by `damping`, 0 or more: 0 bounces on, and 1 comes to rest
-// without bouncing. False if it isn't one of those, or a number's out of range.
+// Makes a hinge's, a slider's, or a distance joint's limits springs, of `frequency` a second, 1e-3
+// or more, or 0 for none, rigid, as at first, damped by `damping`, 0 or more: 0 bounces on, and 1
+// comes to rest without bouncing. False if it isn't one of those, or a number's out of range.
 FBE_PHYSICS_API bool fbe_joint_set_spring(uint64_t joint, float frequency, float damping);
 
 // Drives a hinge or a slider: at `target` radians or meters a second, or to `target` radians or

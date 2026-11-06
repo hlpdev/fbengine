@@ -13,6 +13,7 @@
 #include <Jolt/Physics/Body/BodyInterface.h>
 #include <Jolt/Physics/Body/BodyLockInterface.h>
 #include <Jolt/Physics/Body/MotionProperties.h>
+#include <limits>
 #include <memory>
 #include <span>
 #include <utility>
@@ -90,14 +91,12 @@ body_t* find_moving(std::uint64_t handle, const char* doing) {
     return body;
 }
 
-bool finite(const fbe_body_vec3_t& v) {
-    return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
-}
-
-// `v` as Jolt's, if it's finite; false, saying so, if it isn't.
-bool vec3(const fbe_body_vec3_t& v, JPH::Vec3& made) {
-    if (!finite(v)) {
-        return fail("a vector is finite");
+// `v`, where a body or a point of it is, as Jolt's, if it's within most_position; false, saying
+// so, if it isn't.
+bool placed(const fbe_body_vec3_t& v, JPH::Vec3& made) {
+    if (!within(v.x, v.y, v.z, most_position)) {
+        return fail(std::format("a position is at most 1e9 from 0 each way, not ({}, {}, {})", v.x,
+                                v.y, v.z));
     }
     made = JPH::Vec3(v.x, v.y, v.z);
     return true;
@@ -185,16 +184,38 @@ bool get_vec3(std::uint64_t handle, fbe_body_vec3_t* out, Get get) {
     return true;
 }
 
-// Does `push` to a body with a vector, if it's dynamic; false if it isn't a body or the vector
-// isn't finite.
+// Does `push` to a body with a vector, if it's dynamic; false if it isn't a body, the vector isn't
+// within most_motion, or what it does to the body isn't, which it's put back from.
 template <typename Push>
 bool push(std::uint64_t handle, const fbe_body_vec3_t* v, Push push) {
     const body_t* body = find(handle);
-    JPH::Vec3 made;
-    if (body == nullptr || !vec3(*v, made)) {
+    if (body == nullptr) {
         return false;
     }
-    push(*body, made);
+    if (!within(v->x, v->y, v->z, most_motion)) {
+        return fail(std::format(
+            "a velocity, force, impulse, or torque is at most 1e12 each way, not ({}, {}, {})",
+            v->x, v->y, v->z));
+    }
+    JPH::Body& pushed = body->body();
+    JPH::MotionProperties* motion = pushed.GetMotionPropertiesUnchecked();
+    const bool moves = motion != nullptr && !pushed.IsStatic();
+    const JPH::Vec3 velocity = moves ? motion->GetLinearVelocity() : JPH::Vec3::sZero();
+    const JPH::Vec3 turning = moves ? motion->GetAngularVelocity() : JPH::Vec3::sZero();
+    const JPH::Vec3 force = moves ? motion->GetAccumulatedForce() : JPH::Vec3::sZero();
+    const JPH::Vec3 torque = moves ? motion->GetAccumulatedTorque() : JPH::Vec3::sZero();
+    push(*body, JPH::Vec3(v->x, v->y, v->z));
+    if (moves && !moving_within(pushed)) {
+        motion->SetLinearVelocityClamped(velocity);
+        motion->SetAngularVelocityClamped(turning);
+        if (pushed.IsDynamic()) {
+            pushed.ResetForce();
+            pushed.ResetTorque();
+            pushed.AddForce(force);
+            pushed.AddTorque(torque);
+        }
+        return fail("that would change how the body moves by more than 1e12 each way");
+    }
     return true;
 }
 
@@ -251,6 +272,33 @@ void free_bodies(world_t& world) {
     world.bodies.clear();
 }
 
+bool moving_within(const JPH::Body& body) {
+    const JPH::MotionProperties* motion = body.GetMotionPropertiesUnchecked();
+    if (motion == nullptr || body.IsStatic()) {
+        return true;
+    }
+    if (!within(motion->GetLinearVelocity(), most_motion) ||
+        !within(motion->GetAngularVelocity(), most_motion)) {
+        return false;
+    }
+    if (!body.IsDynamic()) {
+        return true;
+    }
+    const JPH::Vec3 pushing = motion->GetAccumulatedForce() * motion->GetInverseMass();
+    const JPH::Vec3 turning =
+        motion->GetInverseInertiaForRotation(JPH::Mat44::sRotation(body.GetRotation())) *
+        motion->GetAccumulatedTorque();
+    return within(pushing, most_motion) && within(turning, most_motion);
+}
+
+float response(const JPH::Body* body) {
+    if (body == nullptr || !body->IsDynamic()) {
+        return 0.0F;
+    }
+    const JPH::MotionProperties& motion = *body->GetMotionProperties();
+    return std::max(motion.GetInverseMass(), motion.GetInverseInertiaDiagonal().ReduceMax());
+}
+
 JPH::Body* find_body(std::uint64_t handle, world_t*& world) {
     const body_t* found = find(handle);
     if (found == nullptr) {
@@ -296,7 +344,7 @@ FBE_PHYSICS_API uint64_t fbe_body_add(uint64_t world, uint64_t shape, int32_t mo
     JPH::EMotionType type{};
     JPH::Vec3 at;
     JPH::Quat turned;
-    if (of == nullptr || !motion(motion_type, type) || !vec3(*position, at) ||
+    if (of == nullptr || !motion(motion_type, type) || !placed(*position, at) ||
         !quat(*rotation, turned)) {
         return 0;
     }
@@ -416,10 +464,14 @@ FBE_PHYSICS_API bool fbe_body_rotation(uint64_t body, fbe_body_quat_t* rotation)
 
 FBE_PHYSICS_API bool fbe_body_set_position(uint64_t body, const fbe_body_vec3_t* position) {
     const fp_mode_t fp_mode;
-    return find_own(body) != nullptr && push(body, position, [](const body_t& b, JPH::Vec3Arg v) {
-               b.bodies().SetPosition(b.id, v, JPH::EActivation::Activate);
-               ++b.world->moves;
-           });
+    const body_t* found = find_own(body);
+    JPH::Vec3 at;
+    if (found == nullptr || !placed(*position, at)) {
+        return false;
+    }
+    found->bodies().SetPosition(found->id, at, JPH::EActivation::Activate);
+    ++found->world->moves;
+    return true;
 }
 
 FBE_PHYSICS_API bool fbe_body_set_rotation(uint64_t body, const fbe_body_quat_t* rotation) {
@@ -471,7 +523,7 @@ FBE_PHYSICS_API bool fbe_body_add_force_at(uint64_t body, const fbe_body_vec3_t*
                                            const fbe_body_vec3_t* point) {
     const fp_mode_t fp_mode;
     JPH::Vec3 at;
-    return vec3(*point, at) && push(body, force, [at](const body_t& b, JPH::Vec3Arg v) {
+    return placed(*point, at) && push(body, force, [at](const body_t& b, JPH::Vec3Arg v) {
                b.bodies().AddForce(b.id, v, at, JPH::EActivation::Activate);
            });
 }
@@ -493,7 +545,7 @@ FBE_PHYSICS_API bool fbe_body_add_impulse_at(uint64_t body, const fbe_body_vec3_
                                              const fbe_body_vec3_t* point) {
     const fp_mode_t fp_mode;
     JPH::Vec3 at;
-    return vec3(*point, at) && push(body, impulse, [at](const body_t& b, JPH::Vec3Arg v) {
+    return placed(*point, at) && push(body, impulse, [at](const body_t& b, JPH::Vec3Arg v) {
                b.bodies().AddImpulse(b.id, v, at);
            });
 }
@@ -523,10 +575,22 @@ FBE_PHYSICS_API bool fbe_body_set_mass(uint64_t body, float mass) {
     if (!found->weighed) {
         return fail("a mesh has no inside to weigh");
     }
-    if (!std::isfinite(mass) || mass <= 0.0F) {
-        return fail(std::format("a mass is more than 0, not {}", mass));
+    // Less than a milligram turns a body by more than a float holds in a step.
+    if (!std::isfinite(mass) || mass < 1.0e-6F) {
+        return fail(std::format("a mass is 1e-6 kg or more, not {}", mass));
     }
-    found->body().GetMotionProperties()->ScaleToMass(mass);
+    // A mass so small that the body, or its shape, turns by more than a float holds is put back.
+    // A kinematic body keeps a mass for when it's dynamic, which nothing pushes it by till then.
+    JPH::MotionProperties& motion = *found->body().GetMotionProperties();
+    const float was = 1.0F / motion.GetInverseMassUnchecked();
+    motion.ScaleToMass(mass);
+    const bool turns = !found->body().IsDynamic() || within(motion.GetInverseInertiaDiagonal(),
+                                                            std::numeric_limits<float>::max());
+    if (!std::isfinite(motion.GetInverseMassUnchecked()) || !turns ||
+        !moving_within(found->body())) {
+        motion.ScaleToMass(was);
+        return fail(std::format("a mass of {} is too small for the body to move by", mass));
+    }
     return true;
 }
 
@@ -597,7 +661,8 @@ FBE_PHYSICS_API bool fbe_body_set_angular_damping(uint64_t body, float damping) 
 
 FBE_PHYSICS_API bool fbe_body_set_gravity_factor(uint64_t body, float factor) {
     const fp_mode_t fp_mode;
-    return set_motion_float(body, factor, true, "gravity factor", "a gravity factor is finite",
+    return set_motion_float(body, factor, std::abs(factor) <= most_gravity, "gravity factor",
+                            "a gravity factor is at most 1e6 either way",
                             [](JPH::MotionProperties& m, float v) { m.SetGravityFactor(v); });
 }
 
@@ -691,7 +756,7 @@ FBE_PHYSICS_API bool fbe_body_move_to(uint64_t body, const fbe_body_vec3_t* posi
     const body_t* found = find_own(body);
     JPH::Vec3 at;
     JPH::Quat turned;
-    if (found == nullptr || !vec3(*position, at) || !quat(*rotation, turned)) {
+    if (found == nullptr || !placed(*position, at) || !quat(*rotation, turned)) {
         return false;
     }
     if (!found->body().IsKinematic()) {
@@ -760,7 +825,8 @@ FBE_PHYSICS_API bool fbe_body_follow(const uint64_t* bodies, const fbe_body_pose
         const body_t* found = find_own(handles[i]);
         JPH::Vec3 at;
         JPH::Quat turned;
-        if (found == nullptr || !vec3(given[i].position, at) || !quat(given[i].rotation, turned)) {
+        if (found == nullptr || !placed(given[i].position, at) ||
+            !quat(given[i].rotation, turned)) {
             return false;
         }
         if (!found->body().IsKinematic()) {
@@ -786,7 +852,7 @@ FBE_PHYSICS_API bool fbe_body_teleport(uint64_t body, const fbe_body_vec3_t* pos
     const body_t* found = find_own(body);
     JPH::Vec3 at;
     JPH::Quat turned;
-    if (found == nullptr || !vec3(*position, at) || !quat(*rotation, turned)) {
+    if (found == nullptr || !placed(*position, at) || !quat(*rotation, turned)) {
         return false;
     }
     put(*found, at, turned);

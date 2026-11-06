@@ -4,7 +4,9 @@
 // Bodies: a shape at a place in a world, which doesn't move (static), is moved by gravity, forces,
 // and what it touches (dynamic), or is moved by the game alone, pushing dynamic bodies out of its
 // way (kinematic). Positions are the shape's origin's, in the world's space, in std.math's axes
-// and meters; velocities in meters and radians a second.
+// and meters, each at most 1e9 from 0, within which a float still steps; velocities in meters and
+// radians a second, and they, forces, torques, and impulses, at most 1e12 each way, as is what
+// they add up to change a body's velocities by in a second, so its numbers stay a float's.
 
 #include "../physics/fbe_physics.h"
 
@@ -71,7 +73,7 @@ FBE_PHYSICS_API bool fbe_body_rotation(uint64_t body, fbe_body_quat_t* rotation)
 FBE_PHYSICS_API bool fbe_body_center_of_mass(uint64_t body, fbe_body_vec3_t* center);
 
 // Puts `body` at `position`, or turns it to `rotation`, at once, waking it; false if it isn't a
-// body, or is a character's, or the vector or rotation isn't finite, or the rotation is 0.
+// body, or is a character's, or the position or rotation is out of range, or the rotation is 0.
 FBE_PHYSICS_API bool fbe_body_set_position(uint64_t body, const fbe_body_vec3_t* position);
 FBE_PHYSICS_API bool fbe_body_set_rotation(uint64_t body, const fbe_body_quat_t* rotation);
 
@@ -80,13 +82,14 @@ FBE_PHYSICS_API bool fbe_body_velocity(uint64_t body, fbe_body_vec3_t* velocity)
 FBE_PHYSICS_API bool fbe_body_angular_velocity(uint64_t body, fbe_body_vec3_t* velocity);
 
 // Sets how fast `body` moves or turns, waking it; false if it isn't a body, it's static or a
-// character's, or the vector isn't finite.
+// character's, or the vector's out of range.
 FBE_PHYSICS_API bool fbe_body_set_velocity(uint64_t body, const fbe_body_vec3_t* velocity);
 FBE_PHYSICS_API bool fbe_body_set_angular_velocity(uint64_t body, const fbe_body_vec3_t* velocity);
 
 // Pushes a dynamic `body` through the next step with `force`, in newtons, at its center of mass or
 // at `point` in the world, or turns it with `torque`, in newton meters, waking it; a static or
-// kinematic body takes none. False if it isn't a body or a vector isn't finite.
+// kinematic body takes none. False if it isn't a body or a vector's out of range, or the forces
+// would come to more than the most, which leaves the body as it was.
 FBE_PHYSICS_API bool fbe_body_add_force(uint64_t body, const fbe_body_vec3_t* force);
 FBE_PHYSICS_API bool fbe_body_add_force_at(uint64_t body, const fbe_body_vec3_t* force,
                                            const fbe_body_vec3_t* point);
@@ -94,8 +97,8 @@ FBE_PHYSICS_API bool fbe_body_add_torque(uint64_t body, const fbe_body_vec3_t* t
 
 // Changes a dynamic `body`'s velocity at once by `impulse`, in newton seconds, at its center of
 // mass or at `point` in the world, or its angular velocity by `impulse`, in newton meter seconds,
-// waking it; a static or kinematic body takes none. False if it isn't a body or a vector isn't
-// finite.
+// waking it; a static or kinematic body takes none. False if it isn't a body or a vector's out
+// of range, or the velocity would be, which leaves the body as it was.
 FBE_PHYSICS_API bool fbe_body_add_impulse(uint64_t body, const fbe_body_vec3_t* impulse);
 FBE_PHYSICS_API bool fbe_body_add_impulse_at(uint64_t body, const fbe_body_vec3_t* impulse,
                                              const fbe_body_vec3_t* point);
@@ -105,8 +108,9 @@ FBE_PHYSICS_API bool fbe_body_add_angular_impulse(uint64_t body, const fbe_body_
 // unless it's been set; 0 for a static body, a mesh, or what isn't a body.
 FBE_PHYSICS_API float fbe_body_mass(uint64_t body);
 
-// Sets `body`'s mass, more than 0, which its inertia follows; false if it isn't a body, it's
-// static or a mesh, or the mass is out of range.
+// Sets `body`'s mass, 1e-6 kilograms or more, which its inertia follows; false if it isn't a body,
+// it's static or a mesh, or the mass is out of range, or so small that a body of its shape would
+// turn by more than a float holds.
 FBE_PHYSICS_API bool fbe_body_set_mass(uint64_t body, float mass);
 
 // How much `body` grips what it slides on, from 0 on, 0.2 at first, and how much it bounces, from

@@ -37,8 +37,9 @@ pool_t<shape_t>& shapes() {
     return *pool;
 }
 
-bool finite(const fbe_shape_vec3_t& v) {
-    return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+// Whether `v`, a point of a shape, is within most_length.
+bool near(const fbe_shape_vec3_t& v) {
+    return within(v.x, v.y, v.z, most_length);
 }
 
 JPH::Vec3 vec3(const fbe_shape_vec3_t& v) {
@@ -49,10 +50,10 @@ fbe_shape_vec3_t vec3(JPH::Vec3Arg v) {
     return { .x = v.GetX(), .y = v.GetY(), .z = v.GetZ() };
 }
 
-// A length more than 0, which `what` is.
+// A length more than 0 and at most most_length, which `what` is.
 bool positive(float length, std::string_view what) {
-    if (!std::isfinite(length) || length <= 0.0F) {
-        return fail(std::format("{} is more than 0, not {}", what, length));
+    if (!std::isfinite(length) || length <= 0.0F || length > most_length) {
+        return fail(std::format("{} is more than 0 and at most 1e5, not {}", what, length));
     }
     return true;
 }
@@ -121,8 +122,9 @@ FBE_PHYSICS_API uint64_t fbe_shape_capsule(float height, float radius) {
     if (!positive(radius, "a capsule's radius")) {
         return 0;
     }
-    if (!std::isfinite(height) || height < radius * 2.0F) {
-        fail(std::format("a capsule's height is at least twice its radius, {}, not {}",
+    if (!std::isfinite(height) || height < radius * 2.0F || height > most_length * 2.0F) {
+        fail(std::format("a capsule's height is at least twice its radius, {}, and at most 2e5, "
+                         "not {}",
                          radius * 2.0F, height));
         return 0;
     }
@@ -151,8 +153,8 @@ FBE_PHYSICS_API uint64_t fbe_shape_convex_hull(const fbe_shape_vec3_t* points, i
     JPH::Array<JPH::Vec3> hull;
     hull.reserve(static_cast<std::size_t>(count));
     for (const fbe_shape_vec3_t& point : std::span(points, static_cast<std::size_t>(count))) {
-        if (!finite(point)) {
-            fail("a convex hull's points are finite");
+        if (!near(point)) {
+            fail("a convex hull's points are at most 1e5 from 0 each way");
             return 0;
         }
         hull.push_back(vec3(point));
@@ -175,8 +177,8 @@ FBE_PHYSICS_API uint64_t fbe_shape_mesh(const fbe_shape_vec3_t* vertices, int32_
     points.reserve(static_cast<std::size_t>(vertex_count));
     for (const fbe_shape_vec3_t& vertex :
          std::span(vertices, static_cast<std::size_t>(vertex_count))) {
-        if (!finite(vertex)) {
-            fail("a mesh's vertices are finite");
+        if (!near(vertex)) {
+            fail("a mesh's vertices are at most 1e5 from 0 each way");
             return 0;
         }
         points.emplace_back(vertex.x, vertex.y, vertex.z);
@@ -216,8 +218,8 @@ FBE_PHYSICS_API uint64_t fbe_shape_compound(const fbe_shape_part_t* parts, int32
         }
         const fbe_shape_quat_t& q = part.rotation;
         JPH::Quat rotation;
-        if (!finite(part.position)) {
-            fail("a compound's parts are at finite positions");
+        if (!near(part.position)) {
+            fail("a compound's parts are at most 1e5 from 0 each way");
             return 0;
         }
         if (!normalized(q.x, q.y, q.z, q.w, rotation)) {

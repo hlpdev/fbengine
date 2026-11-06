@@ -111,8 +111,8 @@ FBE_PHYSICS_API bool fbe_physics_optimize(uint64_t world);
 // The most bodies `world` was made for, 0 if it isn't a world.
 FBE_PHYSICS_API uint32_t fbe_physics_max_bodies(uint64_t world);
 
-// Sets `world`'s gravity, in meters a second a second; false if it isn't a world or the vector
-// isn't finite.
+// Sets `world`'s gravity, in meters a second a second, at most 1e6 each way; false if it isn't a
+// world or the vector's out of range.
 FBE_PHYSICS_API bool fbe_physics_set_gravity(uint64_t world, const fbe_physics_vec3_t* gravity);
 
 // Puts `world`'s gravity in `gravity`; false if it isn't a world.
@@ -208,7 +208,9 @@ FBE_PHYSICS_API bool fbe_physics_state_hash(uint64_t world, double carried, uint
 // Restores `world` from the `size` bytes of a state at `bytes`, putting what it carried in
 // `carried`; false, leaving the world as it was, if they aren't the state of this world's bodies,
 // joints, and characters as they are, saved by this version of fbengine_physics, as it saved
-// them.
+// them. A state made to pass its hash is read through before any of it's put back, and refused
+// unless it's one the world could be in: in order, its numbers finite and in range, its impulses
+// no more than its bodies take, and its rotations and normals of length 1.
 FBE_PHYSICS_API bool fbe_physics_restore(uint64_t world, const uint8_t* bytes, int64_t size,
                                          double* carried);
 

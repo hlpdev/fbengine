@@ -47,21 +47,35 @@ joint_t* find(std::uint64_t handle) {
 }
 
 bool vec3(const fbe_joint_vec3_t& v, JPH::Vec3& made) {
-    if (!std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.z)) {
-        return fail("a joint's points and axes are finite");
+    if (!within(v.x, v.y, v.z, most_position)) {
+        return fail("a joint's points and axes are at most 1e9 from 0 each way");
     }
     made = JPH::Vec3(v.x, v.y, v.z);
     return true;
+}
+
+// Whether `point` is within most_length of `body`'s center of mass, or `body` is the world: a
+// joint held further from a body turns it by a lever longer than a float's room for the turn.
+bool near(const JPH::Body& body, JPH::Vec3Arg point) {
+    if (&body == &JPH::Body::sFixedToWorld ||
+        within(point - body.GetCenterOfMassPosition(), most_length)) {
+        return true;
+    }
+    return fail("a joint's points are at most 1e5 from the bodies they're on, each way");
 }
 
 bool axis(const fbe_joint_vec3_t& v, JPH::Vec3& made) {
     if (!vec3(v, made)) {
         return false;
     }
-    if (made.LengthSq() == 0.0F || !std::isfinite(made.LengthSq())) {
+    // In doubles, so an axis too short or too long for a float's square still is one.
+    const double length =
+        std::sqrt((double{ v.x } * v.x) + (double{ v.y } * v.y) + (double{ v.z } * v.z));
+    if (length == 0.0) {
         return fail("a joint's axis isn't 0");
     }
-    made = made.Normalized();
+    made = JPH::Vec3(static_cast<float>(v.x / length), static_cast<float>(v.y / length),
+                     static_cast<float>(v.z / length));
     return true;
 }
 
@@ -182,7 +196,8 @@ FBE_PHYSICS_API uint64_t fbe_joint_point(uint64_t a, uint64_t b, const fbe_joint
     const fp_mode_t fp_mode;
     joined_t bodies;
     JPH::Vec3 at;
-    if (!joined(a, b, bodies) || !vec3(*point, at)) {
+    if (!joined(a, b, bodies) || !vec3(*point, at) || !near(*bodies.a, at) ||
+        !near(*bodies.b, at)) {
         return 0;
     }
     JPH::PointConstraintSettings settings;
@@ -197,7 +212,8 @@ FBE_PHYSICS_API uint64_t fbe_joint_hinge(uint64_t a, uint64_t b, const fbe_joint
     joined_t bodies;
     JPH::Vec3 at;
     JPH::Vec3 about;
-    if (!joined(a, b, bodies) || !vec3(*point, at) || !axis(*hinge_axis, about)) {
+    if (!joined(a, b, bodies) || !vec3(*point, at) || !near(*bodies.a, at) ||
+        !near(*bodies.b, at) || !axis(*hinge_axis, about)) {
         return 0;
     }
     JPH::HingeConstraintSettings settings;
@@ -232,7 +248,13 @@ FBE_PHYSICS_API uint64_t fbe_joint_distance(uint64_t a, uint64_t b, const fbe_jo
     joined_t bodies;
     JPH::Vec3 on_a;
     JPH::Vec3 on_b;
-    if (!joined(a, b, bodies) || !vec3(*point_a, on_a) || !vec3(*point_b, on_b)) {
+    if (!joined(a, b, bodies) || !vec3(*point_a, on_a) || !vec3(*point_b, on_b) ||
+        !near(*bodies.a, on_a) || !near(*bodies.b, on_b)) {
+        return 0;
+    }
+    // Nearer, it's a point joint, whose direction Jolt can't find as they move.
+    if ((on_b - on_a).Length() < 1.0e-3F) {
+        fail("a distance joint's points are 1e-3 or more apart");
         return 0;
     }
     JPH::DistanceConstraintSettings settings;
@@ -297,9 +319,11 @@ FBE_PHYSICS_API bool fbe_joint_set_spring(uint64_t joint, float frequency, float
     if (found == nullptr) {
         return false;
     }
-    if (!std::isfinite(frequency) || frequency < 0.0F || !std::isfinite(damping) ||
-        damping < 0.0F) {
-        return fail(std::format("a spring's frequency and damping are 0 or more, not {} and {}",
+    // A frequency less than a thousandth makes a spring Jolt can't tell from none.
+    if (!std::isfinite(frequency) || (frequency != 0.0F && frequency < 1.0e-3F) ||
+        !std::isfinite(damping) || damping < 0.0F) {
+        return fail(std::format("a spring's frequency is 0 or 1e-3 or more, and its damping 0 or "
+                                "more, not {} and {}",
                                 frequency, damping));
     }
     const JPH::SpringSettings spring(JPH::ESpringMode::FrequencyAndDamping, frequency, damping);

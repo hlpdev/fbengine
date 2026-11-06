@@ -12,6 +12,7 @@
 #include "physics/handles.hpp"
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <Jolt/Core/FPControlWord.h>
 #include <Jolt/Core/JobSystem.h>
@@ -166,6 +167,9 @@ struct world_t {
     // What began and ended in the last step.
     std::vector<fbe_physics_contact_t> began;
     std::vector<std::uint64_t> ended;
+    // How many pairs of bodies touching, and manifolds of their contacts, Jolt has room for.
+    std::uint32_t most_pairs = 0;
+    std::uint32_t most_manifolds = 0;
     std::int64_t steps = 0;
     // How many times something's moved its bodies: a step, or a call that puts one somewhere.
     std::int64_t moves = 0;
@@ -176,6 +180,44 @@ struct world_t {
     // The state it was last saved in, which fbe_physics_saved copies out.
     std::vector<std::uint8_t> saved;
 };
+
+/// The most a coordinate of where a body, a character, or a joint's point is goes from 0: well
+/// within the 1e15 meters Jolt's broad phase keeps what's in it to, with the largest shape there.
+constexpr float most_position = 1.0e9F;
+
+/// The most a shape's sizes, or a coordinate of its points or of its parts, go from 0: 100 km,
+/// past which a body of it weighs, and turns, by more than a float holds.
+constexpr float most_length = 1.0e5F;
+
+/// The most a coordinate of a body's velocity, or of what its forces and torques would change it
+/// by in a second, goes from 0: far past Jolt's most, but with room in a float to square it, and to
+/// turn it by a lever as long as a shape.
+constexpr float most_motion = 1.0e12F;
+
+/// The most a coordinate of gravity, or a body's gravity factor, goes from 0, so the two make no
+/// more than most_motion.
+constexpr float most_gravity = 1.0e6F;
+
+/// The most a coordinate of a character's velocity goes from 0, so a move of a second takes it a
+/// thousandth of the way to most_position.
+constexpr float most_speed = 1.0e6F;
+
+/// Whether `x`, `y`, and `z` are each at most `most` from 0, as no NaN is.
+inline bool within(float x, float y, float z, float most) {
+    return std::abs(x) <= most && std::abs(y) <= most && std::abs(z) <= most;
+}
+
+inline bool within(JPH::Vec3Arg v, float most) {
+    return within(v.GetX(), v.GetY(), v.GetZ(), most);
+}
+
+/// Whether `body`'s velocities, and what its forces and torques would change them by in a second,
+/// are within most_motion; true for a static body.
+bool moving_within(const JPH::Body& body);
+
+/// How much an impulse on `body` changes its velocities by, at most, by its inverse mass and
+/// inertia: 0 for a body that only moves as it's moved, or none.
+float response(const JPH::Body* body);
 
 /// Starts Jolt, its allocator, its types, and its job system, if they haven't started: before
 /// anything of Jolt's is made.
