@@ -61,6 +61,7 @@ TEST_CASE("Khronos's sample models' frames match their golden images", "[.exampl
     require(fbe_gpu_start());
     for (const auto& [frame, share_on_older_mesa] : {
              model_frame_t{ .frame = "AlphaBlendModeTest", .share_on_older_mesa = 0.015 },
+             model_frame_t{ .frame = "Effects" },
              model_frame_t{ .frame = "EmissiveStrengthTest" },
              model_frame_t{ .frame = "MetalRoughSpheres" },
              model_frame_t{ .frame = "MetalRoughSpheresNoTextures" },
@@ -144,6 +145,7 @@ TEST_CASE("the sample models' frames match their golden images", "[.example]") {
              std::pair{ "RiggedSimple", 5 },
              std::pair{ "MorphPrimitivesTest", 3 },
              std::pair{ "AnimatedMorphCube", 4 },
+             std::pair{ "Fox", 7 },
          }) {
         for (int frame = 0; frame < frames; ++frame) {
             const std::string file = std::format("model_{}_{}", name, frame);

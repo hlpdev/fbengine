@@ -70,6 +70,15 @@ Colors are in 255ths.
 | EmissiveStrengthTest, in a sun's light | how many pixels a shadow darkens by 8, and lights by 2, against none | at least 200; none | 2852; 0 |
 | | how many bloom lights by 3, against none | at least 200 | 116496 |
 | | Neutral against no tonemap, at its brightest cube | at least 3 | 18 |
+| | with a shadow and bloom at once, its golden image, `khronos_Effects.png` | as golden images are | |
+
+E6's shadows and post effects are held to golden images of our own, not to Khronos's references,
+which have neither: EmissiveStrengthTest in a sun's light, with a shadow and bloom at once and
+Neutral's tonemap, and the checks above of each against none. Where Khronos's skinned and morphing
+models are, see `tests/models/`: RiggedSimple, SimpleMorph, and Fox, among others, posed at fixed
+times by their files' clips, against where glTF's specification puts each frame, worked out by
+`tests/models/reference.py`, and golden images of the rest. Khronos publishes no frames of them at
+fixed times, only a screenshot each.
 
 What it measures is from lavapipe, and some margins are thin. Once CI has run them, each platform's
 measures go here and the limits come from them.
