@@ -758,3 +758,6 @@ Public Function BaseHeightOf(x: Float, z: Float): Float => BaseHeight(x, z)
 
 /// How much of what the rain's cut shows at (`x`, `z`), from 0 to 1: none where a walk goes.
 Public Function ErosionShownAt(x: Float, z: Float): Float => Eroding(x, z, BaseHeight(x, z))
+
+/// The headland's summit, across the ground.
+Public Function HeadlandSpot(): Vec2 => Vec2(HEADLAND_X, HEADLAND_Z)
