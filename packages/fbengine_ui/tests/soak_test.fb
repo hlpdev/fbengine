@@ -1,0 +1,203 @@
+// A long game's UI, headless, on lavapipe: menus, a console, a debug panel, and a HUD whose text
+// changes every frame, driven by seeded keys, text, the mouse, and a pad for thousands of frames,
+// with nothing growing once it's warm: fonts, textures, the tree, and what the console
+// and the panel keep. And layouts with no room, or room past reason, laid out and drawn safely.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.os
+Import std.test
+Import std.text
+Import fbengine
+Import fbengine_ui
+
+Global soakState: Int64 = 1
+
+// Park and Miller's, from a seed of 1 or more.
+Function SoakNext(n: Int): Int
+    soakState = soakState * 48271 % 2147483647
+    Return (soakState % n) As Int
+End Function
+
+Function SoakNoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
+
+// Every node under `node`, and it.
+Function Nodes(node: Node): Int
+    Local count = 1
+    For child In node.Children()
+        count += Nodes(child)
+    End For
+    Return count
+End Function
+
+// What can grow, as a game's frames go on.
+Class Sizes Implements Printable
+    Field Fonts: Int32
+    Field Textures: Int32
+    Field Tree: Int
+    Field Lines: Int
+    Field Run: Int
+
+    Method ToString(): String
+        Return "fonts {Fonts}, textures {Textures}, nodes {Tree}, lines {Lines}, run {Run}"
+    End Method
+End Class
+
+Function Measured(root: Node, console: Console): Sizes
+    Local sizes = Sizes()
+    sizes.Fonts = Font.Count()
+    sizes.Textures = Texture.Count()
+    sizes.Tree = Nodes(root)
+    sizes.Lines = console.Lines().Count
+    sizes.Run = console.History().Count
+    Return sizes
+End Function
+
+// What the HUD and the console are given to show: numbers, and text no font has all of.
+Function Shown(frame: Int): String
+    Local texts = ["{frame}", "fps {60 - frame % 7}", "a\u{301}\u{301}\u{301}\u{301}", "\u{202E}evil\u{202C}",
+                   "\u{05E9}\u{05DC}\u{05D5}\u{05DD} abc", "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}",
+                   "", "\n\n", "x".Repeated(300), "\u{FEFF}\u{200B}\u{FFFD}"]
+    Return texts[frame % texts.Count]
+End Function
+
+@Test
+Function AMenuConsoleAndHudRunForThousandsOfFramesWithoutGrowing() Throws GraphicsError, InputError
+    If SoakNoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Graphics(640, 360)
+    Defer EndGraphics()
+    Local pad = Try Simulate.ConnectGamepad()
+    Defer pad.Unplug()
+    Local root = Node("root")
+    root.SetArrangement(Arrangement.STACK)
+    // The menu.
+    Local menu = Node("menu")
+    menu.SetArrangement(Arrangement.COLUMN)
+    menu.SetAnchors(Anchors.Point(0.5, 0.5))
+    menu.SetGap(4)
+    Local play = Button("Play")
+    Local loud = Slider(0.0, 1.0, 0.5)
+    Local subtitles = Toggle("Subtitles")
+    Local named = TextField("", "your name")
+    named.SetMaxLength(40)
+    menu.Add(play)
+    menu.Add(loud)
+    menu.Add(subtitles)
+    menu.Add(named)
+    root.Add(menu)
+    // The HUD.
+    Local hud = Node("hud")
+    hud.SetArrangement(Arrangement.COLUMN)
+    hud.SetAnchors(Anchors.Point(0.0, 0.0))
+    Local health = Label("100")
+    Local said = Label("")
+    hud.Add(health)
+    hud.Add(said)
+    root.Add(hud)
+    // The console and the debug panel.
+    Local console = Console()
+    console.SetHeight(Sizing.Fixed(150.0))
+    console.SetMaxLines(200)
+    console.Register("echo", "says what it's given", Function(each: Console, words: String[]) => " ".Join(words))
+    root.Add(console)
+    Local panel = DebugPanel()
+    panel.SetAnchors(Anchors.Point(1.0, 0.0))
+    root.Add(panel)
+    Local ui = Ui(root)
+    soakState = 2718
+    Local warm: Sizes? = Null
+    Local speed: Float32 = 1.0
+    For frame = 1 To 3000
+        // Seeded input, as a player gives it.
+        Select SoakNext(10)
+            Case 0
+                Try Simulate.MoveMouse((SoakNext(640) As Float32), (SoakNext(360) As Float32))
+            Case 1
+                Try Simulate.MouseDown(MouseButton.LEFT)
+            Case 2
+                Try Simulate.MouseUp(MouseButton.LEFT)
+            Case 3
+                Try Simulate.PressKey([Key.TAB, Key.UP, Key.DOWN, Key.LEFT, Key.RIGHT, Key.RETURN,
+                                       Key.BACKSPACE, Key.ESCAPE][SoakNext(8)])
+            Case 4
+                Try Simulate.Text(Shown(frame))
+            Case 5
+                pad.SetButton([GamepadButton.SOUTH, GamepadButton.EAST, GamepadButton.DPAD_UP,
+                               GamepadButton.DPAD_DOWN][SoakNext(4)], SoakNext(2) == 0)
+            Case 6
+                If SoakNext(3) == 0 Then ui.Focus(console.Line()) Else ui.Focus(named)
+            Default
+        End Select
+        Flip()
+        ui.Update()
+        // What the game does each frame: its HUD's text, its console's lines, its panel's rows.
+        health.SetText("{100 - frame % 100}")
+        said.SetText(Shown(frame))
+        If frame % 3 == 0 Then console.Print("frame {frame}: {Shown(frame / 3)}")
+        If frame % 50 == 0 Then console.Run("echo {frame}")
+        panel.Watch("frame", "{frame}")
+        If frame % 2 == 0 Then panel.Watch("odd", "{frame}")
+        speed = panel.Tweak("speed", 0.0, 10.0, speed)
+        Screen.Canvas().Clear()
+        ui.Draw()
+        If frame == 500 Then warm = Measured(root, console)
+    End For
+    Local now = Measured(root, console)
+    Local was = warm ?? now
+    Expect(now.Fonts <= was.Fonts, "fonts grew: {was} then {now}")
+    Expect(now.Textures <= was.Textures, "textures grew: {was} then {now}")
+    // Gpu.MemoryUsage isn't checked: on lavapipe it's the whole machine's memory, which other
+    // programs move, not this one's.
+    Expect(now.Tree <= was.Tree + 2, "the tree grew: {was} then {now}")
+    Expect(now.Lines <= 200 && now.Run <= 100, "the console grew: {now}")
+    Expect(play.Text() == "Play", "the menu changed")
+End Function
+
+// A tree with no room, and room past reason: laid out and drawn without a panic, a NaN place, or a
+// size under 0.
+@Test
+Function LayoutsWithNoRoomOrRoomPastReasonAreSafe() Throws GraphicsError
+    If SoakNoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Graphics(1, 1)
+    Defer EndGraphics()
+    Local root = Node("root")
+    root.SetArrangement(Arrangement.COLUMN)
+    Local row = Node("row")
+    row.SetArrangement(Arrangement.ROW)
+    row.SetGap(10)
+    For each = 1 To 20
+        Local label = Label(Shown(each))
+        label.SetWidth(Sizing.Fill())
+        row.Add(label)
+    End For
+    row.Add(Button("x"))
+    row.Add(Slider(1.0, 1.0, 1.0))
+    root.Add(row)
+    Local empty = Node("empty")
+    empty.SetWidth(Sizing.Fixed(0.0))
+    empty.SetHeight(Sizing.Fixed(0.0))
+    empty.Add(Label("inside nothing"))
+    root.Add(empty)
+    Local ui = Ui(root)
+    For scale In [1.0, 0.01, 100.0, 1.0]
+        ui.SetScale(scale)
+        Flip()
+        ui.Update()
+        Screen.Canvas().Clear()
+        ui.Draw()
+    End For
+    For node In [root, row, empty]
+        Local box = node.Box()
+        Expect(box.Width >= 0.0 && box.Height >= 0.0 && !IsNaN(box.X) && !IsNaN(box.Y),
+               "{node.Name()}: {box}")
+    End For
+    // A window gone to its smallest and back, mid-game.
+    Try Graphics(640, 360)
+    Flip()
+    ui.Update()
+    ui.Draw()
+    Expect(root.Box().Width > 0.0)
+End Function

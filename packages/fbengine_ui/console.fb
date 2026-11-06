@@ -48,6 +48,7 @@ Public Class Console Extends Widget
     Field lines: String[] = []
     Field most: Int = 500
     Field history: String[] = []
+    Field mostRun: Int = 100
     Field recalled: Int = 0
     Field output: Node
     Field view: ScrollView
@@ -153,6 +154,10 @@ Public Class Console Extends Widget
         If words.Count == 0 Then Return
         Print("> {typed}")
         If history.Count == 0 || history[history.Count - 1] != typed Then history.Add(typed)
+        // The oldest go past the most it keeps, so a long game's typing doesn't grow it for good.
+        While history.Count > mostRun
+            history.RemoveAt(0)
+        End While
         recalled = history.Count
         Local named = words[0]
         For command In commands
@@ -178,8 +183,19 @@ Public Class Console Extends Widget
     /// The key a game opens and closes it on.
     @MainThread Public Method ToggleKey(): Key => toggle
 
-    /// What was run, the oldest first, as up and down go through it.
+    /// What was run, the oldest first, as up and down go through it: the last 100, or what
+    /// SetMaxHistory says.
     @MainThread Public Method History(): String[] => history.Clone()
+
+    /// Sets the most of what was run it keeps for up and down, 100 at first.
+    @MainThread Public Method SetMaxHistory(count: Int)
+        If count < 1 Then Panic("Console.SetMaxHistory: a console keeps 1 or more, not {count}")
+        mostRun = count
+        While history.Count > mostRun
+            history.RemoveAt(0)
+        End While
+        recalled = history.Count
+    End Method
 
     // Up and down's line: what was run before or after the one shown.
     @MainThread Package Method Recall(by: Int): String?

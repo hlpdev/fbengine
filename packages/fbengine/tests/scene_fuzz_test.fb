@@ -1,0 +1,224 @@
+// Scene files damaged every way a hand edit, a merge, or a write cut off can: thousands of them,
+// seeded, each read whole or refused with an IOError, nothing it made left in the world, never a
+// panic; as a game's Scene.FromText reads them, and as an editor's Scene.Open does. What has no GPU
+// in it runs without one.
+
+Import std.collections
+Import std.core
+Import std.io
+Import std.math
+Import std.test
+Import std.text
+Import fbengine
+
+Global sceneState: Int64 = 1
+
+// Park and Miller's, from a seed of 1 or more.
+Function SceneNext(n: Int): Int
+    sceneState = sceneState * 48271 % 2147483647
+    Return (sceneState % n) As Int
+End Function
+
+// A scene of every kind it saves: a camera, a sprite, a light, meshes of a built-in, of their own
+// vertices, and of a built-in changed, shared materials, children, and a component.
+Function Everything(): Entity[]
+    Local camera = Camera()
+    camera.SetName("view")
+    camera.SetFogMode(FogMode.EXPONENTIAL)
+    camera.SetFogRange(2, 20)
+    Local material = Material(Color(0.25, 0.5, 0.75, 0.5))
+    material.SetBlend(Blend.ADD)
+    material.SetShininess(0.75)
+    Local sprite = Sprite(material)
+    sprite.SetName("smoke")
+    sprite.SetSpriteScale(Vec2(2, 3))
+    Local room = Pivot()
+    room.SetName("room")
+    room.SetPosition(Vec3(1, 2, 3))
+    room.SetRotation(Quat(0, 0.70710677, 0, 0.70710677))
+    Local lamp = Light(LightType.SPOT, room)
+    lamp.SetName("lamp")
+    lamp.SetRange(7.5)
+    Local crate = Mesh(Geometry.Cube(), room)
+    crate.SetName("crate")
+    crate.SetMaterial(material)
+    crate.SetPickMode(PickMode.MESH)
+    Local made = Geometry()
+    Local surface = made.AddSurface()
+    Local up = Vec3(0, 1, 0)
+    Local a = surface.AddVertex(Vertex(Vec3(0.1, 0, 0), up, Vec2(0, 0.25), Vec2(0.5, 0.75), Color(1, 0, 0)))
+    Local b = surface.AddVertex(Vertex(Vec3(1, 0, 0), up, Vec2(1, 0), Vec2(0, 0), Color(0, 1, 0)))
+    Local c = surface.AddVertex(Vertex(Vec3(0, 0, 1), up, Vec2(0, 1), Vec2(0, 0), Color(0, 0, 1)))
+    surface.AddTriangle(a, c, b)
+    Local floor = Mesh(made, room)
+    floor.SetName("floor")
+    Local bent = Geometry.Sphere(6)
+    bent.Translate(Vec3(1, 0, 0))
+    Local ball = Mesh(bent)
+    ball.SetName("ball")
+    Return [camera, sprite, room, ball]
+End Function
+
+// What a scene file can be by mistake, by its characters: cut off, cut into, or with what a person
+// or a merge puts in.
+Function Mangled(saved: String): String
+    Local chars: String[] = []
+    For each In saved.Graphemes()
+        chars.Add(each)
+    End For
+    Local kind = SceneNext(6)
+    If kind == 0
+        Local kept = SceneNext(chars.Count + 1)
+        While chars.Count > kept
+            chars.RemoveAt(chars.Count - 1)
+        End While
+        Return "".Join(chars)
+    End If
+    Local pieces = ["[", "]", "[[entity]]", "[[material]]", "[[geometry]]", "=", "\"", "\n", ",",
+                    "nan", "inf", "-inf", "1e39", "-1", "0", "99999999999999999999", "true",
+                    "path = \"room\"", "path = \"room/crate/x\"", "path = \"\"", "path = \"/\"",
+                    "kind = \"MESH\"", "kind = \"LIGHT\"", "kind = 7", "geometry = \"builtin:sphere:-3\"",
+                    "geometry = \"builtin:sphere:99999999\"", "geometry = \"geometry:0\"",
+                    "material = \"material:0\"", "position = [1]", "rotation = [0, 0, 0, 0]",
+                    "scale = [0, 0, 0]", "vertices = [[1, 2]]", "triangles = [[0, 1, 999]]",
+                    "triangles = [[-1, 0, 1]]", "range = -5", "format = 2", "<<<<<<< HEAD", ">>>>>>>",
+                    "{{", "}}", "\u{FFFD}", "\u{0}", "#"]
+    For change = 1 To 1 + SceneNext(4)
+        Local at = SceneNext(chars.Count + 1)
+        If kind == 1 && at < chars.Count
+            For cut = 1 To 1 + SceneNext(24)
+                If at < chars.Count Then chars.RemoveAt(at)
+            End For
+        Else
+            chars.Insert(at, pieces[SceneNext(pieces.Count)])
+        End If
+    End For
+    Return "".Join(chars)
+End Function
+
+// Every entity under `roots`, and them.
+Function Counted(roots: Entity[]): Int
+    Local count = 0
+    For root In roots
+        count += 1 + Counted(root.Children())
+    End For
+    Return count
+End Function
+
+@Test
+Function MangledScenesAreReadOrRefusedLeavingNothing() Throws IOError
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local saved = Try Scene.Text(Everything())
+    For root In world.Roots()
+        root.Free()
+    End For
+    Expect(world.Roots().Count == 0)
+    sceneState = 9001
+    Local read = 0
+    Local refused = 0
+    For round = 1 To 2000
+        Local text = Mangled(saved)
+        Local roots: Entity[] = []
+        Try
+            roots = Try Scene.FromText(text)
+        Catch error As IOError
+            refused += 1
+            Expect(error.Kind == IOErrorKind.INVALID_DATA, "round {round}: {error.Kind}: {error.Message}")
+            Expect(error.Message.Length > 0)
+            Expect(world.Roots().Count == 0, "round {round}'s refusal left {world.Roots().Count} behind")
+            Continue
+        End Try
+        read += 1
+        // What's read is a scene again: written, it reads back as itself.
+        Try
+            Local again = Try Scene.Text(roots)
+            Local twice = Try Scene.FromText(again)
+            Expect((Try Scene.Text(twice)) == again, "round {round}: read back otherwise")
+            For root In twice
+                root.Free()
+            End For
+        Catch error As IOError
+            // A key it doesn't know is read past, and saving refuses to lose it, as Text says.
+            Expect(error.Message.EndsWith("which saving would lose"),
+                   "round {round} read, but can't be written again: {error.Message}\n{text}")
+        End Try
+        For root In roots
+            root.Free()
+        End For
+        Expect(world.Roots().Count == 0, "round {round} left {world.Roots().Count} behind")
+    End For
+    Expect(read > 20 && refused > 500, "{read} read, {refused} refused")
+End Function
+
+// As an editor opens them, from a file: the same, by Scene.Open.
+@Test
+Function MangledScenesOpenOrAreRefusedLeavingNothing() Throws IOError
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local saved = Try Scene.Text(Everything())
+    For root In world.Roots()
+        root.Free()
+    End For
+    Local folder = Try TempDir()
+    Assets.MountFolder("res://scene-fuzz", folder.Path)
+    Defer Assets.Unmount("res://scene-fuzz")
+    sceneState = 31337
+    Local opened = 0
+    For round = 1 To 300
+        Try File.WriteText(folder.Path / "mangled.scene", Mangled(saved))
+        Try
+            Local scene = Try Scene.Open("res://scene-fuzz/mangled.scene")
+            opened += 1
+            For root In scene.Roots
+                root.Free()
+            End For
+        Catch error As IOError
+            Expect(error.Message.Length > 0)
+        End Try
+        Expect(world.Roots().Count == 0, "round {round} left {world.Roots().Count} behind")
+    End For
+    Expect(opened > 5, "{opened} opened")
+End Function
+
+// Scenes of sizes past reason: deep, wide, and of numbers TOML reads but no entity takes.
+@Test
+Function ScenesPastReasonAreRefusedOrRead() Throws IOError
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    // A thousand deep, each under the last.
+    Local deep = "format = 1\n"
+    Local path = "a"
+    For level = 1 To 1000
+        deep += "[[entity]]\npath = \"{path}\"\nkind = \"PIVOT\"\n"
+        path += "/a"
+    End For
+    // Ten thousand side by side.
+    Local wide = "format = 1\n"
+    For each = 1 To 10000
+        wide += "[[entity]]\npath = \"e{each}\"\nkind = \"PIVOT\"\n"
+    End For
+    Local strange = ["format = 1\n[[entity]]\npath = \"a\"\nkind = \"PIVOT\"\nposition = [1e38, -1e38, 3.4e38]\n",
+                     "format = 1\n[[entity]]\npath = \"a\"\nkind = \"PIVOT\"\nscale = [0, 0, 0]\n",
+                     "format = 1\n[[entity]]\npath = \"a\"\nkind = \"LIGHT\"\nrange = 1e300\n",
+                     "format = 1\n[[entity]]\npath = \"a\"\nkind = \"MESH\"\ngeometry = \"builtin:sphere:2147483647\"\n",
+                     "format = 1\n[[entity]]\npath = \"a\"\nkind = \"MESH\"\ngeometry = \"builtin:sphere:0\"\n",
+                     "format = 1\n[[entity]]\npath = \"" + "x".Repeated(100000) + "\"\nkind = \"PIVOT\"\n"]
+    strange.Add(deep)
+    strange.Add(wide)
+    For text In strange
+        Try
+            Local roots = Try Scene.FromText(text)
+            Expect(Counted(roots) > 0)
+            For root In roots
+                root.Free()
+            End For
+        Catch error As IOError
+            Expect(error.Kind == IOErrorKind.INVALID_DATA, error.Message)
+        End Try
+        Expect(world.Roots().Count == 0)
+    End For
+End Function

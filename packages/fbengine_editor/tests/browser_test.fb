@@ -585,6 +585,80 @@ Function WhatCantBeReadOrWrittenChangesNothing() Throws IOError, GraphicsError
     Expect(editor.ShowingDialog() != Null && editor.SceneFile() == "res://good.scene")
 End Function
 
+Global mangleState: Int64 = 1
+
+// Park and Miller's, from a seed of 1 or more.
+Function MangleNext(n: Int): Int
+    mangleState = mangleState * 48271 % 2147483647
+    Return (mangleState % n) As Int
+End Function
+
+// A scene file as a person or a merge can leave it, by its characters.
+Function MangledScene(saved: String): String
+    Local chars: String[] = []
+    For each In saved.Graphemes()
+        chars.Add(each)
+    End For
+    Local pieces = ["[[entity]]", "\"", "]", "=", "\n", "nan", "1e39", "-1",
+                    "geometry = \"res://sub/ball.gltf#5\"", "geometry = \"res://sub/ball.gltf#-1\"",
+                    "geometry = \"res://sub/ball.gltf#99999999999\"", "geometry = \"res://sub/bad.gltf#0\"",
+                    "geometry = \"res://sub/ball.gltf\"", "geometry = \"res://#\"", "kind = \"MESH\"",
+                    "path = \"Cube/Cube\"", "<<<<<<< HEAD"]
+    For change = 1 To 1 + MangleNext(3)
+        Local at = MangleNext(chars.Count + 1)
+        If MangleNext(3) == 0 && at < chars.Count
+            For cut = 1 To 1 + MangleNext(12)
+                If at < chars.Count Then chars.RemoveAt(at)
+            End For
+        Else
+            chars.Insert(at, pieces[MangleNext(pieces.Count)])
+        End If
+    End For
+    Return "".Join(chars)
+End Function
+
+// Mangled scenes, opened one after another: each opens, or says why in a dialog and leaves what's
+// being edited as it was; never a panic.
+@Test
+Function MangledScenesOpenOrSayWhy() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local game = Try Game(games.Path)
+    Local editor = Try Started(settings.Path, game)
+    Defer editor.Finish()
+    Expect(editor.Actions.Run("add.cube"))
+    Expect(editor.Actions.Run("add.light"))
+    editor.SaveScene("res://saved.scene")
+    editor.Step()
+    Local saved = Try Text(game / "assets" / "saved.scene")
+    mangleState = 1234
+    Local opened = 0
+    Local refused = 0
+    For round = 1 To 40
+        Try File.WriteText(game / "assets" / "mangled.scene", MangledScene(saved))
+        Local before = editor.Edited.Entities().Count
+        editor.OpenScene("res://mangled.scene")
+        editor.Step()
+        If editor.ShowingDialog() != Null
+            Local opening = editor.SceneFile() == "res://mangled.scene"
+            If !opening
+                refused += 1
+                Expect(editor.Edited.Entities().Count == before, "round {round} changed what's edited")
+            Else
+                // Opened, with what was lost said.
+                opened += 1
+            End If
+            Try Simulate.PressKey(Key.ESCAPE)
+            editor.Step()
+        Else
+            opened += 1
+        End If
+        editor.Step()
+    End For
+    Expect(opened > 0 && refused > 0, "{opened} opened, {refused} refused")
+End Function
+
 // A model's saved by where it's from, each thing under it by its path, and read back from it; so with
 // the editor gone a game's Scene.Load gives the same.
 @Test

@@ -1,0 +1,243 @@
+// Input as a long game meets it, offscreen: pads plugged and unplugged in the frame they're
+// pressed, hundreds of times, with nothing left held or kept; the focus lost while keys, buttons,
+// and actions are held; and bindings files damaged every way a hand edit or a cut-off write
+// can, each read or refused with the bindings as they were.
+
+Import std.collections
+Import std.core
+Import std.test
+Import std.text
+Import fbengine
+
+Global stableState: Int64 = 1
+
+// Park and Miller's, from a seed of 1 or more.
+Function StableNext(n: Int): Int
+    stableState = stableState * 48271 % 2147483647
+    Return (stableState % n) As Int
+End Function
+
+// A pad unplugged in the frame its button went down: the action bound to it isn't left held,
+// whatever order the frame's events are read in.
+@Test
+Function APadUnpluggedAsItsPressedLeavesNothingHeld() Throws GraphicsError, InputError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Local controls = ActionSet()
+    Local jump = controls.Add("jump")
+    jump.Bind(Binding.OfGamepadButton(GamepadButton.SOUTH))
+    Flip()
+    // Pressed and unplugged before the Flip reads either.
+    Local pad = Try Simulate.ConnectGamepad()
+    Flip()
+    pad.SetButton(GamepadButton.SOUTH, True)
+    pad.Unplug()
+    Flip()
+    Flip()
+    Expect(!jump.Down(), "jump held by a pad that's gone")
+    // Held across Flips, then unplugged: up at once.
+    Local again = Try Simulate.ConnectGamepad()
+    Flip()
+    again.SetButton(GamepadButton.SOUTH, True)
+    Flip()
+    Expect(jump.Down())
+    again.Unplug()
+    Flip()
+    Expect(!jump.Down(), "jump held after its pad was unplugged")
+    Expect(jump.Up())
+    // Plugged and pressed in one frame: it counts.
+    Local third = Try Simulate.ConnectGamepad()
+    third.SetButton(GamepadButton.SOUTH, True)
+    Flip()
+    Flip()
+    Expect(jump.Down(), "a pad pressed as it's plugged wasn't read")
+    third.Unplug()
+    Flip()
+    Expect(!jump.Down())
+End Function
+
+// Seeded plugs, unplugs, and presses, several a frame, over a thousand frames: the pads known
+// come back to what they were, and no action stays held by one that's gone.
+@Test
+Function PadsPluggedAndUnpluggedForAThousandFramesLeaveNothing() Throws GraphicsError, InputError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Gamepads()
+    Flip()
+    Local before = Gamepads().Count
+    Local controls = ActionSet()
+    Local fire = controls.Add("fire")
+    fire.Bind(Binding.OfGamepadButton(GamepadButton.EAST))
+    fire.Bind(Binding.OfGamepadAxis(GamepadAxis.RIGHT_TRIGGER))
+    Local plugged: VirtualGamepad[] = []
+    stableState = 4242
+    Local most = 0
+    For frame = 1 To 1000
+        For change = 1 To 1 + StableNext(3)
+            Local what = StableNext(5)
+            If what == 0 && plugged.Count < 8
+                plugged.Add(Try Simulate.ConnectGamepad("Pad {frame}"))
+            ElseIf what == 1 && plugged.Count > 0
+                Local at = StableNext(plugged.Count)
+                plugged[at].Unplug()
+                plugged.RemoveAt(at)
+            ElseIf what == 2 && plugged.Count > 0
+                plugged[StableNext(plugged.Count)].SetButton(GamepadButton.EAST, StableNext(2) == 0)
+            ElseIf what == 3 && plugged.Count > 0
+                plugged[StableNext(plugged.Count)].SetAxis(GamepadAxis.RIGHT_TRIGGER,
+                                                           (StableNext(3) As Float32) / 2.0)
+            End If
+        End For
+        most = Max(most, plugged.Count)
+        Flip()
+    End For
+    For pad In plugged
+        pad.Unplug()
+    End For
+    Flip()
+    Flip()
+    Expect(most >= 4, "only {most} pads at once")
+    Expect(Gamepads().Count == before, "{Gamepads().Count} pads known, not {before}")
+    Expect(!fire.Down(), "fire held with every pad gone")
+    Expect(fire.Value() == 0.0, "fire's value {fire.Value()} with every pad gone")
+End Function
+
+// The focus lost with keys, a mouse button, and the actions on them held: all of it up, and none
+// down again until it's pressed again.
+@Test
+Function LosingTheFocusLetsGoOfEveryActionHeldByKeysAndTheMouse() Throws GraphicsError, InputError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Local controls = ActionSet()
+    Local walk = controls.Add("walk")
+    walk.Bind(Binding.OfKey(Key.W))
+    Local shoot = controls.Add("shoot")
+    shoot.Bind(Binding.OfMouseButton(MouseButton.LEFT))
+    Local strafe = controls.Add("strafe")
+    strafe.Bind(Binding.OfKey(Key.D))
+    strafe.Bind(Binding.OfKey(Key.A, -1.0))
+    Try Simulate.KeyDown(Key.W)
+    Try Simulate.KeyDown(Key.D)
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    Flip()
+    Expect(walk.Down() && shoot.Down() && strafe.Value() == 1.0)
+    // Lost and regained in one frame: still let go.
+    Try Simulate.BlurWindow()
+    Try Simulate.FocusWindow()
+    Flip()
+    Expect(!walk.Down(), "walk held after the focus went")
+    Expect(!shoot.Down(), "shoot held after the focus went")
+    Expect(strafe.Value() == 0.0, "strafe's {strafe.Value()} after the focus went")
+    Expect(walk.Up() && shoot.Up())
+    Flip()
+    Expect(!walk.Down() && !shoot.Down())
+    // The keys' real releases, while away, count nothing more; pressed again, they're down.
+    Try Simulate.KeyUp(Key.W)
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    Flip()
+    Expect(!walk.Up() && !shoot.Up())
+    Try Simulate.KeyDown(Key.W)
+    Flip()
+    Expect(walk.Down() && walk.Hit())
+    Try Simulate.KeyUp(Key.W)
+    Try Simulate.KeyUp(Key.D)
+    Flip()
+End Function
+
+// A set of bindings of every kind, two-axis too, as a game's are.
+Function Bound(): ActionSet
+    Local controls = ActionSet()
+    controls.Add("jump").Bind(Binding.OfKey(Key.SPACE))
+    controls.Get("jump")?.Bind(Binding.OfGamepadButton(GamepadButton.SOUTH))
+    Local move = controls.Add("move")
+    move.Bind(Binding.OfKey(Key.D))
+    move.Bind(Binding.OfKey(Key.A, -1.0))
+    move.BindY(Binding.OfGamepadAxis(GamepadAxis.LEFT_Y, 0.5))
+    controls.Add("look").Bind(Binding.OfMouseAxis(MouseAxis.X, 2.0))
+    controls.Add("fire").Bind(Binding.OfMouseButton(MouseButton.LEFT))
+    Return controls
+End Function
+
+// What a bindings file can be by mistake, by hand or a write cut off, by its characters.
+Function Damaged(saved: String): String
+    Local chars: String[] = []
+    For each In saved.Graphemes()
+        chars.Add(each)
+    End For
+    Local kind = StableNext(6)
+    If kind == 0
+        Local kept = StableNext(chars.Count + 1)
+        While chars.Count > kept
+            chars.RemoveAt(chars.Count - 1)
+        End While
+        Return "".Join(chars)
+    End If
+    Local pieces = ["[", "]", "[[", "]]", "=", "\"", "'", "\n", "x", "y", "nan", "inf", "-inf",
+                    "1e400", "-1", "99999999999999999999", "{{", "}}", ",", "key", "scale", "#",
+                    "\u{0}", "\u{FFFD}", "true", "[[jump]]", "[move]", "[[move.x]]", "kind = 9",
+                    "code = -5", "code = 600", "scale = nan", "scale = 1e39", "jump = 3",
+                    "move = \"x\"", "[move.x]"]
+    For change = 1 To 1 + StableNext(4)
+        Local at = StableNext(chars.Count + 1)
+        If kind == 1 && at < chars.Count
+            // Cut some out.
+            For cut = 1 To 1 + StableNext(16)
+                If at < chars.Count Then chars.RemoveAt(at)
+            End For
+        Else
+            chars.Insert(at, pieces[StableNext(pieces.Count)])
+        End If
+    End For
+    Return "".Join(chars)
+End Function
+
+// Damaged bindings files, thousands of them: each read, or refused with an InputError and the
+// bindings as they were; never a panic.
+@Test
+Function DamagedBindingsAreReadOrRefusedWithNothingChanged() Throws InputError
+    Local saved = Bound().Save()
+    stableState = 777
+    Local refused = 0
+    Local read = 0
+    For round = 1 To 3000
+        Local controls = Bound()
+        Local was = controls.Save()
+        Local text = Damaged(saved)
+        Try
+            Try controls.Load(text)
+            read += 1
+            // What's read is bindings again: saved, it reads back as itself.
+            Local again = Bound()
+            Try again.Load(controls.Save())
+            Expect(again.Save() == controls.Save(), "round {round}: read back otherwise:\n{text}")
+        Catch e As InputError
+            refused += 1
+            Expect(controls.Save() == was, "round {round}: changed as it was refused:\n{text}")
+        End Try
+    End For
+    Expect(refused > 100 && read > 100, "{read} read, {refused} refused")
+End Function
+
+// A bindings file that isn't one at all: huge, deep, or of other kinds.
+@Test
+Function BindingsThatArentBindingsAreRefused()
+    Local tooDeep = ""
+    For level = 1 To 2000
+        tooDeep += "["
+    End For
+    Local texts = ["jump = [1, 2, 3]", "jump = [{{ kind = 1 }}]", "jump = [\"space\"]", "move = {{ x = 1 }}",
+                   "move = {{ x = [{{ code = 32 }}] }}", "jump = []" + "\n" + "jump = []", tooDeep,
+                   "jump = [" + "{{ code = 32 }}, ".Repeated(20000) + "]", "\u{FEFF}jump = []"]
+    For text In texts
+        Local controls = Bound()
+        Local was = controls.Save()
+        Try
+            Try controls.Load(text)
+        Catch e As InputError
+            Expect(controls.Save() == was, "changed as it was refused: a text of {text.Length} bytes")
+        End Try
+    End For
+End Function

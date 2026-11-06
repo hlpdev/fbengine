@@ -48,6 +48,25 @@ Function AConsoleKeepsItsLastLines()
     Expect(console.Lines() == ["four"])
 End Function
 
+// What was run is kept for up and down only so far back, so a long game's typing doesn't grow
+// it for good.
+@Test
+Function AConsoleKeepsItsLastRunForUpAndDown()
+    Local console = Console()
+    For each = 1 To 1000
+        console.Run("say {each}")
+    End For
+    Local kept = console.History()
+    Expect(kept.Count == 100, "{kept.Count} kept")
+    Expect(kept[0] == "say 901" && kept[99] == "say 1000")
+    Expect(console.Recall(-1) == "say 1000")
+    console.SetMaxHistory(3)
+    Expect(console.History() == ["say 998", "say 999", "say 1000"])
+    Expect(console.Recall(-1) == "say 1000")
+    console.Run("say again")
+    Expect(console.History() == ["say 999", "say 1000", "say again"])
+End Function
+
 // A debug panel's row's widget, after its name's label.
 Function RowWidget(panel: DebugPanel, name: String): Widget?
     Local row = panel.Find(name)

@@ -1921,13 +1921,14 @@ endif()
 # text's atlas and layouts, as the canvas reads them, from its sources and core's, on HarfBuzz's
 # test fonts.
 file(GLOB fbengine_text_sources CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/native/fbengine/text/*.cpp")
-add_executable(fbengine_text_tests text/text_tests.cpp ${fbengine_text_sources}
+add_executable(fbengine_text_tests text/text_tests.cpp text/fuzz_tests.cpp ${fbengine_text_sources}
                "${PROJECT_SOURCE_DIR}/native/fbengine/core/core.cpp")
 target_include_directories(fbengine_text_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
 target_compile_definitions(fbengine_text_tests PRIVATE FBE_BUILDING
                            FBE_VERSION="${PROJECT_VERSION}"
                            FBE_TEST_FONTS="${harfbuzz_SOURCE_DIR}/test/api/fonts"
                            FBE_OWN_TEST_FONTS="${CMAKE_CURRENT_SOURCE_DIR}/fonts"
+                           FBE_TEXT_CORPUS="${CMAKE_CURRENT_SOURCE_DIR}/text/corpus"
                            FBE_SHAPE_TEST_FONTS="${harfbuzz_SOURCE_DIR}/test/shape/data/in-house/fonts")
 target_link_libraries(fbengine_text_tests PRIVATE SDL3::SDL3-static freetype fbengine_harfbuzz
                       fbengine_sheenbidi Catch2::Catch2WithMain)
