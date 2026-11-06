@@ -1,8 +1,8 @@
 // The sea: its normals, two tiles of waves scrolled across each other, and its color, how much it
 // hides, and its foam, by how deep it is over the ground. sea.fb gives it what it reads:
 //
-// - Its first parameter: how high the sea is, the time in seconds, half the ground map's width, and
-//   how far the sheet goes each way from its middle, in meters.
+// - Its first parameter: how high the sea is, where the lines rolling in are, from 0 to 1, half the
+//   ground map's width, and how far the sheet goes each way from its middle, in meters.
 // - Its second and third: each tile of waves, how many meters across; where it's sampled from, in
 //   tiles, which sea.fb moves so the first's waves go along (0.92, 0.39) in the world and the
 //   second's along (-0.45, 0.89), each wrapped to a tile so it never jumps; and how much of its slopes
@@ -11,12 +11,16 @@
 // - Its fourth: the deep's color, linear, and 1 in w to still it, a mirror.
 // - Its fifth: the shallows' color, linear; its sixth, the foam's, and in w how far below 0 the
 //   ground map's red starts.
+// - Its seventh: how far the froth's noise has drifted, across and along, and the streaks' across,
+//   each in the noise's cells and wrapped to its period, so none of it jumps.
 // - Its first layer: the ground map, over the island, in half floats: red the ground's height. Its
 //   second: a tile of waves' normals. Each has no alpha, laid over what's under by it, so neither
 //   colors the sea.
 #define FBE_BENDS_NORMALS
 
 static const float shallows = 2.6;
+// How many of the noise's cells it goes before it repeats, as sea.fb's FROTH_PERIOD.
+static const float period = 1024.0;
 
 float smoothFrom(float from, float to, float at)
 {
@@ -64,10 +68,11 @@ float3 bend(Surface surface)
     return normalize(float3(slopes, lerp(1.0, one.z, kept) * lerp(1.0, other.z, otherKept)));
 }
 
-// A number from 0 to 1 for a lattice point.
+// A number from 0 to 1 for a lattice point, the same every period.
 float hash(float2 at)
 {
-    return frac(sin(dot(at, float2(127.1, 311.7))) * 43758.5453);
+    const float2 wrapped = at - period * floor(at / period);
+    return frac(sin(dot(wrapped, float2(127.1, 311.7))) * 43758.5453);
 }
 
 // Value noise, smooth between whole numbers, from 0 to 1.
@@ -86,7 +91,7 @@ float noise(float2 at)
 float4 shade(Surface surface)
 {
     const float2 place = placeOf(surface);
-    const float time = surface.parameter(0).y;
+    const float4 drift = surface.parameter(6);
     const float half = surface.parameter(0).z;
     const float2 onMap = (place + float2(half, half)) / (2.0 * half);
     float depth = 100.0;
@@ -102,19 +107,19 @@ float4 shade(Surface surface)
     const float deep = smoothFrom(0.0, shallows, depth);
     const float hides = smoothFrom(0.0, 0.05, depth) * (0.45 + 0.55 * smoothFrom(0.0, 1.4, depth));
     // Froth: patches that drift, of three sizes.
-    const float froth = 0.45 * noise(place * 1.7 + float2(time * 0.07, 0.0)) +
-                        0.3 * noise(place * 5.3 - float2(0.0, time * 0.13)) +
+    const float froth = 0.45 * noise(place * 1.7 + float2(drift.x, 0.0)) +
+                        0.3 * noise(place * 5.3 - float2(0.0, drift.y)) +
                         0.25 * noise(place * 0.45 + float2(17.0, 31.0));
     // At the edge, in patches with gaps between, less of it as it's deeper.
     const float edge = 1.0 - smoothFrom(0.0, 0.22, depth);
     const float edgeFoam = edge * smoothFrom(0.42 + 0.25 * (1.0 - edge), 0.58 + 0.25 * (1.0 - edge), froth);
     // Lines rolling in: streaks of froth along each, thinner the older it is, the shallower it's come.
-    const float rolled = depth / 0.7 + time * 0.22;
+    const float rolled = depth / 0.7 + surface.parameter(0).y;
     const float through = rolled - floor(rolled);
     const float line = (smoothFrom(0.72, 0.92, through) - smoothFrom(0.92, 1.0, through)) *
                        (1.0 - smoothFrom(0.25, 1.1, depth));
     const float age = 1.0 - smoothFrom(0.1, 1.0, depth);
-    const float streaks = noise(place * float2(0.8, 3.1) + float2(time * 0.05, 0.0));
+    const float streaks = noise(place * float2(0.8, 3.1) + float2(drift.z, 0.0));
     const float lineFoam = line * smoothFrom(0.35 + 0.4 * age, 0.6 + 0.4 * age, streaks * 0.7 + froth * 0.3);
     const float foam = saturate(edgeFoam + lineFoam);
     // What the deep's lit as, with the shallows' color in place of its own where it's shallow.

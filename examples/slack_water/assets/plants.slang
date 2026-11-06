@@ -14,36 +14,52 @@
 
 static const float turn = 6.2831853;
 
-// How far it's bent at a place, and how fast that grows with height.
-float2 bentAt(float3 position, float3 place, MovingVertex vertex)
+// How far it's bent at a place, and, in `slope`, how fast that grows each way.
+float bentAt(float3 position, float3 place, MovingVertex vertex, out float3 slope)
 {
     const float4 wind = vertex.parameter(0);
     const float4 shape = vertex.parameter(1);
-    const float up = saturate(position.y / shape.x);
+    const float high = max(shape.x, 0.001);
+    const float up = saturate(position.y / high);
+    const float rising = position.y > 0.0 && position.y < high ? 1.0 / high : 0.0;
     const float3 at = position + place;
     // Gusts across it, 13 times a beat, and a flutter of its parts, 45 times, each by where it is.
-    const float gust = 0.55 + 0.45 * sin(turn * 13.0 / 60.0 * wind.w + shape.y + at.x * 0.9 +
-                                         at.z * 0.7);
-    const float flutter = 0.18 * sin(turn * 45.0 / 60.0 * wind.w + shape.y * 2.3 + at.x * 2.1 +
-                                     at.y * 1.7 + at.z * 2.6);
-    const float amount = shape.z * wind.z * (gust + flutter);
-    return float2(amount * up * up, amount * 2.0 * up / max(shape.x, 0.001));
+    const float gustAt = turn * 13.0 / 60.0 * wind.w + shape.y + at.x * 0.9 + at.z * 0.7;
+    const float flutterAt = turn * 45.0 / 60.0 * wind.w + shape.y * 2.3 + at.x * 2.1 + at.y * 1.7 +
+                            at.z * 2.6;
+    const float strength = shape.z * wind.z;
+    const float amount = strength * (0.55 + 0.45 * sin(gustAt) + 0.18 * sin(flutterAt));
+    const float3 amountSlope = strength * (0.45 * cos(gustAt) * float3(0.9, 0.0, 0.7) +
+                                           0.18 * cos(flutterAt) * float3(2.1, 1.7, 2.6));
+    slope = amountSlope * up * up + float3(0.0, amount * 2.0 * up * rising, 0.0);
+    return amount * up * up;
 }
 
 void move(inout float3 position, inout float3 normal, MovingVertex vertex)
 {
     const float4 wind = vertex.parameter(0);
-    const float4 shape = vertex.parameter(1);
-    const float2 bent = bentAt(position, vertex.place, vertex);
-    const float up = saturate(position.y / shape.x);
-    position.x += wind.x * bent.x;
-    position.z += wind.y * bent.x;
+    const float high = max(vertex.parameter(1).x, 0.001);
+    const float up = saturate(position.y / high);
+    const float rising = position.y > 0.0 && position.y < high ? 1.0 / high : 0.0;
+    float3 slope;
+    const float bent = bentAt(position, vertex.place, vertex, slope);
+    const float3 way = float3(wind.x, 0.0, wind.y);
     // Over, not up: what bends goes down a little as it goes along.
-    position.y -= 0.5 * bent.x * bent.x / max(shape.x, 0.001) * up;
-    // Its normal leans back from the way it's bent, by how fast that bend grows up it.
+    const float drop = 0.5 * bent * bent / high * up;
+    const float3 dropSlope =
+        slope * (bent * up / high) + float3(0.0, 0.5 * bent * bent / high * rising, 0.0);
+    position += way * bent - float3(0.0, drop, 0.0);
+    // Its normal goes through the inverse transpose of how the move stretches what's around it,
+    // each row of that stretch a moved axis, so a side square to the wind leans back from it and
+    // what faces up stays up.
     if (vertex.parameter(2).w != 0.0)
     {
-        normal = normalize(normal - float3(wind.x, 0.0, wind.y) * (bent.y * normal.y));
+        const float3 stretchX = float3(1.0, 0.0, 0.0) + slope * way.x;
+        const float3 stretchY = float3(0.0, 1.0, 0.0) - dropSlope;
+        const float3 stretchZ = float3(0.0, 0.0, 1.0) + slope * way.z;
+        const float3x3 inverseTransposed = float3x3(
+            cross(stretchY, stretchZ), cross(stretchZ, stretchX), cross(stretchX, stretchY));
+        normal = normalize(mul(inverseTransposed, normal));
     }
 }
 

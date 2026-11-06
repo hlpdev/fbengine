@@ -36,6 +36,14 @@ Const PATCHES: Float = 900.0
 Const DEEP: Color = Color(0.1, 0.3, 0.38)
 Const SHALLOW: Color = Color(0.22, 0.52, 0.52)
 Const FOAM: Color = Color(0.95, 0.97, 0.95)
+// How fast the lines of foam roll in, a second; how fast its froth drifts, in its noise's cells a
+// second, coarse and fine, and its streaks; and how many cells that noise goes before it repeats, as
+// water.slang's period.
+Const LINES_ROLL: Float64 = 0.22
+Const FROTH_DRIFT: Float64 = 0.07
+Const FINE_FROTH_DRIFT: Float64 = 0.13
+Const STREAKS_DRIFT: Float64 = 0.05
+Const FROTH_PERIOD: Float64 = 1024.0
 
 // A sine's values, by a whole turn in this many steps, a power of 2.
 Const TURN: Int = 1024
@@ -274,9 +282,15 @@ Public Final Class Sea
     Public Method Update(clock: Float64)
         Local height = SeaHeight(clock)
         sheet.SetPosition(Vec3(0.0, height, 0.0))
-        // Its time, from 0 to an hour and back, so a float's steps stay small.
-        Local time = (clock % 3600.0) As Float
-        water.SetParameter(0, Vec4(height, time, (SIDE As Float) * 0.5, SHEET))
+        // Each of what drifts, worked out in 64 bits and wrapped to how often it repeats, so a
+        // float's steps stay small and nothing jumps.
+        Local wrapped = Function(rate: Float64,
+                                 period: Float64): Float => ((clock * rate) % period) As Float
+        water.SetParameter(0, Vec4(height, wrapped(LINES_ROLL, 1.0), (SIDE As Float) * 0.5, SHEET))
+        water.SetParameter(6,
+                           Vec4(wrapped(FROTH_DRIFT, FROTH_PERIOD),
+                                wrapped(FINE_FROTH_DRIFT, FROTH_PERIOD),
+                                wrapped(STREAKS_DRIFT, FROTH_PERIOD), 0.0))
         Self.clock = clock
         Local one, other = WaveOffsets(clock)
         water.SetParameter(1, Vec4(TILE, one.x, one.y, kept))

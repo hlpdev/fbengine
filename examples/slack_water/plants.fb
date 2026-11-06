@@ -21,7 +21,7 @@ Const BLADES: Int = 14
 Const LEVEL_BLADES: Int[] = [9, 5]
 // How much of the view's height a tuft takes where it's drawn at each level, then as a card, then
 // none.
-Const LEVEL_FROM: Float[] = [0.045, 0.028, 0.016, 0.006]
+Const LEVEL_FROM: Float[] = [0.045, 0.028, 0.018, 0.006]
 // How many tufts in a hundred have seed heads.
 Const SEEDING: Int = 6
 /// Which way the wind goes, off the sea, as the waves do.
@@ -31,8 +31,15 @@ Const BENDS: Float = 0.22
 /// How many seconds the wind's beat goes round in: its gusts and flutters go round a whole number
 /// of times in it, so it wraps with no jump.
 Public Const BEAT: Float = 60.0
-// How far past its bounds a plant can bend, each way, for its cull box.
-Const BENT_PAST: Float = 1.4
+// The most a plant's gusts and its flutter bend it, of its full bend, together: plants.slang's 0.55
+// + 0.45 and 0.18.
+Const GUSTS: Float = 1.0
+Const FLUTTERS: Float = 0.18
+// How high a tuft's bend is full, in its own space.
+Const TUFT_HIGH: Float = 0.45
+// How many ways a tuft's turned, each its own Instances, as a shader moves an instance in its own
+// space and the wind's the world's.
+Const TURNS: Int = 6
 // The atlas the grass is drawn from: its left half's white, for blades, and its right a card of them.
 Const ATLAS_SIDE: Int32 = 128
 
@@ -81,7 +88,18 @@ Public Struct TuftPlace
     Public Field Tall: Float
     Public Field Tint: Color
     Public Field Seeding: Bool
+    Public Field Turn: Int
 End Struct
+
+/// The most what's bent from `high` meters up bends, at its top, each way across: its full bend at
+/// the wind's hardest, with its gusts and flutter at their most at once.
+Public Function MostBent(high: Float): Float => BENDS * high * (GUSTS + FLUTTERS)
+
+// A color in linear light, as it's stored, from 0 to 255.
+Function Stored(linear: Float): UInt8
+    Local encoded = linear <= 0.0031308 ? linear * 12.92 : 1.055 * Exp(Log(linear) / 2.4) - 0.055
+    Return Clamp(encoded * 255.0 + 0.5, 0.0, 255.0) As UInt8
+End Function
 
 // A color as it's stored, in linear light.
 Function Linear(stored: Vec3): Vec3
@@ -107,13 +125,15 @@ Public Function TuftPlaces(heightAt: Func(Float, Float): Float): TuftPlace[]
             Local tall = random.Float(0.7, 1.35)
             Local hue = random.Float(-0.08, 0.08)
             Local seeding = random.Int(100) < SEEDING
+            Local turn = random.Int(TURNS)
             If OnTheGreen(x, z) && !KeptClear(x, z)
                 // What the ground's painted, lifted, as a blade's paler than the turf it's on.
                 Local under = Linear(GroundColor(x, z))
                 Local tint = Color(Clamp(under.x * 2.9 + hue, 0.0, 1.0),
                                    Clamp(under.y * 2.5, 0.0, 1.0),
                                    Clamp(under.z * 1.4 - hue, 0.0, 1.0))
-                places.Add(TuftPlace(Vec3(x, heightAt(x, z) - 0.03, z), size, tall, tint, seeding))
+                places.Add(TuftPlace(Vec3(x, heightAt(x, z) - 0.03, z), size, tall, tint, seeding,
+                                     turn))
             End If
         End For
     End For
@@ -179,15 +199,15 @@ Function AddQuad(surface: Surface, a: Vec3, b: Vec3, c: Vec3, d: Vec3, normal: V
     surface.AddTriangle(first, first + 2, first + 3)
 End Function
 
-/// A tuft of `count` blades, its base at 0 and up +Y, each from the atlas's white, darker at the root;
-/// a seeding one's tallest blades with heads.
-Public Function Tuft(count: Int, seed: Int, seeding: Bool): Geometry
+/// A tuft of `count` blades, its base at 0 and up +Y, each from the atlas's white, darker at the root
+/// as BladeShade has it; a seeding one's tallest blades with heads; all turned `yaw` about up.
+Public Function Tuft(count: Int, seed: Int, seeding: Bool, yaw: Float): Geometry
     Local random = Random(seed)
     Local made = Geometry()
     Local surface = made.AddSurface()
     Local white = Vec2(0.1, 0.5)
     For blade = 0 Until count
-        Local angle = random.Float(0.0, 6.2831853)
+        Local angle = random.Float(0.0, 6.2831853) + yaw
         Local out = random.Float(0.0, 0.16)
         Local tall = random.Float(0.2, 0.42) * (seeding && blade < 3 ? 1.5 : 1.0)
         Local wide = random.Float(0.035, 0.055)
@@ -203,7 +223,7 @@ Public Function Tuft(count: Int, seed: Int, seeding: Bool): Geometry
             Local x = baseX + Cos(angle) * lean * up * up
             Local z = baseZ + Sin(angle) * lean * up * up
             Local narrow = level == 2 ? 0.0 : 1.0 - up * 0.6
-            Local shade = 0.35 + 0.65 * up
+            Local shade = BladeShade(up)
             Local normal = Normalize(Vec3(Cos(angle) * 0.4, 1.0, Sin(angle) * 0.4))
             Local left = surface.AddVertex(Vertex(Vec3(x - acrossX * narrow, tall * up,
                                                        z - acrossZ * narrow),
@@ -238,31 +258,36 @@ Public Function Tuft(count: Int, seed: Int, seeding: Bool): Geometry
     Return made
 End Function
 
-// A tuft as a card, two quads crossed, of the atlas's blades.
-Function TuftCard(): Geometry
+/// How light a blade is, in linear light, `up` of the way up it: darker at its root.
+Public Function BladeShade(up: Float): Float => 0.35 + 0.65 * up
+
+// A tuft as a card, two quads crossed, turned `yaw` about up, of the atlas's blades, which are shaded
+// as a tuft's are, so its vertices are white.
+Function TuftCard(yaw: Float): Geometry
     Local made = Geometry()
     Local surface = made.AddSurface()
     For turn = 0 Until 2
-        Local x = turn == 0 ? 0.24 : 0.0
-        Local z = turn == 0 ? 0.0 : 0.24
+        Local angle = yaw + (turn As Float) * 1.5708
+        Local x = Cos(angle) * 0.24
+        Local z = Sin(angle) * 0.24
         AddQuad(surface, Vec3(-x, 0.0, -z), Vec3(x, 0.0, z), Vec3(x, 0.4, z), Vec3(-x, 0.4, -z),
-                Vec3(0.0, 1.0, 0.0), Color(0.8, 0.8, 0.8), Vec2(0.5, 0.0), Vec2(1.0, 1.0))
+                Vec3(0.0, 1.0, 0.0), Color(1.0, 1.0, 1.0), Vec2(0.5, 0.0), Vec2(1.0, 1.0))
     End For
     Return made
 End Function
 
-// A tuft, with fewer blades as it's further off, then a card, then none; and how many triangles it's
-// drawn with at each.
+// A tuft, turned `yaw`, with fewer blades as it's further off, then a card, then none; and how many
+// triangles it's drawn with at each.
 @MainThread
-Function TuftWithLevels(seed: Int, seeding: Bool): (Geometry, Int[])
-    Local near = Tuft(BLADES, seed, seeding)
+Function TuftWithLevels(seed: Int, seeding: Bool, yaw: Float): (Geometry, Int[])
+    Local near = Tuft(BLADES, seed, seeding, yaw)
     Local counts = [Triangles(near)]
     For level = 0 Until LEVEL_BLADES.Count
-        Local fewer = Tuft(LEVEL_BLADES[level], seed, False)
+        Local fewer = Tuft(LEVEL_BLADES[level], seed, False, yaw)
         near.SetLod(level, fewer, LEVEL_FROM[level])
         counts.Add(Triangles(fewer))
     End For
-    Local card = TuftCard()
+    Local card = TuftCard(yaw)
     near.SetLod(LEVEL_BLADES.Count, card, LEVEL_FROM[LEVEL_BLADES.Count])
     counts.Add(Triangles(card))
     near.SetLod(LEVEL_BLADES.Count + 1, Null, LEVEL_FROM[LEVEL_BLADES.Count + 1])
@@ -386,9 +411,10 @@ Public Function Shrub(seed: Int): (Geometry, Geometry)
 End Function
 
 // The grass's atlas: its left half white, for blades and seed heads, which their vertices color; its
-// right half a card of blades, white where there's one, with no alpha where there isn't.
+// right half a card of blades, each shaded as a tuft's blades are, with no alpha where there isn't
+// one.
 @MainThread
-Function GrassAtlas(): Texture Throws GraphicsError
+Public Function GrassAtlasImage(): Image
     Local image = Image(ATLAS_SIDE * 2, ATLAS_SIDE)
     Local random = Random(4242)
     For y = 0 Until ATLAS_SIDE
@@ -407,7 +433,7 @@ Function GrassAtlas(): Texture Throws GraphicsError
             Local centerX = footX + lean * up * up * tall
             Local half = wide * (1.0 - up)
             Local y = ATLAS_SIDE - 1 - step
-            Local shade = (90.0 + 165.0 * up) As UInt8
+            Local shade = Stored(BladeShade(up))
             For dx = Floor(-half) As Int To Ceil(half) As Int
                 Local x = (centerX As Int) + dx
                 If x >= 0 && x < ATLAS_SIDE && y >= 0
@@ -416,7 +442,98 @@ Function GrassAtlas(): Texture Throws GraphicsError
             End For
         End For
     End For
-    Return Try Texture.FromImage(image, True, TextureFormat.RGBA8)
+    Return image
+End Function
+
+/// The grass's atlas, as a texture, its mipmaps keeping what's cut by its alpha: each level's alpha
+/// scaled, a row at a time, so as much of each row is past half as is of the first level's rows it
+/// covers, and the card's blades don't thin away further off.
+@MainThread
+Public Function GrassAtlas(): Texture Throws GraphicsError
+    Local image = GrassAtlasImage()
+    Local texture = Try Texture.FromImage(image, True, TextureFormat.RGBA8)
+    Local levels = CoverageKept(image, texture.Levels())
+    For level = 1 Until levels.Count
+        texture.WriteLevel(level As Int32, levels[level])
+    End For
+    Return texture
+End Function
+
+// An alpha, times `scale`, to the nearest it can be.
+Function ScaledAlpha(alpha: UInt8, scale: Float): UInt8 =>
+    Clamp((alpha As Float) * scale + 0.5, 0.0, 255.0) As UInt8
+
+// How much of `image`'s rows from `from` until `to` are past half alpha, and so not cut away.
+Function RowsCovered(image: Image, from: Int, to: Int): Float
+    Local kept = 0
+    For y = from Until to
+        For x = 0 Until image.Width
+            If image[x, y].a >= 128 Then kept += 1
+        End For
+    End For
+    Return (kept As Float) / ((image.Width * (to - from)) As Float)
+End Function
+
+/// `image`'s `count` levels of mipmaps, the first `image` itself: each the mean of the level above,
+/// its colors by their alpha, in linear light, and its alpha scaled a row at a time, so each row has
+/// as much past half as the rows of `image` it covers.
+Public Function CoverageKept(image: Image, count: Int): Image[]
+    Local levels = [image]
+    Local plain = image
+    For level = 1 Until count
+        Local width = Max(plain.Width / 2, 1)
+        Local height = Max(plain.Height / 2, 1)
+        Local next = Image(width, height)
+        For y = 0 Until height
+            For x = 0 Until width
+                Local alpha: Float = 0.0
+                Local color = Vec3(0.0, 0.0, 0.0)
+                Local taken = 0
+                For dy = 0 Until (plain.Height > 1 ? 2 : 1)
+                    For dx = 0 Until (plain.Width > 1 ? 2 : 1)
+                        Local texel = plain[x * 2 + dx, y * 2 + dy]
+                        Local weight = (texel.a As Float) / 255.0
+                        alpha += weight
+                        color = color +
+                                Linear(Vec3((texel.r As Float) / 255.0, (texel.g As Float) / 255.0,
+                                            (texel.b As Float) / 255.0)) * weight
+                        taken += 1
+                    End For
+                End For
+                Local mean = alpha > 0.0 ? color * (1.0 / alpha) : Vec3(0.0, 0.0, 0.0)
+                next[x, y] = Color32(Stored(mean.x), Stored(mean.y), Stored(mean.z),
+                                     Clamp(alpha / (taken As Float) * 255.0 + 0.5, 0.0,
+                                           255.0) As UInt8)
+            End For
+        End For
+        plain = next
+        // Each row's alpha scaled, by halving the range it could be in, till as much of it's past
+        // half as of the rows of the first it covers.
+        Local kept = Image(width, height)
+        Local rows = image.Height / height
+        For y = 0 Until height
+            Local wanted = RowsCovered(image, y * rows, (y + 1) * rows)
+            Local covered = Function(scale: Float): Float
+                Local past = 0
+                For x = 0 Until width
+                    If ScaledAlpha(next[x, y].a, scale) >= 128 Then past += 1
+                End For
+                Return (past As Float) / (width As Float)
+            End Function
+            Local low: Float = 0.0
+            Local high: Float = 255.0
+            For step = 0 Until 20
+                Local middle = (low + high) * 0.5
+                If covered(middle) < wanted Then low = middle Else high = middle
+            End For
+            For x = 0 Until width
+                Local texel = next[x, y]
+                kept[x, y] = Color32(texel.r, texel.g, texel.b, ScaledAlpha(texel.a, high))
+            End For
+        End For
+        levels.Add(kept)
+    End For
+    Return levels
 End Function
 
 // A cluster of leaves, for a card: a dozen and more leaves turned every way, each its own green and
@@ -485,7 +602,7 @@ Public Final Class Plants
     Field shrubs: Vec3[]
     Field swaying: Material[]
     Field woods: Entity[]
-    Field canopies: Entity[]
+    Field canopies: Mesh[]
     Field levels: Int[] = []
     Field levelCount: Int = 0
     Field tuftVertices: Int = 0
@@ -496,7 +613,7 @@ Public Final Class Plants
     Field bentNormals: Bool = True
 
     New(tufts: Instances[], places: TuftPlace[], trees: Vec3[], shrubs: Vec3[], swaying: Material[],
-        woods: Entity[], canopies: Entity[])
+        woods: Entity[], canopies: Mesh[])
         Self.tufts = tufts
         Self.places = places
         Self.trees = trees
@@ -540,39 +657,42 @@ Public Final Class Plants
         Local tuftVertices = 0
         Local levels: Int[] = []
         Local levelCount = 0
+        Local grass = sways(atlas, TUFT_HIGH, 0.0, False)
+        grass.SetTwoSided(True)
+        grass.SetAlphaCutoff(0.5)
+        grass.SetMetalRough(0.0, 0.9)
+        grass.SetMap(MaterialMap.OCCLUSION, shaded)
         For seeding In [False, True]
-            Local all: Instance[] = []
-            For place In places
-                If place.Seeding == seeding
-                    all.Add(Instance(Mat4.Translation(place.At) *
-                                     Mat4.Scale(Vec3(place.Size, place.Size * place.Tall,
-                                                     place.Size)),
-                                     place.Tint))
+            For turn = 0 Until TURNS
+                Local all: Instance[] = []
+                For place In places
+                    If place.Seeding == seeding && place.Turn == turn
+                        all.Add(Instance(Mat4.Translation(place.At) *
+                                         Mat4.Scale(Vec3(place.Size, place.Size * place.Tall,
+                                                         place.Size)),
+                                         place.Tint))
+                    End If
+                End For
+                Local yaw = (turn As Float) / (TURNS As Float) * 6.2831853
+                Local tuft, counts = TuftWithLevels((seeding ? 600 : 500) + turn, seeding, yaw)
+                tuft.SetCullBox(Bent(tuft.Bounds(), MostBent(TUFT_HIGH)))
+                If !seeding && turn == 0
+                    levels = counts
+                    levelCount = tuft.LodCount()
+                    tuftVertices = Vertices(tuft)
                 End If
+                Local drawn = Instances(tuft)
+                drawn.SetMaterial(grass)
+                drawn.Set(all)
+                // A field of blades casting is a field's worth of shadow passes for little.
+                drawn.SetCastsShadows(False)
+                tufts.Add(drawn)
             End For
-            Local grass = sways(atlas, 0.45, 0.0, False)
-            grass.SetTwoSided(True)
-            grass.SetAlphaCutoff(0.5)
-            grass.SetMetalRough(0.0, 0.9)
-            grass.SetMap(MaterialMap.OCCLUSION, shaded)
-            Local tuft, counts = TuftWithLevels(seeding ? 600 : 500, seeding)
-            tuft.SetCullBox(Bent(tuft.Bounds(), 0.15))
-            If !seeding
-                levels = counts
-                levelCount = tuft.LodCount()
-                tuftVertices = Vertices(tuft)
-            End If
-            Local drawn = Instances(tuft)
-            drawn.SetMaterial(grass)
-            drawn.Set(all)
-            // A field of blades casting is a field's worth of shadow passes for little.
-            drawn.SetCastsShadows(False)
-            tufts.Add(drawn)
         End For
 
         // The trees and shrubs: their wood and their leaves, each bending as one.
         Local woods: Entity[] = []
-        Local canopies: Entity[] = []
+        Local canopies: Mesh[] = []
         Local canopyBoxes: AABB[] = []
         Local grown = Function(made: (Geometry, Geometry), at: Vec3, high: Float, beat: Float)
             Local woodLook = sways(barkLook, high, beat, False)
@@ -583,8 +703,8 @@ Public Final Class Plants
             leafLook.SetTwoSided(True)
             leafLook.SetAlphaCutoff(0.5)
             canopyBoxes.Add(AABB(made.1.Bounds().Min + at, made.1.Bounds().Max + at))
-            made.0.SetCullBox(Bent(made.0.Bounds(), BENT_PAST))
-            made.1.SetCullBox(Bent(made.1.Bounds(), BENT_PAST))
+            made.0.SetCullBox(Bent(made.0.Bounds(), MostBent(high)))
+            made.1.SetCullBox(Bent(made.1.Bounds(), MostBent(high)))
             Local wood = Mesh(made.0)
             wood.SetMaterial(woodLook)
             wood.SetPosition(at)
@@ -684,6 +804,20 @@ Public Final Class Plants
     Public Method SetCanopiesShown(on: Bool)
         For entity In canopies
             If on Then entity.Show() Else entity.Hide()
+        End For
+    End Method
+
+    /// Each tree's leaves, then each shrub's.
+    @MainThread Public Method Canopies(): Mesh[] => canopies
+
+    /// Has its trees and shrubs cast shadows, or not, to see what only the view draws.
+    @MainThread
+    Public Method SetCasting(on: Bool)
+        For entity In woods
+            entity.SetCastsShadows(on)
+        End For
+        For canopy In canopies
+            canopy.SetCastsShadows(on)
         End For
     End Method
 

@@ -201,7 +201,10 @@ good modern engine on its own. Every structural choice is checked against both.
   linear throughout. VERTEX's light is `min(range / distance, 1)` with no end, clamped per vertex
   before texturing, from the first 8 shown lights in the tree's order; PBR keeps
   KHR_lights_punctual's window, which clusters need. Range means each in its model. A Texture has
-  an alpha flag, which AUTO blending honors.
+  an alpha flag, which AUTO blending honors. A Texture's mipmaps are made from its first level by
+  the GPU, or a game writes a level of its own (`WriteLevel`), which leaves the others as they are,
+  as for mipmaps that keep what an alpha cutoff keeps; a write of the first level makes them all
+  again (2026-11-05).
 - **Lights**: clustered forward, so the many small lights of a facility work, per pixel or per
   vertex. A point or spot light ends at its range, as clustering needs, and falls off inside it as
   glTF's KHR_lights_punctual says, the inverse square windowed to 0 at the range, in every shading
@@ -229,6 +232,10 @@ good modern engine on its own. Every structural choice is checked against both.
 - **Shaders** are Slang, compiled to SPIR-V when the engine's built and embedded in the DLL
   (the user, 2026-10-31).
   Games' own shaders (E6) come with the asset pipeline's build step.
+  A shader of its own sees, as it moves a vertex, where that vertex's instance is in its Instances'
+  space (`MovingVertex.place`, 0 for what isn't an instance), so each of a field of instances moves
+  on its own beat with no parameter of its own; an Instances culls each instance by its geometry's
+  cull box, as a Mesh does, for what its shader moves out of its bounds (2026-11-05).
 
 ## Assets
 
