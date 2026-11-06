@@ -342,6 +342,8 @@ FBE_AUDIO_API bool fbe_audio_start(int32_t device, int32_t sample_rate, int32_t 
         config.noDevice = MA_TRUE;
         config.sampleRate = static_cast<ma_uint32>(sample_rate != 0 ? sample_rate : standard_rate);
         config.channels = static_cast<ma_uint32>(channels != 0 ? channels : standard_channels);
+        // What a game mixing it itself says it mixes at a time, as its own device would.
+        made->period = period;
     } else {
         const opening_t how = {
             .sample_rate = sample_rate,
@@ -447,8 +449,12 @@ FBE_AUDIO_API const char* fbe_audio_output_name(int32_t index) {
 }
 
 FBE_AUDIO_API double fbe_audio_period(void) {
-    if (mixer == nullptr || !mixer->has_device) {
+    if (mixer == nullptr) {
         return 0.0;
+    }
+    if (!mixer->has_device) {
+        // MANUAL's is what it was started with; a device that's gone has none.
+        return mixer->kind == no_device ? mixer->period : 0.0;
     }
     // The device's own frames, at its own rate, which the mix's may be converted to.
     return static_cast<double>(mixer->device.playback.internalPeriodSizeInFrames) /
