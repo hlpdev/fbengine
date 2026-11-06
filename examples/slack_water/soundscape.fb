@@ -28,6 +28,15 @@ Const GULL_HIGH: Float = 12.0
 // How long the wheel takes to be heard.
 Const WHEEL_FADE: Float64 = 1.0
 
+/// What a player's options set the level of: everything, the music, the wind's, sea's, and surf's beds,
+/// and the effects, everything else.
+Public Enum Mix
+    MASTER = 0
+    MUSIC = 1
+    AMBIENCE = 2
+    EFFECTS = 3
+End Enum
+
 /// The mill's room: stone and boards, middling, its highs soaked up a little, and its ring under what
 /// rings it.
 Public Function MillReverb(): Reverb
@@ -47,7 +56,14 @@ Public Final Class Soundscape
     Field storm: Sound
     Field calmPlays: Channel
     Field stormPlays: Channel
-    // The music's own, which it's turned down on under the cues, and quieter inside.
+    // Its buses, by what a player's options set: everything, under which the music's level, the beds',
+    // and the effects'. Each holds what does the work: the music's own, turned down under the cues and
+    // inside; the beds outside, and the effects outside, each muffled from inside; and the mill's room.
+    Field everything: Bus
+    Field musicLevel: Bus
+    Field ambience: Bus
+    Field effects: Bus
+    Field mixLevels: Float[]
     Field music: Bus
     Field ducking: Ducking
     Field cued: Bool = False
@@ -57,8 +73,9 @@ Public Final Class Soundscape
     Field surfPlays: Channel
     Field wheelPlays: Channel?
     Field worksPlays: Channel?
-    // What's outside the mill: the wind, the sea, gulls, the wheel, and the splash.
-    Field outside: Bus
+    // What's outside the mill: the wind, sea, and surf, and the gulls, the wheel, and the splash.
+    Field outsideBeds: Bus
+    Field outsideEffects: Bus
     Field cutoff: Float
     // What's in the mill, in its room: creaks, parts fitted, the sluice, the works, and your steps while
     // you're in it; and its low-pass, which muffles it from outside.
@@ -95,7 +112,12 @@ Public Final Class Soundscape
         Self.calm = calm
         Self.storm = storm
         ducking = Ducking()
-        music = Bus()
+        everything = Bus()
+        musicLevel = Bus(everything)
+        ambience = Bus(everything)
+        effects = Bus(everything)
+        mixLevels = [1.0, 1.0, 1.0, 1.0]
+        music = Bus(musicLevel)
         calm.SetBus(music)
         storm.SetBus(music)
         calm.SetLoop(True)
@@ -114,10 +136,12 @@ Public Final Class Soundscape
         For number = 0 Until sounds.Count
             sounds[number].SetVolume(CueLevel(number As Cue))
         End For
-        outside = Bus()
+        outsideBeds = Bus(ambience)
+        outsideEffects = Bus(effects)
         cutoff = OutsideCutoff(False)
-        outside.SetLowPass(cutoff)
-        mill = Bus()
+        outsideBeds.SetLowPass(cutoff)
+        outsideEffects.SetLowPass(cutoff)
+        mill = Bus(effects)
         mill.SetReverb(MillReverb())
         millCutoff = OutsideCutoff(True)
         mill.SetLowPass(millCutoff)
@@ -125,12 +149,12 @@ Public Final Class Soundscape
         For cue In [Cue.CREAK, Cue.FIT, Cue.SLUICE]
             sounds[cue As Int].SetBus(mill)
         End For
-        wind.SetBus(outside)
-        sea.SetBus(outside)
-        surf.SetBus(outside)
-        wheel.SetBus(outside)
-        sounds[Cue.GULL As Int].SetBus(outside)
-        sounds[Cue.SPLASH As Int].SetBus(outside)
+        wind.SetBus(outsideBeds)
+        sea.SetBus(outsideBeds)
+        surf.SetBus(outsideBeds)
+        wheel.SetBus(outsideEffects)
+        sounds[Cue.GULL As Int].SetBus(outsideEffects)
+        sounds[Cue.SPLASH As Int].SetBus(outsideEffects)
         wind.SetLoop(True)
         sea.SetLoop(True)
         surf.SetLoop(True)
@@ -196,7 +220,28 @@ Public Final Class Soundscape
     End Method
 
     /// The low-pass on what's outside, now.
-    @MainThread Public Method OutsideNow(): Float => outside.LowPass()
+    @MainThread Public Method OutsideNow(): Float => outsideBeds.LowPass()
+
+    /// Sets what a player's options say `mix` is at, from 0, none, to 1, as it's made. Outside that
+    /// panics.
+    @MainThread
+    Public Method SetLevel(mix: Mix, level: Float)
+        If !(level >= 0.0 && level <= 1.0) Then Panic("a level is 0 to 1, not {level}")
+        mixLevels[mix As Int] = level
+        Select mix
+            Case Mix.MASTER
+                everything.SetVolume(level)
+            Case Mix.MUSIC
+                musicLevel.SetVolume(level)
+            Case Mix.AMBIENCE
+                ambience.SetVolume(level)
+            Default
+                effects.SetVolume(level)
+        End Select
+    End Method
+
+    /// What a player's options say `mix` is at.
+    @MainThread Public Method Level(mix: Mix): Float => mixLevels[mix As Int]
 
     /// The wind's level now.
     @MainThread Public Method WindNow(): Float => windPlays.Volume()
@@ -231,14 +276,20 @@ Public Final Class Soundscape
 
     @MainThread Public Method SplashAt(): Vec3 => onRoad.Position()
 
-    /// Whether what's outside the mill goes through the bus that muffles it.
+    /// Whether what's outside the mill goes through the buses that muffle it, the beds' and the effects',
+    /// each under its own level, and everything under Master.
     @MainThread
     Public Method OutsideOnItsBus(): Bool
-        Local all = [wind, sea, surf, wheel, sounds[Cue.GULL As Int], sounds[Cue.SPLASH As Int]]
-        For sound In all
-            If sound.Bus() != outside Then Return False
+        For sound In [wind, sea, surf]
+            If sound.Bus() != outsideBeds Then Return False
         End For
-        Return True
+        For sound In [wheel, sounds[Cue.GULL As Int], sounds[Cue.SPLASH As Int]]
+            If sound.Bus() != outsideEffects Then Return False
+        End For
+        Return outsideBeds.Parent() == ambience && outsideEffects.Parent() == effects &&
+               mill.Parent() == effects && music.Parent() == musicLevel &&
+               musicLevel.Parent() == everything && ambience.Parent() == everything &&
+               effects.Parent() == everything && everything.Parent() == Null
     End Method
 
     /// Sets what the wind and sea are at, 0 for none, to hear the rest by itself.
@@ -325,7 +376,8 @@ Public Final Class Soundscape
         music.SetVolume(ducking.Step(seconds, cued) * (1.0 + (MUSIC_INSIDE - 1.0) * indoors))
         cued = False
         cutoff = CutoffToward(cutoff, OutsideCutoff(inside), seconds)
-        outside.SetLowPass(cutoff)
+        outsideBeds.SetLowPass(cutoff)
+        outsideEffects.SetLowPass(cutoff)
         // The mill's room, the other way round: open from inside, muffled from out.
         millCutoff = CutoffToward(millCutoff, OutsideCutoff(!inside), seconds)
         mill.SetLowPass(millCutoff)
@@ -381,8 +433,8 @@ Public Final Class Soundscape
             Case Cue.SPLASH
                 onRoad.Play(sound)
             Default
-                // Your steps, in the mill's room while you're in it.
-                sound.SetBus(inMill ? mill : Null)
+                // Your steps, in the mill's room while you're in it, and the effects' outside.
+                sound.SetBus(inMill ? mill : effects)
                 sound.Play()
         End Select
     End Method
@@ -413,9 +465,14 @@ Public Final Class Soundscape
         calm.Free()
         storm.Free()
         music.Free()
+        musicLevel.Free()
         wheel.Free()
         works.Free()
-        outside.Free()
+        outsideBeds.Free()
+        outsideEffects.Free()
         mill.Free()
+        ambience.Free()
+        effects.Free()
+        everything.Free()
     End Method
 End Class

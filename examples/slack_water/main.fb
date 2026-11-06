@@ -1183,7 +1183,31 @@ Function Listened() Throws GraphicsError, IOError, AudioError
     scape.Play(Cue.GULL, door)
     Local gullPeak = PeakOf(Audio.Mix(rate))
     Checks("a gull reaches the mix", gullPeak > 0.01 && gullPeak < 0.5)
-    Checks("what's outside is on its bus", scape.OutsideOnItsBus())
+    Checks("what's outside is on its buses, under the options' levels", scape.OutsideOnItsBus())
+    // Each of the options' levels at 0 silences its own, and only that; Master, all of it.
+    Local heardAt = Function(slider: Mix): (Float, Float, Float)
+        For mix In [Mix.MASTER, Mix.MUSIC, Mix.AMBIENCE, Mix.EFFECTS]
+            scape.SetLevel(mix, mix == slider ? 0.0 : 1.0)
+        End For
+        Return Heard3(scape, door, rate)
+    End Function
+    Local all = Heard3(scape, door, rate)
+    Checks("with every level up, music, beds, and effects are heard",
+           all.0 > 0.0005 && all.1 > 0.0005 && all.2 > 0.01)
+    For slider In [Mix.MUSIC, Mix.AMBIENCE, Mix.EFFECTS]
+        Local heard = heardAt(slider)
+        Local silent = slider == Mix.MUSIC ? heard.0 : slider == Mix.AMBIENCE ? heard.1 : heard.2
+        Local rest = slider == Mix.MUSIC ? heard.1 + heard.2 : slider == Mix.AMBIENCE ? heard.0 + heard.2 : heard.0 + heard.1
+        Print("{slider} at 0: music {heard.0}, beds {heard.1}, a gull {heard.2}")
+        // Silent is 60 dB under what's still heard, as the mill's ring from a while ago is still there.
+        Checks("{slider} at 0 silences it, and only it", silent < 0.001 * rest && rest > 0.001)
+    End For
+    Local mastered = heardAt(Mix.MASTER)
+    Checks("Master at 0 silences everything", mastered.0 + mastered.1 + mastered.2 < 0.00001)
+    For mix In [Mix.MASTER, Mix.MUSIC, Mix.AMBIENCE, Mix.EFFECTS]
+        scape.SetLevel(mix, 1.0)
+        Checks("{mix}'s level is what was set", scape.Level(mix) == 1.0)
+    End For
     Local works = island.PlaceOf(Spot.WORKS)
     Checks("a creak's at the mill's works",
            IsClose(mill.x, works.x, 0.01) && IsClose(mill.z, works.y, 0.01))
@@ -1285,6 +1309,33 @@ Function AlikeViews(one: Path, other: Path, floor: Float) Throws IOError
         Print("{name}: {psnr} dB")
         Checks("{name} is alike in both", psnr >= floor)
     End For
+End Function
+
+// How loud the music, the beds, and a gull are, each by itself, from the door: the others at nothing.
+Function Heard3(scape: Soundscape, door: Vec2, rate: Int): (Float, Float, Float)
+    scape.SetMusic(1.0)
+    scape.SetBeds(0.0)
+    Settle(scape)
+    Local music = RmsOf(Audio.Mix(rate))
+    scape.SetMusic(0.0)
+    scape.SetBeds(1.0)
+    Settle(scape)
+    Local beds = RmsOf(Audio.Mix(rate))
+    scape.SetBeds(0.0)
+    Settle(scape)
+    scape.Play(Cue.GULL, door)
+    Local gull = PeakOf(Audio.Mix(rate))
+    Return (music, beds, gull)
+End Function
+
+// A second of the soundscape at slack water, outside, so what's been set's heard as it is, and no gull's
+// left ringing.
+Function Settle(scape: Soundscape)
+    For step = 1 To 60
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Audio.Mix(44100 * 2)
 End Function
 
 // Whether a step of `during` stands out over `before`, the largest there was before it: a click.
