@@ -1,14 +1,16 @@
 // Slack Water's ground up close: what its cover map is at a pixel, turf, sand, rock, or trodden, by its
 // color, given fine detail of its own, from noise in the world, its albedo varied and its normal
 // bumped; rock that's steep mapped three ways, by its normal, so a cliff isn't stretched; each of the
-// noise's octaves gone as its cells near a pixel's size, so nothing far shimmers; and all of it fading
-// out with distance, where the cover map's own texels are small enough. Layer 0 is the cover map, over
-// the terrain's whole, which parameter 0's x says the size of, in meters; its y is where the detail's
-// gone, and its z how far it takes to go. Its w, when 1, shows how much the covers' weights come to,
-// a half each, as the color's every channel, when 2 a half itself, for the two to be compared, and when
-// 3 rock's grain alone.
+// noise's octaves gone as its cells near a pixel's size, and its bump as a pixel nears a centimeter,
+// so nothing shimmers; and all of it fading out with distance, where the cover map's own texels are
+// small enough. Layer 0 is the cover map, over the terrain's whole, which parameter 0's x says the
+// size of, in meters; its y is where the detail's gone, and its z how far it takes to go. Its w, when
+// 1, shows how much the covers' weights come to, a half each, as the color's every channel, when 2 a
+// half itself, for the two to be compared, and when 3 rock's grain alone.
 
 static const float DETAIL_STRENGTH = 1.0;
+// How many meters across a pixel may be for the detail's bump to be all there; it's gone at twice that.
+static const float BUMPED_WITHIN = 0.008;
 
 float hashOf(float2 at)
 {
@@ -119,7 +121,9 @@ float4 shade(Surface surface)
     const float strands = lerp(0.5, noiseAt(flat * float2(31.0, 13.0)), kept(31.0, footprint));
     const float blades = strands * 0.6 +
                          octave(flat, 6.0, float2(2.0, 2.0), footprint) * 0.4;
-    const float grains = sin(flat.x * 4.7 + noiseAt(flat * 1.3) * 5.0) * 0.25 + 0.5 +
+    // Sand's ripples, about two a meter where they bunch.
+    const float ripples = sin(flat.x * 4.7 + noiseAt(flat * 1.3) * 5.0) * kept(2.0, footprint);
+    const float grains = ripples * 0.25 + 0.5 +
                          (octave(flat, 45.0, float2(0.0, 0.0), footprint) - 0.5) * 0.5;
     const float stones = octave(flat, 7.0, float2(11.0, 11.0), footprint);
     const float pebbles = saturate((stones - 0.45) * 4.0) * 0.7 +
@@ -154,6 +158,10 @@ float4 shade(Surface surface)
     const float3 litBumped = surface.light(bumped, 0.0);
     const float3 luma = float3(0.3, 0.6, 0.1);
     const float lit = (dot(litBumped, luma) + 0.03) / (dot(litFlat, luma) + 0.03);
-    color.rgb *= lerp(1.0, max(albedo, 0.2) * clamp(lit, 0.55, 1.6), near);
+    // The bump's slope is a pair of pixels', so it steps from pair to pair where the height bends
+    // within a pair: it's gone as a pixel spans more than BUMPED_WITHIN, leaving the albedo's detail.
+    const float bumps = saturate((BUMPED_WITHIN * 2.0 - footprint) / BUMPED_WITHIN);
+    const float shaded = lerp(1.0, clamp(lit, 0.55, 1.6), bumps);
+    color.rgb *= lerp(1.0, max(albedo, 0.2) * shaded, near);
     return color;
 }

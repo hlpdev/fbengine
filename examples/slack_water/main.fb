@@ -655,10 +655,13 @@ End Function
 // wall, 5.4 and 15; by its height alone, banded across it, no change across at all.
 Const ROCK_ALIKE: Float = 0.4
 
+// How much the sand's detail along the shore may change from pixel to pixel a few meters off, by
+// DetailAround.
+Const SHIMMER: Float = 9.0
+
 // How alike the ground's detail round a point must stay when the eye moves 0.3 m, by DetailAlike: it
-// was 0.97, the world's; 0.66 with the noise in the camera's view, and 0.75 shimmering, its finest
-// octaves kept past a pixel.
-Const WORLD_LOCKED: Float = 0.85
+// was 0.97, the world's, and 0.83 with the noise in the camera's view.
+Const WORLD_LOCKED: Float = 0.9
 
 // How much the ground's own detail, `with` it against `without`, changes from pixel to pixel in the
 // `half` pixels round `at` each way: the mean of how far each one's is from its four neighbors'.
@@ -981,6 +984,19 @@ Function CheckLandmarks(folder: Path, island: Island, camera: Camera) Throws Gra
     Checks("and it's seen", Try SeenIn(island, camera, shore, pieces[3].1,
                                        Vec3(nearest.x, GroundHeight(nearest.x, nearest.y) + 0.1,
                                             nearest.y)))
+    // The sand along the shore doesn't shimmer a few meters off: its detail doesn't step from one pair
+    // of pixels to the next, as a bump's slope, taken a pair at a time, does where the height bends
+    // within a pair. What changes from pixel to pixel there, on the way to the sea, was 5.4, 5.3, 4.2,
+    // and 3.5; with the bump kept however far, 33, 32, 20, and 13.
+    Local sandGround = island.GroundMaterial()
+    Local sand = Try WithAndWithout(island, camera, sandGround, sandGround?.Shader())
+    Local shimmer = 0.0
+    For at In [Vec2(0.19, 0.68), Vec2(0.31, 0.65), Vec2(0.5, 0.58), Vec2(0.7, 0.53)]
+        Local x = at.x * (sand.0.Width As Float)
+        Local y = at.y * (sand.0.Height As Float)
+        shimmer = Max(shimmer, DetailAround(sand.0, sand.1, Vec2(x, y), 40))
+    End For
+    Checks("and the sand along it doesn't shimmer, {shimmer} at most", shimmer < SHIMMER)
     // The rock shelf, from over it: at slack water its pools hold the sea, and at high water the sea's
     // over all of it.
     // Over where most of its pools are, on it.
@@ -1088,7 +1104,7 @@ Function CheckLandmarks(folder: Path, island: Island, camera: Camera) Throws Gra
         If at == Null Then Continue
         energies.Add(DetailAround(detailed, smeared, Vec2(at.x, at.y), 12))
     End For
-    // It was 9.9, 2.3, and 1.2; with its finest octaves kept past a pixel, 13, 28, and 41.
+    // It was 5.9, 1.3, and 1.2; with its finest octaves kept past a pixel, 7.8, 6.3, and 27.
     Checks("its detail fades as it goes away, {energies}",
            energies.Count == 3 && energies[1] < energies[0] && energies[2] < energies[1])
     // It's the world's: moved a little, the eye sees the same detail on the same ground.
