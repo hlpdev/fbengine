@@ -530,15 +530,23 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(examples.slack_water.menus PROPERTIES RESOURCE_LOCK slack_water
                        ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
-  # A walk to the bright ending with sound captions on, each captioned sound's caption shown in the
-  # frame it starts.
+  # Walks to the bright ending and the dim with sound captions on, each captioned sound's caption
+  # shown in the frame it starts, and the dim's flood's surf.
   add_test(NAME examples.slack_water.captions
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
-                   -- --captions)
+                   -- --captions bright)
   set_tests_properties(examples.slack_water.captions PROPERTIES RESOURCE_LOCK slack_water
                        ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        PASS_REGULAR_EXPRESSION "each shown in its frame True"
-                       FAIL_REGULAR_EXPRESSION "panic|error"
+                       FAIL_REGULAR_EXPRESSION "panic|error|False"
+                       SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
+  add_test(NAME examples.slack_water.captions_dim
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                   -- --captions dim)
+  set_tests_properties(examples.slack_water.captions_dim PROPERTIES RESOURCE_LOCK slack_water
+                       ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION "each shown in its frame True, flooded, the surf shown True"
+                       FAIL_REGULAR_EXPRESSION "panic|error|False"
                        SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
   # An option changed by the mouse, the keyboard, and a gamepad, kept: set on one run, and found on the
   # next, in what's shown and what's drawn.

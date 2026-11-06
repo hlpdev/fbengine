@@ -2549,9 +2549,12 @@ Function MenusShown(folder: Path) Throws GraphicsError, IOError, AudioError, Inp
     Try Pressed(session, Key.DOWN)
     Try Pressed(session, Key.RETURN)
     Checks("Options, by the keyboard", session.front.Showing() == Page.OPTIONS)
+    Local seen = session.game.View().Position(Space.WORLD)
     For step = 1 To 4
         Try Pressed(session, Key.LEFT)
     End For
+    Checks("the view stays where the title flew it",
+           Apart(seen, session.game.View().Position(Space.WORLD)) < 0.0001)
     Checks("the master volume's 0.80, and heard so",
            Abs(session.scape.Level(Mix.MASTER) - 0.8) < 0.001)
     // Music, by the keyboard, down one row and four steps.
@@ -2841,7 +2844,6 @@ Function CaptionsDrawn(folder: Path) Throws GraphicsError, IOError, AudioError, 
            NearIn(shown, box, SEA_DARK) > 2000)
     Checks("and what's said, in the HUD", NearIn(shown, Rect(40, 70, 400, 30), FAINT) > 50)
     // Subtitles off: what's said isn't shown.
-    session.front.Find("access.subtitles")?.SetVisible(True)
     Local off = Options.Read(session.front.Current().Written())
     off.Subtitles = False
     Try KeepOptions(off, file)
@@ -2855,9 +2857,9 @@ Function CaptionsDrawn(folder: Path) Throws GraphicsError, IOError, AudioError, 
            NearIn(hidden, Rect(40, 70, 400, 30), FAINT) < 10)
 End Function
 
-// A walk to the bright ending, its sound captions on, each captioned sound's caption shown in the
-// frame it starts.
-Function CaptionsWalked() Throws GraphicsError, IOError, AudioError, InputError
+// A walk to the ending `walk` names, its sound captions on, each captioned sound's caption shown in
+// the frame it starts, and, if the sea floods the road, the surf's.
+Function CaptionsWalked(walk: String) Throws GraphicsError, IOError, AudioError, InputError
     Local kept = Try TempDir()
     Local file = kept.Path / "options.ini"
     Local options = Options()
@@ -2873,9 +2875,10 @@ Function CaptionsWalked() Throws GraphicsError, IOError, AudioError, InputError
     Defer session.Free()
     Try Simulate.FocusWindow()
     Flip(False)
-    Local walker = Walker(Walk3dOf("bright") ?? [])
+    Local walker = Walker(Walk3dOf(walk) ?? [])
     Local heard = 0
     Local said = 0
+    Local surfed = False
     Local cues = CaptionedCues()
     While session.game.Story().Ended() == Ending.NONE
         Try walker.Next(session.game, session.island)
@@ -2885,6 +2888,7 @@ Function CaptionsWalked() Throws GraphicsError, IOError, AudioError, InputError
         End For
         Try Stepped(session, 1)
         Local shown = session.captions.Shown()
+        If shown.Contains("[surf crashes]") Then surfed = True
         For at = 0 Until cues.Count
             If session.scape.Played(cues[at]) > before[at]
                 heard += 1
@@ -2893,7 +2897,9 @@ Function CaptionsWalked() Throws GraphicsError, IOError, AudioError, InputError
         End For
     End While
     Try walker.Stop()
-    Print("captioned sounds heard {heard}, each shown in its frame {said == heard && heard > 3}")
+    Local flooded = session.game.Story().Flooded()
+    Print("captioned sounds heard {heard}, each shown in its frame {said == heard && heard > 3}" +
+          (flooded ? ", flooded, the surf shown {surfed}" : ""))
 End Function
 
 // The walk's bob, under the footsteps, and the hold that opens the sluice, its ring filling, as they're
@@ -3125,11 +3131,11 @@ ElseIf arguments.Count == 2 && arguments[0] == "--menus"
         Try CaptionsDrawn(Path(arguments[1]))
         Try MotionHeld(Path(arguments[1]))
     End If
-ElseIf arguments.Count == 1 && arguments[0] == "--captions"
+ElseIf arguments.Count == 2 && arguments[0] == "--captions"
     If Env.Get("FBENGINE_NO_GPU") == "1"
         Print("no GPU here")
     Else
-        Try CaptionsWalked()
+        Try CaptionsWalked(arguments[1])
     End If
 ElseIf arguments.Count == 3 && arguments[0] == "--kept" &&
        (arguments[1] == "set" || arguments[1] == "check")

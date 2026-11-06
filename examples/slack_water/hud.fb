@@ -81,8 +81,7 @@ Public Final Class Hud
         If text.StartsWith("hold ")
             Local outer = mark / 2 + Px(7.0)
             DrawRing(canvas, x + MarkWide(font, device, prompted, mark) / 2, y + mark / 2, outer,
-                     Px(4.0),
-                     held)
+                     Px(4.0), held)
         End If
     End Method
 

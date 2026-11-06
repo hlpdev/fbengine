@@ -1,6 +1,6 @@
 // What's heard, said in words, for a player who can't hear it: each sound that means something, by
-// its cue, as it starts, and the wind rising and the surf crashing, by the weather; two at a time at
-// most, the newest below, each fading after a while, on a panel in the HUD's style.
+// its cue, as it starts, and the wind rising and the surf crashing, by the weather; three at a time
+// at most, the newest below, each fading after a while, on a panel in the HUD's style.
 
 Import std.collections
 Import std.core
@@ -10,10 +10,11 @@ Import "./cues"
 Import "./ground"
 Import "./hud"
 
-// How long a caption's shown, the last part of it fading, and how many are at once.
+// How long a caption's shown, the last part of it fading, and how many are at once, all of one frame
+// shown however many there are.
 Public Const CAPTION_SECONDS: Float = 3.5
 Const FADE_SECONDS: Float = 0.8
-Public Const MOST_CAPTIONS: Int = 2
+Public Const MOST_CAPTIONS: Int = 3
 // How far the wind's swells rise, in a storm of at least so much, to be the wind rising.
 Const RISING_SWELL: Float = 0.6
 Const RISING_STORM: Float = 0.25
@@ -57,10 +58,12 @@ End Function
 // `units` as whole pixels.
 Function Px(units: Float): Int32 => units As Int32
 
-/// What's said, newest last, each with how long it's been shown.
+/// What's said, newest last, each with how long it's been shown, and the frame it was said in.
 Public Final Class Captions
     Field said: String[] = []
     Field ages: Float[] = []
+    Field frames: Int[] = []
+    Field frame: Int = 0
     Field counts: Map<Int, Int>
     Field swelling: Bool = False
     Field roared: Bool = False
@@ -84,6 +87,7 @@ Public Final Class Captions
     Public Method Reset(played: Func(Cue): Int)
         said = []
         ages = []
+        frames = []
         counts = {}
         For cue In CaptionedCues()
             counts[cue As Int] = played(cue)
@@ -95,11 +99,13 @@ Public Final Class Captions
     /// Moves it on `seconds`: what's fading goes, and what's started since is said, by `played`,
     /// how many times each cue's played, and the weather at `clock`.
     Public Method Update(played: Func(Cue): Int, clock: Float64, seconds: Float)
+        frame += 1
         For at = ages.Count - 1 To 0 Step -1
             ages[at] += seconds
             If ages[at] >= CAPTION_SECONDS
                 ages.RemoveAt(at)
                 said.RemoveAt(at)
+                frames.RemoveAt(at)
             End If
         End For
         // The weather first, so what a sound says is newest, and kept, when more come at once.
@@ -117,13 +123,15 @@ Public Final Class Captions
         End For
     End Method
 
-    /// Says `text`, the oldest going past the most there are.
+    /// Says `text`, the oldest going past the most there are, but none said this frame.
     Public Method Say(text: String)
         said.Add(text)
         ages.Add(0.0)
-        While said.Count > MOST_CAPTIONS
+        frames.Add(frame)
+        While said.Count > MOST_CAPTIONS && frames[0] < frame
             said.RemoveAt(0)
             ages.RemoveAt(0)
+            frames.RemoveAt(0)
         End While
     End Method
 

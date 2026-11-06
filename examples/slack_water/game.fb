@@ -28,6 +28,11 @@ Const BOB_EASE: Float = 6.0
 // How long Use's held to open the sluice.
 Public Const HOLD_SECONDS: Float = 1.0
 
+/// The bob's `from` eased toward `to` over `seconds`, alike however the seconds are cut.
+Public Function Eased(from: Float, to: Float, seconds: Float): Float
+    Return from + (to - from) * (1.0 - Exp(-BOB_EASE * seconds))
+End Function
+
 /// The game: its flow, its island, you, and Pip.
 Public Final Class Game
     Field flow: Flow
@@ -99,7 +104,6 @@ Public Final Class Game
     @MainThread
     Public Method SetMotion(on: Bool)
         bobs = on
-        Seat()
     End Method
 
     /// Sets whether the sluice opens by holding Use HOLD_SECONDS, or, off, by a press.
@@ -292,7 +296,7 @@ Public Final Class Game
             If moved > 0.0001 Then walking = 1.0
         End If
         If strode >= STRIDE Then strode -= STRIDE
-        bobbing += (walking - bobbing) * Min(BOB_EASE * seconds, 1.0)
+        bobbing = Eased(bobbing, walking, seconds)
     End Method
 
     // Takes what's within reach, or does what the mill's inside lets, as E does, or says why not.

@@ -13,6 +13,7 @@ Import fbengine
 Import slack_water.captions
 Import slack_water.cues
 Import slack_water.flow
+Import slack_water.game
 Import slack_water.hud
 Import slack_water.prompts
 Import slack_water.screenmode
@@ -270,14 +271,19 @@ Function ASoundsCaptionIsSaidAsItStarts()
     counts[Cue.PIP_HELLO As Int] = 1
     captions.Update(played, 0.0, 0.1)
     Expect(captions.Shown() == ["[a gull cries]", "[Pip chirps]"], "{captions.Shown()}")
-    // Two at most, the oldest going.
+    // Three at most, the oldest going.
     counts[Cue.SLUICE As Int] = 1
     captions.Update(played, 0.0, 0.1)
-    Expect(captions.Shown() == ["[Pip chirps]", "[the sluice groans open]"], "{captions.Shown()}")
+    Expect(captions.Shown() == ["[a gull cries]", "[Pip chirps]", "[the sluice groans open]"],
+           "{captions.Shown()}")
+    counts[Cue.CREAK As Int] = 1
+    captions.Update(played, 0.0, 0.1)
+    Expect(captions.Shown() == ["[Pip chirps]", "[the sluice groans open]", "[the mill creaks]"],
+           "{captions.Shown()}")
     // Fading at its end, then gone.
-    Expect(captions.Shade(1) == 1.0)
+    Expect(captions.Shade(2) == 1.0)
     captions.Update(played, 0.0, CAPTION_SECONDS - 0.4)
-    Expect(captions.Shade(1) > 0.0 && captions.Shade(1) < 1.0, "{captions.Shade(1)}")
+    Expect(captions.Shade(2) > 0.0 && captions.Shade(2) < 1.0, "{captions.Shade(2)}")
     captions.Update(played, 0.0, 0.5)
     Expect(captions.Shown().Count == 0, "{captions.Shown()}")
     // A new game forgets what was said, and what had played.
@@ -318,4 +324,51 @@ Function TheWeatherIsCaptionedAsItTurns()
     captions.Reset(played)
     captions.Update(played, 1.0, 0.05)
     Expect(captions.Shown().Count == 0, "the wind rose at slack water")
+End Function
+
+@Test
+Function WhatsSaidInOneFrameIsAllShown()
+    Local counts = Map<Int, Int>()
+    Local played = Function(cue: Cue) => counts.Get(cue As Int) ?? 0
+    Local captions = Captions()
+    captions.Reset(played)
+    captions.Update(played, 0.0, 0.1)
+    // Four at once: none goes till the next frame.
+    For cue In [Cue.GULL, Cue.CREAK, Cue.FIT, Cue.PIP_GLAD]
+        counts[cue As Int] = 1
+    End For
+    captions.Update(played, 0.0, 0.1)
+    Expect(captions.Shown().Count == 4, "{captions.Shown()}")
+    counts[Cue.SLUICE As Int] = 1
+    captions.Update(played, 0.0, 0.1)
+    Expect(captions.Shown() == ["[a part clanks into place]", "[Pip trills]",
+                                "[the sluice groans open]"], "{captions.Shown()}")
+End Function
+
+@Test
+Function TheSurfIsShownAtTheFlood()
+    Local counts = Map<Int, Int>()
+    Local played = Function(cue: Cue) => counts.Get(cue As Int) ?? 0
+    Local captions = Captions()
+    captions.Reset(played)
+    captions.Update(played, FLOOD_AT - 0.05, 0.05)
+    // The flood's frame: the sea over the road, Pip worried, and the surf.
+    counts[Cue.SPLASH As Int] = 1
+    counts[Cue.PIP_WORRIES As Int] = 1
+    captions.Update(played, FLOOD_AT + 0.05, 0.05)
+    Local shown = captions.Shown()
+    Expect(shown.Contains("[surf crashes]") && shown.Contains("[the sea breaks over the road]") &&
+           shown.Contains("[Pip whimpers]"), "{shown}")
+End Function
+
+@Test
+Function TheBobEasesAlikeAtAnyRate()
+    For rate In [30.0, 144.0]
+        Local bobbing: Float = 0.0
+        Local steps = rate As Int
+        For step = 1 To steps
+            bobbing = Eased(bobbing, 1.0, 1.0 / (rate As Float))
+        End For
+        Expect(Abs(bobbing - (1.0 - Exp(-6.0))) < 0.0001, "at {rate} a second, {bobbing}")
+    End For
 End Function

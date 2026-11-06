@@ -784,10 +784,9 @@ Public Final Class Frontend
         If page == Page.PLAYING Then Return
         ui.Draw()
         Local canvas = Screen.Canvas()
-        Local y = Screen.Height() - 56
         Local x = 32
         Local mark = (28.0 * options.TextScale()) As Int32
-        y = Screen.Height() - 28 - mark
+        Local y = Screen.Height() - 28 - mark
         x += DrawPrompt(canvas, font, device, Prompted.CHOOSE, "Choose", x, y, mark, PAPER) + 28
         If page != Page.TITLE Then DrawPrompt(canvas, font, device, Prompted.BACK, "Back", x, y,
                                               mark, PAPER)
