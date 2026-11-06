@@ -15,16 +15,22 @@
 #include <vector>
 
 #ifdef _WIN32
-// NOLINTBEGIN(llvm-include-order): windows.h before psapi.h.
+// psapi.h needs windows.h's types first.
+// clang-format off
 #include <windows.h>
 #include <psapi.h>
-// NOLINTEND(llvm-include-order)
+// clang-format on
 #else
 #include <fstream>
 #include <unistd.h>
 #endif
 
 namespace {
+
+/// A generator from `seed`, the same for each run.
+std::mt19937 seeded(std::uint32_t seed) {
+    return std::mt19937(seed);
+}
 
 constexpr float not_a_number = std::numeric_limits<float>::quiet_NaN();
 constexpr float endless = std::numeric_limits<float>::infinity();
@@ -106,8 +112,10 @@ TEST_CASE("what isn't a finite number, given as where an entity is, its turn, or
         CHECK_FALSE(fbe_entity_move(entity, 0.0F, bad, 0.0F));
         CHECK_FALSE(fbe_entity_point_at(entity, bad, 0.0F, 0.0F, 0.0F));
         CHECK_FALSE(fbe_entity_point_at(entity, 0.0F, 0.0F, 5.0F, bad));
-        const fbe_pose_t pose{ .position = { .x = bad, .y = 0.0F, .z = 0.0F },
-                               .rotation = { .x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F } };
+        const fbe_pose_t pose{
+            .position = { .x = bad, .y = 0.0F, .z = 0.0F },
+            .rotation = { .x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F },
+        };
         CHECK_FALSE(fbe_entity_set_poses(&entity, &pose, 1, FBE_SPACE_LOCAL));
         CHECK(says("isn't finite"));
     }
@@ -308,7 +316,7 @@ TEST_CASE("thousands of frames of making, moving, playing, picking, and freeing 
           "the same",
           "[scene]") {
     const test_world_t world;
-    std::mt19937 random(5);
+    std::mt19937 random = seeded(5);
     const std::uint64_t clip = fbe_clip_create("bob", 30.0F);
     const std::array<float, 2> times{ 0.0F, 1.0F };
     const std::array<float, 6> up{ 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F };
@@ -316,16 +324,19 @@ TEST_CASE("thousands of frames of making, moving, playing, picking, and freeing 
                                  up.data(), 2));
     std::vector<std::uint64_t> live;
     std::vector<std::uint64_t> players;
-    constexpr std::array<std::int32_t, 5> kinds{ FBE_ENTITY_PIVOT, FBE_ENTITY_MESH,
-                                                 FBE_ENTITY_LIGHT, FBE_ENTITY_CAMERA,
-                                                 FBE_ENTITY_INSTANCES };
+    constexpr std::array<std::int32_t, 5> kinds{
+        FBE_ENTITY_PIVOT,  FBE_ENTITY_MESH,      FBE_ENTITY_LIGHT,
+        FBE_ENTITY_CAMERA, FBE_ENTITY_INSTANCES,
+    };
     std::int64_t held_at_start = 0;
     const auto frame = [&](int number) {
         for (int i = 0; i < 12; ++i) {
-            const std::uint64_t parent = live.empty() || random() % 3 == 0 ? 0 : live[random() % live.size()];
+            const std::uint64_t parent =
+                live.empty() || random() % 3 == 0 ? 0 : live[random() % live.size()];
             const std::int32_t kind = kinds[random() % kinds.size()];
-            const std::uint64_t made = kind == FBE_ENTITY_MESH ? cube(world.handle, parent)
-                                                               : fbe_entity_create(world.handle, parent, kind);
+            const std::uint64_t made = kind == FBE_ENTITY_MESH
+                                           ? cube(world.handle, parent)
+                                           : fbe_entity_create(world.handle, parent, kind);
             REQUIRE(made != 0);
             if (kind == FBE_ENTITY_INSTANCES) {
                 const std::uint64_t geometry = fbe_geometry_cube();
@@ -383,7 +394,7 @@ TEST_CASE("thousands of frames of making, moving, playing, picking, and freeing 
     CAPTURE(held_at_start, held_at_end, live.size(), players.size());
     // As many live as there were, give or take, and what's held about what it was then.
     CHECK(live.size() < 400);
-    CHECK(held_at_end < held_at_start + (8 << 20));
+    CHECK(held_at_end < held_at_start + (std::int64_t{ 8 } * 1024 * 1024));
     for (const std::uint64_t player : players) {
         fbe_player_free(player);
     }

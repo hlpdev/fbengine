@@ -152,7 +152,8 @@ Function NumbersThatArentFiniteAreRefused()
     Local world = SceneFuzzWorld()
     Defer world.Free()
     Local pivot = "format = 1\n[[entity]]\npath = \"a\"\nkind = \"PIVOT\"\n"
-    Local mesh = "format = 1\n[[entity]]\npath = \"a\"\nkind = \"MESH\"\ngeometry = \"builtin:cube\"\n"
+    Local mesh =
+        "format = 1\n[[entity]]\npath = \"a\"\nkind = \"MESH\"\ngeometry = \"builtin:cube\"\n"
     Local light = "format = 1\n[[entity]]\npath = \"a\"\nkind = \"LIGHT\"\n"
     Local camera = "format = 1\n[[entity]]\npath = \"a\"\nkind = \"CAMERA\"\n"
     For bad In ["nan", "inf", "-inf", "1e400", "-1e400"]

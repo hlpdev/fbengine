@@ -22,6 +22,11 @@
 
 namespace {
 
+/// A generator from `seed`, the same for each run.
+std::mt19937 seeded(std::uint32_t seed) {
+    return std::mt19937(seed);
+}
+
 using bytes_t = std::vector<std::uint8_t>;
 
 bytes_t read_file(const std::filesystem::path& path) {
@@ -52,7 +57,7 @@ public:
     }
 
     void write(std::string_view name, const bytes_t& bytes) const {
-        std::ofstream file(m_folder / name, std::ios::binary | std::ios::trunc);
+        std::ofstream file(m_folder / name, std::ios::binary);
         file.write(reinterpret_cast<const char*>(bytes.data()),
                    static_cast<std::streamsize>(bytes.size()));
     }
@@ -130,9 +135,9 @@ void exercise(std::string_view name) {
     const std::uint64_t world = fbe_world_create();
     const std::uint64_t root = fbe_entity_create(world, 0, FBE_ENTITY_PIVOT);
     for (std::int32_t scene = -1; scene < info.scenes; ++scene) {
-        const bool spawned = fbe_model_spawn(
-            load, scene, root, geometries.data(), static_cast<std::int32_t>(geometries.size()),
-            skins.data(), static_cast<std::int32_t>(skins.size()));
+        const bool spawned = fbe_model_spawn(load, scene, root, geometries.data(),
+                                             static_cast<std::int32_t>(geometries.size()),
+                                             skins.data(), static_cast<std::int32_t>(skins.size()));
         CHECK((spawned || !std::string_view(fbe_error()).empty()));
     }
     const std::uint64_t player = fbe_player_create(root);
@@ -141,7 +146,7 @@ void exercise(std::string_view name) {
             continue;
         }
         const float length = fbe_clip_length(clip);
-        for (const float at : { 0.0F, 0.37F, length * 0.5F, length, length * 3.0F + 0.1F }) {
+        for (const float at : { 0.0F, 0.37F, length * 0.5F, length, (length * 3.0F) + 0.1F }) {
             fbe_player_set_time(player, 0, at);
             INFO(name << " at " << at);
             CHECK(posed_in_numbers(root));
@@ -211,7 +216,8 @@ bytes_t joined(glb_t parts) {
     bytes_t glb;
     put_word(glb, 0x46546C67U);
     put_word(glb, 2);
-    const std::size_t total = 12 + 8 + parts.json.size() + (parts.bin.empty() ? 0 : 8 + parts.bin.size());
+    const std::size_t total =
+        12 + 8 + parts.json.size() + (parts.bin.empty() ? 0 : 8 + parts.bin.size());
     put_word(glb, static_cast<std::uint32_t>(total));
     put_word(glb, static_cast<std::uint32_t>(parts.json.size()));
     put_word(glb, 0x4E4F534AU);
@@ -229,8 +235,8 @@ std::string renumbered(std::string json, std::mt19937& random, std::string_view 
     std::vector<std::size_t> starts;
     for (std::size_t i = 1; i < json.size(); ++i) {
         const bool digit = json[i] >= '0' && json[i] <= '9';
-        const bool after = json[i - 1] == ':' || json[i - 1] == '[' || json[i - 1] == ',' ||
-                           json[i - 1] == ' ';
+        const bool after =
+            json[i - 1] == ':' || json[i - 1] == '[' || json[i - 1] == ',' || json[i - 1] == ' ';
         if (digit && after) {
             starts.push_back(i);
         }
@@ -240,9 +246,9 @@ std::string renumbered(std::string json, std::mt19937& random, std::string_view 
     }
     const std::size_t at = starts[random() % starts.size()];
     std::size_t end = at;
-    while (end < json.size() && (std::isdigit(static_cast<unsigned char>(json[end])) != 0 ||
-                                 json[end] == '.' || json[end] == 'e' || json[end] == 'E' ||
-                                 json[end] == '-' || json[end] == '+')) {
+    while (end < json.size() &&
+           (std::isdigit(static_cast<unsigned char>(json[end])) != 0 || json[end] == '.' ||
+            json[end] == 'e' || json[end] == 'E' || json[end] == '-' || json[end] == '+')) {
         ++end;
     }
     json.replace(at, end - at, with);
@@ -261,7 +267,11 @@ std::string in_nodes(std::string json, std::string_view inserted, int which) {
         int depth = 0;
         std::size_t walk = at;
         for (; walk < json.size(); ++walk) {
-            depth += json[walk] == '{' ? 1 : json[walk] == '}' ? -1 : 0;
+            if (json[walk] == '{') {
+                ++depth;
+            } else if (json[walk] == '}') {
+                --depth;
+            }
             if (depth == 0) {
                 break;
             }
@@ -274,8 +284,9 @@ std::string in_nodes(std::string json, std::string_view inserted, int which) {
     return json;
 }
 
-const std::array<std::string_view, 9> numbers{
-    "-1", "0", "4294967295", "2147483648", "18446744073709551615", "1e30", "1e400", "-0", "3",
+const std::array<std::string_view, 10> numbers{
+    "-1",   "0",     "4294967295", "2147483648", "-2147483649", "18446744073709551615",
+    "1e30", "1e400", "-0",         "3",
 };
 
 /// The seeds: each sample model's file, and whether it's a binary glTF.
@@ -311,13 +322,12 @@ bytes_t as_file(const seed_t& seed, const std::string& json, const bytes_t& bin)
 TEST_CASE("a whole-number accessor's bounds past what it holds are refused as the file's") {
     const folder_t folder;
     for (const std::string_view bound : { "1e30", "-1e30", "-9.3e18", "1e400" }) {
-        const std::string json =
-            std::string(R"({"asset": {"version": "2.0"},
+        const std::string json = std::string(R"({"asset": {"version": "2.0"},
                 "buffers": [{"byteLength": 4, "uri": "data:application/octet-stream;base64,AAABAA=="}],
                 "bufferViews": [{"buffer": 0, "byteLength": 4}],
                 "accessors": [{"bufferView": 0, "componentType": 5123, "count": 2, "type": "SCALAR",
                                "min": [)") +
-            std::string(bound) + R"(], "max": [1]}]})";
+                                 std::string(bound) + R"(], "max": [1]}]})";
         folder.write("bounds.gltf", bytes_t(json.begin(), json.end()));
         const std::uint64_t load =
             fbe_assets_load(FBE_ASSETS_MODEL, "res://fuzz-model/bounds.gltf", false, false);
@@ -349,7 +359,8 @@ TEST_CASE("a sample model cut short anywhere is refused or made, never read past
         exercise(seed.file);
         for (int cut = 0; cut < 48; ++cut) {
             const std::size_t at = whole.size() * static_cast<std::size_t>(cut) / 48;
-            folder.write(seed.file, bytes_t(whole.begin(), whole.begin() + static_cast<std::ptrdiff_t>(at)));
+            folder.write(seed.file,
+                         bytes_t(whole.begin(), whole.begin() + static_cast<std::ptrdiff_t>(at)));
             INFO(seed.file << " cut at " << at);
             exercise(seed.file);
         }
@@ -358,7 +369,7 @@ TEST_CASE("a sample model cut short anywhere is refused or made, never read past
 
 TEST_CASE("a sample model with its bytes changed is refused or made, never read past") {
     const folder_t folder;
-    std::mt19937 random(7);
+    std::mt19937 random = seeded(7);
     for (const seed_t& seed : seeds) {
         const bytes_t whole = seed_bytes(seed);
         for (int round = 0; round < 120; ++round) {
@@ -376,10 +387,11 @@ TEST_CASE("a sample model with its bytes changed is refused or made, never read 
 
 TEST_CASE("a sample model's numbers made huge, negative, or past a float are refused or made") {
     const folder_t folder;
-    std::mt19937 random(11);
+    std::mt19937 random = seeded(11);
     for (const seed_t& seed : seeds) {
         const bytes_t whole = seed_bytes(seed);
-        const glb_t parts = seed.binary ? split(whole) : glb_t{ .json = std::string(whole.begin(), whole.end()) };
+        const glb_t parts =
+            seed.binary ? split(whole) : glb_t{ .json = std::string(whole.begin(), whole.end()) };
         for (int round = 0; round < 150; ++round) {
             std::string json = parts.json;
             const int changes = 1 + static_cast<int>(random() % 3);
@@ -395,9 +407,13 @@ TEST_CASE("a sample model's numbers made huge, negative, or past a float are ref
 
 TEST_CASE("a sample model whose buffer holds what isn't a number poses in numbers or is refused") {
     const folder_t folder;
-    std::mt19937 random(13);
-    constexpr std::array<std::uint32_t, 4> not_numbers{ 0x7FC00000U, 0x7F800000U, 0xFF800000U,
-                                                        0x7F7FFFFFU };
+    std::mt19937 random = seeded(13);
+    constexpr std::array<std::uint32_t, 4> not_numbers{
+        0x7FC00000U,
+        0x7F800000U,
+        0xFF800000U,
+        0x7F7FFFFFU,
+    };
     for (const seed_t& seed : seeds) {
         if (!seed.binary) {
             continue;
@@ -421,11 +437,16 @@ TEST_CASE("a sample model whose nodes are their own children, or two nodes', is 
     const folder_t folder;
     for (const seed_t& seed : seeds) {
         const bytes_t whole = seed_bytes(seed);
-        const glb_t parts = seed.binary ? split(whole) : glb_t{ .json = std::string(whole.begin(), whole.end()) };
-        for (const auto& [inserted, which] :
-             { std::pair{ "\"children\":[0],", 0 }, std::pair{ "\"children\":[1],", 1 },
-               std::pair{ "\"children\":[0],", 1 }, std::pair{ "\"children\":[1],", 2 },
-               std::pair{ "\"children\":[99999],", 0 }, std::pair{ "\"children\":[-1],", 0 } }) {
+        const glb_t parts =
+            seed.binary ? split(whole) : glb_t{ .json = std::string(whole.begin(), whole.end()) };
+        for (const auto& [inserted, which] : {
+                 std::pair{ "\"children\":[0],", 0 },
+                 std::pair{ "\"children\":[1],", 1 },
+                 std::pair{ "\"children\":[0],", 1 },
+                 std::pair{ "\"children\":[1],", 2 },
+                 std::pair{ "\"children\":[99999],", 0 },
+                 std::pair{ "\"children\":[-1],", 0 },
+             }) {
             const std::string json = in_nodes(parts.json, inserted, which);
             folder.write(seed.file, as_file(seed, json, parts.bin));
             INFO(seed.file << " with " << inserted << " in node " << which);
