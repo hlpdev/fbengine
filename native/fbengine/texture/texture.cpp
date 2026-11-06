@@ -695,6 +695,57 @@ bool upload(std::uint64_t handle, const texture_t& texture, std::uint32_t x, std
     return true;
 }
 
+/// Uploads the whole of `level` of `handle`'s texture, `width` by `height`, from `pixels`, rows
+/// `pitch` bytes apart, as `upload` does but making nothing of the other levels from it.
+bool upload_level(std::uint64_t handle, const texture_t& texture, std::uint32_t level,
+                  std::uint32_t width, std::uint32_t height, const std::uint8_t* pixels,
+                  std::uint32_t pitch) {
+    if (level == 0) {
+        fbe::texture::changed_on_gpu(handle);
+    }
+    const std::uint32_t row = width * fbe::texture::pixel_size(texture.format);
+    const staging_t staging = make_staging(VkDeviceSize{ row } * height);
+    if (staging.buffer == VK_NULL_HANDLE) {
+        return false;
+    }
+    VkBuffer buffer = staging.buffer;
+    for (std::uint32_t line = 0; line < height; ++line) {
+        std::memcpy(staging.to + (std::size_t{ line } * row),
+                    pixels + (std::size_t{ line } * pitch), row);
+    }
+    vmaFlushAllocation(fbe::gpu::device()->allocator, staging.memory, 0, VK_WHOLE_SIZE);
+    const VkBufferImageCopy region{
+        .imageSubresource = { .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                              .mipLevel = level,
+                              .layerCount = 1 },
+        .imageExtent = { .width = width, .height = height, .depth = 1 },
+    };
+    if (fbe::gpu::in_graph(handle)) {
+        return fbe::gpu::add_pass({
+            .name = "write a level",
+            .uses = { { fbe::gpu::texture_resource(handle), fbe::gpu::use_t::COPY_TO } },
+            .record =
+                [buffer, image = texture.image, region](VkCommandBuffer commands) {
+                    vkCmdCopyBufferToImage(commands, buffer, image,
+                                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+                },
+            .carried = true,
+        });
+    }
+    VkCommandBuffer commands = fbe::gpu::upload_commands();
+    fbe::gpu::barrier(commands, levels_barrier(texture.image, level, 1,
+                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, resting_stages,
+                                               0, transfer, transfer_write));
+    vkCmdCopyBufferToImage(commands, buffer, texture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                           &region);
+    fbe::gpu::barrier(commands,
+                      levels_barrier(texture.image, level, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, transfer,
+                                     transfer_write, readers, shader_read));
+    return true;
+}
+
 bool valid_filter(std::int32_t filter) {
     return filter == FBE_TEXTURE_NEAREST || filter == FBE_TEXTURE_LINEAR;
 }
@@ -1560,6 +1611,40 @@ FBE_API bool fbe_texture_write(uint64_t texture, int32_t x, int32_t y, int32_t w
     return upload(texture, *found, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y),
                   static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height), pixels,
                   static_cast<std::uint32_t>(pitch));
+}
+
+FBE_API bool fbe_texture_write_level(uint64_t texture, int32_t level, int32_t width, int32_t height,
+                                     const uint8_t* pixels, int32_t pitch) {
+    texture_t* found = fbe::texture::find(texture);
+    if (found == nullptr || !has_pixels(*found)) {
+        return false;
+    }
+    if (found->msaa != VK_NULL_HANDLE) {
+        return fbe::fail("a multisampled target is drawn into, not written");
+    }
+    if (level < 0 || std::cmp_greater_equal(level, found->levels)) {
+        return fbe::fail(
+            std::format("the texture has {} levels, and no level {}", found->levels, level));
+    }
+    const std::uint32_t across = std::max(found->width >> static_cast<std::uint32_t>(level), 1U);
+    const std::uint32_t down = std::max(found->height >> static_cast<std::uint32_t>(level), 1U);
+    if (std::cmp_not_equal(width, across) || std::cmp_not_equal(height, down)) {
+        return fbe::fail(std::format("level {} of a {}x{} texture is {}x{}, not {}x{}", level,
+                                     found->width, found->height, across, down, width, height));
+    }
+    const std::int64_t row = std::int64_t{ width } * fbe::texture::pixel_size(found->format);
+    if (pixels == nullptr || pitch < row) {
+        return fbe::fail(std::format("a row of {} pixels is {} bytes, more than the pitch {}",
+                                     width, row, pitch));
+    }
+    // What the CPU wrote into its copy goes first, making the levels from it, so this goes over.
+    fbe::texture::send_pixels(texture);
+    found = fbe::texture::find(texture);
+    if (found == nullptr) {
+        return false;
+    }
+    return upload_level(texture, *found, static_cast<std::uint32_t>(level), across, down, pixels,
+                        static_cast<std::uint32_t>(pitch));
 }
 
 FBE_API bool fbe_texture_set_alpha(uint64_t texture, bool alpha) {
