@@ -10899,8 +10899,12 @@ TEST_CASE("a shader of its own bends through a surface's own tangents, as a map 
             require(fbe_mesh_set_material(mesh, material));
             require(fbe_material_set_parameter(material, 5, x, y, 0.8F, 1.0F));
             const fbe::golden::frame_t bent = scene.drawn();
-            const std::array<std::uint8_t, 4> texel{ static_cast<std::uint8_t>(red),
-                                                     static_cast<std::uint8_t>(green), 230, 255 };
+            const std::array<std::uint8_t, 4> texel{
+                static_cast<std::uint8_t>(red),
+                static_cast<std::uint8_t>(green),
+                230,
+                255,
+            };
             require(fbe_texture_write(normals, 0, 0, 1, 1, texel.data(), 4));
             require(fbe_mesh_set_material(mesh, mapped));
             const fbe::golden::frame_t by_map = scene.drawn();
