@@ -182,6 +182,8 @@ struct geometry_t {
     std::string scene_id;
     vec3_t cull_min;
     vec3_t cull_max;
+    /// Goes up when its cull box is set or cleared, so Instances' clusters know to take it.
+    std::uint64_t cull_version = 0;
     /// Goes up when its triangles come or go, as against only moving, which a tree can be
     /// refitted for rather than built again.
     std::uint64_t shape_version = 0;
@@ -351,6 +353,7 @@ struct instances_t {
     std::vector<instance_cluster_t> clusters;
     std::uint32_t clusters_geometry = none;
     std::uint64_t clusters_version = 0;
+    std::uint64_t clusters_cull_version = 0;
     bool clusters_stale = true;
     /// Which clusters have changed, if not all of them have.
     std::vector<std::uint32_t> stale_clusters;

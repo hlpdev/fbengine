@@ -193,14 +193,22 @@ void copy_instances(std::uint32_t from, std::uint32_t to) {
 const std::vector<instance_cluster_t>& instance_clusters(instances_t& found) {
     const scene_t& s = scene();
     const std::uint64_t version = found.geometry != none ? s.geometries[found.geometry].version : 0;
+    const std::uint64_t cull_version =
+        found.geometry != none ? s.geometries[found.geometry].cull_version : 0;
     const bool whole = found.clusters_stale || found.clusters_geometry != found.geometry ||
-                       found.clusters_version != version;
+                       found.clusters_version != version ||
+                       found.clusters_cull_version != cull_version;
     if (!whole && found.stale_clusters.empty()) {
         return found.clusters;
     }
     vec3_t low;
     vec3_t high;
-    if (found.geometry != none) {
+    // Each instance's box is its geometry's cull box, if it has one, as what its shader moves
+    // goes out of its bounds; else its bounds.
+    if (found.geometry != none && s.geometries[found.geometry].has_cull_box) {
+        low = s.geometries[found.geometry].cull_min;
+        high = s.geometries[found.geometry].cull_max;
+    } else if (found.geometry != none) {
         geometry_bounds(found.geometry, low, high);
     }
     const vec3_t both = low + high;
@@ -236,6 +244,7 @@ const std::vector<instance_cluster_t>& instance_clusters(instances_t& found) {
     found.clusters_stale = false;
     found.clusters_geometry = found.geometry;
     found.clusters_version = version;
+    found.clusters_cull_version = cull_version;
     found.stale_clusters.clear();
     return found.clusters;
 }

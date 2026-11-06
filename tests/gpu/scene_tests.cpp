@@ -10974,6 +10974,54 @@ TEST_CASE("a shader of its own moves each instance by where it is", "[gpu][scene
     fbe_material_release(material);
 }
 
+TEST_CASE("a shader of its own moves each instance by where it is in its Instances, not the world",
+          "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t material = by_game_shader();
+    require(fbe_material_set_shading(material, FBE_SHADING_UNLIT));
+    require(fbe_material_set_parameter(material, 4, 0.5F, 0.0F, 0.0F, 0.0F));
+    const std::uint64_t made =
+        cubes_at(scene.world, material,
+                 { instance_at(-3.0F, 0.0F, -10.0F), instance_at(3.0F, 0.0F, -10.0F) });
+    const fbe::golden::frame_t where = scene.drawn();
+    // Its Instances 10 along, and the camera with them: each instance where it is in them is as
+    // it was, so nothing it draws changes.
+    require(fbe_entity_set_position(made, 10.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+    require(fbe_entity_set_position(scene.camera, 10.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+    CHECK(fbe::golden::compare(where, scene.drawn(), 1).pixels == 0);
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_material_release(material);
+}
+
+TEST_CASE("an Instances is culled by its geometry's cull box, as what its shader moves leaves "
+          "its bounds",
+          "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t material = by_game_shader();
+    require(fbe_material_set_shading(material, FBE_SHADING_UNLIT));
+    // Past the view's left edge, until its shader moves it 30 to the middle.
+    require(fbe_material_set_parameter(material, 1, 30.0F, 0.0F, 0.0F, 0.0F));
+    const std::uint64_t made =
+        cubes_at(scene.world, material, { instance_at(-30.0F, 0.0F, -10.0F) });
+    const std::uint64_t geometry = fbe_instances_geometry(made);
+    SECTION("by its bounds, it's culled") {
+        CHECK(near(middle(scene.drawn()), { 0, 0, 255 }));
+    }
+    SECTION("by a box that takes its move, it's drawn") {
+        const fbe_aabb_t moved{ .min = { .x = -1.0F, .y = -1.0F, .z = -1.0F },
+                                .max = { .x = 31.0F, .y = 1.0F, .z = 1.0F } };
+        require(fbe_geometry_set_cull_box(geometry, &moved));
+        CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
+        // And by its bounds again once it's cleared.
+        require(fbe_geometry_clear_cull_box(geometry));
+        CHECK(near(middle(scene.drawn()), { 0, 0, 255 }));
+    }
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_material_release(material);
+}
+
 TEST_CASE("a shader of its own draws an Instances, each moved in its own space", "[gpu][scene]") {
     const scene_t scene;
     const std::uint64_t material = by_game_shader();
@@ -11018,6 +11066,20 @@ TEST_CASE("a shader of its own draws an Instances, each moved in its own space",
         CHECK(middle(scene.drawn())[0] != 0);
         fbe_material_release(paint);
     }
+    SECTION("casting, moved by where it is in its Instances") {
+        const std::uint64_t paint = fbe_material_create();
+        wall(scene.world, -10.0F, 30.0F, paint);
+        sun_from_right(scene.world);
+        // 10 along its Instances, which are 5 back, it's off the sun's way to the wall's middle,
+        // until its shader moves it up by 0.3 of that.
+        const std::uint64_t made =
+            cubes_at(scene.world, material, { instance_at(10.0F, -3.0F, -5.0F) });
+        require(fbe_entity_set_position(made, -5.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+        CHECK(middle(scene.drawn())[0] != 0);
+        require(fbe_material_set_parameter(material, 4, 0.3F, 0.0F, 0.0F, 0.0F));
+        CHECK(middle(scene.drawn())[0] == 0);
+        fbe_material_release(paint);
+    }
     CHECK(fbe_gpu_validation_errors() == 0);
     fbe_material_release(material);
 }
@@ -11055,6 +11117,18 @@ TEST_CASE("a shader of its own reaches the prepass: what it moves, and what it c
         require(fbe_entity_free(by_place));
         require(fbe_material_set_parameter(moved, 1, 3.0F, 0.0F, 0.0F, 0.0F));
         cubes_at(scene.world, moved, { turned_instance_at(0.0F, -3.0F, -9.0F) });
+        CHECK(same(reference, scene.drawn()));
+    }
+    SECTION("an instance it moves by where it is in its Instances is too") {
+        const std::uint64_t by_place = cube(scene.world, 0.0F, 0.0F, -9.0F, placed);
+        const fbe::golden::frame_t reference = scene.drawn();
+        REQUIRE(darkened(reference));
+        require(fbe_entity_free(by_place));
+        // 6 along its Instances, which are 6 back, so 3 below; moved up by half of 6.
+        require(fbe_material_set_parameter(moved, 4, 0.5F, 0.0F, 0.0F, 0.0F));
+        const std::uint64_t made =
+            cubes_at(scene.world, moved, { instance_at(6.0F, -3.0F, -9.0F) });
+        require(fbe_entity_set_position(made, -6.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
         CHECK(same(reference, scene.drawn()));
     }
     SECTION("it's given a morph's normal, as when it's drawn") {
