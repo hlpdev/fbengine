@@ -558,13 +558,15 @@ void posed(Draw draw, uint index, inout float4 position, inout float3 normal, in
 #include "fbe_game_shader.slang"
 #endif
 
-// Where a shader of its own moves a vertex to, if it does.
-void movedByItsShader(Draw draw, Vertex vertex, inout float4 position, inout float3 normal)
+// Where a shader of its own moves a vertex to, if it does: `place` is where its instance is in its
+// Instances' space, or nowhere for what isn't one.
+void movedByItsShader(Draw draw, Vertex vertex, inout float4 position, inout float3 normal,
+                      float3 place = float3(0.0, 0.0, 0.0))
 {
 #ifdef FBE_MOVES_VERTICES
     MovingVertex moving = { float2(vertex.uv0[0], vertex.uv0[1]), float2(vertex.uv1[0], vertex.uv1[1]),
                             float4(vertex.color[0], vertex.color[1], vertex.color[2], vertex.color[3]),
-                            draw.material };
+                            draw.material, place };
     float3 moved = position.xyz;
     move(moved, normal, moving);
     position = float4(moved, position.w);
@@ -647,7 +649,7 @@ Corner drawnInstanceCorner(uint index, uint instance)
     const Instance one = instanceAt(draw.instances, instance);
     float4 start = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
     float3 given = float3(vertex.normal[0], vertex.normal[1], vertex.normal[2]);
-    movedByItsShader(draw, vertex, start, given);
+    movedByItsShader(draw, vertex, start, given, float3(one.rows[0].w, one.rows[1].w, one.rows[2].w));
     const float4 position = float4(dot(one.rows[0], start), dot(one.rows[1], start),
                                    dot(one.rows[2], start), 1.0);
     // Its matrix's columns, whose cofactors turn a normal.
@@ -1364,7 +1366,7 @@ PrepassCorner prepassInstanceVertex(uint index : SV_VulkanVertexID, uint instanc
     const Instance one = instanceAt(draw.instances, instance);
     float4 start = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
     float3 normal = float3(vertex.normal[0], vertex.normal[1], vertex.normal[2]);
-    movedByItsShader(draw, vertex, start, normal);
+    movedByItsShader(draw, vertex, start, normal, float3(one.rows[0].w, one.rows[1].w, one.rows[2].w));
     const float4 position = float4(dot(one.rows[0], start), dot(one.rows[1], start),
                                    dot(one.rows[2], start), 1.0);
     PrepassCorner corner = prepassCorner(camera, draw, push.draw, position, position, vertex,
@@ -1451,7 +1453,7 @@ ShadowCorner shadowInstanceVertex(uint index : SV_VulkanVertexID, uint instance 
     const Instance one = instanceAt(draw.instances, instance);
     float4 start = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
     float3 normal = float3(vertex.normal[0], vertex.normal[1], vertex.normal[2]);
-    movedByItsShader(draw, vertex, start, normal);
+    movedByItsShader(draw, vertex, start, normal, float3(one.rows[0].w, one.rows[1].w, one.rows[2].w));
     const float4 position = float4(dot(one.rows[0], start), dot(one.rows[1], start),
                                    dot(one.rows[2], start), 1.0);
     ShadowCorner corner;

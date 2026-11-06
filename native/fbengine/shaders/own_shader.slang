@@ -93,6 +93,10 @@ struct MovingVertex
     float2 uv1;
     float4 color;
     uint material;
+    // Where its instance is in its Instances' space, its matrix's translation, so each can move as
+    // its own, as grass in the wind; the world's place for an Instances at the world's origin, and 0
+    // for what isn't an instance.
+    float3 place;
 
     // A parameter Material.SetParameter set, the last for an index past them.
     float4 parameter(uint index)

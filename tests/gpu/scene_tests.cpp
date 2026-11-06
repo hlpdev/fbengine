@@ -10945,6 +10945,31 @@ TEST_CASE("a shader of its own bends a two-sided back as its front", "[gpu][scen
     fbe_material_release(material);
 }
 
+// Each instance's place reaches its shader's move, so two of one geometry move apart by where they
+// are: here up by how far across each is, so the right one's up and the left one's down.
+TEST_CASE("a shader of its own moves each instance by where it is", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t material = by_game_shader();
+    require(fbe_material_set_shading(material, FBE_SHADING_UNLIT));
+    cubes_at(scene.world, material,
+             { instance_at(-3.0F, 0.0F, -10.0F), instance_at(3.0F, 0.0F, -10.0F) });
+    const auto red_at = [&](const fbe::golden::frame_t& frame, float x, float y) {
+        return pixel_of(frame, pixel_at(scene.camera, x, y, -9.0F))[0] > 200;
+    };
+    const fbe::golden::frame_t level = scene.drawn();
+    CHECK(red_at(level, -3.0F, 0.0F));
+    CHECK(red_at(level, 3.0F, 0.0F));
+    require(fbe_material_set_parameter(material, 4, 0.5F, 0.0F, 0.0F, 0.0F));
+    const fbe::golden::frame_t moved = scene.drawn();
+    CHECK(red_at(moved, 3.0F, 1.5F));
+    CHECK(!red_at(moved, 3.0F, -1.2F));
+    CHECK(red_at(moved, -3.0F, -1.5F));
+    CHECK(!red_at(moved, -3.0F, 1.2F));
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_material_release(material);
+}
+
 TEST_CASE("a shader of its own draws an Instances, each moved in its own space", "[gpu][scene]") {
     const scene_t scene;
     const std::uint64_t material = by_game_shader();

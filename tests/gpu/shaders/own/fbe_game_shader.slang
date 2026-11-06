@@ -17,7 +17,9 @@ float3 bend(Surface surface)
 
 void move(inout float3 position, inout float3 normal, MovingVertex vertex)
 {
-    position += vertex.parameter(1).xyz + normal * vertex.parameter(3).x;
+    // Up by its fifth parameter's x times how far across its instance is.
+    position += vertex.parameter(1).xyz + normal * vertex.parameter(3).x +
+                float3(0.0, vertex.place.x * vertex.parameter(4).x, 0.0);
 }
 
 float4 shade(Surface surface)
