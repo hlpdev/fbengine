@@ -484,8 +484,10 @@ Function Litter(wood: Material, stone: Material): Pivot
     Local litter = Pivot()
     Local rope = Material(Color(0.55, 0.46, 0.32))
     rope.SetMetalRough(0.0, 0.9)
+    // The sea's taken its color, leaving it grey-brown, and its grain, in its normals and roughness.
     Local weathered = wood.Clone()
-    weathered.SetColor(Color(0.8, 0.76, 0.7))
+    weathered.SetTexture(0, Null)
+    weathered.SetColor(Color(0.24, 0.21, 0.17))
     Local parts = Gathered()
     For spot In ShoreSpots()
         Local place = Placed(spot)
