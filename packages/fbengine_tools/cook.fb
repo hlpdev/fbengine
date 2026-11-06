@@ -210,13 +210,34 @@ Public Final Class Cooker
         Try File.WriteBytes(to, cooked)
         Local reads: Path[] = []
         If File.Exists(depfile)
-            For name In DepfileNames(Try File.ReadText(depfile))
-                If !name.Replace("\\", "/").StartsWith(scratch.Path.Text.Replace("\\", "/"))
-                    reads.Add(Path(name))
-                End If
+            For name In OfTheGames(DepfileNames(Try File.ReadText(depfile)), scratch.Path)
+                reads.Add(Path(name))
             End For
         End If
         Return reads
+    End Method
+
+    // Which of the files Slang says it read, `names`, are the game's, not the `scratch` folder's.
+    // Slang says a file by its path with every link followed, as on macOS, whose temp folder is one, so
+    // the scratch folder's also the one it says fbe_own.slang is in, given there, by its unique name.
+    Package Static Method OfTheGames(names: String[], scratch: Path): String[]
+        Local scratches = [scratch.Text.Replace("\\", "/")]
+        For name In names
+            Local read = Path(name.Replace("\\", "/"))
+            If read.FileName() == "fbe_own.slang" && read.Parent().FileName() == scratch.FileName()
+                scratches.Add(read.Parent().Text)
+            End If
+        End For
+        Local games: String[] = []
+        For name In names
+            Local forward = name.Replace("\\", "/")
+            Local ours = False
+            For folder In scratches
+                ours = ours || forward.StartsWith(folder + "/")
+            End For
+            If !ours Then games.Add(name)
+        End For
+        Return games
     End Method
 
     // What Slang said, where it says the scratch folder saying fbengine's own shaders' place, which
