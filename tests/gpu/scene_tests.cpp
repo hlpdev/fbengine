@@ -106,6 +106,26 @@ struct scene_t {
 
 using rgba_t = std::array<std::uint8_t, 4>;
 
+/// A part of a test, by its name, and what it does in a scene of its own.
+template <typename Scene>
+using part_t = std::pair<std::string_view, std::function<void(const Scene&)>>;
+
+/// Each part in a scene of its own, made by Scene(whether it stops the GPU), in turn, on one GPU:
+/// lavapipe takes seconds to make a game shader's pipelines as it first draws with them, so that's
+/// once, not once a part, as sections would, each starting the GPU again.
+template <typename Scene>
+void on_one_gpu(const std::vector<part_t<Scene>>& parts) {
+    for (std::size_t at = 0; at < parts.size(); ++at) {
+        INFO(parts[at].first);
+        {
+            const Scene scene(at + 1 == parts.size());
+            parts[at].second(scene);
+        }
+        // Kept for the next part, and stopped after the last.
+        CHECK(fbe_gpu_started() == (at + 1 < parts.size()));
+    }
+}
+
 rgba_t pixel(const fbe::golden::frame_t& frame, std::uint32_t x, std::uint32_t y) {
     const std::size_t at = ((std::size_t{ y } * frame.width) + x) * 4;
     return { frame.rgba[at], frame.rgba[at + 1], frame.rgba[at + 2], frame.rgba[at + 3] };
@@ -5737,72 +5757,91 @@ TEST_CASE("two materials with one shader read their own parameters", "[gpu][scen
     CHECK(fbe_gpu_validation_errors() == 0);
 }
 
+namespace {
+
+/// A scene with a material of the game's shader, for a test whose parts are on one GPU.
+struct shader_scene_t : scene_t {
+    std::uint64_t material = by_game_shader();
+
+    explicit shader_scene_t(bool stops) : scene_t(stops) {}
+    shader_scene_t(const shader_scene_t&) = delete;
+    shader_scene_t& operator=(const shader_scene_t&) = delete;
+    shader_scene_t(shader_scene_t&&) = delete;
+    shader_scene_t& operator=(shader_scene_t&&) = delete;
+
+    ~shader_scene_t() {
+        CHECK(fbe_gpu_validation_errors() == 0);
+        fbe_material_release(material);
+    }
+};
+
+} // namespace
+
 TEST_CASE("a shader moves a vertex after its morph and its skin", "[gpu][scene]") {
-    const scene_t scene;
-    const std::uint64_t material = by_game_shader();
-    SECTION("drawn, skinned") {
+    std::vector<part_t<shader_scene_t>> parts;
+    parts.emplace_back("drawn, skinned", [](const shader_scene_t& scene) {
         require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
         // A joint to the left, turned: moved right after it, it's in the middle.
-        const skinned_wall_t skinned = skinned_wall(scene.world, material, -3.0F, 0.5F);
+        const skinned_wall_t skinned = skinned_wall(scene.world, scene.material, -3.0F, 0.5F);
         all_on(skinned.geometry, 0, 1.0F);
         require(fbe_entity_set_position(skinned.still, -1.0F, 0.0F, -3.0F, FBE_SPACE_WORLD));
         quarter_turned(skinned.still);
         room_to_move(skinned.geometry);
         CHECK(near(middle(scene.drawn()), { 0, 0, 255 }));
-        require(fbe_material_set_parameter(material, 1, 1.0F, 0.0F, 0.0F, 0.0F));
+        require(fbe_material_set_parameter(scene.material, 1, 1.0F, 0.0F, 0.0F, 0.0F));
         CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
         fbe_skin_release(skinned.skin);
-    }
-    SECTION("drawn, morphed") {
+    });
+    parts.emplace_back("drawn, morphed", [](const shader_scene_t& scene) {
         require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
-        const std::uint64_t mesh = wall(scene.world, -3.0F, 0.5F, material);
+        const std::uint64_t mesh = wall(scene.world, -3.0F, 0.5F, scene.material);
         require(fbe_entity_set_position(mesh, 0.0F, 60.0F, -3.0F, FBE_SPACE_WORLD));
         add_lift(fbe_mesh_geometry(mesh), -30.0F);
         room_to_move(fbe_mesh_geometry(mesh));
         const std::array<float, 1> one{ 1.0F };
         require(fbe_morph_set_weights(mesh, one.data(), 1));
         CHECK(near(middle(scene.drawn()), { 0, 0, 255 }));
-        require(fbe_material_set_parameter(material, 1, 0.0F, -30.0F, 0.0F, 0.0F));
+        require(fbe_material_set_parameter(scene.material, 1, 0.0F, -30.0F, 0.0F, 0.0F));
         CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
-    }
-    SECTION("casting, skinned") {
+    });
+    parts.emplace_back("casting, skinned", [](const shader_scene_t& scene) {
         const std::uint64_t paint = fbe_material_create();
         wall(scene.world, -10.0F, 30.0F, paint);
         sun_from_right(scene.world);
-        const skinned_wall_t skinned = skinned_wall(scene.world, material, -5.0F, 0.5F);
+        const skinned_wall_t skinned = skinned_wall(scene.world, scene.material, -5.0F, 0.5F);
         all_on(skinned.geometry, 0, 1.0F);
         require(fbe_entity_set_position(skinned.still, 3.0F, 0.0F, -5.0F, FBE_SPACE_WORLD));
         quarter_turned(skinned.still);
         room_to_move(skinned.geometry);
         CHECK(middle(scene.drawn())[0] != 0);
-        require(fbe_material_set_parameter(material, 1, 2.0F, 0.0F, 0.0F, 0.0F));
+        require(fbe_material_set_parameter(scene.material, 1, 2.0F, 0.0F, 0.0F, 0.0F));
         CHECK(middle(scene.drawn())[0] == 0);
         fbe_skin_release(skinned.skin);
         fbe_material_release(paint);
-    }
-    SECTION("casting, morphed") {
+    });
+    parts.emplace_back("casting, morphed", [](const shader_scene_t& scene) {
         const std::uint64_t paint = fbe_material_create();
         wall(scene.world, -10.0F, 30.0F, paint);
         sun_from_right(scene.world);
-        const std::uint64_t mesh = wall(scene.world, -5.0F, 3.0F, material);
+        const std::uint64_t mesh = wall(scene.world, -5.0F, 3.0F, scene.material);
         require(fbe_entity_set_position(mesh, 5.0F, 60.0F, -5.0F, FBE_SPACE_WORLD));
         add_lift(fbe_mesh_geometry(mesh), -30.0F);
         room_to_move(fbe_mesh_geometry(mesh));
         const std::array<float, 1> one{ 1.0F };
         require(fbe_morph_set_weights(mesh, one.data(), 1));
         CHECK(middle(scene.drawn())[0] != 0);
-        require(fbe_material_set_parameter(material, 1, 0.0F, -30.0F, 0.0F, 0.0F));
+        require(fbe_material_set_parameter(scene.material, 1, 0.0F, -30.0F, 0.0F, 0.0F));
         CHECK(middle(scene.drawn())[0] == 0);
         fbe_material_release(paint);
-    }
-    SECTION("a terrain, drawn and casting") {
+    });
+    parts.emplace_back("a terrain, drawn and casting", [](const shader_scene_t& scene) {
         const std::uint64_t paint = fbe_material_create();
         wall(scene.world, -10.0F, 30.0F, paint);
         sun_from_right(scene.world);
         // A slab stood on end, as a terrain that casts is above, on the sun's way till it's moved.
         const std::uint64_t terrain = fbe_entity_create(scene.world, 0, FBE_ENTITY_TERRAIN);
         require(fbe_terrain_set_size(terrain, 32));
-        require(fbe_terrain_set_material(terrain, material));
+        require(fbe_terrain_set_material(terrain, scene.material));
         require(fbe_entity_set_scale(terrain, 0.25F, 1.0F, 0.25F, FBE_SPACE_WORLD));
         const float half = std::numbers::pi_v<float> * 0.25F;
         require(fbe_entity_set_rotation(terrain, std::sin(half), 0.0F, 0.0F, std::cos(half),
@@ -5810,12 +5849,11 @@ TEST_CASE("a shader moves a vertex after its morph and its skin", "[gpu][scene]"
         require(fbe_entity_set_position(terrain, 1.0F, 4.0F, -5.0F, FBE_SPACE_WORLD));
         CHECK(middle(scene.drawn())[0] == 0);
         // In its own space, whose x is the world's: off the sun's way.
-        require(fbe_material_set_parameter(material, 1, 16.0F, 0.0F, 0.0F, 0.0F));
+        require(fbe_material_set_parameter(scene.material, 1, 16.0F, 0.0F, 0.0F, 0.0F));
         CHECK(middle(scene.drawn())[0] != 0);
         fbe_material_release(paint);
-    }
-    CHECK(fbe_gpu_validation_errors() == 0);
-    fbe_material_release(material);
+    });
+    on_one_gpu(parts);
 }
 
 TEST_CASE("a two-sided material's back has its shader's normal facing the camera", "[gpu][scene]") {
@@ -11368,10 +11406,7 @@ TEST_CASE("a shader of its own reaches the prepass: what it moves, and what it c
     const auto same = [](const fbe::golden::frame_t& one, const fbe::golden::frame_t& other) {
         return fbe::golden::compare(one, other, 1).pixels == 0;
     };
-    // Each part in a scene of its own, in turn, on one GPU: lavapipe takes seconds to make a
-    // pipeline of the shader as it first draws with it, so that's once, not once a part, as
-    // sections would, each starting the GPU again.
-    std::vector<std::pair<std::string_view, std::function<void(const prepass_scene_t&)>>> parts;
+    std::vector<part_t<prepass_scene_t>> parts;
     parts.emplace_back("a mesh it moves is where it's moved to", [&](const prepass_scene_t& scene) {
         const std::uint64_t by_place = cube(scene.world, 0.0F, 0.0F, -9.0F, scene.placed);
         const fbe::golden::frame_t reference = scene.drawn();
@@ -11598,16 +11633,7 @@ TEST_CASE("a shader of its own reaches the prepass: what it moves, and what it c
                   }) == 0);
             fbe_skin_release(skinned.skin);
         });
-    for (std::size_t at = 0; at < parts.size(); ++at) {
-        INFO(parts[at].first);
-        const bool last = at + 1 == parts.size();
-        {
-            const prepass_scene_t scene(last);
-            parts[at].second(scene);
-        }
-        // Kept for the next part, and stopped after the last.
-        CHECK(fbe_gpu_started() == (at + 1 < parts.size()));
-    }
+    on_one_gpu(parts);
 }
 
 TEST_CASE("a camera in stored values blends with what's stored, as DirectX 7 did", "[gpu][scene]") {
