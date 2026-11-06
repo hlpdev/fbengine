@@ -22,6 +22,7 @@ Import std.io
 Import std.math
 Import std.os
 Import std.text
+Import std.time
 Import fbengine
 Import fbengine_audio
 Import "./checks"
@@ -123,6 +124,7 @@ End Function
 // The bright walk, saving the screen in `folder` when you first hold something, when the causeway
 // floods, and at its end.
 Function Framed(folder: Path) Throws GraphicsError, IOError
+    Local began = Instant.Now()
     Try Dir.CreateAll(folder)
     Local lines: String[] = []
     Local font = Font.BuiltIn(20.0)
@@ -154,7 +156,9 @@ Function Framed(folder: Path) Throws GraphicsError, IOError
     End Function)
     If failure != "" Then Throw IOError(IOErrorKind.OTHER, failure)
     Checks("saved 3 frames, ended BRIGHT", saved == 3 && ended == Ending.BRIGHT)
+    Local walked = Lap("the walk's frames", began)
     Try SaveViews(folder)
+    Lap("all of the views", walked)
 End Function
 
 // Global: whether any check of what's made went wrong, which is the program's exit code.
@@ -348,7 +352,15 @@ End Function
 
 // The island, in `folder`, from each of its views, at slack water and at high tide; and whether
 // what was drawn is what it should be, as the flow has the tide, by the pixels themselves.
-Function SaveViews(folder: Path) Throws GraphicsError, IOError
+// How long it's been since `began`, said as `what` took, for a log to show what costs.
+Function Lap(what: String, began: Instant): Instant
+    Local now = Instant.Now()
+    Print("{what} took {(now - began).TotalSeconds} s")
+    Return now
+End Function
+
+Function SaveViews(folder: Path, stillsOnly: Bool = False) Throws GraphicsError, IOError
+    Local lap = Instant.Now()
     Window.SetHeadless(True)
     Try Graphics(1280, 720)
     Defer EndGraphics()
@@ -378,7 +390,11 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
         saved += 1
         Flip(False)
     End For
-    Try SaveSeaAndSky(folder, camera, island)
+    lap = Lap("the views", lap)
+    If !stillsOnly
+        Try SaveSeaAndSky(folder, camera, island)
+        lap = Lap("the sea and sky", lap)
+    End If
     // High tide, from the island's view.
     Local first = Views()[0]
     camera.SetPosition(first.1)
@@ -390,6 +406,8 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     saved += 1
     Flip(False)
     Checks("saved 5 views of the island", saved == 5)
+    // What a cooked game's views are compared by, and nothing more.
+    If stillsOnly Then Return
 
     // The numbers the flow goes by, as drawn.
     Local allAgree = True
@@ -576,7 +594,9 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     // By how bright it is, as the sea moves between them, and their pixels move by a part of one.
     Checks("a still's drawn afresh, with nothing of the view before it",
            Abs(MeanBrightness(yardAgain) - MeanBrightness(yardAfterDark)) < AFRESH)
+    lap = Lap("the island's checks", lap)
     Try CheckLandmarks(folder, island, camera)
+    lap = Lap("the landmarks", lap)
 End Function
 
 // Each of `island`'s landmarks, as `camera` sees it, with it hidden and shown: in `image` of the view
@@ -722,6 +742,12 @@ Function CheckLandmarks(folder: Path, island: Island, camera: Camera) Throws Gra
     Checks("and it's seen", Try SeenIn(island, camera, shore, pieces[3].1,
                                        Vec3(nearest.x, GroundHeight(nearest.x, nearest.y) + 0.1,
                                             nearest.y)))
+    // Each one's share of a frame, which takes hundreds of frames to tell: only when asked.
+    If Env.Get("SLACK_WATER_COSTS") == "1" Then CostsOf(island, camera, pieces)
+End Function
+
+// Each of `pieces`' share of a frame of the whole island, from above, as `camera` sees it.
+Function CostsOf(island: Island, camera: Camera, pieces: (String, Entity)[])
     // Each one's share of a frame of the whole island, from above: its draws and triangles, exactly,
     // and its time, as the middle of five turns of it hidden and shown, beside how much the frame's own
     // time wanders, which a share under can't be told from.
@@ -2121,7 +2147,7 @@ Function CookedWalk(kept: Path, folder: Path) Throws GraphicsError, IOError, Aud
     Try Walked3dBy(Walk3dOf("bright") ?? [], lines)
     Try Pinned(lines, kept, False)
     Try Dir.CreateAll(folder)
-    Try SaveViews(folder)
+    Try SaveViews(folder, True)
     Checks("the views from it are saved", File.Exists(folder / "island.png"))
 End Function
 
@@ -2241,8 +2267,12 @@ ElseIf arguments.Count == 2 && arguments[0] == "--frames"
     If Env.Get("FBENGINE_NO_GPU") == "1"
         Print("no GPU here")
     Else
+        Local began = Instant.Now()
         Try Framed(Path(arguments[1]))
+        Local framed = Instant.Now()
         Try SaveWalk(Path(arguments[1]))
+        Lap("the 3D walk's frames", framed)
+        Lap("--frames", began)
     End If
 ElseIf arguments.Count == 4 && arguments[0] == "--alike"
     Try AlikeViews(Path(arguments[1]), Path(arguments[2]), Float.Parse(arguments[3]) ?? 100.0)
