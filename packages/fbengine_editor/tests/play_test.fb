@@ -834,8 +834,8 @@ Function AGameSayingALotIsntKeptWaiting() Throws IOError, GraphicsError
         frames += 1
     End While
     Expect(editor.Run.State() == PlayState.ENDED, Said(editor))
-    // Here, 24 frames for 123 reads of 64 KB, half a second in all, the pane making only the rows in
-    // view: five a frame. One a frame would be as many frames as reads.
+    // Here, about 35 frames for 124 reads of 64 KB, more than three a frame, the pane making only the
+    // rows in view. One a frame would be as many frames as reads.
     Local reads = editor.Run.Reads() - readsBefore
     Local fits = (Window.Height() / 22) + 3
     Expect(editor.Output.RowsMade() <= fits,
