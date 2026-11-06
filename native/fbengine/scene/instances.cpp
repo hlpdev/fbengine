@@ -313,7 +313,9 @@ bool instances_own_bounds(instances_t& found, vec3_t& min, vec3_t& max) {
     geometry_bounds(found.geometry, low, high);
     instance_cluster_t all;
     all.count = static_cast<std::uint32_t>(found.items.size());
-    work_out_cluster(found, all, (low + high) * 0.5F, (high - low) * 0.5F);
+    const vec3_t both = low + high;
+    const vec3_t across = high - low;
+    work_out_cluster(found, all, both * 0.5F, across * 0.5F);
     min = all.low;
     max = all.high;
     return true;
