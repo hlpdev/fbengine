@@ -8583,19 +8583,17 @@ TEST_CASE("a camera that doesn't read its image's samples takes no slot for them
         fbe_texture_release(target);
         return taken;
     };
-    // An HDR camera's tonemap reads them.
-    CHECK(slots_drawn() == free - 1);
-    // Temporal antialiasing reads what they resolve to.
+    // Temporal antialiasing reads what they resolve to. First, as an image that read them would be
+    // the one the HDR camera's tonemap had, kept for its next frame, slot and all.
     require(fbe_camera_set_temporal_aa(scene.camera, true));
-    const std::uint32_t temporal = slots_drawn();
-    // FXAA, without HDR, reads what's tonemapped.
+    CHECK(slots_drawn() == free);
+    // An HDR camera's tonemap reads them.
     require(fbe_camera_set_temporal_aa(scene.camera, false));
+    CHECK(slots_drawn() == free - 1);
+    // FXAA, without HDR, reads what's tonemapped, taking none more than the HDR camera's.
     require(fbe_camera_set_hdr(scene.camera, false));
     require(fbe_camera_set_fxaa(scene.camera, true));
-    const std::uint32_t fxaa = slots_drawn();
-    // Neither took one more than the HDR camera's, which is still kept for its next frame.
-    CHECK(temporal == free - 1);
-    CHECK(fxaa == free - 1);
+    CHECK(slots_drawn() == free - 1);
     CHECK(fbe_gpu_validation_errors() == 0);
 }
 
