@@ -1,0 +1,113 @@
+// The options as kept, with no window: each read back as it was written, what's missing or wrong its
+// default, numbers kept to their ranges, a file that's gone or isn't one; and the prompts' names and
+// colors by the pad.
+
+Import std.core
+Import std.io
+Import std.math
+Import std.os
+Import std.test
+Import std.text
+Import fbengine
+Import slack_water.hud
+Import slack_water.prompts
+Import slack_water.settings
+
+@Test
+Function TheDefaultsAreAsMade()
+    Local options = Options()
+    Expect(options.Master == 1.0 && options.Ambience == 1.0 && options.Effects == 1.0)
+    Expect(options.Picture == Quality.HIGH && options.Shown == WindowMode.WINDOWED)
+    Expect(options.Width == 0 && options.Height == 0)
+    Expect(options.Look == 1.0 && !options.InvertY)
+End Function
+
+@Test
+Function EachIsReadBackAsWritten()
+    Local options = Options()
+    options.Master = 0.25
+    options.Ambience = 0.5
+    options.Effects = 0.75
+    options.Picture = Quality.LOW
+    options.Shown = WindowMode.FULLSCREEN
+    options.Width = 1920
+    options.Height = 1080
+    options.Look = 2.5
+    options.InvertY = True
+    Local read = Options.Read(options.Written())
+    Expect(read.Same(options), read.Written())
+    Expect(read.Master == 0.25 && read.Ambience == 0.5 && read.Effects == 0.75)
+    Expect(read.Picture == Quality.LOW && read.Shown == WindowMode.FULLSCREEN)
+    Expect(read.Width == 1920 && read.Height == 1080 && read.Look == 2.5 && read.InvertY)
+    // Borderless, as well.
+    options.Shown = WindowMode.BORDERLESS
+    Expect(Options.Read(options.Written()).Shown == WindowMode.BORDERLESS)
+End Function
+
+@Test
+Function WhatsWrongIsItsDefault()
+    Local read = Options.Read("[audio]\nmaster = loud\nambience = 7\neffects = -2\n" +
+                              "[video]\nquality = ultra\nwindow = sideways\nwidth = 800\n" +
+                              "[controls]\nlook = 0\ninvert_y = maybe\n")
+    Expect(read.Master == 1.0, "{read.Master}")
+    // Numbers are kept to their ranges.
+    Expect(read.Ambience == 1.0 && read.Effects == 0.0, "{read.Ambience} {read.Effects}")
+    Expect(read.Picture == Quality.HIGH && read.Shown == WindowMode.WINDOWED)
+    // A size needs both.
+    Expect(read.Width == 0 && read.Height == 0)
+    Expect(read.Look == LEAST_LOOK && !read.InvertY, "{read.Look}")
+    Expect(Options.Read("this isn't [an ini\n= =").Same(Options()))
+    Expect(Options.Read("").Same(Options()))
+    // Words in any case, with spaces round them.
+    Expect(Options.Read("[video]\nquality =  LOW \n").Picture == Quality.LOW)
+End Function
+
+@Test
+Function TheyreKeptInTheirFileAndFoundAgain() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Local file = folder.Path / "deeper" / "options.ini"
+    Expect(KeptOptions(file).Same(Options()), "none kept is the defaults")
+    Expect(KeptOptions(Null).Same(Options()))
+    Local options = Options()
+    options.Look = 1.5
+    Try KeepOptions(options, file)
+    Expect(KeptOptions(file).Look == 1.5)
+    // A test's folder, by SLACK_WATER_SETTINGS.
+    Env.Set("SLACK_WATER_SETTINGS", folder.Path.Text)
+    Expect(OptionsFile() == folder.Path / "options.ini")
+    Env.Unset("SLACK_WATER_SETTINGS")
+    Local mine = OptionsFile()
+    Expect(mine == Null || mine.Text.EndsWith("options.ini") && mine.Text.Contains("Slack Water"))
+End Function
+
+@Test
+Function APadsButtonsAreItsOwn()
+    Expect(ButtonName(GamepadType.XBOX_ONE, GamepadButton.SOUTH) == "A")
+    Expect(ButtonName(GamepadType.XBOX_ONE, GamepadButton.WEST) == "X")
+    Expect(ButtonName(GamepadType.PS5, GamepadButton.SOUTH) == "Cross")
+    Expect(ButtonName(GamepadType.PS4, GamepadButton.EAST) == "Circle")
+    Expect(ButtonName(GamepadType.SWITCH_PRO, GamepadButton.SOUTH) == "B")
+    Expect(ButtonName(GamepadType.SWITCH_PRO, GamepadButton.EAST) == "A")
+    Expect(ButtonName(GamepadType.XBOX_ONE, GamepadButton.START) == "Menu")
+    Expect(ButtonName(GamepadType.PS5, GamepadButton.START) == "Options")
+    Expect(ButtonName(GamepadType.SWITCH_PRO, GamepadButton.START) == "+")
+    Expect(ButtonMark(GamepadType.PS5, GamepadButton.NORTH) == "T")
+    Expect(ButtonColor(GamepadType.XBOX_ONE, GamepadButton.SOUTH) == Color32(96, 176, 64, 255))
+    Expect(ButtonColor(GamepadType.PS5, GamepadButton.SOUTH) == Color32(92, 140, 220, 255))
+    Expect(PromptName(Device.KEYS, GamepadType.XBOX_ONE, Prompted.USE) == "E")
+    Expect(PromptName(Device.PAD, GamepadType.XBOX_ONE, Prompted.USE) == "A")
+    Expect(PromptName(Device.KEYS, GamepadType.STANDARD, Prompted.HAND) == "Q")
+    Expect(PromptName(Device.PAD, GamepadType.PS5, Prompted.HAND) == "Square")
+    Expect(PromptName(Device.KEYS, GamepadType.STANDARD, Prompted.PAUSE) == "Esc")
+End Function
+
+@Test
+Function AGamesPromptIsReadForItsKey()
+    Local use = PromptOf("E: pick up the gear")
+    Expect(use != Null && use.0 == Prompted.USE && use.1 == "pick up the gear")
+    Local hand = PromptOf("Q: hand Pip the belt")
+    Expect(hand != Null && hand.0 == Prompted.HAND && hand.1 == "hand Pip the belt")
+    Expect(PromptOf("") == Null)
+    Expect(PromptOf("nothing here") == Null)
+End Function

@@ -1,0 +1,154 @@
+// What a player chooses in Options: how loud each part is, how much the picture spends, the window,
+// and how looking feels. Kept as an INI file in the OS's folder for a program's settings, through
+// std's Ini, as item 19's sample keeps its own; one that's missing or can't be read is the defaults,
+// and each value that isn't one is its own default.
+
+Import std.collections
+Import std.core
+Import std.data.ini
+Import std.io
+Import std.math
+Import std.os
+Import std.text
+Import fbengine
+
+/// How much the picture spends: everything, or what a low GPU can, antialiasing from the picture
+/// alone, with no ambient occlusion and no sun's shadows.
+Public Enum Quality
+    HIGH = 0
+    LOW = 1
+End Enum
+
+// How far looking's sensitivity goes either way from 1.
+Public Const LEAST_LOOK: Float = 0.25
+Public Const MOST_LOOK: Float = 3.0
+
+/// A player's options.
+Public Final Class Options
+    /// The whole mix's volume, 0 to 1.
+    Public Field Master: Float = 1.0
+    /// The wind's and the sea's, 0 to 1.
+    Public Field Ambience: Float = 1.0
+    /// Everything else's: steps, gulls, creaks, the wheel, the splash, 0 to 1.
+    Public Field Effects: Float = 1.0
+    /// How much the picture spends.
+    Public Field Picture: Quality = Quality.HIGH
+    /// How the window shows: framed, on the whole screen at a display mode, or borderless at the
+    /// desktop's.
+    Public Field Shown: WindowMode = WindowMode.WINDOWED
+    /// The display mode a fullscreen window's at, or 0 by 0 for the one nearest the window's size.
+    Public Field Width: Int = 0
+    Public Field Height: Int = 0
+    /// How far the view turns for the mouse or a stick, 1 as it was made.
+    Public Field Look: Float = 1.0
+    /// Whether up looks down.
+    Public Field InvertY: Bool = False
+
+    /// The defaults.
+    Public New()
+    End New
+
+    /// Options as `text`, an INI file, says, each value that's missing or isn't one its default,
+    /// and numbers kept to their ranges.
+    Public Static Method Read(text: String): Options
+        Local options = Options()
+        Local settings = Value.Object()
+        Try
+            settings = Try Ini.Read(text)
+        Catch e As ParseError
+            Return options
+        End Try
+        options.Master = Number(settings, "audio.master", 1.0, 0.0, 1.0)
+        options.Ambience = Number(settings, "audio.ambience", 1.0, 0.0, 1.0)
+        options.Effects = Number(settings, "audio.effects", 1.0, 0.0, 1.0)
+        options.Picture = Said(settings, "video.quality") == "low" ? Quality.LOW : Quality.HIGH
+        Select Said(settings, "video.window")
+            Case "fullscreen"
+                options.Shown = WindowMode.FULLSCREEN
+            Case "borderless"
+                options.Shown = WindowMode.BORDERLESS
+            Default
+                options.Shown = WindowMode.WINDOWED
+        End Select
+        options.Width = Whole(settings, "video.width")
+        options.Height = Whole(settings, "video.height")
+        If options.Width <= 0 || options.Height <= 0
+            options.Width = 0
+            options.Height = 0
+        End If
+        options.Look = Number(settings, "controls.look", 1.0, LEAST_LOOK, MOST_LOOK)
+        options.InvertY = Said(settings, "controls.invert_y") == "true"
+        Return options
+    End Method
+
+    /// It as an INI file.
+    Public Method Written(): String
+        Local settings = Value.Object()
+        Local audio = Value.Object()
+        audio["master"] = Value("{Master:.2}")
+        audio["ambience"] = Value("{Ambience:.2}")
+        audio["effects"] = Value("{Effects:.2}")
+        settings["audio"] = audio
+        Local video = Value.Object()
+        video["quality"] = Value(Picture == Quality.LOW ? "low" : "high")
+        Local window = "windowed"
+        If Shown == WindowMode.FULLSCREEN Then window = "fullscreen"
+        If Shown == WindowMode.BORDERLESS Then window = "borderless"
+        video["window"] = Value(window)
+        video["width"] = Value("{Width}")
+        video["height"] = Value("{Height}")
+        settings["video"] = video
+        Local controls = Value.Object()
+        controls["look"] = Value("{Look:.2}")
+        controls["invert_y"] = Value(InvertY ? "true" : "false")
+        settings["controls"] = controls
+        Return Ini.Write(settings)
+    End Method
+
+    /// A copy of it.
+    Public Method Clone(): Options => Options.Read(Written())
+
+    /// Whether it's the same as `other`, as it'd be written.
+    Public Method Same(other: Options): Bool => Written() == other.Written()
+End Class
+
+// The text at `path`, lowercase and trimmed, or "".
+Function Said(settings: Value, path: String): String
+    Return (settings.Path(path)?.AsString() ?? "").Trim().ToLower()
+End Function
+
+// The number at `path`, kept from `least` to `most`, or `otherwise` for none, or what isn't one.
+Function Number(settings: Value, path: String, otherwise: Float, least: Float, most: Float): Float
+    Local read = Float32.Parse(Said(settings, path))
+    If read == Null || !IsFinite(read) Then Return otherwise
+    Return Clamp(read, least, most)
+End Function
+
+// The whole number at `path`, or 0.
+Function Whole(settings: Value, path: String): Int => Int.Parse(Said(settings, path)) ?? 0
+
+/// Where the options are kept: in SLACK_WATER_SETTINGS's folder, for a test, or else the OS's folder
+/// for a program's settings, under Slack Water; Null where there's no such folder.
+Public Function OptionsFile(): Path?
+    Local folder = Env.Get("SLACK_WATER_SETTINGS")
+    If folder != Null && folder != "" Then Return Path(folder) / "options.ini"
+    Local config = Folders.Config
+    If config == Null || config == "" Then Return Null
+    Return Path(config) / "Slack Water" / "options.ini"
+End Function
+
+/// The options kept in `file`, or the defaults where there are none, or they can't be read.
+Public Function KeptOptions(file: Path?): Options
+    If file == Null || !File.Exists(file) Then Return Options()
+    Try
+        Return Options.Read(Try File.ReadText(file))
+    Catch e As IOError
+        Return Options()
+    End Try
+End Function
+
+/// Keeps `options` in `file`, whole or not at all, making its folder.
+Public Function KeepOptions(options: Options, file: Path) Throws IOError
+    Try Dir.CreateAll(file.Parent())
+    Try File.WriteTextAtomic(file, options.Written())
+End Function

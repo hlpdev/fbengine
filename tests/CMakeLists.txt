@@ -511,6 +511,34 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(examples.slack_water.end_screen PROPERTIES RESOURCE_LOCK slack_water
                        ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
+  # Its front end, by the mouse, the keyboard, and a gamepad: the title over the island, the pause,
+  # and Options, each frame saved and checked, its options in a folder of its own.
+  add_test(NAME examples.slack_water.menus
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                   -- --menus "${PROJECT_BINARY_DIR}/example-frames/slack_water_menus")
+  set_tests_properties(examples.slack_water.menus PROPERTIES RESOURCE_LOCK slack_water
+                       ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
+  # An option changed by the mouse, the keyboard, and a gamepad, kept: set on one run, and found on the
+  # next, in what's shown and what's drawn.
+  set(slack_water_kept "${PROJECT_BINARY_DIR}/example-frames/slack_water_kept")
+  add_test(NAME examples.slack_water.kept_clean COMMAND "${CMAKE_COMMAND}" -E rm -rf "${slack_water_kept}")
+  set_tests_properties(examples.slack_water.kept_clean PROPERTIES RESOURCE_LOCK slack_water
+                       FIXTURES_SETUP slack_water_kept_clean)
+  foreach(stage IN ITEMS set check)
+    add_test(NAME examples.slack_water.kept_${stage}
+             COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                     -- --kept ${stage} "${slack_water_kept}")
+    set_tests_properties(examples.slack_water.kept_${stage} PROPERTIES RESOURCE_LOCK slack_water
+                         ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                         SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
+  endforeach()
+  set_tests_properties(examples.slack_water.kept_set PROPERTIES
+                       FIXTURES_REQUIRED slack_water_kept_clean FIXTURES_SETUP slack_water_kept_set
+                       PASS_REGULAR_EXPRESSION "\nset: quality LOW, look 1[.]20, invert True, back at the title True\r?\n")
+  set_tests_properties(examples.slack_water.kept_check PROPERTIES
+                       FIXTURES_REQUIRED slack_water_kept_set
+                       PASS_REGULAR_EXPRESSION "\nafter a restart: quality LOW, look 1[.]20, invert True\r?\nshown as Quality: Low\r?\nits bloom off True\r?\n")
   # As it ships: a release, from its cooked pak, into a folder this clears, as the game never does.
   set(slack_water_cooked "${PROJECT_BINARY_DIR}/example-frames/slack_water_cooked")
   add_test(NAME examples.slack_water.cooked_clean

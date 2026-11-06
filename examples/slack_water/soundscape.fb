@@ -35,8 +35,15 @@ Public Final Class Soundscape
     Field windPlays: Channel
     Field seaPlays: Channel
     Field wheelPlays: Channel?
-    // What's outside the mill: the wind, the sea, gulls, the wheel, and the splash.
+    // Everything, at a player's master volume; and in it, what's outside the mill: the wind, the sea,
+    // gulls, the wheel, and the splash.
+    Field everything: Bus
     Field outside: Bus
+    // A player's volume for the wind and the sea, and for everything else.
+    Field ambience: Float = 1.0
+    Field effects: Float = 1.0
+    // The wheel's level as it turns, for a change of volume after it's started.
+    Field wheelLevel: Float = 0.0
     Field cutoff: Float
     Field atMill: Emitter
     Field atWheel: Emitter
@@ -60,7 +67,11 @@ Public Final Class Soundscape
         For number = 0 Until sounds.Count
             sounds[number].SetVolume(CueLevel(number As Cue))
         End For
-        outside = Bus()
+        everything = Bus()
+        outside = Bus(everything)
+        For sound In sounds
+            sound.SetBus(everything)
+        End For
         cutoff = OutsideCutoff(False)
         outside.SetLowPass(cutoff)
         wind.SetBus(outside)
@@ -160,9 +171,28 @@ Public Final Class Soundscape
     @MainThread
     Public Method SetBeds(level: Float)
         beds = level
-        windPlays.SetVolume(WindLevel(0.0, False) * beds)
-        seaPlays.SetVolume(SeaLevel(0.0, False) * beds)
+        windPlays.SetVolume(WindLevel(0.0, False) * beds * ambience)
+        seaPlays.SetVolume(SeaLevel(0.0, False) * beds * ambience)
     End Method
+
+    /// Sets a player's volumes, each 0 to 1: everything; the wind and the sea; and the rest, the
+    /// steps, gulls, creaks, the wheel, and the splash. The wind and sea take theirs at the next
+    /// Update.
+    @MainThread
+    Public Method SetVolumes(master: Float, beds: Float, rest: Float)
+        everything.SetVolume(master)
+        ambience = beds
+        effects = rest
+        For number = 0 Until sounds.Count
+            sounds[number].SetVolume(CueLevel(number As Cue) * effects)
+        End For
+        Local plays = wheelPlays
+        If plays != Null Then plays.SetVolume(wheelLevel * effects)
+    End Method
+
+    /// Everything's volume, the wind's and sea's, and the rest's, as a player's set them.
+    @MainThread Public Method Volumes(): (Float, Float, Float) => (everything.Volume(), ambience,
+                                                                   effects)
 
     /// Moves it on `seconds`, as `game` has.
     @MainThread
@@ -184,7 +214,8 @@ Public Final Class Soundscape
         Local speed = WheelSpeed(flow.Ended())
         If speed > 0.0 && wheelPlays == Null
             // At its level and pitch from its first sample.
-            wheel.SetVolume(WheelLevel(speed))
+            wheelLevel = WheelLevel(speed)
+            wheel.SetVolume(wheelLevel * effects)
             wheel.SetPitch(speed)
             wheelPlays = atWheel.Play(wheel, False, WHEEL_FADE)
         End If
@@ -202,8 +233,8 @@ Public Final Class Soundscape
                      (WindLevel(clock, True) - WindLevel(clock, False)) * indoors
         Local sea = SeaLevel(clock, False) +
                     (SeaLevel(clock, True) - SeaLevel(clock, False)) * indoors
-        windPlays.SetVolume(wind * beds)
-        seaPlays.SetVolume(sea * beds)
+        windPlays.SetVolume(wind * beds * ambience)
+        seaPlays.SetVolume(sea * beds * ambience)
         cutoff = CutoffToward(cutoff, OutsideCutoff(inside), seconds)
         outside.SetLowPass(cutoff)
     End Method
@@ -247,5 +278,6 @@ Public Final Class Soundscape
         sea.Free()
         wheel.Free()
         outside.Free()
+        everything.Free()
     End Method
 End Class

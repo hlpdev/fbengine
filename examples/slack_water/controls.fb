@@ -52,6 +52,9 @@ Public Final Class Controls
     Public Field Turn: Action
     Public Field Use: Action
     Public Field Hand: Action
+    // How far looking turns, as a player's options set it, and whether up looks down.
+    Field sensitivity: Float = 1.0
+    Field inverted: Bool = False
 
     Public New()
         Set = ActionSet()
@@ -85,9 +88,20 @@ Public Final Class Controls
     /// Which way you're walking: across, and ahead.
     @MainThread Public Method Walking(): Vec2 => Move.Vector()
 
-    /// How far the mouse has moved.
-    @MainThread Public Method Looking(): Vec2 => Look.Vector()
+    /// Sets how far looking turns, 1 as it was made, and whether up looks down, for the mouse and the
+    /// right stick both.
+    Public Method SetLook(scale: Float, invertY: Bool)
+        sensitivity = scale
+        inverted = invertY
+    End Method
 
-    /// How far a stick's held over, from -1 to 1 each way.
-    @MainThread Public Method Turning(): Vec2 => Turn.Vector()
+    /// How far the mouse has moved, by the look's sensitivity, and the other way up if it's inverted.
+    @MainThread Public Method Looking(): Vec2 => Felt(Look.Vector())
+
+    /// How far a stick's held over, from -1 to 1 each way, by the same.
+    @MainThread Public Method Turning(): Vec2 => Felt(Turn.Vector())
+
+    Method Felt(way: Vec2): Vec2
+        Return Vec2(way.x * sensitivity, (inverted ? -way.y : way.y) * sensitivity)
+    End Method
 End Class

@@ -1,0 +1,75 @@
+// What's over the game as it's played: the clock and what was last said, on a panel of the sea's dark
+// with a brass edge, as the menus are, and what can be done here, with its key or button. All drawn,
+// with no image.
+
+Import std.core
+Import std.math
+Import std.text
+Import fbengine
+Import "./prompts"
+
+/// The front end's colors: the sea's dark, brass, and the paper of its text.
+Public Const SEA_DARK: Color32 = Color32(14, 26, 34, 210)
+Public Const BRASS: Color32 = Color32(198, 158, 92, 255)
+Public Const PAPER: Color32 = Color32(236, 232, 220, 255)
+Public Const FAINT: Color32 = Color32(168, 176, 178, 255)
+
+// How far in from the screen's edges it is, and how high a prompt's mark is.
+Const MARGIN: Int32 = 24
+Const MARK: Int32 = 30
+
+/// The HUD.
+Public Final Class Hud
+    Field clockFont: Font
+    Field font: Font
+
+    @MainThread
+    Public New()
+        clockFont = Font.BuiltIn(26.0)
+        font = Font.BuiltIn(20.0)
+    End New
+
+    /// Draws `clock`, what was last `said`, and `prompt`, a Game's, as "E: ..." or "Q: ...", by
+    /// `device`, on the screen's canvas.
+    @MainThread
+    Public Method Draw(clock: String, said: String, prompt: String, device: LastDevice)
+        Local canvas = Screen.Canvas()
+        Local width = Screen.Width()
+        Local height = Screen.Height()
+        // The clock and its line, on a panel as wide as they need.
+        Local wide = Max(clockFont.Width(clock), font.Width(said)) As Int32 + 32
+        Local high = said != "" ? 84 : 52
+        canvas.SetColor(SEA_DARK)
+        canvas.DrawRect(MARGIN, MARGIN, wide, high, True)
+        canvas.SetColor(BRASS)
+        canvas.DrawRect(MARGIN, MARGIN, 4, high, True)
+        canvas.SetColor(PAPER)
+        canvas.DrawText(clockFont, clock, MARGIN + 16, MARGIN + 10)
+        If said != ""
+            canvas.SetColor(FAINT)
+            canvas.DrawText(font, said, MARGIN + 16, MARGIN + 50)
+        End If
+        // What can be done, at the bottom, in the middle.
+        Local asked = PromptOf(prompt)
+        If asked == Null Then Return
+        Local prompted, text = asked
+        Local promptWide = Estimate(text) + MARK + MARK / 3
+        Local x = (width - promptWide) / 2
+        Local y = height - MARGIN - MARK - 12
+        canvas.SetColor(SEA_DARK)
+        canvas.DrawRect(x - 14, y - 8, promptWide + 28, MARK + 16, True)
+        DrawPrompt(canvas, font, device.Current(), device.PadKind(), prompted, text, x, y, MARK,
+                   PAPER)
+    End Method
+
+    // How wide `text` is in its font.
+    @MainThread Method Estimate(text: String): Int32 => font.Width(text) As Int32
+End Class
+
+/// What a Game's prompt asks for and says: "E: pick up the gear" is USE and "pick up the gear"; Null
+/// for none.
+Public Function PromptOf(prompt: String): (Prompted, String)?
+    If prompt.StartsWith("E: ") Then Return (Prompted.USE, prompt.Slice(3, prompt.Length))
+    If prompt.StartsWith("Q: ") Then Return (Prompted.HAND, prompt.Slice(3, prompt.Length))
+    Return Null
+End Function

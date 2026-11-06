@@ -6,6 +6,7 @@ Import std.math
 Import fbengine
 Import fbengine_ui
 Import "./flow"
+Import "./frontend"
 
 // How long after the end you can look at the lamp before it's shown.
 Public Const END_WAIT: Float = 3.0
@@ -43,7 +44,7 @@ Public Final Class EndScreen
         panel.Add(again)
         panel.Add(leave)
         screen.Add(panel)
-        ui = Ui(screen)
+        ui = Ui(screen, SlackTheme())
     End New
 
     /// Whether it's shown.

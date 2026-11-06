@@ -29,12 +29,16 @@ Import "./controls"
 Import "./cues"
 Import "./flow"
 Import "./follow"
+Import "./frontend"
 Import "./game"
+Import "./hud"
 Import "./ground"
 Import "./island"
 Import "./map"
+Import "./prompts"
 Import "./res" As Res
 Import "./screens"
+Import "./settings"
 Import "./sky"
 Import "./soundscape"
 Import "./walks"
@@ -1619,51 +1623,103 @@ Final Class Session
     Field last: String[]
     Field font: Font
     Field left: Bool = False
-    // Whether the mouse is free, to point at the end screen.
+    // Whether the mouse is free, to point at the end screen or a menu.
     Field pointing: Bool = False
+    // The title, pause, and options, and the HUD.
+    Field front: Frontend
+    Field hud: Hud
+    // Whether it's in a window of its own, a player's, which its options may change.
+    Field windowed: Bool = False
 
-    New(island: Island, last: String[], game: Game, scape: Soundscape)
+    New(island: Island, last: String[], game: Game, scape: Soundscape, front: Frontend)
         Self.island = island
         Self.last = last
         controls = Controls()
         Self.game = game
         Self.scape = scape
+        Self.front = front
         ending = EndScreen()
         font = Font.BuiltIn(20.0)
+        hud = Hud()
     End New
 
-    // One at its first moment, on `island`, with the audio started.
+    // One at its first moment, on `island`, with the audio started, being played, or `atTitle`, with
+    // the options kept in `file`, or the defaults for Null.
     @MainThread
-    Static Method Make(island: Island): Session Throws IOError, InputError
-        Try SetMouseRelative(True)
+    Static Method Make(island: Island, file: Path? = Null,
+                       atTitle: Bool = False): Session Throws IOError, InputError
+        Local front = Frontend(file)
+        If !atTitle Then front.Open(Page.PLAYING)
+        Try SetMouseRelative(!atTitle)
         Local last = [""]
         Local game = Game(island, Function(line: String)
             last[0] = line
         End Function)
-        Return Session(island, last, game, Try Soundscape.Make(game, island))
+        Local made = Session(island, last, game, Try Soundscape.Make(game, island), front)
+        made.pointing = atTitle
+        made.Applied()
+        Return made
+    End Method
+
+    // What the options say, put into what they're of: the volumes, the look, the picture, and, in a
+    // player's window, the window.
+    @MainThread
+    Method Applied()
+        Local options = front.Current()
+        scape.SetVolumes(options.Master, options.Ambience, options.Effects)
+        controls.SetLook(options.Look, options.InvertY)
+        Pictured(island, game.View(), options.Picture)
+        If !windowed Then Return
+        Try
+            If options.Shown == WindowMode.FULLSCREEN && options.Width > 0 &&
+               Window.Mode() != WindowMode.FULLSCREEN
+                Try Window.SetSize(options.Width As Int32, options.Height As Int32)
+            End If
+            If Window.Mode() != options.Shown Then Try Window.SetMode(options.Shown)
+        Catch e As GraphicsError
+            PrintError("the window can't be that: {e.Message}")
+        End Try
+    End Method
+
+    // A game at its first moment, in place of the one there was.
+    @MainThread
+    Method Fresh() Throws IOError
+        scape.Free()
+        game.Free()
+        Local said = last
+        said[0] = ""
+        game = Game(island, Function(line: String)
+            said[0] = line
+        End Function)
+        scape = Try Soundscape.Make(game, island)
+        Applied()
+        ending.Update(game.Story(), 0.0)
     End Method
 
     // Moves it all on `seconds`, whether the window's in front or not. With the end screen shown, the
     // mouse and keys are its, not the game's. It plays again if that's been chosen.
     @MainThread
     Method Step(seconds: Float) Throws IOError, InputError
-        controls.Set.SetEnabled(!ending.Showing())
-        scape.Update(game, Moved(game, controls, seconds) ? seconds : 0.0)
-        ending.Update(game.Story(), seconds)
-        If ending.LeaveChosen() Then left = True
-        If ending.AgainChosen()
-            scape.Free()
-            game.Free()
-            Local said = last
-            said[0] = ""
-            game = Game(island, Function(line: String)
-                said[0] = line
-            End Function)
-            scape = Try Soundscape.Make(game, island)
-            ending.Update(game.Story(), 0.0)
+        front.Update(ending.Showing())
+        If front.QuitChosen() Then left = True
+        If front.LeaveChosen() Then Try Fresh()
+        If front.OptionsChanged() Then Applied()
+        Local page = front.Showing()
+        controls.Set.SetEnabled(page == Page.PLAYING && !ending.Showing())
+        If page == Page.TITLE
+            front.Fly(game.View(), seconds)
+            scape.Update(game, 0.0)
+        ElseIf page == Page.PLAYING
+            scape.Update(game, Moved(game, controls, seconds) ? seconds : 0.0)
+            ending.Update(game.Story(), seconds)
+            If ending.LeaveChosen() Then left = True
+            If ending.AgainChosen() Then Try Fresh()
+        Else
+            scape.Update(game, 0.0)
         End If
-        If ending.Showing() != pointing
-            pointing = ending.Showing()
+        Local free = page != Page.PLAYING || ending.Showing()
+        If free != pointing
+            pointing = free
             Try SetMouseRelative(!pointing)
         End If
     End Method
@@ -1671,12 +1727,12 @@ Final Class Session
     // Draws what it says over what's drawn.
     @MainThread
     Method Draw()
-        Local canvas = Screen.Canvas()
-        canvas.SetColor(Color32(236, 232, 220, 255))
-        canvas.DrawText(font, game.Story().ClockLine(), 24, 20)
-        canvas.DrawText(font, Untimed(last[0]), 24, 48)
-        canvas.DrawText(font, game.Prompt(), 24, 680)
+        If front.OverGame()
+            hud.Draw(game.Story().ClockLine(), Untimed(last[0]),
+                     ending.Showing() ? "" : game.Prompt(), front.Device())
+        End If
         ending.Draw()
+        front.Draw()
     End Method
 
     @MainThread
@@ -1685,6 +1741,27 @@ Final Class Session
         game.Free()
     End Method
 End Class
+
+// Sets what `camera` and `island` spend on the picture for `quality`: everything, or, low, no bloom
+// and no sun's shadows.
+@MainThread
+Function Pictured(island: Island, camera: Camera, quality: Quality)
+    Looked(camera)
+    Local low = quality == Quality.LOW
+    If low Then camera.SetBloom(0.0, 1.0)
+    island.SetSunShadows(!low)
+End Function
+
+// The display the window's on, for its modes, or Null with none, as offscreen.
+@MainThread
+Function FirstDisplay(): Display?
+    Try
+        Local all = Try Displays()
+        Return all.Count > 0 ? all[0] : Null
+    Catch e As GraphicsError
+        Return Null
+    End Try
+End Function
 
 // Steps `session` on `steps` tenths of a second, offscreen, mixing what it plays.
 Function Stepped(session: Session, steps: Int) Throws IOError, InputError
@@ -1897,9 +1974,12 @@ Function Played() Throws GraphicsError, IOError, InputError, AudioError
         Try Audio.Start(AudioDevice.SILENT)
     End Try
     Defer Audio.Stop()
-    Local session = Try Session.Make(island)
+    Local session = Try Session.Make(island, OptionsFile(), True)
     Defer session.Free()
-    While !Window.Closed() && !KeyHit(Key.ESCAPE) && !session.left
+    session.windowed = True
+    session.front.SetModes(FirstDisplay())
+    session.Applied()
+    While !Window.Closed() && !session.left
         Flip()
         Try session.Step(FrameStep(Frame.Delta()) As Float)
         If Screen.Texture() == Null Then Continue
@@ -1908,11 +1988,209 @@ Function Played() Throws GraphicsError, IOError, InputError, AudioError
     End While
 End Function
 
+// How many of `image`'s pixels in `box` are near `color`, each channel within 40.
+Function NearIn(image: Image, box: Rect, color: Color32): Int
+    Local count = 0
+    For y = Max(box.Y As Int, 0) Until Min((box.Y + box.Height) As Int, image.Height)
+        For x = Max(box.X As Int, 0) Until Min((box.X + box.Width) As Int, image.Width)
+            Local one = image[x, y]
+            If Abs((one.r As Int) - (color.r As Int)) < 40 &&
+               Abs((one.g As Int) - (color.g As Int)) < 40 &&
+               Abs((one.b As Int) - (color.b As Int)) < 40
+                count += 1
+            End If
+        End For
+    End For
+    Return count
+End Function
+
+// The box of what's called `name` in the front end.
+Function BoxOf(session: Session, name: String): Rect => session.front.Find(name)?.Box() ??
+                                                        Rect(0, 0, 0, 0)
+
+// The island drawn with what's over it, saved as `name` in `folder`, and given.
+Function Pictured(session: Session, folder: Path, name: String): Image Throws GraphicsError, IOError
+    session.island.Scene().Render()
+    session.Draw()
+    Try Screen.Save(folder / "{name}.png")
+    Return Try Screen.ToImage()
+End Function
+
+// Presses `key`, a step on each side.
+Function Pressed(session: Session, key: Key) Throws GraphicsError, IOError, InputError
+    Try Simulate.PressKey(key)
+    Try Stepped(session, 1)
+End Function
+
+// Presses `button` on `pad`, as a person does.
+Function PadPressed(session: Session, pad: VirtualGamepad,
+                    button: GamepadButton) Throws GraphicsError, IOError, InputError
+    pad.SetButton(button, True)
+    Try Stepped(session, 1)
+    pad.SetButton(button, False)
+    Try Stepped(session, 1)
+End Function
+
+// Clicks what's called `name` in the front end.
+Function Clicked(session: Session, name: String) Throws GraphicsError, IOError, InputError
+    Local at = BoxOf(session, name).Center
+    Try Simulate.MoveMouse(at.x, at.y)
+    Try Stepped(session, 1)
+    Try Simulate.Click(MouseButton.LEFT)
+    Try Stepped(session, 2)
+End Function
+
+// The title, the pause menu, and Options, a thing at a time, offscreen, by the keyboard, the mouse,
+// and a gamepad, with what each looks like saved in `folder`, and the options kept in a folder of
+// its own.
+Function MenusShown(folder: Path) Throws GraphicsError, IOError, AudioError, InputError
+    Try Dir.CreateAll(folder)
+    Local kept = Try TempDir()
+    Local file = kept.Path / "options.ini"
+    Local island = Try Opened()
+    Defer EndGraphics()
+    Defer Assets.StopWatching()
+    Defer island.Free()
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Defer Audio.Stop()
+    Local session = Try Session.Make(island, file, True)
+    Defer session.Free()
+    Try Simulate.FocusWindow()
+    Flip(False)
+
+    // The title, over the island, the clock not running, the mouse free.
+    Local clock = session.game.Story().Clock()
+    Try Stepped(session, 10)
+    Local from = session.game.View().Position(Space.WORLD)
+    Try Stepped(session, 10)
+    Checks("it starts at the title", session.front.Showing() == Page.TITLE)
+    Checks("the clock doesn't run there", session.game.Story().Clock() == clock)
+    Checks("the mouse is free there", !MouseRelative())
+    Checks("its camera flies round the island",
+           Apart(from, session.game.View().Position(Space.WORLD)) > 1.0)
+    Local title = Try Pictured(session, folder, "title")
+    Checks("its name's drawn in brass", NearIn(title, BoxOf(session, "title.name"), BRASS) > 200)
+    Checks("with no HUD", NearIn(title, Rect(24, 24, 4, 52), BRASS) < 20)
+
+    // Options, by the keyboard: down to it, Enter, and the master volume down by four steps.
+    Try Pressed(session, Key.DOWN)
+    Try Pressed(session, Key.RETURN)
+    Checks("Options, by the keyboard", session.front.Showing() == Page.OPTIONS)
+    For step = 1 To 4
+        Try Pressed(session, Key.LEFT)
+    End For
+    Local volumes = session.scape.Volumes()
+    Checks("the master volume's 0.80, and heard so", Abs(volumes.0 - 0.8) < 0.001)
+    Local shown = Try Pictured(session, folder, "options")
+    Checks("its heading's drawn in brass",
+           NearIn(shown, BoxOf(session, "options.name"), BRASS) > 200)
+    Checks("with no HUD from the title", NearIn(shown, Rect(24, 24, 4, 52), BRASS) < 20)
+    Try Pressed(session, Key.ESCAPE)
+    Checks("Escape goes back to the title", session.front.Showing() == Page.TITLE)
+    Checks("and keeps them", KeptOptions(file).Master == 0.8)
+
+    // Play, by a gamepad, as the title's Play has the focus.
+    Local pad = Try Simulate.ConnectGamepad("Xbox Wireless Controller")
+    Defer pad.Unplug()
+    Flip(False)
+    Try PadPressed(session, pad, GamepadButton.SOUTH)
+    Checks("Play, by a gamepad", session.front.Showing() == Page.PLAYING)
+    Checks("the mouse is the game's", MouseRelative())
+    Try Stepped(session, 5)
+    Checks("and the clock runs", session.game.Story().Clock() > clock)
+    Checks("its prompts are the pad's", session.front.Device().Current() == Device.PAD)
+
+    // Paused by Start: the clock stops, and the menu's over the game, with the HUD under it.
+    Try PadPressed(session, pad, GamepadButton.START)
+    Checks("paused, by Start", session.front.Showing() == Page.PAUSED)
+    Local stopped = session.game.Story().Clock()
+    Try Stepped(session, 5)
+    Checks("its clock stops", session.game.Story().Clock() == stopped)
+    Checks("the mouse is free", !MouseRelative())
+    Local paused = Try Pictured(session, folder, "pause")
+    Checks("its heading's drawn in brass",
+           NearIn(paused, BoxOf(session, "pause.name"), BRASS) > 200)
+    Checks("over the HUD's brass edge", NearIn(paused, Rect(24, 24, 4, 52), BRASS) > 150)
+
+    // Options from it, by the mouse; Invert Y by a click; back by the pad's east.
+    Try Clicked(session, "pause.options")
+    Checks("Options, by the mouse", session.front.Showing() == Page.OPTIONS)
+    Checks("its prompts are the keys' now", session.front.Device().Current() == Device.KEYS)
+    Try Clicked(session, "options.invert")
+    Checks("Invert Y, by a click", session.front.Current().InvertY)
+    Try PadPressed(session, pad, GamepadButton.EAST)
+    Checks("back to the pause menu, by the pad", session.front.Showing() == Page.PAUSED)
+    Checks("and kept", KeptOptions(file).InvertY)
+    // Resumed by Escape, and the game's looking's inverted.
+    Try Pressed(session, Key.ESCAPE)
+    Checks("resumed, by Escape", session.front.Showing() == Page.PLAYING)
+    Local pitch = session.game.Pitch()
+    Try Simulate.MouseMotion(0.0, 100.0)
+    Try Stepped(session, 1)
+    Checks("the mouse down looks up, inverted", session.game.Pitch() > pitch)
+    // And leaves to the title, by the mouse, a new game waiting.
+    Try PadPressed(session, pad, GamepadButton.START)
+    Try Clicked(session, "pause.leave")
+    Checks("Leave goes to the title", session.front.Showing() == Page.TITLE)
+    Checks("with a game at its first moment", session.game.Story().Clock() == 0.0)
+    Try Clicked(session, "title.quit")
+    Checks("Quit, by the mouse", session.left)
+End Function
+
+// Changes options on one run, by the mouse, the keyboard, and a gamepad, in the folder `kept`, or, on
+// a run after it, says what it finds kept there, and in what the game does.
+Function KeptAcross(stage: String, kept: Path) Throws GraphicsError, IOError, AudioError, InputError
+    Local file = kept / "options.ini"
+    Local island = Try Opened()
+    Defer EndGraphics()
+    Defer Assets.StopWatching()
+    Defer island.Free()
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Defer Audio.Stop()
+    Local session = Try Session.Make(island, file, True)
+    Defer session.Free()
+    Try Simulate.FocusWindow()
+    Flip(False)
+    Try Stepped(session, 2)
+    If stage == "set"
+        Try Dir.CreateAll(kept)
+        If File.Exists(file) Then Try File.Delete(file)
+        Try Clicked(session, "title.options")
+        // Quality, by a click: low.
+        Try Clicked(session, "options.quality")
+        // Look, by the keyboard: down to it from the master volume, and four steps up.
+        session.front.Open(Page.OPTIONS)
+        For step = 1 To 5
+            Try Pressed(session, Key.DOWN)
+        End For
+        For step = 1 To 4
+            Try Pressed(session, Key.RIGHT)
+        End For
+        // Invert Y, by a gamepad's south on it, and back by its east.
+        Local pad = Try Simulate.ConnectGamepad()
+        Defer pad.Unplug()
+        Flip(False)
+        Try PadPressed(session, pad, GamepadButton.DPAD_DOWN)
+        Try PadPressed(session, pad, GamepadButton.SOUTH)
+        Try PadPressed(session, pad, GamepadButton.EAST)
+        Local options = session.front.Current()
+        Print("set: quality {options.Picture}, look {options.Look:.2}, invert {options.InvertY}, back at the title {session.front.Showing() == Page.TITLE}")
+    Else
+        Local options = session.front.Current()
+        Print("after a restart: quality {options.Picture}, look {options.Look:.2}, invert {options.InvertY}")
+        Try Clicked(session, "title.options")
+        Local chooser = session.front.Find("options.quality") As? Chooser
+        Print("shown as {chooser?.Text() ?? "nothing"}")
+        Print("its bloom off {session.game.View().BloomIntensity() == 0.0}")
+    End If
+End Function
+
 Local arguments = Process.Arguments()
 Const USAGE = "usage: slack_water [--walk <bright|dim|dark> [<kept>] | --walk3d " +
               "<bright|dim|dark|cut|swept|wing|far_end> [<kept>] | --feel | --hear | " +
               "--end <folder> | --cooked <kept> <folder> | " +
-              "--frames <folder> | --check <folder> | --match <made> <kept>]"
+              "--frames <folder> | --menus <folder> | --kept <set|check> <folder> | " +
+              "--check <folder> | --match <made> <kept>]"
 // What's for its tests only, so a game on a player's machine can't be made to write anywhere else.
 Local checking = Env.Get("SLACK_WATER_CHECKS") == "1"
 If arguments.Count == 0
@@ -1990,6 +2268,19 @@ ElseIf arguments.Count == 2 && arguments[0] == "--frames"
     Else
         Try Framed(Path(arguments[1]))
         Try SaveWalk(Path(arguments[1]))
+    End If
+ElseIf arguments.Count == 2 && arguments[0] == "--menus"
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+    Else
+        Try MenusShown(Path(arguments[1]))
+    End If
+ElseIf arguments.Count == 3 && arguments[0] == "--kept" &&
+       (arguments[1] == "set" || arguments[1] == "check")
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+    Else
+        Try KeptAcross(arguments[1], Path(arguments[2]))
     End If
 ElseIf arguments.Count == 4 && arguments[0] == "--alike"
     Try AlikeViews(Path(arguments[1]), Path(arguments[2]), Float.Parse(arguments[3]) ?? 100.0)

@@ -90,7 +90,8 @@ Public Function CostWasRead(lost: Bool, cost: Float): Bool => !lost && cost >= 0
 /// Whether `arguments` are a mode that draws with no person there, which ctest runs and a window never shows.
 Public Function DrawsWithoutAPerson(arguments: String[]): Bool
     If arguments.Count == 0 Then Return False
-    Return ["--cooked", "--walk3d", "--end", "--hear", "--feel", "--frames"].Contains(arguments[0])
+    Return ["--cooked", "--walk3d", "--end", "--hear", "--feel", "--frames", "--menus",
+            "--kept"].Contains(arguments[0])
 End Function
 
 /// Whether such a mode may draw, with `devices` shown: not when it would pick one of several for itself.
