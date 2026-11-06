@@ -1,7 +1,6 @@
 // What's shown over the game: the end screen, a little after it ends, which says how it ended, and
 // plays it again, or leaves, by the mouse, the keyboard, or a gamepad.
 
-Import std.core
 Import std.math
 Import fbengine
 Import fbengine_ui
@@ -46,6 +45,12 @@ Public Final Class EndScreen
         screen.Add(panel)
         ui = Ui(screen, SlackTheme())
     End New
+
+    /// Sets how large it's drawn, 1 as it's made, as a player's text size says.
+    @MainThread
+    Public Method SetScale(by: Float)
+        ui.SetScale(by)
+    End Method
 
     /// Whether it's shown.
     @MainThread Public Method Showing(): Bool => shown

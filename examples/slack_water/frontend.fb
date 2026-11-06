@@ -6,7 +6,6 @@ Import std.collections
 Import std.core
 Import std.io
 Import std.math
-Import std.text
 Import fbengine
 Import fbengine_ui
 Import "./hud"
@@ -26,6 +25,9 @@ Public Enum Page
     OPTIONS = 3
     /// Options' keys.
     KEYS = 4
+    /// Options' accessibility: subtitles, sound captions, text size, reduced motion, and the hold to
+    /// open the sluice.
+    ACCESS = 5
 End Enum
 
 // The flight round the island: where it looks, how far out and up it is, and how fast it goes round,
@@ -222,6 +224,15 @@ Public Final Class Frontend
     Field keysSaid: Label
     Field keysBack: Button
     Field waitingFor: Bound? = Null
+    // Accessibility.
+    Field accessible: Button
+    Field accessPanel: Node
+    Field subtitles: Toggle
+    Field captions: Toggle
+    Field textSize: Chooser
+    Field reduced: Toggle
+    Field holding: Toggle
+    Field accessBack: Button
     Field page: Page = Page.TITLE
     Field optionsFrom: Page = Page.TITLE
     Field options: Options
@@ -316,6 +327,8 @@ Public Final Class Frontend
         settings.Add(invert)
         controls = Button("Controls", "options.keys")
         settings.Add(controls)
+        accessible = Button("Accessibility", "options.access")
+        settings.Add(accessible)
         back = Button("Back", "options.back")
         settings.Add(back)
         keeping = Panel("keep")
@@ -339,10 +352,28 @@ Public Final Class Frontend
         keysPanel.Add(keysSaid)
         keysBack = Button("Back", "keys.back")
         keysPanel.Add(keysBack)
+        accessPanel = Panel("access")
+        Local accessHeading = Label("Accessibility", "access.name")
+        accessHeading.SetStyleName("heading")
+        accessPanel.Add(accessHeading)
+        subtitles = Toggle("Subtitles", options.Subtitles, "access.subtitles")
+        captions = Toggle("Sound captions", options.SoundCaptions, "access.captions")
+        textSize = Chooser("Text size", ["Normal", "Large", "Larger"], "access.size")
+        textSize.SetAt(options.TextSize)
+        reduced = Toggle("Reduced motion", options.ReducedMotion, "access.reduced")
+        holding = Toggle("Hold to open the sluice", options.HoldToOpen, "access.hold")
+        accessBack = Button("Back", "access.back")
+        accessPanel.Add(subtitles)
+        accessPanel.Add(captions)
+        accessPanel.Add(textSize)
+        accessPanel.Add(reduced)
+        accessPanel.Add(holding)
+        accessPanel.Add(accessBack)
         screen.Add(title)
         screen.Add(paused)
         screen.Add(settings)
         screen.Add(keysPanel)
+        screen.Add(accessPanel)
         screen.Add(keeping)
         ui = Ui(screen, SlackTheme())
         ui.SetNavigable(True)
@@ -351,6 +382,8 @@ Public Final Class Frontend
         ui.Focus(play)
         Windowed()
         Relabeled()
+        ui.SetScale(options.TextScale())
+        font = Font.BuiltIn(18.0 * options.TextScale())
     End New
 
     // A panel in the middle of the screen, its widgets one under the other.
@@ -447,7 +480,8 @@ Public Final Class Frontend
     /// Points `camera` along the title's flight, `seconds` on, while the title's showing.
     @MainThread
     Public Method Fly(camera: Camera, seconds: Float)
-        flown += seconds
+        // With reduced motion, a third as fast.
+        flown += options.ReducedMotion ? seconds / 3.0 : seconds
         Local angle = flown * FLIGHT_SPEED
         camera.SetPosition(Vec3(ISLAND_MIDDLE.x + Cos(angle) * FLIGHT_OUT, FLIGHT_UP,
                                 ISLAND_MIDDLE.z + Sin(angle) * FLIGHT_OUT))
@@ -501,6 +535,8 @@ Public Final Class Frontend
                 Saved(seconds)
                 If controls.Clicked()
                     Open(Page.KEYS)
+                ElseIf accessible.Clicked()
+                    Open(Page.ACCESS)
                 ElseIf back.Clicked() || ui.Back()
                     KeepNow()
                     Open(optionsFrom)
@@ -516,6 +552,13 @@ Public Final Class Frontend
                         "Press a key for {BoundName(chosen As Bound)}, or Escape for none")
                     Relabeled()
                 ElseIf keysBack.Clicked() || ui.Back()
+                    Open(Page.OPTIONS)
+                End If
+            Case Page.ACCESS
+                Accessed()
+                Saved(seconds)
+                If accessBack.Clicked() || ui.Back()
+                    KeepNow()
                     Open(Page.OPTIONS)
                 End If
             Default
@@ -604,6 +647,25 @@ Public Final Class Frontend
         End If
     End Method
 
+    // What the accessibility page's widgets say, into the options, the text's size taking at once.
+    @MainThread
+    Method Accessed()
+        Local was = options.Written()
+        If textSize.Clicked() Then textSize.Step(1)
+        options.Subtitles = subtitles.On()
+        options.SoundCaptions = captions.On()
+        options.TextSize = textSize.At()
+        options.ReducedMotion = reduced.On()
+        options.HoldToOpen = holding.On()
+        changed = options.Written() != was
+        If !changed Then Return
+        ui.SetScale(options.TextScale())
+        font = Font.BuiltIn(18.0 * options.TextScale())
+        unkept = True
+        unkeptFor = 0.0
+        unkeptAt = ui.Focused()
+    End Method
+
     // Keeps what's changed a second on, or once the focus leaves where it was changed.
     @MainThread
     Method Saved(seconds: Float)
@@ -678,6 +740,8 @@ Public Final Class Frontend
             Case Page.KEYS
                 keysSaid.SetText("")
                 ui.Focus(keyButtons[0])
+            Case Page.ACCESS
+                ui.Focus(subtitles)
             Default
                 ui.Focus(Null)
         End Select
@@ -690,6 +754,7 @@ Public Final Class Frontend
         paused.SetVisible(shown == Page.PAUSED)
         settings.SetVisible(shown == Page.OPTIONS)
         keysPanel.SetVisible(shown == Page.KEYS)
+        accessPanel.SetVisible(shown == Page.ACCESS)
     End Method
 
     /// Where `name`'s widget is on the screen, for a test's mouse.
@@ -699,6 +764,9 @@ Public Final Class Frontend
         Return found != Null ? found.Box().Center : Null
     End Method
 
+    /// How large its text and widgets are, a UI unit's pixels.
+    @MainThread Public Method Scale(): Float => options.TextScale()
+
     /// The widget called `name`, for a test.
     @MainThread Public Method Find(name: String): Node? => screen.Find(name)
 
@@ -706,7 +774,8 @@ Public Final Class Frontend
     @MainThread
     Public Method OverGame(): Bool
         Return page == Page.PLAYING || page == Page.PAUSED ||
-               (page == Page.OPTIONS || page == Page.KEYS) && optionsFrom == Page.PAUSED
+               (page == Page.OPTIONS || page == Page.KEYS || page == Page.ACCESS) &&
+               optionsFrom == Page.PAUSED
     End Method
 
     /// Draws it over what's drawn, with what to press at the bottom, unless the game's being played.
@@ -717,8 +786,10 @@ Public Final Class Frontend
         Local canvas = Screen.Canvas()
         Local y = Screen.Height() - 56
         Local x = 32
-        x += DrawPrompt(canvas, font, device, Prompted.CHOOSE, "Choose", x, y, 28, PAPER) + 28
-        If page != Page.TITLE Then DrawPrompt(canvas, font, device, Prompted.BACK, "Back", x, y, 28,
-                                              PAPER)
+        Local mark = (28.0 * options.TextScale()) As Int32
+        y = Screen.Height() - 28 - mark
+        x += DrawPrompt(canvas, font, device, Prompted.CHOOSE, "Choose", x, y, mark, PAPER) + 28
+        If page != Page.TITLE Then DrawPrompt(canvas, font, device, Prompted.BACK, "Back", x, y,
+                                              mark, PAPER)
     End Method
 End Class

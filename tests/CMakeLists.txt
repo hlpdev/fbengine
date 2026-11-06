@@ -530,6 +530,16 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(examples.slack_water.menus PROPERTIES RESOURCE_LOCK slack_water
                        ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
+  # A walk to the bright ending with sound captions on, each captioned sound's caption shown in the
+  # frame it starts.
+  add_test(NAME examples.slack_water.captions
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                   -- --captions)
+  set_tests_properties(examples.slack_water.captions PROPERTIES RESOURCE_LOCK slack_water
+                       ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION "each shown in its frame True"
+                       FAIL_REGULAR_EXPRESSION "panic|error"
+                       SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
   # An option changed by the mouse, the keyboard, and a gamepad, kept: set on one run, and found on the
   # next, in what's shown and what's drawn.
   set(slack_water_kept "${PROJECT_BINARY_DIR}/example-frames/slack_water_kept")
@@ -691,7 +701,7 @@ if(FBENGINE_FB_TESTS)
                    -- "${PROJECT_BINARY_DIR}/example-frames/slack_water_made")
   set_tests_properties(examples.slack_water.tools PROPERTIES
                        FIXTURES_SETUP slack_water_made TIMEOUT 300
-                       PASS_REGULAR_EXPRESSION "18 textures\r?\n23 sounds\r?\n8 joints in Pip\r?\n$")
+                       PASS_REGULAR_EXPRESSION "18 textures\r?\n29 sounds\r?\n8 joints in Pip\r?\n$")
   foreach(checked IN ITEMS "made=${PROJECT_BINARY_DIR}/example-frames/slack_water_made"
                            "kept=${PROJECT_SOURCE_DIR}/examples/slack_water/assets")
     string(FIND "${checked}" "=" split)

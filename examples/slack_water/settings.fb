@@ -121,6 +121,17 @@ Public Final Class Options
     Public Field InvertY: Bool = False
     /// Which key does what.
     Public Field Keys: KeyMap
+    /// Whether what's said is shown, the game's and Pip's lines.
+    Public Field Subtitles: Bool = True
+    /// Whether sounds are shown in words, as they're heard.
+    Public Field SoundCaptions: Bool = False
+    /// How large text is: 0, as it's made, 1 larger, or 2 larger still.
+    Public Field TextSize: Int = 0
+    /// Whether what moves by itself moves less: the title's flight slower, and your eyes not bobbing
+    /// as you walk.
+    Public Field ReducedMotion: Bool = False
+    /// Whether the sluice opens by holding Use, or, off, by a press.
+    Public Field HoldToOpen: Bool = True
 
     /// The defaults.
     Public New()
@@ -158,6 +169,11 @@ Public Final Class Options
         End If
         options.Look = Number(settings, "controls.look", 1.0, LEAST_LOOK, MOST_LOOK)
         options.InvertY = Said(settings, "controls.invert_y") == "true"
+        options.Subtitles = Said(settings, "access.subtitles") != "false"
+        options.SoundCaptions = Said(settings, "access.sound_captions") == "true"
+        options.TextSize = Clamp(Whole(settings, "access.text_size"), 0, 2)
+        options.ReducedMotion = Said(settings, "access.reduced_motion") == "true"
+        options.HoldToOpen = Said(settings, "access.hold_to_open") != "false"
         // Each key that's one, or its default; and all the defaults if two are the same.
         Local read = KeyMap()
         For at = 0 Until BOUND_KEYS.Count
@@ -196,8 +212,18 @@ Public Final Class Options
             keys[BOUND_KEYS[at]] = Value("{Keys.Of(at As Bound)}")
         End For
         settings["keys"] = keys
+        Local access = Value.Object()
+        access["subtitles"] = Value(Subtitles ? "true" : "false")
+        access["sound_captions"] = Value(SoundCaptions ? "true" : "false")
+        access["text_size"] = Value("{TextSize}")
+        access["reduced_motion"] = Value(ReducedMotion ? "true" : "false")
+        access["hold_to_open"] = Value(HoldToOpen ? "true" : "false")
+        settings["access"] = access
         Return Ini.Write(settings)
     End Method
+
+    /// How much text's scaled for its TextSize.
+    Public Method TextScale(): Float => [1.0, 1.25, 1.5][TextSize]
 
     /// A copy of it.
     Public Method Clone(): Options => Options.Read(Written())

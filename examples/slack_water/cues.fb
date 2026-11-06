@@ -27,10 +27,21 @@ Public Enum Cue
     FIT = 14
     /// The sluice opened, and the water let into the race.
     SLUICE = 15
+    /// Pip: catching up with you, taking a part, giving one back, worried at the flood, and glad or
+    /// sad at how it ended.
+    PIP_HELLO = 16
+    PIP_TAKES = 17
+    PIP_GIVES = 18
+    PIP_WORRIES = 19
+    PIP_GLAD = 20
+    PIP_SAD = 21
 End Enum
 
 /// How many cues there are.
-Public Const CUES: Int = 16
+Public Const CUES: Int = 22
+
+// How long after it's ended Pip says how it feels, so it's after the sluice's rush, not over it.
+Const PIP_AFTER_ENDING: Float = 2.5
 
 /// What you're walking on: bare rock, the tidal road's stones, the mill's boards, the shallows, sand,
 /// and turf, which trodden ground sounds as.
@@ -44,8 +55,8 @@ Public Enum Surface
 End Enum
 
 // How far you walk to a step, in meters, and how far a move can be before it's the water carrying you.
-Const STRIDE: Float = 1.8
-Const FARTHEST_MOVE: Float = 1.0
+Public Const STRIDE: Float = 1.8
+Public Const FARTHEST_MOVE: Float = 1.0
 // How long it is from one gull to the next, and one creak to the next, at least, and how much longer
 // it can be.
 Const GULL_AT_LEAST: Float = 5.0
@@ -67,8 +78,8 @@ Const WORKS: Float = 0.1
 // The music: how loud either theme is, at most, and what's left of it inside the mill.
 Const MUSIC: Float = 0.08
 Public Const MUSIC_INSIDE: Float = 0.7
-// Under a cue, the music's at DUCK, reached over DUCK_DOWN seconds, held DUCK_HOLD after the last cue,
-// and back over DUCK_UP, each in a line, so there's no click.
+// Under a cue, the music's at DUCK, reached over DUCK_DOWN seconds, held until DUCK_HOLD after the
+// last cue ends, and back over DUCK_UP, each in a line, so there's no click.
 Const DUCK: Float = 0.5
 Const DUCK_DOWN: Float = 0.15
 Const DUCK_HOLD: Float = 1.0
@@ -95,9 +106,11 @@ Public Function CueLevel(cue: Cue): Float
         Case Cue.SPLASH
             Return 0.3
         Case Cue.SLUICE
-            Return 0.2
+            Return 0.15
         Case Cue.FIT
             Return 0.25
+        Case Cue.PIP_GLAD, Cue.PIP_SAD
+            Return 0.15
         Default
             Return 0.2
     End Select
@@ -193,15 +206,17 @@ Public Function MusicLevels(clock: Float64, inside: Bool): (Float, Float)
             level * Max(Sin(turn As Float64) As Float, 0.0))
 End Function
 
-/// What the music's turned down to under the cues: DUCK under one, held a while after, then back to
-/// 1, each change in a line, at most `seconds` / DUCK_DOWN of the way down, or / DUCK_UP up, a step.
+/// What the music's turned down to under the cues: DUCK under one, held until DUCK_HOLD after it
+/// ends, then back to 1, each change in a line, at most `seconds` / DUCK_DOWN of the way down, or
+/// / DUCK_UP up, a step.
 Public Final Class Ducking
     Field level: Float = 1.0
     Field held: Float = 0.0
 
-    /// Where it's at, `seconds` on, `cued` or not in them.
-    Public Method Step(seconds: Float, cued: Bool): Float
-        If cued Then held = DUCK_HOLD
+    /// Where it's at, `seconds` on, with a cue begun in them that sounds for `cued` seconds, the
+    /// longest if there were more, or 0 for none.
+    Public Method Step(seconds: Float, cued: Float): Float
+        If cued > 0.0 Then held = Max(held, cued + DUCK_HOLD)
         Local target = held > 0.0 ? DUCK : 1.0
         held = Max(held - seconds, 0.0)
         Local down = seconds / DUCK_DOWN * (1.0 - DUCK)
@@ -244,10 +259,13 @@ End Function
 Public Function StepPitch(surface: Surface): Float => surface == Surface.ROAD ? 0.85 : 1.0
 
 /// Whether `cue` is one of your steps.
-Public Function IsStep(cue: Cue): Bool
-    Return cue != Cue.GULL && cue != Cue.CREAK && cue != Cue.SPLASH && cue != Cue.FIT &&
-           cue != Cue.SLUICE
-End Function
+Public Function IsStep(cue: Cue): Bool => (cue As Int) <= (Cue.WADE_2 As Int) && cue != Cue.GULL &&
+                                          cue != Cue.CREAK && cue != Cue.SPLASH ||
+                                          cue == Cue.SAND_1 || cue == Cue.SAND_2 ||
+                                          cue == Cue.TURF_1 || cue == Cue.TURF_2
+
+/// Whether `cue` is Pip's voice.
+Public Function IsPip(cue: Cue): Bool => (cue As Int) >= (Cue.PIP_HELLO As Int)
 
 // The steps that a surface can be.
 Function StepsOn(surface: Surface): Cue[]
@@ -277,6 +295,12 @@ Public Final Class Cues
     Field flooded: Bool = False
     Field fitted: Int = 0
     Field opened: Bool = False
+    // What Pip was doing, as of the last Step: how many times it had caught up, what it held, and
+    // how long it's been since the end.
+    Field pipCaughtUp: Int = 0
+    Field pipHeld: Bool = False
+    Field pipWorried: Bool = False
+    Field sinceEnded: Float = -1.0
 
     Public New()
         untilGull = GULL_AT_LEAST + Random() * GULL_MORE
@@ -322,6 +346,27 @@ Public Final Class Cues
         If !opened && flow.SluiceOpen()
             opened = True
             cues.Add(Cue.SLUICE)
+        End If
+        // Pip: catching up, taking and giving back, worried as the flood comes, and how it feels,
+        // a while after it's ended.
+        While pipCaughtUp < flow.CaughtUp()
+            pipCaughtUp += 1
+            cues.Add(Cue.PIP_HELLO)
+        End While
+        Local holds = flow.PipHolds() != Null
+        If holds && !pipHeld Then cues.Add(Cue.PIP_TAKES)
+        If !holds && pipHeld Then cues.Add(Cue.PIP_GIVES)
+        pipHeld = holds
+        If !pipWorried && flow.Flooded()
+            pipWorried = True
+            cues.Add(Cue.PIP_WORRIES)
+        End If
+        If flow.Ended() != Ending.NONE
+            Local was = sinceEnded
+            sinceEnded = was < 0.0 ? 0.0 : was + seconds
+            If was < PIP_AFTER_ENDING && sinceEnded >= PIP_AFTER_ENDING
+                cues.Add(flow.Ended() == Ending.BRIGHT ? Cue.PIP_GLAD : Cue.PIP_SAD)
+            End If
         End If
         Return cues
     End Method

@@ -156,6 +156,8 @@ Public Final Class Flow
     Field pipDriven: Bool = False
     Field pipNear: Bool = False
     Field pipCaughtAt: Area = Area.INSIDE
+    // How many times it's been said Pip catches up.
+    Field caughtUp: Int = 0
     // Where each part lies, by its number, or Null once something has it, or the sea does.
     Field lying: Area?[]
     Field fitted: Bool[]
@@ -189,6 +191,10 @@ Public Final Class Flow
 
     /// Where Pip is.
     Public Method PipAt(): Area => pipAt
+
+    /// How many times it's been said that Pip catches up: once each place it does, not each time
+    /// it's near you again.
+    Public Method CaughtUp(): Int => caughtUp
 
     /// How it's ended, NONE until it does.
     Public Method Ended(): Ending => ending
@@ -255,6 +261,7 @@ Public Final Class Flow
         pipNear = near
         If ending == Ending.NONE && near && place == at && pipCaughtAt != at
             pipCaughtAt = at
+            caughtUp += 1
             Say("Pip catches up")
         End If
     End Method
@@ -403,6 +410,7 @@ Public Final Class Flow
                     pipLeft = 0.0
                 Else
                     pipAt = at
+                    caughtUp += 1
                     Say("Pip catches up")
                 End If
             End If

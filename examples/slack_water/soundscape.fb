@@ -25,6 +25,8 @@ Const FAR: Float = 60.0
 Const GULL_NEAR: Float = 15.0
 Const GULL_ROLLOFF: Float = 0.3
 Const GULL_HIGH: Float = 12.0
+// How high Pip's voice is over the ground, at its head.
+Const PIP_HIGH: Float = 0.7
 // How long the wheel takes to be heard.
 Const WHEEL_FADE: Float64 = 1.0
 
@@ -66,7 +68,9 @@ Public Final Class Soundscape
     Field mixLevels: Float[]
     Field music: Bus
     Field ducking: Ducking
-    Field cued: Bool = False
+    // How long the longest cue begun since the last Surroundings sounds, which the music's held
+    // down until it ends; 0 for none.
+    Field cued: Float = 0.0
     Field musicSet: Float = 1.0
     Field windPlays: Channel
     Field seaPlays: Channel
@@ -80,8 +84,17 @@ Public Final Class Soundscape
     // What's in the mill, in its room: creaks, parts fitted, the sluice, the works, and your steps while
     // you're in it; and its low-pass, which muffles it from outside.
     Field mill: Bus
+    // Your own steps while you're in the mill: its room, open while you're in it, as you're never
+    // outside them, so the first step in isn't muffled while the mill's low-pass opens; and muffled as
+    // you leave, so what's left of their ring isn't heard as if you were still in.
+    Field stepsInside: Bus
+    Field stepsCutoff: Float
     Field millCutoff: Float
     Field inMill: Bool = False
+    // Whether the last of your steps went through the mill's room.
+    Field lastStepInMill: Bool = False
+    Field pipInMill: Bool = False
+    Field atPip: Emitter
     Field atMill: Emitter
     Field atWheel: Emitter
     Field onRoad: Emitter
@@ -142,6 +155,10 @@ Public Final Class Soundscape
         outsideBeds.SetLowPass(cutoff)
         outsideEffects.SetLowPass(cutoff)
         mill = Bus(effects)
+        stepsInside = Bus(effects)
+        stepsInside.SetReverb(MillReverb())
+        stepsCutoff = OutsideCutoff(False)
+        stepsInside.SetLowPass(stepsCutoff)
         mill.SetReverb(MillReverb())
         millCutoff = OutsideCutoff(True)
         mill.SetLowPass(millCutoff)
@@ -173,6 +190,9 @@ Public Final Class Soundscape
         onRoad = MadeEmitter(Vec3(middle.x, GroundHeight(middle.x, middle.y) + 1.0, middle.y))
         onRoad.SetRange(GULL_NEAR, FAR * 2.0)
         overhead = MadeEmitter(Vec3(0.0, GULL_HIGH, 0.0))
+        Local pip = game.PipLocation()
+        atPip = MadeEmitter(Vec3(pip.x, GroundHeight(pip.x, pip.y) + PIP_HIGH, pip.y))
+        pipInMill = InMill(pip.x, pip.y)
         overhead.SetRange(GULL_NEAR, FAR * 2.0)
         overhead.SetRolloff(GULL_ROLLOFF)
         Local start = game.Location()
@@ -202,7 +222,11 @@ Public Final Class Soundscape
                         Try Assets.Load<Sound>(Res.Wade1), Try Assets.Load<Sound>(Res.Wade2),
                         Try Assets.Load<Sound>(Res.Sand1), Try Assets.Load<Sound>(Res.Sand2),
                         Try Assets.Load<Sound>(Res.Turf1), Try Assets.Load<Sound>(Res.Turf2),
-                        Try Assets.Load<Sound>(Res.Fit), Try Assets.Load<Sound>(Res.Sluice)]
+                        Try Assets.Load<Sound>(Res.Fit), Try Assets.Load<Sound>(Res.Sluice),
+                        Try Assets.Load<Sound>(Res.PipHello), Try Assets.Load<Sound>(Res.PipTakes),
+                        Try Assets.Load<Sound>(Res.PipGives),
+                        Try Assets.Load<Sound>(Res.PipWorries),
+                        Try Assets.Load<Sound>(Res.PipGlad), Try Assets.Load<Sound>(Res.PipSad)]
         Return Soundscape(sounds, Try Assets.Load<Sound>(Res.Wind), Try Assets.Load<Sound>(Res.Sea),
                           Try Assets.Load<Sound>(Res.Surf), Try Assets.Load<Sound>(Res.Wheel),
                           Try Assets.Load<Sound>(Res.Works), Try Assets.Load<Sound>(Res.Calm),
@@ -276,6 +300,11 @@ Public Final Class Soundscape
 
     @MainThread Public Method SplashAt(): Vec3 => onRoad.Position()
 
+    /// Where Pip's voice is heard from, and whether that's in the mill.
+    @MainThread Public Method PipAt(): Vec3 => atPip.Position()
+
+    @MainThread Public Method PipInMill(): Bool => pipInMill
+
     /// Whether what's outside the mill goes through the buses that muffle it, the beds' and the effects',
     /// each under its own level, and everything under Master.
     @MainThread
@@ -329,13 +358,18 @@ Public Final Class Soundscape
         fromX = here.x
         fromZ = here.y
         Local inside = InMill(here.x, here.y)
+        // Pip's voice from its head, in the mill's room while it's in it, and outside's while not.
+        Local pip = game.PipLocation()
+        atPip.SetPosition(Vec3(pip.x, GroundHeight(pip.x, pip.y) + PIP_HIGH, pip.y))
+        pipInMill = InMill(pip.x, pip.y)
         Local surface = SurfaceAt(heights, here.x, here.y, inside, SeaHeight(flow.Clock()))
+        // Where you are first, so a step through the door is heard on the side it's on.
+        Surroundings(flow.Clock(), inside, seconds)
         For cue In cues.Step(flow, Sqrt(dx * dx + dz * dz), seconds, surface, inside)
             sounds[cue As Int].SetPitch(
                 IsStep(cue) ? StepPitch(surface) : 1.0)
             Play(cue, here)
         End For
-        Surroundings(flow.Clock(), inside, seconds)
         Local speed = WheelSpeed(flow.Ended())
         If speed > 0.0 && wheelPlays == Null
             // At its level and pitch from its first sample.
@@ -374,15 +408,25 @@ Public Final Class Soundscape
         calmPlays.SetVolume(levels.0 * musicSet)
         stormPlays.SetVolume(levels.1 * musicSet)
         music.SetVolume(ducking.Step(seconds, cued) * (1.0 + (MUSIC_INSIDE - 1.0) * indoors))
-        cued = False
+        cued = 0.0
         cutoff = CutoffToward(cutoff, OutsideCutoff(inside), seconds)
         outsideBeds.SetLowPass(cutoff)
         outsideEffects.SetLowPass(cutoff)
         // The mill's room, the other way round: open from inside, muffled from out.
         millCutoff = CutoffToward(millCutoff, OutsideCutoff(!inside), seconds)
         mill.SetLowPass(millCutoff)
+        // Your steps' ring: open from the first step in, and muffled as the mill is once you're out.
+        Local ringTo = CutoffToward(stepsCutoff, OutsideCutoff(True), seconds)
+        stepsCutoff = inside ? OutsideCutoff(False) : ringTo
+        stepsInside.SetLowPass(stepsCutoff)
         inMill = inside
     End Method
+
+    /// The low-pass on your steps' ring in the mill, now.
+    @MainThread Public Method StepsRingNow(): Float => stepsInside.LowPass()
+
+    /// Whether the last of your steps went through the mill's room.
+    @MainThread Public Method LastStepInMill(): Bool => lastStepInMill
 
     /// Whether what's in the mill goes through its room, and its ring's heard.
     @MainThread
@@ -392,7 +436,8 @@ Public Final Class Soundscape
         For sound In all
             If sound.Bus() != mill Then Return False
         End For
-        Return mill.ReverbHeard()
+        Return mill.ReverbHeard() && stepsInside.ReverbHeard() &&
+               stepsInside.LowPass() == stepsCutoff
     End Method
 
     /// The calm theme's level and the storm's, now, and the music's ducking and inside's together.
@@ -421,8 +466,8 @@ Public Final Class Soundscape
     Public Method Play(cue: Cue, here: Vec2)
         played[cue As Int] += 1
         // The music's ducked under anything but your steps.
-        If !IsStep(cue) Then cued = True
         Local sound = sounds[cue As Int]
+        If !IsStep(cue) Then cued = Max(cued, sound.Length() As Float)
         Select cue
             Case Cue.GULL
                 Local at = cues.GullAt(here.x, here.y)
@@ -430,11 +475,16 @@ Public Final Class Soundscape
                 overhead.Play(sound)
             Case Cue.CREAK, Cue.FIT, Cue.SLUICE
                 atMill.Play(sound)
+            Case Cue.PIP_HELLO, Cue.PIP_TAKES, Cue.PIP_GIVES, Cue.PIP_WORRIES, Cue.PIP_GLAD,
+                 Cue.PIP_SAD
+                sound.SetBus(pipInMill ? mill : outsideEffects)
+                atPip.Play(sound)
             Case Cue.SPLASH
                 onRoad.Play(sound)
             Default
                 // Your steps, in the mill's room while you're in it, and the effects' outside.
-                sound.SetBus(inMill ? mill : effects)
+                sound.SetBus(inMill ? stepsInside : effects)
+                lastStepInMill = inMill
                 sound.Play()
         End Select
     End Method
@@ -452,6 +502,7 @@ Public Final Class Soundscape
         If plays != Null Then plays.Stop()
         Local running = worksPlays
         If running != Null Then running.Stop()
+        atPip.Free()
         atMill.Free()
         atWheel.Free()
         onRoad.Free()
@@ -471,6 +522,7 @@ Public Final Class Soundscape
         outsideBeds.Free()
         outsideEffects.Free()
         mill.Free()
+        stepsInside.Free()
         ambience.Free()
         effects.Free()
         everything.Free()

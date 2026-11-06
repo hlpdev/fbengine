@@ -91,7 +91,7 @@ Public Function CostWasRead(lost: Bool, cost: Float): Bool => !lost && cost >= 0
 Public Function DrawsWithoutAPerson(arguments: String[]): Bool
     If arguments.Count == 0 Then Return False
     Return ["--cooked", "--walk3d", "--end", "--hear", "--feel", "--frames", "--menus",
-            "--kept"].Contains(arguments[0])
+            "--kept", "--captions"].Contains(arguments[0])
 End Function
 
 /// Whether such a mode may draw, with `devices` shown: not when it would pick one of several for itself.

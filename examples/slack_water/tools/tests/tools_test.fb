@@ -23,14 +23,16 @@ Function AllSounds(): Float[][]
     Return [Wind(), Sea(), Surf(), Calm(), Storm(), Gull(), Creak(), Wheel(), Works(), Step(5),
             Step(6), Step(7),
             FloorStep(9), FloorStep(10), Wade(11), Wade(12), SandStep(13), SandStep(14),
-            TurfStep(15), TurfStep(16), Splash(), Fit(), Sluice()]
+            TurfStep(15), TurfStep(16), Splash(), Fit(), Sluice(), PipHello(), PipTakes(),
+            PipGives(),
+            PipWorries(), PipGlad(), PipSad()]
 End Function
 
 // What's played once, not looped.
 Function OneShots(): Float[][]
     Return [Gull(), Creak(), Step(5), Step(6), Step(7), FloorStep(9), FloorStep(10), Wade(11),
             Wade(12), SandStep(13), SandStep(14), TurfStep(15), TurfStep(16), Splash(), Fit(),
-            Sluice()]
+            Sluice(), PipHello(), PipTakes(), PipGives(), PipWorries(), PipGlad(), PipSad()]
 End Function
 
 // The samples' root mean square.
@@ -73,19 +75,50 @@ Function NothingClips()
     End For
 End Function
 
-// The music's loops meet their starts as if they went on: their last sample's step to their first is
-// no larger than the steps inside them, and is a sixteen-second loop's.
+// The music's loops meet their starts as if they went on: their last sample's step to their first is no
+// more than half again the largest of the steps either side of it, it bends no more there than beside,
+// and they're sixteen seconds long.
 @Test
 Function TheMusicLoopsWhereItStarted()
     For theme In [Calm(), Storm()]
         Expect(theme.Count == 16 * 22050)
-        Local largest = 0.0
-        For at = 1 Until theme.Count
-            largest = Max(largest, Abs(theme[at] - theme[at - 1]))
+        Local last = theme.Count - 1
+        Local beside = 0.0
+        For at = 1 Until 9
+            beside = Max(beside, Abs(theme[at] - theme[at - 1]))
+            beside = Max(beside, Abs(theme[last - at + 1] - theme[last - at]))
         End For
-        Expect(Abs(theme[0] - theme[theme.Count - 1]) <= largest)
-        // And it's the same a loop on: its first second's the next loop's first second.
-        Expect(Abs(theme[0] - theme[theme.Count - 1]) < 0.05)
+        Expect(Abs(theme[0] - theme[last]) <= 1.5 * beside)
+        // As a step as large as its own can be where it doesn't go on, what it bends, its second
+        // difference, either side of the seam, is no more than it is beside.
+        Local bend = Function(at: Int): Float
+            Local n = theme.Count
+            Return Abs(theme[(at + 1) % n] - 2.0 * theme[at % n] + theme[(at - 1 + n) % n])
+        End Function
+        Local near = 0.0
+        For at = 2 Until 40
+            near = Max(near, Max(bend(at), bend(last - at)))
+        End For
+        Expect(Max(bend(0), bend(last)) <= near)
+    End For
+End Function
+
+// The storm's drum dies away to nothing where it stops, each bar, so there's no tick: what it bends
+// there, its second difference, is no more than half again what it is around.
+@Test
+Function TheStormsDrumDoesntTick()
+    Local storm = Storm()
+    Local bends = Function(from: Int, until: Int): Float
+        Local most = 0.0
+        For at = from Until until
+            most = Max(most, Abs(storm[at + 1] - 2.0 * storm[at] + storm[at - 1]))
+        End For
+        Return most
+    End Function
+    For bar = 0 Until 4
+        Local stop = bar * 4 * 22050 + ((DRUM * 22050.0) As Int)
+        Local around = Max(bends(stop - 2205, stop - 441), bends(stop + 441, stop + 2205))
+        Expect(bends(stop - 3, stop + 3) <= 1.5 * around)
     End For
 End Function
 
@@ -109,6 +142,19 @@ End Function
 Function WhatsPlayedOnceEndsAtNothing()
     For sound In OneShots()
         Expect(Abs(sound[sound.Count - 1]) < 0.005)
+    End For
+End Function
+
+// What's played once starts at nothing, so it doesn't click as it starts, and Pip's rests are silent,
+// not a thump.
+@Test
+Function WhatsPlayedOnceStartsAtNothing()
+    For sound In OneShots()
+        Expect(Abs(sound[0]) < 0.005)
+    End For
+    Local hello = PipHello()
+    For at = 2646 Until 3748
+        Expect(Abs(hello[at]) < 0.005)
     End For
 End Function
 

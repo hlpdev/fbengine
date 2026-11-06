@@ -85,6 +85,9 @@ Public Final Class Controls
     /// Whether E or its button was pressed.
     @MainThread Public Method UseHit(): Bool => Use.Hit()
 
+    /// Whether Use is held down, as of the last Flip.
+    @MainThread Public Method UseDown(): Bool => Use.Down()
+
     /// Whether Q or its button was pressed.
     @MainThread Public Method HandHit(): Bool => Hand.Hit()
 

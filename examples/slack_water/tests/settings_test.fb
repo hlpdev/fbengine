@@ -10,6 +10,9 @@ Import std.os
 Import std.test
 Import std.text
 Import fbengine
+Import slack_water.captions
+Import slack_water.cues
+Import slack_water.flow
 Import slack_water.hud
 Import slack_water.prompts
 Import slack_water.screenmode
@@ -225,4 +228,94 @@ Function AWindowGoesFromOneWayToAnother() Throws GraphicsError
     stand.Calls = []
     Try Switched(stand, choices[1], (1280, 720))
     Expect(stand.Calls.Join(" ") == "WINDOWED BORDERLESS", stand.Calls.Join(" "))
+End Function
+
+@Test
+Function AccessibilityIsKept()
+    Local options = Options()
+    Expect(options.Subtitles && !options.SoundCaptions && options.TextSize == 0 &&
+           !options.ReducedMotion)
+    Expect(options.HoldToOpen)
+    Expect(options.TextScale() == 1.0)
+    options.Subtitles = False
+    options.SoundCaptions = True
+    options.TextSize = 2
+    options.ReducedMotion = True
+    options.HoldToOpen = False
+    Local read = Options.Read(options.Written())
+    Expect(!read.Subtitles && read.SoundCaptions && read.TextSize == 2 && read.ReducedMotion,
+           read.Written())
+    Expect(read.TextScale() == 1.5)
+    Expect(!read.HoldToOpen, read.Written())
+    Expect(Options.Read("[access]\nhold_to_open = maybe\n").HoldToOpen)
+    Expect(Options.Read("[access]\ntext_size = 9\n").TextSize == 2)
+    Expect(Options.Read("[access]\ntext_size = -3\n").TextSize == 0)
+    Expect(Options.Read("[access]\nsubtitles = maybe\n").Subtitles)
+End Function
+
+@Test
+Function ASoundsCaptionIsSaidAsItStarts()
+    Local counts = Map<Int, Int>()
+    Local played = Function(cue: Cue) => counts.Get(cue As Int) ?? 0
+    Local captions = Captions()
+    captions.Reset(played)
+    // Nothing's played: nothing's said, at slack water.
+    captions.Update(played, 0.0, 0.1)
+    Expect(captions.Shown().Count == 0, "{captions.Shown()}")
+    counts[Cue.GULL As Int] = 1
+    captions.Update(played, 0.0, 0.1)
+    Expect(captions.Shown() == ["[a gull cries]"], "{captions.Shown()}")
+    // Steps say nothing; Pip and the sluice do.
+    counts[Cue.STEP_1 As Int] = 4
+    counts[Cue.PIP_HELLO As Int] = 1
+    captions.Update(played, 0.0, 0.1)
+    Expect(captions.Shown() == ["[a gull cries]", "[Pip chirps]"], "{captions.Shown()}")
+    // Two at most, the oldest going.
+    counts[Cue.SLUICE As Int] = 1
+    captions.Update(played, 0.0, 0.1)
+    Expect(captions.Shown() == ["[Pip chirps]", "[the sluice groans open]"], "{captions.Shown()}")
+    // Fading at its end, then gone.
+    Expect(captions.Shade(1) == 1.0)
+    captions.Update(played, 0.0, CAPTION_SECONDS - 0.4)
+    Expect(captions.Shade(1) > 0.0 && captions.Shade(1) < 1.0, "{captions.Shade(1)}")
+    captions.Update(played, 0.0, 0.5)
+    Expect(captions.Shown().Count == 0, "{captions.Shown()}")
+    // A new game forgets what was said, and what had played.
+    captions.Say("[the mill creaks]")
+    captions.Reset(played)
+    Expect(captions.Shown().Count == 0)
+    captions.Update(played, 0.0, 0.1)
+    Expect(captions.Shown().Count == 0, "what had played was said again")
+    // Each cue that means something has words; the steps don't.
+    For cue In [Cue.GULL, Cue.CREAK, Cue.SPLASH, Cue.FIT, Cue.SLUICE, Cue.PIP_HELLO, Cue.PIP_TAKES,
+                Cue.PIP_GIVES, Cue.PIP_WORRIES, Cue.PIP_GLAD, Cue.PIP_SAD]
+        Expect(CaptionOf(cue).StartsWith("["), "{cue}")
+    End For
+    Expect(CaptionOf(Cue.STEP_1) == "" && CaptionOf(Cue.SAND_2) == "")
+End Function
+
+@Test
+Function TheWeatherIsCaptionedAsItTurns()
+    Local played = Function(cue: Cue) => 0
+    Local captions = Captions()
+    captions.Reset(played)
+    Local rises = 0
+    Local crashes = 0
+    Local clock: Float64 = 0.0
+    While clock < TIDE_IN_AT
+        captions.Update(played, clock, 0.05)
+        For each In captions.Shown()
+            If each == "[the wind rises]" Then rises += 1
+            If each == "[surf crashes]" Then crashes += 1
+        End For
+        // Each said once, as it's shown, till it's gone.
+        captions.Update(played, clock, CAPTION_SECONDS)
+        clock += 0.05
+    End While
+    // The wind rises in the storm, now and then, not at slack water or every moment; the surf once.
+    Expect(rises >= 2 && rises < 200, "the wind rose {rises} times")
+    Expect(crashes == 1, "the surf crashed {crashes} times")
+    captions.Reset(played)
+    captions.Update(played, 1.0, 0.05)
+    Expect(captions.Shown().Count == 0, "the wind rose at slack water")
 End Function

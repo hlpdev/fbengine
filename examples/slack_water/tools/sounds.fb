@@ -82,16 +82,21 @@ Function Leveled(samples: Float[], peak: Float): Float[]
     Return leveled
 End Function
 
-// `samples`, played once, faded to nothing over their last 5 ms, as leveling them around 0 can leave
-// their last sample off it, a click as they stop.
-Function Ended(samples: Float[]): Float[]
+// `samples`, played once: faded in from nothing over their first 1 ms, as a strike's first sample is
+// a click as it starts, short enough to keep the strike; and to nothing over their last 5 ms, as
+// leveling them around 0 can leave their last sample off it, a click as they stop.
+Function Once(samples: Float[]): Float[]
+    Local once = samples
+    Local first = Min(Samples(0.001), samples.Count)
+    For at = 0 Until first
+        once[at] = samples[at] * ((at As Float) / (first As Float))
+    End For
     Local count = Min(Samples(0.005), samples.Count)
-    Local ended = samples
     For at = 0 Until count
         Local from = samples.Count - count + at
-        ended[from] = samples[from] * (((count - 1 - at) As Float) / (count As Float))
+        once[from] = once[from] * (((count - 1 - at) As Float) / (count As Float))
     End For
-    Return ended
+    Return once
 End Function
 
 // Writes `samples`, from -1 to 1, as a WAV.
@@ -193,7 +198,7 @@ Public Function Gull(): Float[]
         Local envelope = Sine(part * 3.14159)
         made.Add((Sine(phase) + 0.4 * Sine(phase * 2.0)) * envelope)
     End For
-    Return Ended(Leveled(made, 0.6))
+    Return Once(Leveled(made, 0.6))
 End Function
 
 // Wood creaking: a low tone in stutters.
@@ -208,7 +213,7 @@ Public Function Creak(): Float[]
         Local fade = Sine(t / 0.5 * 3.14159)
         made.Add((Sine(phase) * 0.6 + hiss.Next() * 0.1) * stutter * fade)
     End For
-    Return Ended(Leveled(made, 0.6))
+    Return Once(Leveled(made, 0.6))
 End Function
 
 // The wheel: a slow thump, and water, turning once in its length, which is whole beats once its
@@ -235,7 +240,7 @@ Public Function Step(seed: UInt32): Float[]
         Local t = (at As Float) / (RATE As Float)
         made.Add(low.Next(hiss.Next(), 0.25) * Decay(-t * 38.0))
     End For
-    Return Ended(Leveled(made, 0.7))
+    Return Once(Leveled(made, 0.7))
 End Function
 
 // A step on the mill's boards: a low knock, a seed for each of two.
@@ -248,7 +253,7 @@ Public Function FloorStep(seed: UInt32): Float[]
         Local knock = Sine(t * TAU * 140.0) * Decay(-t * 30.0)
         made.Add(knock + low.Next(hiss.Next(), 0.1) * Decay(-t * 60.0))
     End For
-    Return Ended(Leveled(made, 0.7))
+    Return Once(Leveled(made, 0.7))
 End Function
 
 // The music's loops: 16 seconds, four bars of four at 60 beats a minute.
@@ -317,6 +322,9 @@ Public Function Calm(): Float[]
     Return Leveled(made, 0.6)
 End Function
 
+// How long the storm's drum rings, in seconds, at each bar's start.
+Public Const DRUM: Float = 1.2
+
 // The storm's theme, for when it comes and the flood: a low D's drone, pulsing in eighth notes, its
 // fifth, a minor second over it that rubs, and a drum's hit at each bar, louder each bar in four. A
 // loop of 16 seconds, as Calm is.
@@ -340,18 +348,85 @@ Public Function Storm(): Float[]
         made[at] = drone * pulse * 0.5 + fifth * 0.4 + rub
     End For
     For bar = 0 Until 4
-        // A drum's hit: a low tone falling in pitch, dying away, wrapping round.
+        // A drum's hit: a low tone falling in pitch, dying away, wrapping round, and faded to nothing
+        // over its last 5 ms, as Once fades, so what's left of it doesn't stop at once.
         Local first = Samples((bar As Float) * 4.0)
         Local phase = 0.0
-        For at = 0 Until Samples(1.2)
+        Local count = Samples(DRUM)
+        Local fade = Samples(0.005)
+        For at = 0 Until count
             Local t = (at As Float) / (RATE As Float)
             phase += (55.0 + 40.0 * Decay(-t * 12.0)) * TAU / (RATE As Float)
             Local index = (first + at) % made.Count
+            Local ending = Min(((count - 1 - at) As Float) / (fade As Float), 1.0)
             made[index] = made[index] + Sine(phase) * Decay(-t * 3.5) * Min(t / 0.003, 1.0) *
-                          (0.6 + 0.15 * (bar As Float))
+                          ending * (0.6 + 0.15 * (bar As Float))
         End For
     End For
     Return Leveled(made, 0.6)
+End Function
+
+// Pip's voice: a little brass helper's, by frequency modulation, a tone at twice the note bending it
+// as much as its envelope says, so it's bright as it starts and rounder as it dies. Each of `notes` is
+// its hertz at its start and end, and how long it is; each one's swells in and out over 15 ms. A note
+// of 0 hertz is a rest: nothing, not a held tone's offset.
+Function Chirps(notes: (Float, Float, Float)[]): Float[]
+    Local made: Float[] = []
+    Local phase = 0.0
+    Local turn = 0.0
+    For note In notes
+        Local count = Samples(note.2)
+        If note.0 == 0.0 && note.1 == 0.0
+            For at = 0 Until count
+                made.Add(0.0)
+            End For
+            Continue
+        End If
+        For at = 0 Until count
+            Local part = (at As Float) / (count As Float)
+            Local hertz = note.0 + (note.1 - note.0) * part
+            phase += hertz * TAU / (RATE As Float)
+            turn += hertz * 2.0 * TAU / (RATE As Float)
+            Local t = (at As Float) / (RATE As Float)
+            Local edge = Min(Min(t / 0.015, (note.2 - t) / 0.015), 1.0)
+            Local bright = 1.5 * (1.0 - part * 0.7)
+            made.Add(Sine(phase + bright * Sine(turn)) * edge)
+        End For
+    End For
+    Return Once(Leveled(made, 0.6))
+End Function
+
+// Pip's hello: two notes up, E5 to A5, as it catches up.
+Public Function PipHello(): Float[] => Chirps([(659.0, 680.0, 0.12), (0.0, 0.0, 0.05),
+                                               (880.0, 900.0, 0.16)])
+
+// Pip taking something: a quick glide up.
+Public Function PipTakes(): Float[] => Chirps([(600.0, 1200.0, 0.16)])
+
+// Pip giving something back: a quick glide down.
+Public Function PipGives(): Float[] => Chirps([(1200.0, 600.0, 0.16)])
+
+// Pip worried, as the flood comes over the road: three wobbling notes, each lower.
+Public Function PipWorries(): Float[]
+    Local notes: (Float, Float, Float)[] = []
+    For each = 0 Until 3
+        Local base = 760.0 - (each As Float) * 70.0
+        notes.Add((base, base - 40.0, 0.14))
+        notes.Add((base - 40.0, base + 10.0, 0.08))
+        notes.Add((0.0, 0.0, 0.05))
+    End For
+    Return Chirps(notes)
+End Function
+
+// Pip glad, as the lamp burns bright: C6, E6, G6, C7, up.
+Public Function PipGlad(): Float[]
+    Return Chirps([(1047.0, 1047.0, 0.09), (1319.0, 1319.0, 0.09), (1568.0, 1568.0, 0.09),
+                   (2093.0, 2100.0, 0.22)])
+End Function
+
+// Pip sad, as the lamp burns dim or not at all: G5, E5, C5, slowly down, each sagging.
+Public Function PipSad(): Float[]
+    Return Chirps([(784.0, 760.0, 0.22), (659.0, 630.0, 0.22), (523.0, 480.0, 0.4)])
 End Function
 
 // A part fitted: iron struck on iron, a few partials that aren't harmonics, ringing down, and a
@@ -368,7 +443,7 @@ Public Function Fit(): Float[]
                                         18.0) < 0.12 && t < 0.5 ? hiss.Next() * 0.5 : 0.0
         made.Add(ring * Min(t / 0.002, 1.0) + click)
     End For
-    Return Ended(Leveled(made, 0.6))
+    Return Once(Leveled(made, 0.6))
 End Function
 
 // The sluice opened: its wood groaning as it's raised, a low tone in stutters that rises, then the
@@ -389,7 +464,7 @@ Public Function Sluice(): Float[]
                      Clamp((t - 0.4) / 0.8, 0.0, 1.0) * Clamp((2.2 - t) / 0.4, 0.0, 1.0) * 2.5
         made.Add(groan * 0.6 + rush)
     End For
-    Return Ended(Leveled(made, 0.7))
+    Return Once(Leveled(made, 0.7))
 End Function
 
 // The mill's works, driven: a gear's teeth clicking twelve times a second, a shaft's low hum, and the
@@ -425,7 +500,7 @@ Public Function SandStep(seed: UInt32): Float[]
                       Clamp((0.22 - t) / 0.06, 0.0, 1.0)
         made.Add(low.Next(grain * through, 0.45 - t) * swell)
     End For
-    Return Ended(Leveled(made, 0.6))
+    Return Once(Leveled(made, 0.6))
 End Function
 
 // A step on turf: a soft, low thud, and the grass brushed, a seed for each of two.
@@ -439,7 +514,7 @@ Public Function TurfStep(seed: UInt32): Float[]
         Local brush = low.Next(hiss.Next(), 0.12) * Sine(Min(t / 0.2, 1.0) * TAU / 2.0) * 0.6
         made.Add(thud + brush)
     End For
-    Return Ended(Leveled(made, 0.6))
+    Return Once(Leveled(made, 0.6))
 End Function
 
 // A step in the shallows: a wash of noise, a seed for each of two.
@@ -452,7 +527,7 @@ Public Function Wade(seed: UInt32): Float[]
         Local swell = Sine(Min(t / 0.35, 1.0) * TAU / 2.0)
         made.Add(low.Next(hiss.Next(), 0.2 + 0.25 * swell) * swell)
     End For
-    Return Ended(Leveled(made, 0.6))
+    Return Once(Leveled(made, 0.6))
 End Function
 
 // A splash: noise, bright at first, darkening and dying away.
@@ -464,7 +539,7 @@ Public Function Splash(): Float[]
         Local t = (at As Float) / (RATE As Float)
         made.Add(low.Next(hiss.Next(), 0.5 * Decay(-t * 4.0) + 0.03) * Decay(-t * 4.5))
     End For
-    Return Ended(Leveled(made, 0.8))
+    Return Once(Leveled(made, 0.8))
 End Function
 
 /// Writes every sound in `folder`.
@@ -493,6 +568,12 @@ Public Function WriteSounds(folder: Path) Throws IOError
     Try WriteWav(folder / "fit.wav", Fit())
     Try WriteWav(folder / "sluice.wav", Sluice())
     Try WriteWav(folder / "works.wav", Works())
+    Try WriteWav(folder / "pip_hello.wav", PipHello())
+    Try WriteWav(folder / "pip_takes.wav", PipTakes())
+    Try WriteWav(folder / "pip_gives.wav", PipGives())
+    Try WriteWav(folder / "pip_worries.wav", PipWorries())
+    Try WriteWav(folder / "pip_glad.wav", PipGlad())
+    Try WriteWav(folder / "pip_sad.wav", PipSad())
     Try WriteWav(folder / "calm.wav", Calm())
     Try File.WriteText(folder / "calm.wav.toml", "streamed = true\n")
     Try WriteWav(folder / "storm.wav", Storm())

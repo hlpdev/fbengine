@@ -203,6 +203,12 @@ End Function
 /// Draws `prompted`'s key's cap, or its button's disc, at `x`, `y`, `size` high, and `text` after
 /// it, in `font`, in `color`; gives how wide that all was.
 @MainThread
+/// How wide `prompted`'s mark is drawn, `size` high, by `last`'s device, as DrawPrompt draws it.
+Public Function MarkWide(font: Font, last: LastDevice, prompted: Prompted, size: Int32): Int32
+    If last.Current() == Device.PAD Then Return size
+    Return Max(size, (font.Width(KeyFor(prompted, last.Keys())) As Int32) + size / 2)
+End Function
+
 Public Function DrawPrompt(canvas: Canvas, font: Font, last: LastDevice, prompted: Prompted,
                            text: String, x: Int32, y: Int32, size: Int32, color: Color32): Int32
     Local was = canvas.Color()
