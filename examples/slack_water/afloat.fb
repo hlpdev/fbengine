@@ -57,7 +57,7 @@ Const BARREL_MASS: Float = 45.0
 Const CRATE_MASS: Float = 25.0
 Const GRIP: Float = 0.8
 // How much a barrel rolling on its side is slowed, as it would be on sand.
-Const ROLLING: Float = 2.0
+Const ROLLING: Float = 4.0
 
 /// You and Pip, as what pushes, each a capsule this tall from end to end and this wide: yours from the
 /// knee up, so what you walk into tips over rather than sliding along whole, and Pip's from the ground.

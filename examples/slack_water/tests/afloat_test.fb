@@ -367,6 +367,13 @@ Function TheGroundIsOneGrid()
     End For
     // Two triangles a metre: 6 by 6 metres and 6 by 6, overlapping 4 by 5, and one inside both.
     Expect(corners.Count / 6 == 36 + 36 - 20, "{corners.Count / 6} metres")
+    // Each corner's one point, which the triangles beside it share.
+    Local places = Set<String>()
+    For point In points
+        Local key = "{point.x} {point.z}"
+        Expect(!places.Contains(key), "{key} twice")
+        places.Add(key)
+    End For
     Expect(Abs(points[0].y - (points[0].x * 0.1 + points[0].z * 0.05)) < 0.0001)
 End Function
 
@@ -378,4 +385,70 @@ Function TheTidesRiseHasNoSpikeAtTheFlood()
     For at In [FLOOD_AT - 0.9, FLOOD_AT - 0.5, FLOOD_AT - 0.1]
         Expect(TideRising(at) <= before * 1.5 + 0.0001, "{TideRising(at)} at {at}, {before} before")
     End For
+End Function
+
+// What floats is on the sea as it's drawn, the tide's height alone, wherever and whenever it is.
+@Test
+Function WhatFloatsIsOnTheDrawnSea() Throws ShapeError
+    Local world, made, _, _, _, _ = Try Scene()
+    Defer world.Free()
+    Defer made.Free()
+    For frame = 1 To 30
+        made.SetClock(TIDE_IN_AT * (frame As Float64) / 30.0)
+        made.SetWalkers(Vec3(5, 0.3, 0), Vec3(20, 0, 22))
+        made.Step(0.1)
+        For place In [Vec2(0, 0), Vec2(3.7, -1.2), Vec2(-8, 5)]
+            Expect(made.WaterAt(place.x, place.y) == SeaHeight(made.Clock()),
+                   "{made.WaterAt(place.x, place.y)} at {place}, at {made.Clock()}")
+        End For
+    End For
+End Function
+
+// The swell rolls and pitches the boat, gently: its up swings a little each way, never more than 5
+// degrees from the vertical.
+@Test
+Function TheSwellRocksTheBoatGently() Throws ShapeError
+    Local world, made, _, _, _, _ = Try Scene()
+    Defer world.Free()
+    Defer made.Free()
+    Run(made, 50, 0.0, 0.0, 0.0)
+    Local rollLeast: Float = 1
+    Local rollMost: Float = -1
+    Local pitchLeast: Float = 1
+    Local pitchMost: Float = -1
+    For frame = 1 To 100
+        made.SetWalkers(Vec3(5, 0.3, 0), Vec3(20, 0, 22))
+        made.Step(0.1)
+        Local up = made.Boat().Rotation() * Vec3(0, 1, 0)
+        rollLeast = Min(rollLeast, up.x)
+        rollMost = Max(rollMost, up.x)
+        pitchLeast = Min(pitchLeast, up.z)
+        pitchMost = Max(pitchMost, up.z)
+    End For
+    Print("the boat rolls {rollLeast} to {rollMost}, and pitches {pitchLeast} to {pitchMost}")
+    Expect(rollMost - rollLeast > 0.02 && pitchMost - pitchLeast > 0.01)
+    Local most = Sin(5.0 * Pi / 180.0)
+    Expect(Max(Max(Abs(rollLeast), Abs(rollMost)), Max(Abs(pitchLeast), Abs(pitchMost))) < most)
+End Function
+
+// A barrel on its side, rolling, rolls to a stop in a metre or so, as on sand, not on along the bank.
+@Test
+Function ABarrelRollsToAStop() Throws ShapeError
+    Local world, made, _, _, _, _ = Try Scene()
+    Defer world.Free()
+    Defer made.Free()
+    Local barrel = made.Props()[0]
+    // On its side, its axis along z, its middle at z 0, rolling along x at 1 m/s.
+    barrel.Teleport(Vec3(8, 0.3 + 0.37, -0.45), Quat.FromAxisAngle(Vec3(1, 0, 0), Pi / 2))
+    barrel.SetVelocity(Vec3(1, 0, 0))
+    barrel.SetAngularVelocity(Vec3(0, 0, -1.0 / 0.37))
+    Local from = barrel.Position()
+    For frame = 1 To 30
+        made.SetWalkers(Vec3(20, 0, 20), Vec3(20, 0, 22))
+        made.Step(0.1)
+    End For
+    Local to = barrel.Position()
+    Print("the barrel rolled from {from} to {to}, going {barrel.Velocity()}")
+    Expect(Distance(barrel.Velocity(), Vec3(0, 0, 0)) < 0.05, "{barrel.Velocity()}")
+    Expect(to.x - from.x < 1.5 && to.y > 0.3, "{to}")
 End Function
