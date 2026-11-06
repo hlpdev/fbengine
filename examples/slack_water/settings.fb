@@ -27,6 +27,8 @@ Public Const MOST_LOOK: Float = 3.0
 Public Final Class Options
     /// The whole mix's volume, 0 to 1.
     Public Field Master: Float = 1.0
+    /// The music's, 0 to 1.
+    Public Field Music: Float = 1.0
     /// The wind's and the sea's, 0 to 1.
     Public Field Ambience: Float = 1.0
     /// Everything else's: steps, gulls, creaks, the wheel, the splash, 0 to 1.
@@ -59,6 +61,7 @@ Public Final Class Options
             Return options
         End Try
         options.Master = Number(settings, "audio.master", 1.0, 0.0, 1.0)
+        options.Music = Number(settings, "audio.music", 1.0, 0.0, 1.0)
         options.Ambience = Number(settings, "audio.ambience", 1.0, 0.0, 1.0)
         options.Effects = Number(settings, "audio.effects", 1.0, 0.0, 1.0)
         options.Picture = Said(settings, "video.quality") == "low" ? Quality.LOW : Quality.HIGH
@@ -86,6 +89,7 @@ Public Final Class Options
         Local settings = Value.Object()
         Local audio = Value.Object()
         audio["master"] = Value("{Master:.2}")
+        audio["music"] = Value("{Music:.2}")
         audio["ambience"] = Value("{Ambience:.2}")
         audio["effects"] = Value("{Effects:.2}")
         settings["audio"] = audio

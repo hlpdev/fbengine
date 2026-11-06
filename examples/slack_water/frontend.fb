@@ -169,6 +169,9 @@ Public Final Class Frontend
     Field leave: Button
     Field settings: Node
     Field master: Slider
+    Field music: Slider
+    // Music's row, hidden until there's music to set.
+    Field musicRow: Node
     Field ambience: Slider
     Field effects: Slider
     Field quality: Chooser
@@ -232,15 +235,19 @@ Public Final Class Frontend
         heading.SetStyleName("title")
         settings.Add(heading)
         master = Slider(0.0, 1.0, options.Master)
+        music = Slider(0.0, 1.0, options.Music)
         ambience = Slider(0.0, 1.0, options.Ambience)
         effects = Slider(0.0, 1.0, options.Effects)
         look = Slider(LEAST_LOOK, MOST_LOOK, options.Look)
-        For each In [master, ambience, effects, look]
+        For each In [master, music, ambience, effects, look]
             each.SetStep(0.05)
             each.SetWidth(Sizing.Fixed(280.0))
         End For
         settings.Add(Row("Master volume", master))
-        settings.Add(Row("Wind and sea", ambience))
+        musicRow = Row("Music", music)
+        musicRow.SetVisible(False)
+        settings.Add(musicRow)
+        settings.Add(Row("Ambience", ambience))
         settings.Add(Row("Effects", effects))
         quality = Chooser("Quality", ["High", "Low"], "options.quality")
         quality.SetAt(options.Picture As Int)
@@ -402,6 +409,7 @@ Public Final Class Frontend
     Method Read()
         Local was = options.Written()
         options.Master = master.Value()
+        options.Music = music.Value()
         options.Ambience = ambience.Value()
         options.Effects = effects.Value()
         options.Picture = quality.At() == 1 ? Quality.LOW : Quality.HIGH

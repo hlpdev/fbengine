@@ -16,7 +16,8 @@ Import slack_water.settings
 @Test
 Function TheDefaultsAreAsMade()
     Local options = Options()
-    Expect(options.Master == 1.0 && options.Ambience == 1.0 && options.Effects == 1.0)
+    Expect(options.Master == 1.0 && options.Music == 1.0 && options.Ambience == 1.0 &&
+           options.Effects == 1.0)
     Expect(options.Picture == Quality.HIGH && options.Shown == WindowMode.WINDOWED)
     Expect(options.Width == 0 && options.Height == 0)
     Expect(options.Look == 1.0 && !options.InvertY)
@@ -26,6 +27,7 @@ End Function
 Function EachIsReadBackAsWritten()
     Local options = Options()
     options.Master = 0.25
+    options.Music = 0.4
     options.Ambience = 0.5
     options.Effects = 0.75
     options.Picture = Quality.LOW
@@ -36,7 +38,7 @@ Function EachIsReadBackAsWritten()
     options.InvertY = True
     Local read = Options.Read(options.Written())
     Expect(read.Same(options), read.Written())
-    Expect(read.Master == 0.25 && read.Ambience == 0.5 && read.Effects == 0.75)
+    Expect(read.Master == 0.25 && read.Music == 0.4 && read.Ambience == 0.5 && read.Effects == 0.75)
     Expect(read.Picture == Quality.LOW && read.Shown == WindowMode.FULLSCREEN)
     Expect(read.Width == 1920 && read.Height == 1080 && read.Look == 2.5 && read.InvertY)
     // Borderless, as well.
