@@ -47,6 +47,7 @@ constexpr std::uint32_t op_entry_point = 15;
 constexpr std::uint32_t op_decorate = 71;
 constexpr std::uint32_t decoration_binding = 33;
 constexpr std::uint32_t decoration_set = 34;
+constexpr std::uint32_t op_type_float = 22;
 constexpr std::uint32_t op_type_image = 25;
 constexpr std::uint32_t op_type_array = 28;
 constexpr std::uint32_t op_type_runtime_array = 29;
@@ -130,8 +131,8 @@ bool has_entry(std::span<const std::uint32_t> words, std::string_view name, std:
     return false;
 }
 
-/// Where the instruction that makes `id` is, of the opcode `code`, and how many words it has; 0 for
-/// none.
+/// Where the instruction that makes `id` is, of the opcode `code`, and how many words it has, each
+/// of them there; 0 for none, or if an instruction before it, or it, runs past the words.
 std::pair<std::size_t, std::uint32_t> made_by(std::span<const std::uint32_t> words,
                                               std::uint32_t code, std::uint32_t id) {
     // A variable says its type first, then itself; a type says itself first.
@@ -139,11 +140,10 @@ std::pair<std::size_t, std::uint32_t> made_by(std::span<const std::uint32_t> wor
     std::size_t at = 5;
     while (at < words.size()) {
         const std::uint32_t count = words[at] >> 16U;
-        if (count == 0) {
+        if (count == 0 || count > words.size() - at) {
             return { 0, 0 };
         }
-        if ((words[at] & 0xFFFFU) == code && count > own && at + own < words.size() &&
-            words[at + own] == id) {
+        if ((words[at] & 0xFFFFU) == code && count > own && words[at + own] == id) {
             return { at, count };
         }
         at += count;
@@ -151,8 +151,9 @@ std::pair<std::size_t, std::uint32_t> made_by(std::span<const std::uint32_t> wor
     return { 0, 0 };
 }
 
-/// Whether the variable `id` is the set's multisampled images: an array of 2D multisampled images,
-/// as bindless.slang's is, which the set has at that binding, not some other image or a buffer.
+/// Whether the variable `id` is the set's multisampled images: an array of 2D multisampled images
+/// of floats, to be sampled, as bindless.slang's is, which the set has at that binding, not a
+/// storage image, one of ints, some other image, or a buffer.
 bool multisampled_images(std::span<const std::uint32_t> words, std::uint32_t id) {
     const auto [variable, variable_words] = made_by(words, op_variable, id);
     if (variable_words < 4) {
@@ -171,9 +172,11 @@ bool multisampled_images(std::span<const std::uint32_t> words, std::uint32_t id)
         }
     }
     const auto [image, image_words] = made_by(words, op_type_image, element);
-    // Its dimension, depth, arrayed, and multisampled.
+    // Its dimension, depth, arrayed, multisampled, and sampled, 1 as a sampled image is, 2 as a
+    // storage one; and what it's of.
     return image_words >= 9 && words[image + 3] == dim_2d && words[image + 5] == 0 &&
-           words[image + 6] == 1;
+           words[image + 6] == 1 && words[image + 7] == 1 &&
+           made_by(words, op_type_float, words[image + 2]).second >= 3;
 }
 
 /// Whether SPIR-V binds only what the scene's pipelines' layout has: the bindless set, each binding

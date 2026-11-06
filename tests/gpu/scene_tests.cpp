@@ -8361,32 +8361,28 @@ fbe::gpu::resource_t bright_image(std::uint32_t side, std::uint32_t samples) {
 
 } // namespace
 
-// F6: a tonemap of what's resolved undoes multisampling on a bright edge: a quarter of a light of
-// 100 is 25, nearly all of what a tonemap makes of 100.
-// Of as many samples as a GPU has, past 1: lavapipe has 4, and MoltenVK 2 and 4.
-TEST_CASE("a bright edge is the average of each sample's tonemap", "[gpu][scene]") {
-    // Over black, over a dim wall, and over no alpha, where its alpha's what of it each covers.
-    struct behind_t {
-        float dim = 0.0F;
-        float alpha = 1.0F;
-    };
+namespace {
+
+/// What's behind an edge: a wall of `dim` light, none if 0, and the clear's alpha.
+struct behind_t {
+    float dim = 0.0F;
+    float alpha = 1.0F;
+};
+
+/// That a bright edge of `samples` is the average of each sample's tonemap, over black, over a
+/// dim wall, and over no alpha, where its alpha's what of it each covers.
+void bright_edge_at(std::uint32_t samples) {
     const behind_t behind =
         GENERATE(behind_t{}, behind_t{ .dim = 0.5F }, behind_t{ .alpha = 0.0F });
     const float dim = behind.dim;
-    const std::uint32_t samples = GENERATE(2U, 4U);
     CAPTURE(dim, behind.alpha, samples);
     const scene_t scene;
-    const VkPhysicalDeviceLimits& limits = fbe::gpu::device()->properties.limits;
-    if ((limits.framebufferColorSampleCounts & limits.sampledImageColorSampleCounts & samples) ==
-        0) {
-        SKIP("this GPU doesn't draw and read " << samples << " samples");
-    }
     bright_wall(scene, behind.alpha);
     if (dim > 0.0F) {
-        const std::uint64_t behind = fbe_material_create();
-        require(fbe_material_set_emissive(behind, dim, dim, dim));
-        wall(scene.world, -6.0F, 20.0F, behind);
-        fbe_material_release(behind);
+        const std::uint64_t dim_material = fbe_material_create();
+        require(fbe_material_set_emissive(dim_material, dim, dim, dim));
+        wall(scene.world, -6.0F, 20.0F, dim_material);
+        fbe_material_release(dim_material);
     }
     const float under = through(FBE_TONEMAP_REINHARD, dim);
     const samples_edge_t edge = edge_of(scene, 32, under, samples, behind.alpha == 0.0F);
@@ -8396,6 +8392,30 @@ TEST_CASE("a bright edge is the average of each sample's tonemap", "[gpu][scene]
     CHECK(again.parts == edge.parts);
     CHECK(again.others == 0);
     CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+} // namespace
+
+// F6: a tonemap of what's resolved undoes multisampling on a bright edge: a quarter of a light of
+// 100 is 25, nearly all of what a tonemap makes of 100. Every GPU draws and reads 4 samples.
+TEST_CASE("a bright edge is the average of each sample's tonemap", "[gpu][scene]") {
+    bright_edge_at(4);
+}
+
+// Of a test of its own, so a GPU without 2, as lavapipe is, skips it, and MoltenVK's log says it
+// ran.
+TEST_CASE("a bright edge of 2 samples is their average's tonemap too", "[gpu][scene]") {
+    bool has_two = false;
+    {
+        const scene_t scene;
+        const VkPhysicalDeviceLimits& limits = fbe::gpu::device()->properties.limits;
+        has_two = (limits.framebufferColorSampleCounts & limits.sampledImageColorSampleCounts &
+                   VK_SAMPLE_COUNT_2_BIT) != 0;
+    }
+    if (!has_two) {
+        SKIP("this GPU doesn't draw and read 2 samples");
+    }
+    bright_edge_at(2);
 }
 
 // What's all of a pixel has no edge: each of its samples has the bloom a single sample would, on

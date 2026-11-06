@@ -324,59 +324,53 @@ TEST_CASE("a shader binds only what the scene's pipelines have") {
     CHECK(fbe_shader_check(good.data(), static_cast<std::int64_t>(good.size())));
     CHECK(shader_of(decorated(33, 0)) != 0);
     CHECK(shader_of(decorated(34, 0)) != 0);
-    // At 1, an array of 2D multisampled images, as the set's is, and nothing else there.
-    const auto at_samples = [](std::uint32_t multisampled, bool sized) {
+    // At 1, an array of 2D multisampled images of floats, to be sampled, as the set's is, and
+    // nothing else there.
+    struct image_t {
+        std::uint32_t multisampled = 1;
+        /// 1 to be sampled, 2 a storage image.
+        std::uint32_t sampled = 1;
+        /// What it's of: the float, 20, or the int, 25.
+        std::uint32_t of = 20;
+        bool sized = true;
+        /// How many of its 9 words there are, as the last instruction.
+        std::size_t there = 9;
+    };
+    const auto at_samples = [](const image_t& image) {
         std::vector<std::uint32_t> words = good_spirv();
-        words.insert(words.end(), {
-                                      (3U << 16U) | 22U,
-                                      20,
-                                      32,
-                                      (9U << 16U) | 25U,
-                                      21,
-                                      20,
-                                      1,
-                                      0,
-                                      0,
-                                      multisampled,
-                                      1,
-                                      0,
-                                      (4U << 16U) | 21U,
-                                      25,
-                                      32,
-                                      0,
-                                      (4U << 16U) | 43U,
-                                      25,
-                                      26,
-                                      64,
-                                  });
-        if (sized) {
+        // A float, an int, and 64 of it.
+        words.insert(words.end(), { (3U << 16U) | 22U, 20, 32, (4U << 16U) | 21U, 25, 32, 0,
+                                    (4U << 16U) | 43U, 25, 26, 64 });
+        if (image.sized) {
             words.insert(words.end(), { (4U << 16U) | 28U, 22, 21, 26 });
         } else {
             words.insert(words.end(), { (3U << 16U) | 29U, 22, 21 });
         }
-        words.insert(words.end(), {
-                                      (4U << 16U) | 32U,
-                                      23,
-                                      0,
-                                      22,
-                                      (4U << 16U) | 59U,
-                                      23,
-                                      24,
-                                      0,
-                                      (4U << 16U) | 71U,
-                                      24,
-                                      33,
-                                      1,
-                                  });
+        // A pointer to them, a variable of it, at binding 1, and the images last.
+        words.insert(words.end(), { (4U << 16U) | 32U, 23, 0, 22, (4U << 16U) | 59U, 23, 24, 0,
+                                    (4U << 16U) | 71U, 24, 33, 1 });
+        const std::array<std::uint32_t, 9> type{
+            (9U << 16U) | 25U, 21, image.of, 1, 0, 0, image.multisampled, image.sampled, 0,
+        };
+        words.insert(words.end(), type.begin(),
+                     type.begin() + static_cast<std::ptrdiff_t>(image.there));
         return cooked(fbe_version(), words);
     };
-    const std::uint64_t samples = shader_of(at_samples(1, true));
+    const std::uint64_t samples = shader_of(at_samples({}));
     CHECK(samples != 0);
     fbe_shader_release(samples);
-    const std::uint64_t unsized = shader_of(at_samples(1, false));
+    const std::uint64_t unsized = shader_of(at_samples({ .sized = false }));
     CHECK(unsized != 0);
     fbe_shader_release(unsized);
-    CHECK(shader_of(at_samples(0, true)) == 0);
+    CHECK(shader_of(at_samples({ .multisampled = 0 })) == 0);
+    CHECK(error_says("don't bind"));
+    // The review's: a storage image, one of ints, and one whose last words aren't there, as far
+    // as what it's checked by is there.
+    CHECK(shader_of(at_samples({ .sampled = 2 })) == 0);
+    CHECK(error_says("don't bind"));
+    CHECK(shader_of(at_samples({ .of = 25 })) == 0);
+    CHECK(error_says("don't bind"));
+    CHECK(shader_of(at_samples({ .there = 8 })) == 0);
     CHECK(error_says("don't bind"));
     CHECK(shader_of(decorated(33, 1)) == 0);
     // A global's, as Slang gives one, past the set's, a texture's, and a set of its own.
