@@ -188,8 +188,7 @@ Function LatticeAt(x: Int, y: Int, octave: Int): Float
 End Function
 
 // The map of the ground under the sea, in half floats, so what's between its texels is: the ground's
-// height in red, GROUND_BELOW over it, what breaks the foam up in green, and no alpha, over the
-// terrain's square.
+// height in red, GROUND_BELOW over it, and no alpha, over the terrain's square.
 @MainThread
 Function GroundMap(): Texture Throws GraphicsError
     Local values: Float32[] = []
@@ -200,9 +199,7 @@ Function GroundMap(): Texture Throws GraphicsError
             Local placeZ = ((y As Float) + 0.5) / (GROUND_SIDE As Float) * (SIDE As Float) -
                            (SIDE As Float) * 0.5
             values.Add(Max(GroundHeight(placeX, placeZ) + GROUND_BELOW, 0.0) As Float32)
-            Local broken = 0.3 + 0.28 * SoftNoise(placeX * 0.35, placeZ * 0.35) +
-                           0.3 * SoftNoise(placeX * 1.3 + 40.0, placeZ * 1.3)
-            values.Add(Clamp(broken, 0.0, 1.0) As Float32)
+            values.Add(0.0)
             values.Add(0.0)
             values.Add(0.0)
         End For

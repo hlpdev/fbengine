@@ -11,9 +11,9 @@
 // - Its fourth: the deep's color, linear, and 1 in w to still it, a mirror.
 // - Its fifth: the shallows' color, linear; its sixth, the foam's, and in w how far below 0 the
 //   ground map's red starts.
-// - Its first layer: the ground map, over the island, in half floats: red the ground's height, and
-//   green what breaks the foam up. Its second: a tile of waves' normals. Each has no alpha, laid over
-//   what's under by it, so neither colors the sea.
+// - Its first layer: the ground map, over the island, in half floats: red the ground's height. Its
+//   second: a tile of waves' normals. Each has no alpha, laid over what's under by it, so neither
+//   colors the sea.
 #define FBE_BENDS_NORMALS
 
 static const float shallows = 2.6;
@@ -90,12 +90,10 @@ float4 shade(Surface surface)
     const float half = surface.parameter(0).z;
     const float2 onMap = (place + float2(half, half)) / (2.0 * half);
     float depth = 100.0;
-    float broken = 0.5;
     if (all(onMap > float2(0.0, 0.0)) && all(onMap < float2(1.0, 1.0)))
     {
         const float4 ground = surface.texture(0, onMap);
         depth = surface.parameter(0).x - (ground.r - surface.parameter(5).w);
-        broken = ground.g;
     }
     if (depth <= 0.0)
     {
@@ -103,9 +101,10 @@ float4 shade(Surface surface)
     }
     const float deep = smoothFrom(0.0, shallows, depth);
     const float hides = smoothFrom(0.0, 0.05, depth) * (0.45 + 0.55 * smoothFrom(0.0, 1.4, depth));
-    // Froth: patches that drift, of two sizes, and what the ground map breaks it up by.
+    // Froth: patches that drift, of three sizes.
     const float froth = 0.45 * noise(place * 1.7 + float2(time * 0.07, 0.0)) +
-                        0.3 * noise(place * 5.3 - float2(0.0, time * 0.13)) + 0.25 * broken;
+                        0.3 * noise(place * 5.3 - float2(0.0, time * 0.13)) +
+                        0.25 * noise(place * 0.45 + float2(17.0, 31.0));
     // At the edge, in patches with gaps between, less of it as it's deeper.
     const float edge = 1.0 - smoothFrom(0.0, 0.22, depth);
     const float edgeFoam = edge * smoothFrom(0.42 + 0.25 * (1.0 - edge), 0.58 + 0.25 * (1.0 - edge), froth);

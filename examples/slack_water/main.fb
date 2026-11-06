@@ -479,6 +479,21 @@ Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws Grap
                MovedShare(alone, aloneLater, 420, 720) > 0.1)
     End For
     island.Waters().SetTilesKept(True, True)
+    // An hour in, they go on as they were: neither tile's place jumps.
+    Local tilesAt = Function(clock: Float64): (Vec4, Vec4)
+        island.Update(clock)
+        Return (island.Waters().Shown().Parameter(1), island.Waters().Shown().Parameter(2))
+    End Function
+    Local oneBefore, otherBefore = tilesAt(3599.99)
+    Local oneAfter, otherAfter = tilesAt(3600.01)
+    island.Update(0.0)
+    Local wrappedApart = Function(a: Float, b: Float): Float => Min(Abs(a - b), 1.0 - Abs(a - b))
+    Checks("an hour in, its waves don't jump",
+           Max(wrappedApart(oneBefore.y, oneAfter.y), wrappedApart(oneBefore.z, oneAfter.z)) <
+           0.002 &&
+           Max(wrappedApart(otherBefore.y, otherAfter.y),
+               wrappedApart(otherBefore.z, otherAfter.z)) <
+           0.002)
 
     // Each tile's slopes are the world's: with every texel of a tile tilted along x, the second's,
     // sampled turned, turned back, the two make what a map of their sum would.
