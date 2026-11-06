@@ -962,7 +962,9 @@ Function Walked3d(island: Island, walk: String[], lines: String[],
         End For
         Checks("out of the door, after the end, it's not muffled",
                scape.OutsideNow() == OutsideCutoff(False))
-        Checks("nor quieter", IsClose(scape.SeaNow(), SeaLevel(game.Story().Clock(), False), 0.001))
+        Checks("nor quieter",
+               IsClose(scape.SeaNow(), SeaLevel(game.Story().Clock(), False), 0.001) &&
+               IsClose(scape.SurfNow(), SurfLevel(game.Story().Clock(), False), 0.001))
     End If
     Return ended
 End Function
@@ -996,13 +998,40 @@ Function HighsOf(samples: Float[]): Float
     Return Sqrt(sum / Max(samples.Count As Float, 1.0))
 End Function
 
-// Whether what a walk heard is what it should be: the wind and sea all along, your feet, and the
-// flood; the wheel by how it ended; and a mix that's not silent, and doesn't clip.
+// Whether what a walk heard is what it should be: the wind, sea, and surf all along, your feet on each
+// surface, the flood, the mill's parts and sluice; the wheel and works by how it ended; and a mix
+// that's not silent, and doesn't clip.
 Function Heard(scape: Soundscape, flow: Flow, loudest: Float)
-    Checks("the wind and sea are streamed, and playing", scape.AroundYou())
-    Checks("your steps are heard", scape.Played(Cue.STEP_1) > 0 && scape.Played(Cue.STEP_2) > 0 &&
-           scape.Played(Cue.STEP_3) > 0)
+    Checks("the wind, sea, and surf are streamed, and playing", scape.AroundYou())
+    Checks("the music's streamed, and playing", scape.MusicPlaying())
+    // By the end the storm's in: its theme, and none of the calm's.
+    Local levels = MusicLevels(flow.Clock(), False)
+    Checks("the music's at its levels by the weather and tide",
+           IsClose(scape.MusicNow().0, levels.0, 0.0001) &&
+           IsClose(scape.MusicNow().1, levels.1, 0.0001))
+    // The storm's in by the end: the wind's whistling, at its pitch.
+    Checks("the wind's pitched by the storm",
+           IsClose(scape.WindPitchNow(), WindPitch(flow.Clock()), 0.001) &&
+           scape.WindPitchNow() > 1.0)
+    // On rock, sand, the trodden ground from the door to the road, and the mill's boards, each a walk
+    // crosses.
+    Checks("your steps are heard on rock, sand, turf, and boards",
+           scape.Played(Cue.STEP_1) + scape.Played(Cue.STEP_2) + scape.Played(Cue.STEP_3) > 0 &&
+           scape.Played(Cue.SAND_1) + scape.Played(Cue.SAND_2) > 0 &&
+           scape.Played(Cue.TURF_1) + scape.Played(Cue.TURF_2) > 0 &&
+           scape.Played(Cue.FLOOR_1) + scape.Played(Cue.FLOOR_2) > 0)
+    Checks("there's a sound for each cue", scape.CueCount() == CUES)
     Checks("the flood splashes, once", scape.Played(Cue.SPLASH) == 1)
+    // A clank for each part fitted, and the sluice once, as how it ended says.
+    Local fitted = 0
+    For part In [Part.GEAR, Part.PADDLE, Part.BELT]
+        If flow.Fitted(part) Then fitted += 1
+    End For
+    Checks("each part fitted's heard, and the sluice if it opened",
+           scape.Played(Cue.FIT) == fitted &&
+           scape.Played(Cue.SLUICE) == (flow.SluiceOpen() ? 1 : 0))
+    Checks("the works run at the wheel's speed",
+           IsClose(scape.WorksPitch(), WheelSpeed(flow.Ended()), 0.001))
     Checks("the wheel's pitch is its speed",
            IsClose(scape.WheelPitch(), WheelSpeed(flow.Ended()), 0.001))
     Print("its loudest was {loudest}")
@@ -1032,6 +1061,17 @@ Function Listened() Throws GraphicsError, IOError, AudioError
     Audio.Mix(rate)
     Local bed = RmsOf(Audio.Mix(rate))
     Checks("the wind and sea are heard at slack water", bed > 0.005)
+    // The surf by itself, over a whole wave each: at its level, and louder with the storm in and its
+    // roar than at slack water, by more than the wind and sea alone could make it.
+    scape.SetWindAndSea(0.0)
+    Local slackSurf = WaveOf(scape, 0.0, rate)
+    Local stormSurf = WaveOf(scape, TIDE_IN_AT, rate)
+    Checks("the surf's at its level, with the storm in",
+           IsClose(scape.SurfNow(), SurfLevel(TIDE_IN_AT, False), 0.0001))
+    Checks("the surf by itself is louder with the storm in", stormSurf > 2.0 * slackSurf)
+    scape.SetWindAndSea(1.0)
+    scape.Surroundings(0.0, False, 1.0)
+    Audio.Mix(rate)
     // A gull, off over the water, over them.
     Local gullOver = 0
     For call = 1 To 6
@@ -1042,15 +1082,102 @@ Function Listened() Throws GraphicsError, IOError, AudioError
     scape.SetBeds(0.0)
     Audio.Mix(rate)
     Audio.Mix(rate)
+    // The music by itself: ducked under a gull and back, and turning to the storm's theme with no click.
+    scape.SetMusic(1.0)
+    Listener.SetPosition(Vec3(door.x, 5.0, door.y))
+    // Long enough after the gulls above to have come back from under them.
+    For step = 1 To 150
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Checks("the music's whole at slack water", IsClose(scape.MusicBusNow(), 1.0, 0.0001))
+    scape.Play(Cue.GULL, door)
+    For step = 1 To 30
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Checks("the music ducks under a gull", IsClose(scape.MusicBusNow(), 0.5, 0.0001))
+    For step = 1 To 150
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Checks("and comes back after", IsClose(scape.MusicBusNow(), 1.0, 0.0001))
+    // The weather and tide from slack water to the tide in, over a whole loop, 16 seconds, against a
+    // whole loop of each theme held still: no step through the crossfade larger than the two still
+    // themes' added, which a crossfade of the two can come to.
+    Local stillStep = 0.0
+    For step = 1 To 960
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        stillStep = Max(stillStep, LargestStep(Audio.Mix(735)))
+    End For
+    Local turningStep = 0.0
+    For step = 1 To 960
+        scape.Surroundings(TIDE_IN_AT * (step As Float64) / 960.0, False, 1.0 / 60.0)
+        turningStep = Max(turningStep, LargestStep(Audio.Mix(735)))
+    End For
+    Local stormStep = 0.0
+    For step = 1 To 960
+        scape.Surroundings(TIDE_IN_AT, False, 1.0 / 60.0)
+        stormStep = Max(stormStep, LargestStep(Audio.Mix(735)))
+    End For
+    Print("the music's largest step, calm {stillStep}, storm {stormStep}, turning {turningStep}")
+    Checks("the music turns to the storm's with no click",
+           !Clicks(turningStep, stillStep + stormStep))
+    Checks("the storm's theme is all of it, once the tide's in",
+           scape.MusicNow().0 < 0.0001 &&
+           IsClose(scape.MusicNow().1, MusicLevels(TIDE_IN_AT, False).1, 0.0001))
+    // Quieter inside.
+    For step = 1 To 60
+        scape.Surroundings(TIDE_IN_AT, True, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Checks("the music's quieter inside", IsClose(scape.MusicBusNow(), 0.7, 0.0001))
+    For step = 1 To 60
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    scape.SetMusic(0.0)
+    For step = 1 To 6
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Audio.Mix(rate)
     Checks("with the beds at nothing, it's silent", PeakOf(Audio.Mix(1024)) < 0.0005)
-    // Each cue, by itself, in its band, from nearby.
+    // The mill's room: what's in it is on its bus, whose ring's heard; your steps ring there, after
+    // they've ended, and not outside; and it's muffled from out, as the outside is from in.
+    Checks("what's in the mill is in its room, which rings", scape.MillOnItsBus())
+    For step = 1 To 60
+        scape.Surroundings(0.0, True, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    scape.Play(Cue.FLOOR_1, door)
+    Audio.Mix(rate / 5)
+    Local ringing = RmsOf(Audio.Mix(rate * 2 / 5))
+    For step = 1 To 60
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Audio.Mix(rate)
+    scape.Play(Cue.STEP_1, door)
+    Audio.Mix(rate / 5)
+    Local dry = RmsOf(Audio.Mix(rate * 2 / 5))
+    Print("a step's ring, inside {ringing}, and out {dry}")
+    Checks("your steps ring in the mill, and not outside", ringing > 0.0005 && ringing > 10.0 * dry)
+    Checks("the mill's muffled from outside", scape.MillNow() == OutsideCutoff(True))
+    Audio.Mix(rate)
+    // Each cue, by itself, in its band, from nearby: the splash on the road, from outside, and the
+    // rest at the mill's works, from inside it, where they are.
     Local mill = scape.MillAt()
     Local road = scape.SplashAt()
     For cue In [Cue.STEP_1, Cue.STEP_2, Cue.STEP_3, Cue.FLOOR_1, Cue.FLOOR_2, Cue.WADE_1,
-                Cue.WADE_2,
-                Cue.CREAK, Cue.SPLASH]
+                Cue.WADE_2, Cue.SAND_1, Cue.SAND_2, Cue.TURF_1, Cue.TURF_2,
+                Cue.CREAK, Cue.SPLASH, Cue.FIT, Cue.SLUICE]
         Local near = cue == Cue.SPLASH ? road : mill
         Listener.SetPosition(Vec3(near.x, near.y, near.z + 1.0))
+        For step = 1 To 30
+            scape.Surroundings(0.0, cue != Cue.SPLASH, 1.0 / 60.0)
+            Audio.Mix(735)
+        End For
         scape.Play(cue, door)
         Local peak = PeakOf(Audio.Mix(rate))
         Checks("cue {cue As Int} reaches the mix", peak > 0.05 && peak < 0.5)
@@ -1060,7 +1187,31 @@ Function Listened() Throws GraphicsError, IOError, AudioError
     scape.Play(Cue.GULL, door)
     Local gullPeak = PeakOf(Audio.Mix(rate))
     Checks("a gull reaches the mix", gullPeak > 0.01 && gullPeak < 0.5)
-    Checks("what's outside is on its bus", scape.OutsideOnItsBus())
+    Checks("what's outside is on its buses, under the options' levels", scape.OutsideOnItsBus())
+    // Each of the options' levels at 0 silences its own, and only that; Master, all of it.
+    Local heardAt = Function(slider: Mix): (Float, Float, Float)
+        For mix In [Mix.MASTER, Mix.MUSIC, Mix.AMBIENCE, Mix.EFFECTS]
+            scape.SetLevel(mix, mix == slider ? 0.0 : 1.0)
+        End For
+        Return Heard3(scape, door, rate)
+    End Function
+    Local all = Heard3(scape, door, rate)
+    Checks("with every level up, music, beds, and effects are heard",
+           all.0 > 0.0005 && all.1 > 0.0005 && all.2 > 0.01)
+    For slider In [Mix.MUSIC, Mix.AMBIENCE, Mix.EFFECTS]
+        Local heard = heardAt(slider)
+        Local silent = slider == Mix.MUSIC ? heard.0 : slider == Mix.AMBIENCE ? heard.1 : heard.2
+        Local rest = slider == Mix.MUSIC ? heard.1 + heard.2 : slider == Mix.AMBIENCE ? heard.0 + heard.2 : heard.0 + heard.1
+        Print("{slider} at 0: music {heard.0}, beds {heard.1}, a gull {heard.2}")
+        // Silent is 60 dB under what's still heard, as the mill's ring from a while ago is still there.
+        Checks("{slider} at 0 silences it, and only it", silent < 0.001 * rest && rest > 0.001)
+    End For
+    Local mastered = heardAt(Mix.MASTER)
+    Checks("Master at 0 silences everything", mastered.0 + mastered.1 + mastered.2 < 0.00001)
+    For mix In [Mix.MASTER, Mix.MUSIC, Mix.AMBIENCE, Mix.EFFECTS]
+        scape.SetLevel(mix, 1.0)
+        Checks("{mix}'s level is what was set", scape.Level(mix) == 1.0)
+    End For
     Local works = island.PlaceOf(Spot.WORKS)
     Checks("a creak's at the mill's works",
            IsClose(mill.x, works.x, 0.01) && IsClose(mill.z, works.y, 0.01))
@@ -1087,7 +1238,7 @@ Function Listened() Throws GraphicsError, IOError, AudioError
     For second = 1 To 3
         Audio.Mix(rate)
     End For
-    Checks("only the wind and sea play on", Audio.Playing() == 2)
+    Checks("only the beds and the music play on", Audio.Playing() == 5)
     // The wheel's where it's drawn, and heard outside.
     Local wheel = scape.WheelAt()
     Local drawn = island.WheelAt()
@@ -1099,12 +1250,13 @@ Function Listened() Throws GraphicsError, IOError, AudioError
         scape.Surroundings(0.0, False, 1.0 / 60.0)
         Audio.Mix(735)
     End For
-    Local outsideMix = Audio.Mix(rate)
+    // Over a whole wave of the surf, which breaks each 4 seconds, so it's each at its average.
+    Local outsideMix = Audio.Mix(rate * 4)
     For step = 1 To 60
         scape.Surroundings(0.0, True, 1.0 / 60.0)
         Audio.Mix(735)
     End For
-    Local insideMix = Audio.Mix(rate)
+    Local insideMix = Audio.Mix(rate * 4)
     Local lower = 20.0 * Log10((RmsOf(outsideMix) / Max(RmsOf(insideMix), 0.00001)) As Float64)
     Print("from inside, it's {lower} dB lower")
     Checks("from inside, it's at least 6 dB lower", lower >= 6.0)
@@ -1124,15 +1276,17 @@ Function Listened() Throws GraphicsError, IOError, AudioError
     End For
     scape.Play(Cue.SPLASH, door)
     Checks("the splash is muffled from inside", openSplash > 2.0 * HighsOf(Audio.Mix(rate)))
-    // Through the door and back, a frame at a time, with no click: no sample's step stands out.
+    // Through the door and back, a frame at a time, with no click: no sample's step stands out, over the
+    // wind and sea, with the surf's crashes at nothing, as they'd hide one.
     scape.SetBeds(1.0)
+    scape.SetSurf(0.0)
     For step = 1 To 60
         scape.Surroundings(0.0, False, 1.0 / 60.0)
         Audio.Mix(735)
     End For
-    // Over as long as its waves take.
+    // Over 8 seconds, long enough that the beds' own largest step is found, as a shorter while can miss it.
     Local largestBefore = 0.0
-    For step = 1 To 240
+    For step = 1 To 480
         scape.Surroundings(0.0, False, 1.0 / 60.0)
         largestBefore = Max(largestBefore, LargestStep(Audio.Mix(735)))
     End For
@@ -1144,7 +1298,10 @@ Function Listened() Throws GraphicsError, IOError, AudioError
         End For
     End For
     Print("the largest step's {largestBefore}, and {largestDuring} through the door")
-    Checks("the door doesn't click", largestDuring <= 1.5 * largestBefore)
+    Checks("the door doesn't click", !Clicks(largestDuring, largestBefore))
+    Checks("a click of 1.4 times the largest step would",
+           Clicks(1.4 * largestBefore, largestBefore))
+    scape.SetSurf(1.0)
 End Function
 
 // Whether the PNGs of each view in `one` are close to the same in `other`, by their PSNR, in decibels.
@@ -1156,6 +1313,43 @@ Function AlikeViews(one: Path, other: Path, floor: Float) Throws IOError
         Print("{name}: {psnr} dB")
         Checks("{name} is alike in both", psnr >= floor)
     End For
+End Function
+
+// How loud the music, the beds, and a gull are, each by itself, from the door: the others at nothing.
+Function Heard3(scape: Soundscape, door: Vec2, rate: Int): (Float, Float, Float)
+    scape.SetMusic(1.0)
+    scape.SetBeds(0.0)
+    Settle(scape)
+    Local music = RmsOf(Audio.Mix(rate))
+    scape.SetMusic(0.0)
+    scape.SetBeds(1.0)
+    Settle(scape)
+    Local beds = RmsOf(Audio.Mix(rate))
+    scape.SetBeds(0.0)
+    Settle(scape)
+    scape.Play(Cue.GULL, door)
+    Local gull = PeakOf(Audio.Mix(rate))
+    Return (music, beds, gull)
+End Function
+
+// A second of the soundscape at slack water, outside, so what's been set's heard as it is, and no gull's
+// left ringing.
+Function Settle(scape: Soundscape)
+    For step = 1 To 60
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Audio.Mix(44100 * 2)
+End Function
+
+// Whether a step of `during` stands out over `before`, the largest there was before it: a click.
+Function Clicks(during: Float, before: Float): Bool => during > 1.25 * before
+
+// The surf's loudness over a whole wave, 4 seconds, `clock` seconds in, once it's settled there.
+Function WaveOf(scape: Soundscape, clock: Float64, rate: Int): Float
+    scape.Surroundings(clock, False, 1.0)
+    Audio.Mix(rate)
+    Return RmsOf(Audio.Mix(rate * 4))
 End Function
 
 // The largest change from a sample to the next on the same channel.
@@ -1666,7 +1860,10 @@ Final Class Session
     @MainThread
     Method Applied()
         Local options = front.Current()
-        scape.SetVolumes(options.Master, options.Ambience, options.Effects)
+        scape.SetLevel(Mix.MASTER, options.Master)
+        scape.SetLevel(Mix.MUSIC, options.Music)
+        scape.SetLevel(Mix.AMBIENCE, options.Ambience)
+        scape.SetLevel(Mix.EFFECTS, options.Effects)
         controls.SetLook(options.Look, options.InvertY)
         Pictured(island, game.View(), options.Picture)
         If !windowed Then Return
@@ -2079,15 +2276,23 @@ Function MenusShown(folder: Path) Throws GraphicsError, IOError, AudioError, Inp
     For step = 1 To 4
         Try Pressed(session, Key.LEFT)
     End For
-    Local volumes = session.scape.Volumes()
-    Checks("the master volume's 0.80, and heard so", Abs(volumes.0 - 0.8) < 0.001)
+    Checks("the master volume's 0.80, and heard so",
+           Abs(session.scape.Level(Mix.MASTER) - 0.8) < 0.001)
+    // Music, by the keyboard, down one row and four steps.
+    Try Pressed(session, Key.DOWN)
+    For step = 1 To 4
+        Try Pressed(session, Key.LEFT)
+    End For
+    Checks("the music's 0.80, and heard so", Abs(session.scape.Level(Mix.MUSIC) - 0.8) < 0.001)
+    Checks("and nothing else moved", session.scape.Level(Mix.AMBIENCE) == 1.0 &&
+           session.scape.Level(Mix.EFFECTS) == 1.0)
     Local shown = Try Pictured(session, folder, "options")
     Checks("its heading's drawn in brass",
            NearIn(shown, BoxOf(session, "options.name"), BRASS) > 200)
     Checks("with no HUD from the title", NearIn(shown, Rect(24, 24, 4, 52), BRASS) < 20)
     Try Pressed(session, Key.ESCAPE)
     Checks("Escape goes back to the title", session.front.Showing() == Page.TITLE)
-    Checks("and keeps them", KeptOptions(file).Master == 0.8)
+    Checks("and keeps them", KeptOptions(file).Master == 0.8 && KeptOptions(file).Music == 0.8)
 
     // Play, by a gamepad, as the title's Play has the focus.
     Local pad = Try Simulate.ConnectGamepad("Xbox Wireless Controller")
@@ -2160,7 +2365,7 @@ Function KeptAcross(stage: String, kept: Path) Throws GraphicsError, IOError, Au
         Try Clicked(session, "options.quality")
         // Look, by the keyboard: down to it from the master volume, and four steps up.
         session.front.Open(Page.OPTIONS)
-        For step = 1 To 5
+        For step = 1 To 6
             Try Pressed(session, Key.DOWN)
         End For
         For step = 1 To 4

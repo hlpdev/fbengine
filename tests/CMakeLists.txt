@@ -220,10 +220,16 @@ if(FBENGINE_FB_TESTS)
              COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_exports_test.py")
     set_tests_properties(tools.check_exports PROPERTIES PASS_REGULAR_EXPRESSION "macOS side holds")
     # Each target that builds gltf.cpp reads the simdjson fastgltf fetched, as its own compile says.
+    # With no compile_commands.json, as under the Visual Studio generator, it says so and is skipped.
     add_test(NAME tools.check_simdjson
-             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_simdjson.py" "${PROJECT_BINARY_DIR}")
-    set_tests_properties(tools.check_simdjson PROPERTIES
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_simdjson.py" "${PROJECT_BINARY_DIR}"
+                     "${fbengine_simdjson_folder}/simdjson.h")
+    set_tests_properties(tools.check_simdjson PROPERTIES SKIP_RETURN_CODE 77
                          PASS_REGULAR_EXPRESSION "targets read the simdjson fastgltf fetched")
+    add_test(NAME tools.check_simdjson_reads
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_simdjson_test.py")
+    set_tests_properties(tools.check_simdjson_reads PROPERTIES
+                         PASS_REGULAR_EXPRESSION "reads commands and rules as it should")
   endif()
   add_test(NAME models.golden
            COMMAND fbengine_gpu_tests "the sample models' frames match their golden images")
@@ -656,8 +662,10 @@ if(FBENGINE_FB_TESTS)
                        ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
   # Its flow, and its tools' sounds and materials, by their numbers, with nothing drawn.
+  # From the game's folder, as its tests read its tools' sounds.fb by their path.
   add_test(NAME examples.slack_water.rules
-           COMMAND "${FBENGINE_FB}" --color never test "${PROJECT_SOURCE_DIR}/examples/slack_water")
+           COMMAND "${FBENGINE_FB}" --color never test "${PROJECT_SOURCE_DIR}/examples/slack_water"
+           WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/examples/slack_water")
   set_tests_properties(examples.slack_water.rules PROPERTIES RESOURCE_LOCK slack_water TIMEOUT 300)
   add_test(NAME examples.slack_water.tools_rules
            COMMAND "${FBENGINE_FB}" --color never test
@@ -680,7 +688,7 @@ if(FBENGINE_FB_TESTS)
                    -- "${PROJECT_BINARY_DIR}/example-frames/slack_water_made")
   set_tests_properties(examples.slack_water.tools PROPERTIES
                        FIXTURES_SETUP slack_water_made TIMEOUT 300
-                       PASS_REGULAR_EXPRESSION "18 textures\r?\n13 sounds\r?\n8 joints in Pip\r?\n$")
+                       PASS_REGULAR_EXPRESSION "18 textures\r?\n23 sounds\r?\n8 joints in Pip\r?\n$")
   foreach(checked IN ITEMS "made=${PROJECT_BINARY_DIR}/example-frames/slack_water_made"
                            "kept=${PROJECT_SOURCE_DIR}/examples/slack_water/assets")
     string(FIND "${checked}" "=" split)

@@ -170,7 +170,6 @@ Public Final Class Frontend
     Field settings: Node
     Field master: Slider
     Field music: Slider
-    // Music's row, hidden until there's music to set.
     Field musicRow: Node
     Field ambience: Slider
     Field effects: Slider
@@ -245,7 +244,6 @@ Public Final Class Frontend
         End For
         settings.Add(Row("Master volume", master))
         musicRow = Row("Music", music)
-        musicRow.SetVisible(False)
         settings.Add(musicRow)
         settings.Add(Row("Ambience", ambience))
         settings.Add(Row("Effects", effects))

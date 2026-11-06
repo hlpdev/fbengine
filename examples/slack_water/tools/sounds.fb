@@ -1,5 +1,5 @@
-// The game's sounds, synthesized: wind and sea from filtered noise, gulls, creaks, the wheel, steps,
-// and a splash, as mono 16-bit WAVs of 22050 samples a second.
+// The game's sounds, synthesized: wind and sea from filtered noise, gulls, creaks, the wheel, steps on
+// each surface, and a splash, as mono 16-bit WAVs of 22050 samples a second.
 
 Import std.collections
 Import std.core
@@ -42,16 +42,22 @@ Final Class Smooth
     End Method
 End Class
 
-// `samples` with their last `fade` seconds faded over their first, so they loop without a click, at
-// equal power, as what's faded isn't the same.
-Public Function Looped(samples: Float[], fade: Float): Float[]
+// `samples` with their last `fade` seconds faded over their first, so they loop without a click: at
+// equal power, for noise, whose two ends aren't the same; or, `alike`, in a line, for what's the same
+// material either side, as a tone or a beat is, which equal power would swell by up to 1.41.
+Public Function Looped(samples: Float[], fade: Float, alike: Bool = False): Float[]
     Local count = (fade * (RATE As Float)) As Int
     Local whole = samples.Count - count
     Local looped: Float[] = []
     For at = 0 Until whole
         If at < count
-            Local mix = (at As Float) / (count As Float) * TAU / 4.0
-            looped.Add(samples[at] * Sine(mix) + samples[whole + at] * Cosine(mix))
+            Local part = (at As Float) / (count As Float)
+            If alike
+                looped.Add(samples[at] * part + samples[whole + at] * (1.0 - part))
+            Else
+                looped.Add(samples[at] * Sine(part * TAU / 4.0) +
+                           samples[whole + at] * Cosine(part * TAU / 4.0))
+            End If
         Else
             looped.Add(samples[at])
         End If
@@ -74,6 +80,18 @@ Function Leveled(samples: Float[], peak: Float): Float[]
         leveled.Add((sample - mean) / loudest * peak)
     End For
     Return leveled
+End Function
+
+// `samples`, played once, faded to nothing over their last 5 ms, as leveling them around 0 can leave
+// their last sample off it, a click as they stop.
+Function Ended(samples: Float[]): Float[]
+    Local count = Min(Samples(0.005), samples.Count)
+    Local ended = samples
+    For at = 0 Until count
+        Local from = samples.Count - count + at
+        ended[from] = samples[from] * (((count - 1 - at) As Float) / (count As Float))
+    End For
+    Return ended
 End Function
 
 // Writes `samples`, from -1 to 1, as a WAV.
@@ -111,6 +129,10 @@ End Function
 // How many samples `seconds` are.
 Function Samples(seconds: Float): Int => (seconds * (RATE As Float)) As Int
 
+// The rates of the wind sound's own swell, in radians a second, which the game's gusts keep apart from.
+Public Const WIND_SWELL: Float = 0.9
+Public Const WIND_SWELL_TOO: Float = 2.3
+
 // Wind: noise, swelling, through a filter that opens as it does.
 Public Function Wind(): Float[]
     Local hiss = Hiss(1)
@@ -118,7 +140,7 @@ Public Function Wind(): Float[]
     Local made: Float[] = []
     For at = 0 Until Samples(7.0)
         Local t = (at As Float) / (RATE As Float)
-        Local swell = 0.55 + 0.25 * Sine(t * 0.9) + 0.2 * Sine(t * 2.3 + 1.0)
+        Local swell = 0.55 + 0.25 * Sine(t * WIND_SWELL) + 0.2 * Sine(t * WIND_SWELL_TOO + 1.0)
         made.Add(low.Next(hiss.Next(), 0.02 + swell * 0.05) * (0.8 + swell))
     End For
     Return Leveled(Looped(made, 1.0), 0.7)
@@ -138,6 +160,27 @@ Public Function Sea(): Float[]
     Return Leveled(Looped(made, 1.0), 0.7)
 End Function
 
+// Surf: waves breaking on rock, one each 4 seconds, two to a loop, each a bright crash that darkens, and
+// the hiss of it drawing back.
+Public Function Surf(): Float[]
+    Local hiss = Hiss(17)
+    Local low = Smooth()
+    Local body = Smooth()
+    Local made: Float[] = []
+    For at = 0 Until Samples(9.0)
+        Local t = (at As Float) / (RATE As Float)
+        Local into = Fract(t / 4.0) * 4.0
+        // The crash, from nothing to its height in a tenth of a second, then dying away; the draw
+        // back after, softer and darker.
+        Local crash = Min(into / 0.1, 1.0) * Decay(-into * 1.6)
+        Local back = Sine(Clamp((into - 0.8) / 3.2, 0.0, 1.0) * 3.14159) * 0.35
+        Local noise = hiss.Next()
+        Local bright = low.Next(noise, 0.05 + crash * 0.4)
+        made.Add(bright * (crash + back) + body.Next(noise, 0.01) * 2.0 * (crash + 0.3))
+    End For
+    Return Leveled(Looped(made, 1.0), 0.7)
+End Function
+
 // A gull's call: a falling cry, twice.
 Public Function Gull(): Float[]
     Local made: Float[] = []
@@ -150,7 +193,7 @@ Public Function Gull(): Float[]
         Local envelope = Sine(part * 3.14159)
         made.Add((Sine(phase) + 0.4 * Sine(phase * 2.0)) * envelope)
     End For
-    Return Leveled(made, 0.6)
+    Return Ended(Leveled(made, 0.6))
 End Function
 
 // Wood creaking: a low tone in stutters.
@@ -165,7 +208,7 @@ Public Function Creak(): Float[]
         Local fade = Sine(t / 0.5 * 3.14159)
         made.Add((Sine(phase) * 0.6 + hiss.Next() * 0.1) * stutter * fade)
     End For
-    Return Leveled(made, 0.6)
+    Return Ended(Leveled(made, 0.6))
 End Function
 
 // The wheel: a slow thump, and water, turning once in its length, which is whole beats once its
@@ -180,7 +223,7 @@ Public Function Wheel(): Float[]
         Local thump = Sine(beat * TAU * 3.0) * Decay(-beat * 9.0) * 0.8
         made.Add(thump + low.Next(hiss.Next(), 0.1) * 0.5)
     End For
-    Return Leveled(Looped(made, 0.25), 0.7)
+    Return Leveled(Looped(made, 0.25, True), 0.7)
 End Function
 
 // A step on rock: a click and a little noise, a seed for each of three.
@@ -192,7 +235,7 @@ Public Function Step(seed: UInt32): Float[]
         Local t = (at As Float) / (RATE As Float)
         made.Add(low.Next(hiss.Next(), 0.25) * Decay(-t * 38.0))
     End For
-    Return Leveled(made, 0.7)
+    Return Ended(Leveled(made, 0.7))
 End Function
 
 // A step on the mill's boards: a low knock, a seed for each of two.
@@ -205,7 +248,198 @@ Public Function FloorStep(seed: UInt32): Float[]
         Local knock = Sine(t * TAU * 140.0) * Decay(-t * 30.0)
         made.Add(knock + low.Next(hiss.Next(), 0.1) * Decay(-t * 60.0))
     End For
-    Return Leveled(made, 0.7)
+    Return Ended(Leveled(made, 0.7))
+End Function
+
+// The music's loops: 16 seconds, four bars of four at 60 beats a minute.
+Const BARS: Float = 16.0
+
+// A note's frequency in hertz, `semitones` from A4's 440, rounded so a whole number of its cycles fits
+// in a loop, so it meets its start: by under a 32nd of a hertz, which no ear hears.
+Function Note(semitones: Float): Float
+    Local hertz = 440.0 * (Exp((semitones / 12.0 * 0.6931472) As Float64) As Float)
+    Return Round(hertz * BARS) / BARS
+End Function
+
+// `amount` of a tone at `hertz` added to `into`, a loop, from `start` seconds for `seconds`, swelling
+// in and out over `swell`, and wrapping round its end onto its start.
+Function Pad(into: Float[], hertz: Float, start: Float, seconds: Float, swell: Float, amount: Float)
+    Local count = Samples(seconds)
+    Local first = Samples(start)
+    For at = 0 Until count
+        Local t = (at As Float) / (RATE As Float)
+        Local edge = Min(Min(t / swell, (seconds - t) / swell), 1.0)
+        Local shape = Sine(edge * TAU / 4.0)
+        Local time = ((first + at) As Float) / (RATE As Float)
+        // Two voices a little apart, for a chorus, each a whole number of cycles in the loop.
+        Local voice = Sine(time * TAU * hertz) + 0.5 * Sine(time * TAU * (hertz + 1.0 / BARS))
+        Local index = ((first + at) % into.Count + into.Count) % into.Count
+        into[index] = into[index] + voice * shape * amount
+    End For
+End Function
+
+// A note plucked at `start` seconds, `hertz`, dying away over `decay`, wrapping round the loop's end.
+Function Pluck(into: Float[], hertz: Float, start: Float, decay: Float, amount: Float)
+    Local first = Samples(start)
+    For at = 0 Until Samples(decay * 5.0)
+        Local t = (at As Float) / (RATE As Float)
+        Local time = ((first + at) As Float) / (RATE As Float)
+        Local tone = Sine(time * TAU * hertz) + 0.3 * Sine(time * TAU * hertz * 2.0)
+        Local index = ((first + at) % into.Count + into.Count) % into.Count
+        into[index] = into[index] + tone * Min(t / 0.004, 1.0) * Decay(-t / decay) * amount
+    End For
+End Function
+
+// The calm theme, for slack water: a slow pad in D dorian, Dm9, Bbmaj7, Fmaj7, and Cadd9, a bar each,
+// each swelling into the next, with a few plucked notes over it, sparse, as the water's still. A loop
+// of 16 seconds whose end meets its start, as every tone in it is a whole number of cycles and every
+// note wraps round.
+Public Function Calm(): Float[]
+    Local made: Float[] = []
+    For at = 0 Until Samples(BARS)
+        made.Add(0.0)
+    End For
+    // Semitones from A4: D3 is -19.
+    Local chords = [[-19.0, -16.0, -12.0, -9.0, -5.0], [-23.0, -19.0, -16.0, -12.0],
+                    [-28.0, -24.0, -21.0, -17.0], [-21.0, -17.0, -14.0, -7.0]]
+    For bar = 0 Until 4
+        For note In chords[bar]
+            // Each chord over its bar and a second more, so it's under the next's swell.
+            Pad(made, Note(note), (bar As Float) * 4.0 - 0.5, 5.0, 1.5, 0.12)
+        End For
+    End For
+    // D5, F5, G5, A5, C6: the pentatonic of D minor, at fixed beats, sparse.
+    Local melody = [(1.0, 5.0), (2.5, 8.0), (5.0, 12.0), (7.0, 10.0), (9.5, 3.0), (11.0, 5.0),
+                    (13.0, 15.0), (14.5, 12.0)]
+    For each In melody
+        Pluck(made, Note(each.1), each.0, 0.45, 0.35)
+    End For
+    Return Leveled(made, 0.6)
+End Function
+
+// The storm's theme, for when it comes and the flood: a low D's drone, pulsing in eighth notes, its
+// fifth, a minor second over it that rubs, and a drum's hit at each bar, louder each bar in four. A
+// loop of 16 seconds, as Calm is.
+Public Function Storm(): Float[]
+    Local made: Float[] = []
+    For at = 0 Until Samples(BARS)
+        made.Add(0.0)
+    End For
+    Local d2 = Note(-31.0)
+    Local a2 = Note(-24.0)
+    Local eb3 = Note(-18.0)
+    For at = 0 Until made.Count
+        Local time = (at As Float) / (RATE As Float)
+        // Eighth notes at 60 a minute: twice a second, each swelling and falling.
+        Local pulse = 0.55 + 0.45 * Sine(time * TAU * 2.0 - TAU / 4.0)
+        Local drone = Sine(time * TAU * d2) + 0.5 * Sine(time * TAU * d2 * 2.0) +
+                      0.33 * Sine(time * TAU * d2 * 3.0)
+        Local fifth = 0.5 * Sine(time * TAU * a2)
+        // The minor second, coming and going over each bar.
+        Local rub = 0.3 * Sine(time * TAU * eb3) * (0.5 + 0.5 * Sine(time * TAU / 4.0))
+        made[at] = drone * pulse * 0.5 + fifth * 0.4 + rub
+    End For
+    For bar = 0 Until 4
+        // A drum's hit: a low tone falling in pitch, dying away, wrapping round.
+        Local first = Samples((bar As Float) * 4.0)
+        Local phase = 0.0
+        For at = 0 Until Samples(1.2)
+            Local t = (at As Float) / (RATE As Float)
+            phase += (55.0 + 40.0 * Decay(-t * 12.0)) * TAU / (RATE As Float)
+            Local index = (first + at) % made.Count
+            made[index] = made[index] + Sine(phase) * Decay(-t * 3.5) * Min(t / 0.003, 1.0) *
+                          (0.6 + 0.15 * (bar As Float))
+        End For
+    End For
+    Return Leveled(made, 0.6)
+End Function
+
+// A part fitted: iron struck on iron, a few partials that aren't harmonics, ringing down, and a
+// ratchet's clicks as it's seated.
+Public Function Fit(): Float[]
+    Local hiss = Hiss(18)
+    Local made: Float[] = []
+    For at = 0 Until Samples(0.7)
+        Local t = (at As Float) / (RATE As Float)
+        Local ring = Sine(t * TAU * 523.0) * Decay(-t * 7.0) +
+                     0.6 * Sine(t * TAU * 1307.0) * Decay(-t * 11.0) +
+                     0.35 * Sine(t * TAU * 2291.0) * Decay(-t * 16.0)
+        Local click = t > 0.25 && Fract((t - 0.25) *
+                                        18.0) < 0.12 && t < 0.5 ? hiss.Next() * 0.5 : 0.0
+        made.Add(ring * Min(t / 0.002, 1.0) + click)
+    End For
+    Return Ended(Leveled(made, 0.6))
+End Function
+
+// The sluice opened: its wood groaning as it's raised, a low tone in stutters that rises, then the
+// water let into the race, rushing louder.
+Public Function Sluice(): Float[]
+    Local hiss = Hiss(19)
+    Local low = Smooth()
+    Local made: Float[] = []
+    Local phase = 0.0
+    For at = 0 Until Samples(2.2)
+        Local t = (at As Float) / (RATE As Float)
+        phase += (70.0 + t * 40.0) * TAU / (RATE As Float)
+        Local raised = Clamp(1.0 - t / 0.9, 0.0, 1.0)
+        Local stutter = Fract(t * 14.0) < 0.4 ? 1.0 : 0.2
+        Local groan = (Sine(phase) + 0.5 * Sine(phase * 2.0)) * stutter * raised *
+                      Min(t / 0.05, 1.0)
+        Local rush = low.Next(hiss.Next(), 0.08 + 0.15 * Clamp((t - 0.5) / 1.0, 0.0, 1.0)) *
+                     Clamp((t - 0.4) / 0.8, 0.0, 1.0) * Clamp((2.2 - t) / 0.4, 0.0, 1.0) * 2.5
+        made.Add(groan * 0.6 + rush)
+    End For
+    Return Ended(Leveled(made, 0.7))
+End Function
+
+// The mill's works, driven: a gear's teeth clicking twelve times a second, a shaft's low hum, and the
+// knock of each turn of the great wheel, two seconds of it, which loop.
+Public Function Works(): Float[]
+    Local hiss = Hiss(20)
+    Local low = Smooth()
+    Local made: Float[] = []
+    For at = 0 Until Samples(2.25)
+        Local t = (at As Float) / (RATE As Float)
+        Local tooth = Fract(t * 12.0)
+        Local click = low.Next(hiss.Next(), 0.3) * Decay(-tooth * 60.0)
+        Local hum = Sine(t * TAU * 45.0) * (0.6 + 0.4 * Sine(t * TAU * 0.5))
+        Local turn = Fract(t * 0.5)
+        Local knock = Sine(turn * TAU * 60.0) * Decay(-turn * 25.0)
+        made.Add(click * 0.8 + hum * 0.3 + knock * 0.5)
+    End For
+    Return Leveled(Looped(made, 0.25, True), 0.6)
+End Function
+
+// A step on sand: grains giving way, a crunch of noise in short bursts, darker as it settles, a seed for
+// each of two.
+Public Function SandStep(seed: UInt32): Float[]
+    Local hiss = Hiss(seed)
+    Local low = Smooth()
+    Local made: Float[] = []
+    For at = 0 Until Samples(0.22)
+        Local t = (at As Float) / (RATE As Float)
+        // Grains: the noise let through in bursts, more of them at first.
+        Local grain = hiss.Next()
+        Local through = Abs(grain) > 0.55 + t * 2.0 ? 1.0 : 0.25
+        Local swell = Sine(Min(t / 0.03, 1.0) * TAU / 4.0) * Decay(-t * 14.0) *
+                      Clamp((0.22 - t) / 0.06, 0.0, 1.0)
+        made.Add(low.Next(grain * through, 0.45 - t) * swell)
+    End For
+    Return Ended(Leveled(made, 0.6))
+End Function
+
+// A step on turf: a soft, low thud, and the grass brushed, a seed for each of two.
+Public Function TurfStep(seed: UInt32): Float[]
+    Local hiss = Hiss(seed)
+    Local low = Smooth()
+    Local made: Float[] = []
+    For at = 0 Until Samples(0.2)
+        Local t = (at As Float) / (RATE As Float)
+        Local thud = Sine(t * TAU * 75.0) * Decay(-t * 25.0)
+        Local brush = low.Next(hiss.Next(), 0.12) * Sine(Min(t / 0.2, 1.0) * TAU / 2.0) * 0.6
+        made.Add(thud + brush)
+    End For
+    Return Ended(Leveled(made, 0.6))
 End Function
 
 // A step in the shallows: a wash of noise, a seed for each of two.
@@ -218,7 +452,7 @@ Public Function Wade(seed: UInt32): Float[]
         Local swell = Sine(Min(t / 0.35, 1.0) * TAU / 2.0)
         made.Add(low.Next(hiss.Next(), 0.2 + 0.25 * swell) * swell)
     End For
-    Return Leveled(made, 0.6)
+    Return Ended(Leveled(made, 0.6))
 End Function
 
 // A splash: noise, bright at first, darkening and dying away.
@@ -230,7 +464,7 @@ Public Function Splash(): Float[]
         Local t = (at As Float) / (RATE As Float)
         made.Add(low.Next(hiss.Next(), 0.5 * Decay(-t * 4.0) + 0.03) * Decay(-t * 4.5))
     End For
-    Return Leveled(made, 0.8)
+    Return Ended(Leveled(made, 0.8))
 End Function
 
 /// Writes every sound in `folder`.
@@ -239,6 +473,8 @@ Public Function WriteSounds(folder: Path) Throws IOError
     Try File.WriteText(folder / "wind.wav.toml", "streamed = true\n")
     Try WriteWav(folder / "sea.wav", Sea())
     Try File.WriteText(folder / "sea.wav.toml", "streamed = true\n")
+    Try WriteWav(folder / "surf.wav", Surf())
+    Try File.WriteText(folder / "surf.wav.toml", "streamed = true\n")
     Try WriteWav(folder / "gull.wav", Gull())
     Try WriteWav(folder / "creak.wav", Creak())
     Try WriteWav(folder / "wheel.wav", Wheel())
@@ -250,4 +486,15 @@ Public Function WriteSounds(folder: Path) Throws IOError
     Try WriteWav(folder / "wade_1.wav", Wade(11))
     Try WriteWav(folder / "wade_2.wav", Wade(12))
     Try WriteWav(folder / "splash.wav", Splash())
+    Try WriteWav(folder / "sand_1.wav", SandStep(13))
+    Try WriteWav(folder / "sand_2.wav", SandStep(14))
+    Try WriteWav(folder / "turf_1.wav", TurfStep(15))
+    Try WriteWav(folder / "turf_2.wav", TurfStep(16))
+    Try WriteWav(folder / "fit.wav", Fit())
+    Try WriteWav(folder / "sluice.wav", Sluice())
+    Try WriteWav(folder / "works.wav", Works())
+    Try WriteWav(folder / "calm.wav", Calm())
+    Try File.WriteText(folder / "calm.wav.toml", "streamed = true\n")
+    Try WriteWav(folder / "storm.wav", Storm())
+    Try File.WriteText(folder / "storm.wav.toml", "streamed = true\n")
 End Function
