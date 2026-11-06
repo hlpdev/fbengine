@@ -10,7 +10,7 @@ Import "./map"
 Import "./res" As Res
 
 /// How far apart tufts of grass are, on a grid each one's moved about in.
-Public Const TUFT_SPACING: Float = 0.55
+Public Const TUFT_SPACING: Float = 0.65
 // How many groups of tufts sway on beats of their own, each its own Instances.
 Const BEATS: Int = 4
 // How many blades a tuft has, near, a little further, and further still; past that, none.
@@ -18,9 +18,9 @@ Const BLADES: Int = 14
 Const FEWER_BLADES: Int = 5
 Const FEWEST_BLADES: Int = 2
 // How much of the view's height a tuft takes where it's drawn with fewer blades, fewest, or none.
-Const FEWER_FROM: Float = 0.02
-Const FEWEST_FROM: Float = 0.008
-Const NONE_FROM: Float = 0.003
+Const FEWER_FROM: Float = 0.035
+Const FEWEST_FROM: Float = 0.014
+Const NONE_FROM: Float = 0.006
 // Which way the wind goes, off the sea, as the waves do.
 Const WIND_X: Float = 0.92
 Const WIND_Z: Float = 0.39
