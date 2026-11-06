@@ -446,7 +446,26 @@ Function ALongMixMovesTheClockAndLeavesTheSound() Throws VideoError, AudioError
     End For
 End Function
 
-// A clock follows what's heard, a mix's period behind what's been mixed.
+// A clock follows what's heard, a mix's period behind what's been mixed: by hand, on MANUAL as a
+// device of 0.1 s, exactly so.
+@Test @MainThread
+Function AClockFollowsWhatsHeardAPeriodBehind() Throws VideoError, AudioError
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2, "", 0.1)
+    Defer Audio.Stop()
+    Local video = Try Video.Load(Embed("media/colors.mpg"))
+    Defer video.Free()
+    video.Play()
+    For i = 1 To 5
+        Audio.Mix(13230)
+        Local mixed = video.SoundChannel().Position()
+        video.Update(0.0)
+        Expect(Abs(video.Time() - (mixed - 0.1)) < 0.0001,
+               "of {mixed} s mixed, its clock's {video.Time()}")
+    End For
+End Function
+
+// And on a device that mixes as it goes, a period behind what's been mixed by the time it's read,
+// however a mix lands between what's read before and what the clock reads.
 @Test @MainThread
 Function AClockFollowsWhatsHeardOfAPeriodsMix() Throws VideoError, AudioError
     Try Audio.Start(AudioDevice.SILENT, 44100, 2, "", 0.1)
@@ -459,12 +478,13 @@ Function AClockFollowsWhatsHeardOfAPeriodsMix() Throws VideoError, AudioError
     Local start = Instant.Now()
     While start.Elapsed < 800.Milliseconds
         Sleep(10.Milliseconds)
-        Local mixed = video.SoundChannel().Position()
+        Local before = video.SoundChannel().Position()
         video.Update(0.0)
-        If mixed > period + 0.05
+        Local after = video.SoundChannel().Position()
+        If before > period + 0.05
             seen = True
-            Expect(video.Time() <= mixed - period + 0.02,
-                   "of {mixed} s mixed, {period} s at a time, its clock's {video.Time()}")
+            Expect(video.Time() <= after - period + 0.02,
+                   "of {after} s mixed, {period} s at a time, its clock's {video.Time()}")
         End If
     End While
     Expect(seen, "it never mixed enough")

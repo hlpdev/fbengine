@@ -78,6 +78,9 @@ void refuse_pipelines_of(std::string_view name,
                          VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_FLAG_BITS_MAX_ENUM);
 std::uint32_t pipelines_refused();
 
+/// How many pipelines have been made since the GPU started, for a test.
+std::size_t pipelines_made();
+
 /// Loads the pipeline cache as the device starts: the file fbe_gpu_set_pipeline_cache names, if
 /// it's this device's and whole, or an empty cache.
 void start_pipeline_cache();
