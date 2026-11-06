@@ -150,7 +150,7 @@ void hammered(std::uint64_t seed, int calls, bool device_events) {
             const std::uint64_t bus = any(buses, random);
             fbe_bus_set_volume(bus, random.unit() * 1.5F);
             fbe_bus_set_low_pass(bus,
-                                 random.below(3) == 0 ? 0.0F : 100.0F + random.unit() * 20000.0F);
+                                 random.below(3) == 0 ? 0.0F : 100.0F + (random.unit() * 20000.0F));
             if (random.below(3) == 0) {
                 fbe_bus_set_reverb(bus, random.unit(), random.unit(), random.unit(), random.unit(),
                                    random.unit());

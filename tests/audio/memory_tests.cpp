@@ -36,7 +36,7 @@ std::vector<std::uint8_t> read(const std::string& name) {
 /// process's size says nothing of a leak: LeakSanitizer says that there.
 #if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
 constexpr bool sanitized = true;
-#elif defined(__has_feature)
+#elifdef __has_feature
 #if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
 constexpr bool sanitized = true;
 #else
@@ -100,7 +100,7 @@ std::vector<std::vector<std::uint8_t>> corpus_sounds() {
     for (const auto& entry : std::filesystem::directory_iterator(FBE_AUDIO_TEST_CORPUS)) {
         const std::filesystem::path& path = entry.path();
         if (entry.is_regular_file() && path.extension() != ".sh" &&
-            path.filename().string().find("opus") == std::string::npos) {
+            !path.filename().string().contains("opus")) {
             paths.push_back(path);
         }
     }

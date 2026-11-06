@@ -58,7 +58,7 @@ std::uint64_t allocated() {
 /// process's size says nothing of a leak: LeakSanitizer says that there.
 #if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
 constexpr bool sanitized = true;
-#elif defined(__has_feature)
+#elifdef __has_feature
 #if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
 constexpr bool sanitized = true;
 #else

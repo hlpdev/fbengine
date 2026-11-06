@@ -136,8 +136,9 @@ void played(std::uint64_t sound) {
 /// leaves what stopped it.
 void tried(const std::vector<std::uint8_t>& bytes, const std::string& what) {
     INFO(what);
+    // NOLINTNEXTLINE(clang-diagnostic-deprecated-declarations): only read here.
     if (const char* last = std::getenv("FBE_FUZZ_LAST")) {
-        std::ofstream file(last, std::ios::binary | std::ios::trunc);
+        std::ofstream file(last, std::ios::binary);
         file.write(reinterpret_cast<const char*>(bytes.data()), // NOLINT: ofstream takes chars.
                    static_cast<std::streamsize>(bytes.size()));
     }
@@ -147,7 +148,7 @@ void tried(const std::vector<std::uint8_t>& bytes, const std::string& what) {
         const std::uint64_t sound =
             stream ? fbe_sound_stream(bytes.data(), size) : fbe_sound_load(bytes.data(), size);
         if (sound == 0) {
-            CHECK(std::string_view(fbe_audio_error()).size() > 0);
+            CHECK(!std::string_view(fbe_audio_error()).empty());
             continue;
         }
         played(sound);
@@ -200,8 +201,12 @@ TEST_CASE("every Ogg of the corpus, cut short and changed, is a sound or an erro
 // The files the package's tests keep for what once broke a decoder, cut short and changed too.
 TEST_CASE("the package's broken files, cut short and changed, are sounds or errors") {
     std::vector<std::filesystem::path> files;
-    for (const std::string_view name : { "corrupt.ogg", "forged.flac", "forged.ogg", "forged.wav",
-                                         "leak16.ogg", "rate.ogg", "rate.wav", "short.ogg" }) {
+    constexpr std::array<std::string_view, 8> names{
+        "corrupt.ogg", "forged.flac", "forged.ogg", "forged.wav",
+        "leak16.ogg",  "rate.ogg",    "rate.wav",   "short.ogg",
+    };
+    files.reserve(names.size());
+    for (const std::string_view name : names) {
         files.emplace_back(std::filesystem::path(FBE_AUDIO_TEST_DATA) / name);
     }
     fuzzed(files, 0x2545F4914F6CDD1DULL);
