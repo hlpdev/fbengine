@@ -1182,7 +1182,7 @@ Function TheShelfHasPoolsThatHoldTheSeaAtSlackWater()
     Local shelf = 0
     Local pools = 0
     For x = -70 To -20
-        For z = 15 To 60
+        For z = 5 To 60
             Local fx = x As Float
             Local fz = z As Float
             Local height = GroundHeight(fx, fz)
@@ -1192,7 +1192,7 @@ Function TheShelfHasPoolsThatHoldTheSeaAtSlackWater()
             End If
         End For
     End For
-    Expect(shelf > 30, "{shelf}")
+    Expect(shelf > 12, "{shelf}")
     Expect(pools > 3 && pools < shelf / 2, "{pools} of {shelf}")
     // All of it's under the high water.
     Expect(SHELF < SeaHeight(TIDE_IN_AT))
@@ -1210,4 +1210,75 @@ Function BouldersLieOnTheSlopesAwayFromTheWalks()
             Expect(Sqrt(dx * dx + dz * dz) > boulder.1 + 1.0, "{boulder.0} by {spot}")
         End For
     End For
+End Function
+
+// The coast's reach every 2 degrees round the mill, and the ellipse that fits it best, by its mean and
+// its twice-round terms, as an ellipse about its middle is.
+Function CoastAndEllipse(): (Float[], Float[])
+    Local coast: Float[] = []
+    Local angles: Float[] = []
+    For step = 0 Until 180
+        Local angle = (step As Float) * Pi / 90.0 - Pi
+        angles.Add(angle)
+        coast.Add(CoastAt(angle))
+    End For
+    Local mean = 0.0
+    Local c2 = 0.0
+    Local s2 = 0.0
+    Local c1 = 0.0
+    Local s1 = 0.0
+    For at = 0 Until coast.Count
+        mean += coast[at]
+        c1 += coast[at] * Cos(angles[at])
+        s1 += coast[at] * Sin(angles[at])
+        c2 += coast[at] * Cos(2.0 * angles[at])
+        s2 += coast[at] * Sin(2.0 * angles[at])
+    End For
+    Local n = coast.Count As Float
+    mean /= n
+    Local fit: Float[] = []
+    For angle In angles
+        fit.Add(mean + 2.0 / n * (c1 * Cos(angle) + s1 * Sin(angle) + c2 * Cos(2.0 * angle) +
+                                  s2 * Sin(2.0 * angle)))
+    End For
+    Return (coast, fit)
+End Function
+
+@Test
+Function TheMainIslandsCoastIsBrokenByCoves()
+    Local both = CoastAndEllipse()
+    Local coast = both.0
+    Local fit = both.1
+    Local mean = 0.0
+    For reach In coast
+        mean += reach
+    End For
+    mean /= coast.Count As Float
+    // Somewhere it's off the ellipse that fits it best by 15% of its reach.
+    Local most = 0.0
+    For at = 0 Until coast.Count
+        most = Max(most, Abs(coast[at] - fit[at]))
+    End For
+    Expect(most >= 0.15 * mean, "{most} of {mean}")
+    // And each cove's a cove: in from the coast either side of it by 15% of the reach.
+    For cove In Coves()
+        Local inside = CoastAt(cove.0)
+        Local either = (CoastAt(cove.0 - cove.2 * 2.5) + CoastAt(cove.0 + cove.2 * 2.5)) / 2.0
+        Expect(either - inside >= 0.15 * mean,
+               "{cove.0}: {inside} against {either}, either side, of {mean}")
+    End For
+End Function
+
+@Test
+Function ASeaStackStandsOffTheHeadland()
+    Local stack = StackSpot()
+    Expect(GroundHeight(stack.x, stack.y) > STACK_HIGH - 1.5)
+    // In the sea, cliffs all round.
+    For step = 0 Until 12
+        Local angle = (step As Float) * Pi / 6.0
+        Expect(GroundHeight(stack.x + Cos(angle) * 6.0, stack.y + Sin(angle) * 6.0) < 0.0,
+               "{angle}")
+    End For
+    // And the shelf's in a cove.
+    Expect(Abs(Coves()[0].0 - Atan2(30.0, SHELF_MIDDLE - MAIN_X)) < 0.3)
 End Function

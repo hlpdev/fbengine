@@ -71,6 +71,57 @@ Function Mound(x: Float, z: Float, centerX: Float, centerZ: Float, radius: Float
     Return 1.0 - Sqrt(dx * dx + dz * dz) / edge
 End Function
 
+/// The main island's coves, as angles round the mill from +x toward +z, how far each cuts in, as a
+/// part of the island's reach there, and how wide it is, in radians: one in the south, which the
+/// shelf's in, one south-west, and one north-east, none where the road leaves to the east.
+Public Function Coves(): (Float, Float, Float)[]
+    Return [(1.62, 0.36, 0.3), (2.75, 0.4, 0.24), (-0.95, 0.34, 0.22)]
+End Function
+
+// The main rock's shape, as Mound's, with its coves cut into it.
+Function MainMound(x: Float, z: Float): Float
+    Local dx = x - MAIN_X
+    Local dz = z
+    Local angle = Atan2(dz, dx)
+    Local reach = 1.0
+    For cove In Coves()
+        Local apart = angle - cove.0
+        While apart > Pi
+            apart -= 2.0 * Pi
+        End While
+        While apart < -Pi
+            apart += 2.0 * Pi
+        End While
+        Local into = apart / cove.2
+        reach -= cove.1 * (Exp((-into * into) As Float64) As Float)
+    End For
+    Local edge = MAIN_RADIUS * (0.72 + Rough(x + 300.0, z + 300.0) * 0.56) * reach
+    Return 1.0 - Sqrt(dx * dx + dz * dz) / edge
+End Function
+
+// The sea stack off the headland: where it stands, how far its cliffs reach from its middle, and how
+// high it is.
+Const STACK_X: Float = HEADLAND_X + 6.0
+Const STACK_Z: Float = HEADLAND_Z - 33.0
+Const STACK_RADIUS: Float = 3.2
+/// How high the sea stack stands.
+Public Const STACK_HIGH: Float = 9.0
+
+/// Where the sea stack stands off the headland.
+Public Function StackSpot(): Vec2 => Vec2(STACK_X, STACK_Z)
+
+/// How far the main island's coast reaches from the mill at `angle`, from +x toward +z: the first
+/// ground, going out, that's under the sea at slack water, a quarter meter at a time.
+Public Function CoastAt(angle: Float): Float
+    Local c = Cos(angle As Float64) As Float
+    Local s = Sin(angle As Float64) As Float
+    Local reach = 10.0
+    While reach < 110.0 && GroundHeight(MAIN_X + c * reach, s * reach) > 0.0
+        reach += 0.25
+    End While
+    Return reach
+End Function
+
 // Noise folded into ridges, from 0 to 1: crags at two scales, sharp along their tops.
 Function Ridged(x: Float, z: Float): Float
     Local wide = 1.0 - Abs(2.0 * Noise(x * 0.04 + 11.0, z * 0.04 + 5.0) - 1.0)
@@ -113,20 +164,20 @@ Public Const SHELF: Float = 0.12
 /// How much of what's at (`x`, `z`), `height` high as it is, is the shore's rock shelf, from 0 to 1:
 /// along the main island's south shore, between where it'd be under the sea's floor and up the beach.
 Public Function ShelfAt(x: Float, z: Float, height: Float): Float
-    Local along = Clamp(1.0 - Abs(x - SHELF_MIDDLE) / 26.0, 0.0, 1.0) *
-                  Clamp((z - 16.0) / 5.0, 0.0, 1.0)
+    Local along = Clamp((26.0 - Abs(x - SHELF_MIDDLE)) / 6.0, 0.0, 1.0) *
+                  Clamp((z - 6.0) / 5.0, 0.0, 1.0)
     If along <= 0.0 Then Return 0.0
-    Local band = Clamp((height + 1.2) / 0.5, 0.0, 1.0) * Clamp((1.3 - height) / 0.5, 0.0, 1.0)
+    Local band = Clamp((height + 0.5) / 0.4, 0.0, 1.0) * Clamp((1.3 - height) / 0.5, 0.0, 1.0)
     Return along * band
 End Function
 
 /// Where the shelf's middle is, across the south shore.
-Public Const SHELF_MIDDLE: Float = MAIN_X - 6.0
+Public Const SHELF_MIDDLE: Float = MAIN_X - 2.0
 
 /// How deep the shelf's tide pools are at (`x`, `z`), under the shelf: a hand's depth below the sea at
 /// slack water, so they hold it, or nothing.
 Public Function PoolAt(x: Float, z: Float): Float
-    Local pool = Clamp((Noise(x * 0.33 + 21.0, z * 0.33 + 4.0) - 0.62) * 6.0, 0.0, 1.0)
+    Local pool = Clamp((Noise(x * 0.33 + 21.0, z * 0.33 + 4.0) - 0.55) * 6.0, 0.0, 1.0)
     Return -0.3 * pool * pool * (3.0 - 2.0 * pool)
 End Function
 
@@ -151,7 +202,7 @@ Function Rock(x: Float, z: Float): Float
     Local headland = Max(Mound(x, z, HEADLAND_X, HEADLAND_Z, HEADLAND_RADIUS),
                          Mound(x, z, HEADLAND_X - 17.0, HEADLAND_Z + 5.0, HEADLAND_RADIUS * 0.7) *
                          0.8)
-    Local land = Max(Max(Mound(x, z, MAIN_X, 0.0, MAIN_RADIUS), far), headland)
+    Local land = Max(Max(MainMound(x, z), far), headland)
     Local height = land * 6.0
     If land > 0.0
         Local high = Clamp(headland, 0.0, 1.0)
@@ -168,6 +219,12 @@ Function Rock(x: Float, z: Float): Float
                       Clamp((Noise(x * 0.07 + 40.0, z * 0.07 + 13.0) - 0.25) * 3.0, 0.0, 1.0)
         rocky *= Clamp((FromWalks(x, z) - 5.0) / 4.0, 0.0, 1.0)
         If rocky > 0.0 Then height += (Terraced(height) - height) * rocky
+    End If
+    // The sea stack off the headland: a column, cliffs all round, its top broken.
+    Local stackAway = Sqrt((x - STACK_X) * (x - STACK_X) + (z - STACK_Z) * (z - STACK_Z))
+    Local column = Clamp((STACK_RADIUS - stackAway) / 0.9, 0.0, 1.0)
+    If column > 0.0
+        height = Max(height, -2.0 + column * (STACK_HIGH + 2.0 + Noise(x * 0.9, z * 0.9) * 1.2))
     End If
     // The rock shelf along the main island's south shore, its pools in it.
     Local shelf = ShelfAt(x, z, height)

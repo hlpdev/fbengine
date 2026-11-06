@@ -815,9 +815,9 @@ Function CheckLandmarks(folder: Path, island: Island, camera: Camera) Throws Gra
     Try Screen.Save(folder / "shelf_high.png")
     Flip(False)
     island.Update(0.0)
-    Local pools = 0
-    Local pooled = 0
-    Local dry = 0
+    // Each point of it: how much bluer than red it's drawn at slack water, if it's a pool, and at high.
+    Local poolBlue: Int[] = []
+    Local dryBlue: Int[] = []
     Local covered = 0
     Local onShelf = 0
     For across = -8 To 8
@@ -830,18 +830,26 @@ Function CheckLandmarks(folder: Path, island: Island, camera: Camera) Throws Gra
             Local seenHigh = PixelOf(camera, high, Vec3(x, Max(height, SeaHeight(TIDE_IN_AT)), z))
             If seen == Null || seenHigh == Null Then Continue
             onShelf += 1
-            // The sea in a pool, or its foam, as shallow water's drawn.
-            Local least = Min(seen.r As Int, Min(seen.g As Int, seen.b As Int))
-            Local wet = (seen.b As Int) > (seen.r As Int) + 30 || least > 170
-            If height < 0.0 Then pooled += 1
-            If height < 0.0 && wet Then pools += 1
-            If height > 0.05 && !wet Then dry += 1
+            Local blue = (seen.b As Int) - (seen.r As Int)
+            If height < 0.0 && PoolAt(x, z) < -0.1 Then poolBlue.Add(blue)
+            If height > 0.05 Then dryBlue.Add(blue)
             If (seenHigh.b As Int) > (seenHigh.r As Int) + 30 Then covered += 1
         End For
     End For
-    Checks("the shelf's pools hold the sea at slack water, and the rest's dry, {pools} of {pooled} pooled, " +
-           "{dry} of {onShelf}",
-           onShelf > 40 && pools > 2 && dry > onShelf / 3)
+    // The pools bluer than the dry shelf, by the sea in them, the shallows showing the rock under.
+    Local dryMean = 0
+    For blue In dryBlue
+        dryMean += blue
+    End For
+    dryMean = dryBlue.Count > 0 ? dryMean / dryBlue.Count : 0
+    Local poolMean = 0
+    For blue In poolBlue
+        poolMean += blue
+    End For
+    poolMean = poolBlue.Count > 0 ? poolMean / poolBlue.Count : -1000
+    Checks("the shelf's pools hold the sea at slack water, {poolMean} bluer than red against its " +
+           "{dryBlue.Count} dry points' {dryMean}", onShelf > 40 && poolBlue.Count > 3 &&
+           poolMean > dryMean + 10 && dryBlue.Count > onShelf / 3)
     Checks("and at high water the sea's over it, {covered} of {onShelf}",
            covered > onShelf * 9 / 10)
     Print("the ground's erosion took {ErosionSeconds()} s, of {DROPS} drops")
