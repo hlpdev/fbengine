@@ -409,27 +409,41 @@ Function TheMusicTurnsWithTheWeatherAndTide()
     Expect(Tension(FLOOD_AT + 20.0) > StormAt(FLOOD_AT + 20.0))
 End Function
 
-// The music ducks under a cue, in a line, to half in 0.15 s, holds a second after the last, and comes
-// back over 0.8 s, never stepping more than that rate allows.
+// The music ducks under a cue, in a line, to half in 0.15 s, holds a second after the last ends, and
+// comes back over 0.8 s, never stepping more than that rate allows.
 @Test
 Function TheMusicDucksUnderACueWithoutAClick()
     Local ducking = Ducking()
-    Expect(ducking.Step(0.01, False) == 1.0)
+    Expect(ducking.Step(0.01, 0.0) == 1.0)
     Local was = 1.0
     Local tick = 0
     Local reachedAt = -1
     Local backAt = -1
     For step = 1 To 400
-        Local now = ducking.Step(0.01, step == 10 || step == 50)
+        // Two cues of 0.3 s each.
+        Local now = ducking.Step(0.01, step == 10 || step == 50 ? 0.3 : 0.0)
         Expect(Abs(now - was) <= 0.5 * 0.01 / 0.15 + 0.000001)
         If reachedAt < 0 && now <= 0.5 + 0.000001 Then reachedAt = step
         If reachedAt > 0 && backAt < 0 && now >= 1.0 - 0.000001 Then backAt = step
         was = now
     End For
-    // Half by 15 hundredths after the first; held until a second after the second, at 50; back by
+    // Half by 15 hundredths after the first; held until a second after the second ends, at 80; back by
     // 0.8 s after that.
     Expect(reachedAt >= 24 && reachedAt <= 26)
-    Expect(backAt >= 228 && backAt <= 232)
+    Expect(backAt >= 258 && backAt <= 262)
+End Function
+
+// Under a long cue, as the sluice's 2.2 s rush, the music stays down until a second after it ends,
+// not a second after it starts, and a short cue in it doesn't bring it up sooner.
+@Test
+Function TheMusicStaysDownUntilALongCueEnds()
+    Local ducking = Ducking()
+    Local downUntil = -1
+    For step = 1 To 500
+        Local now = ducking.Step(0.01, step == 1 ? 2.2 : step == 100 ? 0.2 : 0.0)
+        If now <= 0.5 + 0.000001 Then downUntil = step
+    End For
+    Expect(downUntil >= 319 && downUntil <= 321)
 End Function
 
 // Pip's voice by the flow: a hello each time it catches up, never at the start, as it's with you; a
@@ -438,15 +452,17 @@ End Function
 @Test
 Function PipSaysWhatTheFlowDoes()
     For ending In ["bright", "dim", "dark"]
-        Local flow = Quiet()
+        // What the flow says of Pip catching up, as a player reads it.
+        Local caught: String[] = []
+        Local flow = Flow(Function(line: String)
+            If line.EndsWith("Pip catches up") Then caught.Add(line)
+        End Function)
         Local cues = Cues()
         Local steps = WalkOf(ending) ?? []
         Local next = 0
         Local heard = [0, 0, 0, 0, 0, 0]
-        Local caughtUp = 0
         Local takes = 0
         Local gives = 0
-        Local wasHere = flow.PipHere()
         Local held = False
         Local endedAt = -1.0
         Local feltAt = -1.0
@@ -466,8 +482,6 @@ Function PipSaysWhatTheFlowDoes()
             End If
             flow.Step(0.1)
             If flow.Ended() != Ending.NONE && endedAt < 0.0 Then endedAt = (tick As Float) * 0.1
-            If flow.PipHere() && !wasHere && flow.Ended() == Ending.NONE Then caughtUp += 1
-            wasHere = flow.PipHere()
             Local holds = flow.PipHolds() != Null
             If holds && !held Then takes += 1
             If !holds && held Then gives += 1
@@ -477,7 +491,7 @@ Function PipSaysWhatTheFlowDoes()
                 If cue == Cue.PIP_GLAD || cue == Cue.PIP_SAD Then feltAt = (tick As Float) * 0.1
             End For
         End For
-        Expect(heard[0] == caughtUp && caughtUp > 0)
+        Expect(heard[0] == caught.Count && caught.Count == flow.CaughtUp() && caught.Count > 0)
         Expect(heard[1] == takes && heard[2] == gives)
         Expect(heard[3] == (flow.Flooded() ? 1 : 0))
         Expect(heard[4] == (flow.Ended() == Ending.BRIGHT ? 1 : 0))
@@ -497,8 +511,10 @@ Function NothingAtOnceClips()
         loudestBeds = Max(loudestBeds, WindLevel(clock, False) + SeaLevel(clock, False) +
                           SurfLevel(clock, False))
     End For
-    // The music, both themes at once, at their peak, ducked under the cues.
-    Local music = (MusicLevels(FLOOD_AT, False).0 + MusicLevels(FLOOD_AT, False).1) * 0.6 * 0.5
+    // The music, both themes at once, at their peak, as it is at a cue's attack, before it's ducked.
+    Local attack = Ducking().Step(0.0, 1.0)
+    Expect(attack == 1.0)
+    Local music = (MusicLevels(FLOOD_AT, False).0 + MusicLevels(FLOOD_AT, False).1) * 0.6 * attack
     Local toTheEnd = loudestBeds * 0.7 + WheelLevel(1.0) * 0.7 + WorksLevel(1.0) * 0.6 +
                      CueLevel(Cue.STEP_1) * 0.7 + CueLevel(Cue.CREAK) * 0.6 +
                      CueLevel(Cue.SLUICE) * 0.7 + music

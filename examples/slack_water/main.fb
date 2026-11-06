@@ -1025,9 +1025,10 @@ Function Heard(scape: Soundscape, flow: Flow, loudest: Float)
            scape.Played(Cue.TURF_1) + scape.Played(Cue.TURF_2) > 0 &&
            scape.Played(Cue.FLOOR_1) + scape.Played(Cue.FLOOR_2) > 0)
     Checks("there's a sound for each cue", scape.CueCount() == CUES)
-    // Pip: caught up with you at least once, worried at the flood, and glad or sad by how it ended.
-    Checks("Pip says hello, and is worried at the flood",
-           scape.Played(Cue.PIP_HELLO) > 0 &&
+    // Pip: a hello each time it's said to catch up with you, worried at the flood, and glad or sad by
+    // how it ended.
+    Checks("Pip says hello as it catches up, and is worried at the flood",
+           scape.Played(Cue.PIP_HELLO) == flow.CaughtUp() && flow.CaughtUp() > 0 &&
            scape.Played(Cue.PIP_WORRIES) == (flow.Flooded() ? 1 : 0))
     Checks("Pip's glad or sad, as it ended",
            scape.Played(Cue.PIP_GLAD) == (flow.Ended() == Ending.BRIGHT ? 1 : 0) &&
@@ -1096,8 +1097,9 @@ Function Listened() Throws GraphicsError, IOError, AudioError
     // The music by itself: ducked under a gull and back, and turning to the storm's theme with no click.
     scape.SetMusic(1.0)
     Listener.SetPosition(Vec3(door.x, 5.0, door.y))
-    // Long enough after the gulls above to have come back from under them.
-    For step = 1 To 150
+    // Long enough after the gulls above to have come back from under them: a second after the last
+    // ends, and 0.8 s up.
+    For step = 1 To 300
         scape.Surroundings(0.0, False, 1.0 / 60.0)
         Audio.Mix(735)
     End For
@@ -1234,7 +1236,8 @@ Function Listened() Throws GraphicsError, IOError, AudioError
             Audio.Mix(735)
         End For
         scape.Play(cue, door)
-        Local peak = PeakOf(Audio.Mix(rate))
+        // The sluice's rush, of 2.2 s, all of it.
+        Local peak = PeakOf(Audio.Mix(cue == Cue.SLUICE ? rate * 3 : rate))
         Print("cue {cue As Int} peaks at {peak}")
         Checks("cue {cue As Int} reaches the mix", peak > 0.05 && peak < 0.5)
     End For
@@ -1746,6 +1749,107 @@ Function Moved(game: Game, controls: Controls, seconds: Float): Bool
     Return True
 End Function
 
+// Crossing the mill's door ahead of Pip, out and in five times, with a second at each side for Pip to
+// come up: Pip says hello as often as it's said to catch up, not each time it's beside you again.
+Function HelloedAtTheDoor() Throws GraphicsError, IOError, AudioError
+    Local island = Try Opened()
+    Defer EndGraphics()
+    Defer Assets.StopWatching()
+    Defer island.Free()
+    Local caught: String[] = []
+    Local game = Game(island, Function(line: String)
+        If line.EndsWith("Pip catches up") Then caught.Add(line)
+    End Function)
+    Defer game.Free()
+    Try StartAudio(AudioDevice.MANUAL, 44100)
+    Defer Audio.Stop()
+    Local scape = Try Soundscape.Make(game, island)
+    Defer scape.Free()
+    Local controls = Controls()
+    Local stepped = Function()
+        Flip(False)
+        game.Step(controls, 0.1)
+        scape.Update(game, 0.1)
+        Audio.Mix(4410)
+    End Function
+    Local door = DoorSpot()
+    Local crossed = 0
+    // Each step, on the side of the door it's on, the first each way too.
+    Local stepsHeard = [0, 0]
+    Local wrongSide = 0
+    Local stepsPlayed = Function(): Int
+        Local count = 0
+        For number = 0 Until CUES
+            If IsStep(number As Cue) Then count += scape.Played(number As Cue)
+        End For
+        Return count
+    End Function
+    Local heardOnItsSide = Function()
+        Local before = stepsPlayed()
+        stepped()
+        If stepsPlayed() > before
+            Local inside = InMill(game.Location().x, game.Location().y)
+            stepsHeard[inside ? 1 : 0] += 1
+            If scape.LastStepInMill() != inside Then wrongSide += 1
+        End If
+    End Function
+    Local ringOpen = True
+    Local ringMuffled = True
+    For crossing = 1 To 5
+        For spot In [Vec2(door.x, door.y + 3.0), MillSpot()]
+            Local inside = Try WalkedOnTo(game, spot, heardOnItsSide)
+            If inside == InMill(spot.x, spot.y) Then crossed += 1
+            For step = 1 To 10
+                stepped()
+            End For
+            If inside Then ringOpen = ringOpen && scape.StepsRingNow() == OutsideCutoff(False)
+            If !inside Then ringMuffled = ringMuffled && scape.StepsRingNow() == OutsideCutoff(True)
+        End For
+    End For
+    // And just out of the door and straight back in, five times, Pip left inside: it's beside you
+    // again each time, with nothing new to say.
+    Local besideAgain = 0
+    For crossing = 1 To 5
+        Local out = Try WalkedOnTo(game, Vec2(door.x, door.y - 1.0), heardOnItsSide)
+        Local wasHere = game.Story().PipHere()
+        Local back = Try WalkedOnTo(game, MillSpot(), heardOnItsSide)
+        For step = 1 To 10
+            stepped()
+        End For
+        If !out && back && !wasHere && game.Story().PipHere() Then besideAgain += 1
+    End For
+    Print("just out and back in, Pip's beside you again {besideAgain} times")
+    Checks("just out of the door and back, Pip's beside you again", besideAgain > 0)
+    Local hellos = scape.Played(Cue.PIP_HELLO)
+    Print(
+        "across the door {crossed} times, Pip's said to catch up {caught.Count} times, and says " +
+        "hello {hellos}")
+    Checks("the door's crossed, out and in, five times", crossed == 10)
+    Print("steps heard outside {stepsHeard[0]}, inside {stepsHeard[1]}, on the wrong side {wrongSide}")
+    Checks("each step's heard on its side of the door, the first each way too",
+           wrongSide == 0 && stepsHeard[0] > 0 && stepsHeard[1] > 0)
+    Checks("your steps' ring is open inside, and muffled a second out",
+           ringOpen && ringMuffled)
+    Checks("Pip says hello as often as it's said to catch up", hellos == caught.Count &&
+           hellos == game.Story().CaughtUp())
+End Function
+
+// Walks you to `spot`, by W, within a meter, at most 100 steps, each `stepped`, and says whether you're
+// in the mill.
+Function WalkedOnTo(game: Game, spot: Vec2, stepped: Func()): Bool Throws GraphicsError
+    Try Simulate.KeyDown(Key.W)
+    For step = 1 To 100
+        Local here = game.Location()
+        If (spot.x - here.x) * (spot.x - here.x) + (spot.y - here.y) * (spot.y - here.y) < 1.0
+            Break
+        End If
+        game.Face(spot.x, spot.y)
+        stepped()
+    End For
+    Try Simulate.KeyUp(Key.W)
+    Return InMill(game.Location().x, game.Location().y)
+End Function
+
 // Walks you to (`toX`, `toZ`), by W, within a meter, at most `steps` steps.
 Function WalkedTo(game: Game, controls: Controls, toX: Float, toZ: Float,
                   steps: Int) Throws GraphicsError
@@ -1943,6 +2047,11 @@ Final Class Session
         ending.Update(game.Story(), seconds)
         If ending.LeaveChosen() Then left = True
         If ending.AgainChosen()
+            // The player's levels, as the options set them, are theirs, not the game's.
+            Local levels: Float[] = []
+            For mix In [Mix.MASTER, Mix.MUSIC, Mix.AMBIENCE, Mix.EFFECTS]
+                levels.Add(scape.Level(mix))
+            End For
             scape.Free()
             game.Free()
             Local said = last
@@ -1951,6 +2060,9 @@ Final Class Session
                 said[0] = line
             End Function)
             scape = Try Soundscape.Make(game, island)
+            For mix In [Mix.MASTER, Mix.MUSIC, Mix.AMBIENCE, Mix.EFFECTS]
+                scape.SetLevel(mix, levels[mix As Int])
+            End For
             ending.Update(game.Story(), 0.0)
         End If
         If ending.Showing() != pointing
@@ -2027,10 +2139,18 @@ Function EndAndAgain(session: Session, said: String, wheelAtFirst: Quat) Throws 
     Try Stepped(session, 1)
     Checks("under it, the mouse doesn't turn you", session.game.Yaw() == yaw)
     Checks("nor do keys walk you", session.game.Location() == at)
+    // The player's levels, set in the options, and kept as it begins again.
+    Local scapeWas = session.scape
+    session.scape.SetLevel(Mix.MUSIC, 0.25)
+    session.scape.SetLevel(Mix.EFFECTS, 0.5)
     // E, with it: not a key the new game hears.
     Try Simulate.PressKey(Key.E)
     Try Simulate.PressKey(Key.SPACE)
     Checks("playing again begins again", Try SteppedToAgain(session, flow))
+    Checks("with the player's levels as they set them",
+           session.scape != scapeWas && session.scape.Level(Mix.MASTER) == 1.0 &&
+           session.scape.Level(Mix.MUSIC) == 0.25 && session.scape.Level(Mix.AMBIENCE) == 1.0 &&
+           session.scape.Level(Mix.EFFECTS) == 0.5)
     Checks("the sea's back as soon as it does", island.SeaDrawnAt() == SeaHeight(0.0))
     Checks("and the mouse is the game's", MouseRelative())
     Try Stepped(session, 1)
@@ -2264,6 +2384,7 @@ ElseIf arguments.Count == 1 && arguments[0] == "--hear"
         Print("no GPU here")
     Else
         Try Listened()
+        Try HelloedAtTheDoor()
     End If
 ElseIf arguments.Count == 1 && arguments[0] == "--feel"
     If Env.Get("FBENGINE_NO_GPU") == "1"

@@ -78,8 +78,8 @@ Const WORKS: Float = 0.1
 // The music: how loud either theme is, at most, and what's left of it inside the mill.
 Const MUSIC: Float = 0.08
 Public Const MUSIC_INSIDE: Float = 0.7
-// Under a cue, the music's at DUCK, reached over DUCK_DOWN seconds, held DUCK_HOLD after the last cue,
-// and back over DUCK_UP, each in a line, so there's no click.
+// Under a cue, the music's at DUCK, reached over DUCK_DOWN seconds, held until DUCK_HOLD after the
+// last cue ends, and back over DUCK_UP, each in a line, so there's no click.
 Const DUCK: Float = 0.5
 Const DUCK_DOWN: Float = 0.15
 Const DUCK_HOLD: Float = 1.0
@@ -106,7 +106,7 @@ Public Function CueLevel(cue: Cue): Float
         Case Cue.SPLASH
             Return 0.3
         Case Cue.SLUICE
-            Return 0.2
+            Return 0.15
         Case Cue.FIT
             Return 0.25
         Case Cue.PIP_GLAD, Cue.PIP_SAD
@@ -206,15 +206,17 @@ Public Function MusicLevels(clock: Float64, inside: Bool): (Float, Float)
             level * Max(Sin(turn As Float64) As Float, 0.0))
 End Function
 
-/// What the music's turned down to under the cues: DUCK under one, held a while after, then back to
-/// 1, each change in a line, at most `seconds` / DUCK_DOWN of the way down, or / DUCK_UP up, a step.
+/// What the music's turned down to under the cues: DUCK under one, held until DUCK_HOLD after it
+/// ends, then back to 1, each change in a line, at most `seconds` / DUCK_DOWN of the way down, or
+/// / DUCK_UP up, a step.
 Public Final Class Ducking
     Field level: Float = 1.0
     Field held: Float = 0.0
 
-    /// Where it's at, `seconds` on, `cued` or not in them.
-    Public Method Step(seconds: Float, cued: Bool): Float
-        If cued Then held = DUCK_HOLD
+    /// Where it's at, `seconds` on, with a cue begun in them that sounds for `cued` seconds, the
+    /// longest if there were more, or 0 for none.
+    Public Method Step(seconds: Float, cued: Float): Float
+        If cued > 0.0 Then held = Max(held, cued + DUCK_HOLD)
         Local target = held > 0.0 ? DUCK : 1.0
         held = Max(held - seconds, 0.0)
         Local down = seconds / DUCK_DOWN * (1.0 - DUCK)
@@ -293,9 +295,9 @@ Public Final Class Cues
     Field flooded: Bool = False
     Field fitted: Int = 0
     Field opened: Bool = False
-    // What Pip was doing, as of the last Step: whether it was with you, what it held, and how long
-    // it's been since the end.
-    Field pipWasHere: Bool = True
+    // What Pip was doing, as of the last Step: how many times it had caught up, what it held, and
+    // how long it's been since the end.
+    Field pipCaughtUp: Int = 0
     Field pipHeld: Bool = False
     Field pipWorried: Bool = False
     Field sinceEnded: Float = -1.0
@@ -347,9 +349,10 @@ Public Final Class Cues
         End If
         // Pip: catching up, taking and giving back, worried as the flood comes, and how it feels,
         // a while after it's ended.
-        Local pipHere = flow.PipHere()
-        If pipHere && !pipWasHere && flow.Ended() == Ending.NONE Then cues.Add(Cue.PIP_HELLO)
-        pipWasHere = pipHere
+        While pipCaughtUp < flow.CaughtUp()
+            pipCaughtUp += 1
+            cues.Add(Cue.PIP_HELLO)
+        End While
         Local holds = flow.PipHolds() != Null
         If holds && !pipHeld Then cues.Add(Cue.PIP_TAKES)
         If !holds && pipHeld Then cues.Add(Cue.PIP_GIVES)
