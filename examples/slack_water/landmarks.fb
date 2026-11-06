@@ -1,0 +1,562 @@
+// What makes the island a place past the mill, of shapes built in code: the far islet's lighthouse,
+// its lamp turning, lit in the storm; a jetty off the main island's west shore, with a rowboat moored
+// at it that rides the sea; and driftwood, rope, and rocks along the sand, each fitted to the ground.
+
+Import std.core
+Import std.math
+Import fbengine
+Import "./ground"
+Import "./map"
+Import "./shapes"
+
+// How tall the lighthouse's tower is, from its foot, and how wide at its foot and its top.
+Const TOWER: Float = 9.0
+Const TOWER_FOOT: Float = 1.5
+Const TOWER_TOP: Float = 1.05
+// How high its plinth is, from its pivot, which is under the ground by SUNK.
+Const PLINTH_HIGH: Float = 0.6
+Const SUNK: Float = 0.1
+/// How high the lamp room's lens is, over the lighthouse's pivot.
+Public Const LENS: Float = TOWER + 0.75
+// How bright its lamp is, lit, how far it reaches, and how fast it turns, in radians a second.
+Const BEAM: Float = 600.0
+Const BEAM_RANGE: Float = 160.0
+/// How fast the lighthouse's lamp turns, in radians a second.
+Public Const BEAM_TURN: Float = 0.9
+// How far out from the lens the beam starts: past the gallery's rail, so the lamp room's frame
+// doesn't catch it.
+Const BEAM_OUT: Float = 1.75
+// How bright its lens glows, lit, past white, for bloom.
+Const LENS_GLOW: Float = 6.0
+// How high the jetty's deck is, over the sea at slack water, above the high water.
+Const DECK: Float = 2.0
+/// How far the boat rises and falls on the sea, and how often, in radians a second.
+Public Const BOB: Float = 0.06
+Const BOB_RATE: Float = 1.7
+
+/// How lit the lighthouse is `clock` seconds in, from 0 to 1: once the storm's well begun, more as it
+/// comes on.
+Public Function LighthouseLit(clock: Float64): Float => Clamp(StormAt(clock) * 1.4 - 0.2, 0.0, 1.0)
+
+/// How far the boat's middle rides over the sea: its keel, KEEL under that, in it by a little.
+Public Const RIDES: Float = 0.12
+/// How far the boat's keel is under its middle, and its floorboards over its keel, whose tops are over
+/// the sea however it swells, so the sea, a plane through all of it, isn't seen in it.
+Public Const KEEL: Float = 0.18
+Public Const FLOORBOARDS: Float = 0.13
+
+/// Where the boat is `clock` seconds in, `swell` seconds into its own rising and falling: on the sea's
+/// height then, a little over it.
+Public Function BoatHeight(clock: Float64, swell: Float64): Float
+    Return SeaHeight(clock) + RIDES + BOB * (Sin(swell * BOB_RATE) As Float)
+End Function
+
+/// What moves on its own in real time, whatever the flow's clock does as it waits: the lamp's turn and
+/// the boat's swell.
+Public Final Class Motion
+    /// How far the lamp's turned, in radians.
+    Public Field Turned: Float = 0.0
+    /// How long the boat's been rising and falling, in seconds.
+    Public Field Swell: Float64 = 0.0
+
+    /// Moves it on `seconds`, as they pass.
+    Public Method Step(seconds: Float)
+        Turned += BEAM_TURN * seconds
+        Swell += seconds As Float64
+    End Method
+End Class
+
+/// The landmarks, in the island's World.
+Public Final Class Landmarks
+    Field lighthouse: Pivot
+    Field beam: Light
+    Field lens: Material
+    Field jetty: Pivot
+    Field boat: Pivot
+    Field litter: Pivot
+    Field litterCount: Int
+    Field logs: (Mesh, Float, Float)[]
+    Field bollard: Vec3
+    Field driven = False
+    Field motion: Motion
+    Field clock: Float64 = 0.0
+
+    New(lighthouse: Pivot, beam: Light, lens: Material, jetty: Pivot, boat: Pivot, litter: Pivot,
+        litterCount: Int, logs: (Mesh, Float, Float)[])
+        Self.logs = logs
+        Self.lighthouse = lighthouse
+        Self.beam = beam
+        Self.lens = lens
+        Self.jetty = jetty
+        Self.boat = boat
+        Self.litter = litter
+        Self.litterCount = litterCount
+        motion = Motion()
+    End New
+
+    /// Builds them, of `wood`, `boards`, `iron`, and `stone`.
+    @MainThread
+    Public Static Method Make(wood: Material, boards: Material, iron: Material,
+                              stone: Material): Landmarks
+        Local lighthouse, beam, lens = Lighthouse(iron, stone)
+        Local jetty, boat = Jetty(wood, boards, iron)
+        Local litter, logs = Litter(wood, stone)
+        Local made = Landmarks(lighthouse, beam, lens, jetty, boat, litter, ShoreSpots().Count,
+                               logs)
+        made.Shown()
+        Return made
+    End Method
+
+    /// Moves them on to `clock` seconds in: the lamp lit by the weather, the boat on the sea.
+    @MainThread
+    Public Method Update(clock: Float64)
+        Self.clock = clock
+        Shown()
+    End Method
+
+    /// Moves what moves on its own on `seconds` of real time: the lamp's turn, the boat's swell.
+    @MainThread
+    Public Method Animate(seconds: Float)
+        motion.Step(seconds)
+        Shown()
+    End Method
+
+    /// Turns the lamp to `turned` radians, as a still of its beam passing wants.
+    @MainThread
+    Public Method TurnBeam(turned: Float)
+        motion.Turned = turned
+        Shown()
+    End Method
+
+    /// How far the lamp's turned, in radians.
+    @MainThread Public Method BeamTurned(): Float => motion.Turned
+
+    // Shows them as the clock and their own motion have them.
+    @MainThread
+    Method Shown()
+        Local lit = LighthouseLit(clock)
+        beam.SetIntensity(BEAM * lit)
+        // Out past the rail, the way it faces, as a light faces -Z.
+        Local turned = motion.Turned
+        beam.SetRotation(-0.06, turned, 0.0)
+        beam.SetPosition(Vec3(-Sin(turned) * BEAM_OUT, LENS, -Cos(turned) * BEAM_OUT))
+        Local glow = LENS_GLOW * (0.05 + 0.95 * lit)
+        lens.SetEmissive(Color(glow, glow * 0.85, glow * 0.55))
+        // Once a body drives it, the boat's where that has it.
+        If driven Then Return
+        Local spot = JettyEnd()
+        boat.SetPosition(Vec3(spot.x - 1.0, BoatHeight(clock, motion.Swell), spot.y + 2.4))
+        boat.SetRotation(0.04 * (Sin(motion.Swell * 1.1) As Float), 0.3, 0.0)
+    End Method
+
+    /// Each of them, by its name, for what's drawn of it alone.
+    @MainThread
+    Public Method Pieces(): (String, Entity)[]
+        Return [("lighthouse", lighthouse As Entity), ("jetty", jetty As Entity),
+                ("boat", boat As Entity), ("litter", litter As Entity)]
+    End Method
+
+    /// The lens's middle, in the world.
+    @MainThread
+    Public Method LampAt(): Vec3 => lighthouse.Position(Space.WORLD) + Vec3(0.0, LENS, 0.0)
+
+    /// The boat's middle, in the world.
+    @MainThread Public Method BoatAt(): Vec3 => boat.Position(Space.WORLD)
+
+    /// How bright the lamp's beam is now.
+    @MainThread Public Method Beam(): Float => beam.Intensity()
+
+    /// The boat's root, its origin at its middle, its keel KEEL under it.
+    @MainThread Public Method Boat(): Pivot => boat
+
+    /// Whether something else moves the boat, as a body does: then its swell and the sea's height
+    /// don't.
+    @MainThread
+    Public Method DriveBoat(on: Bool)
+        driven = on
+        Shown()
+    End Method
+
+    /// The top of the jetty's bollard, in the world, which the boat's tied to.
+    @MainThread
+    Public Method BollardTop(): Vec3 => jetty.Position(Space.WORLD) + Vec3(0.3, DECK + 0.5, 0.9)
+
+    /// Where the boat's rope ties on, in its own frame: its bow's gunwale, at +z.
+    @MainThread Public Method RopeOnBoat(): Vec3 => Vec3(0.0, 0.54 - KEEL, 0.86 * 2.2 - 0.05)
+
+    /// Each log of driftwood, a mesh of its own, so it can be moved: its length, along its own x, and
+    /// its radius, in the world. Its origin's its axis's middle, 0.11 of its scale over its underside.
+    @MainThread Public Method Logs(): (Mesh, Float, Float)[] => logs
+
+    /// How many things lie along the shores.
+    @MainThread Public Method LitterCount(): Int => litterCount
+End Class
+
+/// Pieces gathered into a surface for each material, so a landmark of many is a few draws.
+Public Final Class Gathered
+    Field materials: Material[] = []
+    Field surfaces: Geometry[] = []
+
+    /// Puts `piece`, moved by `place`, in `material`'s surface, and lets it go: its normals by the
+    /// inverse of `place`, transposed, so a piece scaled more one way than another still has its
+    /// normals across its faces.
+    @MainThread
+    Public Method Put(material: Material, piece: Geometry, place: Mat4)
+        Local at = -1
+        For index = 0 Until materials.Count
+            If materials[index] == material Then at = index
+        End For
+        If at < 0
+            materials.Add(material)
+            Local made = Geometry()
+            made.AddSurface()
+            surfaces.Add(made)
+            at = materials.Count - 1
+        End If
+        Local normals = Transpose(Inverse(place.ToMat3()))
+        Local into = surfaces[at].Surface(0)
+        For from In piece.Surfaces()
+            Local first = into.VertexCount()
+            Local vertices: Vertex[] = []
+            For vertex In from.Vertices()
+                vertices.Add(Vertex(place.TransformPoint(vertex.Position),
+                                    Normalize(normals * vertex.Normal), vertex.Uv0))
+            End For
+            into.AddVertices(vertices)
+            Local indices: Int[] = []
+            For index In from.Triangles()
+                indices.Add(first + index)
+            End For
+            into.AddTriangles(indices)
+        End For
+        piece.Free()
+    End Method
+
+    /// Puts `piece` at `at`, turned by `turn` and scaled by `scale`.
+    @MainThread
+    Public Method PutAt(material: Material, piece: Geometry, at: Vec3, turn: Quat, scale: Vec3)
+        Put(material, piece, Mat4.Compose(at, turn, scale))
+    End Method
+
+    @MainThread
+    Public Method PutAt(material: Material, piece: Geometry, at: Vec3, turn: Quat)
+        Put(material, piece, Mat4.Compose(at, turn, Vec3(1.0, 1.0, 1.0)))
+    End Method
+
+    @MainThread
+    Public Method PutAt(material: Material, piece: Geometry, at: Vec3)
+        Put(material, piece, Mat4.Translation(at))
+    End Method
+
+    /// What's been put in `material`'s surface.
+    @MainThread
+    Public Method Of(material: Material): Geometry?
+        For index = 0 Until materials.Count
+            If materials[index] == material Then Return surfaces[index]
+        End For
+        Return Null
+    End Method
+
+    /// A mesh on `parent` for each material, of all that's been put in it.
+    @MainThread
+    Public Method Meshes(parent: Entity)
+        For index = 0 Until materials.Count
+            Local mesh = Mesh(surfaces[index], parent)
+            mesh.SetMaterial(materials[index])
+        End For
+    End Method
+End Class
+
+/// Where the lighthouse's pivot is: under its flat pad by a little, so its plinth sits in it.
+Public Function LighthouseBase(): Vec3
+    Local spot = LighthouseSpot()
+    Return Vec3(spot.x, GroundHeight(spot.x, spot.y) - SUNK, spot.y)
+End Function
+
+/// Which way the lighthouse's door faces, across the ground: toward the landing on the far islet,
+/// where the road comes in.
+Public Function DoorFacing(): Vec2
+    Local spot = LighthouseSpot()
+    Local landing = Landing(True)
+    Return Normalize(Vec2(landing.x - spot.x, landing.y - spot.y))
+End Function
+
+/// How high the lighthouse door's sill is, over its pivot: on the plinth.
+Public Function DoorSill(): Float => PLINTH_HIGH
+
+// The lighthouse at its place on the far islet: a stone plinth, a white tower, tapering, with red
+// bands; a gallery with its rail; a lamp room of iron, its lens; a red cap; and a door, toward the
+// landing, with a step up to it. Gives its pivot, its beam, and its lens's material.
+@MainThread
+Function Lighthouse(iron: Material, stone: Material): (Pivot, Light, Material)
+    Local white = Material(Color(0.86, 0.85, 0.8))
+    white.SetMetalRough(0.0, 0.55)
+    Local red = Material(Color(0.55, 0.07, 0.05))
+    red.SetMetalRough(0.0, 0.45)
+    Local pivot = Pivot()
+    pivot.SetPosition(LighthouseBase())
+    Local parts = Gathered()
+    Local here = Mat4.Identity
+    parts.Put(stone, Turned([Vec2(0.0, 0.0), Vec2(PLINTH, 0.0), Vec2(PLINTH - 0.05, PLINTH_HIGH),
+                             Vec2(0.0, PLINTH_HIGH)], 24), here)
+    parts.Put(white, Turned([Vec2(0.0, 0.5), Vec2(TOWER_FOOT, 0.5), Vec2(TOWER_TOP, TOWER),
+                             Vec2(0.0, TOWER)], 24), here)
+    // Its bands, a little proud of it.
+    For band In [0.3, 0.62]
+        Local low = 0.5 + (TOWER - 0.5) * band
+        Local high = low + 1.4
+        Local wide = TOWER_FOOT + (TOWER_TOP - TOWER_FOOT) * (low - 0.5) / (TOWER - 0.5) + 0.02
+        Local narrow = TOWER_FOOT + (TOWER_TOP - TOWER_FOOT) * (high - 0.5) / (TOWER - 0.5) + 0.02
+        parts.Put(red, Turned([Vec2(wide, low), Vec2(narrow, high)], 24, False), here)
+    End For
+    // The gallery, and its rail of posts and a ring.
+    parts.Put(iron, Turned([Vec2(0.0, TOWER), Vec2(1.6, TOWER), Vec2(1.6, TOWER + 0.15),
+                            Vec2(0.0, TOWER + 0.15)], 24), here)
+    For post = 0 Until 16
+        Local angle = 2.0 * Pi * (post As Float) / 16.0
+        parts.PutAt(iron, Beveled(Vec3(0.025, 0.45, 0.025), 0.01),
+                    Vec3(Cos(angle) * 1.5, TOWER + 0.6, Sin(angle) * 1.5))
+    End For
+    parts.Put(iron,
+              Turned([Vec2(1.47, TOWER + 1.02), Vec2(1.53, TOWER + 1.02), Vec2(1.53, TOWER + 1.08),
+                      Vec2(1.47, TOWER + 1.08), Vec2(1.47, TOWER + 1.02)], 24), here)
+    // The lamp room: its frame, its floor, and its cap.
+    For post = 0 Until 6
+        Local angle = 2.0 * Pi * (post As Float) / 6.0
+        parts.PutAt(iron, Beveled(Vec3(0.04, 0.6, 0.04), 0.01),
+                    Vec3(Cos(angle) * 0.85, TOWER + 0.75, Sin(angle) * 0.85))
+    End For
+    parts.Put(iron, Turned([Vec2(0.0, TOWER + 1.3), Vec2(1.0, TOWER + 1.3), Vec2(1.0, TOWER + 1.36),
+                            Vec2(0.0, TOWER + 1.36)], 24), here)
+    parts.Put(red, Turned([Vec2(1.0, TOWER + 1.35), Vec2(0.0, TOWER + 2.15)], 24), here)
+    // Its door, on the plinth, toward the landing, and a step down from it, outside the plinth.
+    Local facing = DoorFacing()
+    Local turn = Quat.FromEuler(0.0, Atan2(facing.x, facing.y), 0.0)
+    Local onTower = TOWER_FOOT - 0.06
+    parts.PutAt(iron, Beveled(Vec3(0.45, 0.9, 0.06), 0.02),
+                Vec3(facing.x * onTower, DoorSill() + 0.9, facing.y * onTower), turn)
+    parts.PutAt(stone, Beveled(Vec3(0.6, 0.18, 0.25), 0.03),
+                Vec3(facing.x * (PLINTH + 0.2), SUNK + 0.08, facing.y * (PLINTH + 0.2)), turn)
+    parts.Meshes(pivot)
+    // The lens, its own, as its glow is the weather's.
+    Local lens = Material(Color(0.0, 0.0, 0.0))
+    lens.SetEmissive(Color(0.3, 0.25, 0.15))
+    Local bulb = Mesh(Geometry.Sphere(16), pivot)
+    bulb.SetMaterial(lens)
+    bulb.SetPosition(Vec3(0.0, LENS, 0.0))
+    bulb.SetScale(Vec3(0.45, 0.55, 0.45))
+    Local beam = Light(LightType.SPOT, pivot)
+    beam.SetColor(Color(1.0, 0.9, 0.7))
+    beam.SetRange(BEAM_RANGE)
+    beam.SetCone(0.08, 0.2)
+    beam.SetIntensity(0.0)
+    Return (pivot, beam, lens)
+End Function
+
+/// The rowboat's hull: lapped planks, a strake at a time, from its keel to its gunwale, open at its top,
+/// about 1.2 m across and 3.7 m long.
+@MainThread
+Public Function BoatHull(): Geometry
+    Local outline: Vec2[] = [Vec2(0.0, 0.0)]
+    Local strakes = 5
+    For strake = 1 To strakes
+        Local through = (strake As Float) / (strakes As Float)
+        Local radius = 0.86 * (Sin((through * Pi * 0.5) As Float64) As Float)
+        Local height = 0.5 * through
+        // Each plank's lower edge lies over the one under it.
+        outline.Add(Vec2(radius - 0.02, height - 0.08))
+        outline.Add(Vec2(radius, height))
+    End For
+    Local hull = Turned(outline, 24, False)
+    hull.Scale(Vec3(0.7, 1.0, 2.2))
+    Return hull
+End Function
+
+// The jetty, out from the west shore: posts down into the sea, a deck of planks with gaps, and a
+// bollard at its end; and the rowboat moored by it. Gives the jetty and the boat.
+@MainThread
+Function Jetty(wood: Material, boards: Material, iron: Material): (Pivot, Pivot)
+    Local jetty = Pivot()
+    Local start = JettyStart()
+    Local end = JettyEnd()
+    Local length = start.x - end.x
+    jetty.SetPosition(Vec3(end.x, 0.0, end.y))
+    Local parts = Gathered()
+    // Its posts, in pairs, from under the sea's floor up past its deck.
+    Local pairs = 6
+    For at = 0 Until pairs
+        Local x = length * (at As Float) / ((pairs - 1) As Float)
+        For side In [-1.1, 1.1]
+            Local floor = GroundHeight(end.x + x, end.y + side) - 0.6
+            Local high = DECK + 0.35
+            parts.PutAt(wood, Turned([Vec2(0.0, floor), Vec2(0.13, floor), Vec2(0.12, high),
+                                      Vec2(0.0, high)], 10), Vec3(x, 0.0, side))
+        End For
+    End For
+    // The beams the planks lie on, and the planks, a gap between each.
+    For side In [-1.1, 1.1]
+        parts.PutAt(wood, Beveled(Vec3(length * 0.5 + 0.2, 0.09, 0.08), 0.02),
+                    Vec3(length * 0.5, DECK - 0.15, side))
+    End For
+    Local plank = 0.0
+    While plank < length + 0.2
+        parts.PutAt(boards, Beveled(Vec3(0.11, 0.035, 1.3), 0.012), Vec3(plank, DECK - 0.03, 0.0),
+                    Quat.FromEuler(0.0, 0.03 * (Sin((plank * 7.0) As Float64) As Float), 0.0))
+        plank += 0.28
+    End While
+    // A bollard at its end, the boat's rope round it.
+    parts.PutAt(iron, Turned([Vec2(0.0, DECK), Vec2(0.12, DECK), Vec2(0.1, DECK + 0.4),
+                              Vec2(0.16, DECK + 0.46), Vec2(0.0, DECK + 0.5)], 10),
+                Vec3(0.3, 0.0, 0.9))
+    parts.Meshes(jetty)
+    // The rowboat: its hull of painted planks, seen inside and out; a gunwale round its top; three
+    // thwarts; and two oars, shipped, each a loom and a blade.
+    Local boat = Pivot()
+    Local paint = wood.Clone()
+    paint.SetColor(Color(0.55, 0.66, 0.74))
+    paint.SetTwoSided(True)
+    Local hull = Gathered()
+    Local down = Vec3(0.0, -KEEL, 0.0)
+    hull.PutAt(paint, BoatHull(), down)
+    Local gunwale = Turned([Vec2(0.83, 0.47), Vec2(0.9, 0.47), Vec2(0.9, 0.54), Vec2(0.83, 0.54),
+                            Vec2(0.83, 0.47)], 24)
+    hull.PutAt(boards, gunwale, down, Quat(0.0, 0.0, 0.0, 1.0), Vec3(0.7, 1.0, 2.2))
+    // Its floorboards, along its bottom.
+    For across In [-0.14, 0.0, 0.14]
+        hull.PutAt(boards, Beveled(Vec3(0.072, 0.012, 0.75), 0.006),
+                   Vec3(across, FLOORBOARDS - KEEL, 0.0))
+    End For
+    For along In [-0.9, 0.0, 0.85]
+        Local wide = 0.6 * (1.0 - Abs(along) * 0.28)
+        hull.PutAt(boards, Beveled(Vec3(wide, 0.025, 0.11), 0.01), Vec3(0.0, 0.2, along))
+    End For
+    For side In [-0.22, 0.22]
+        Local lay = Quat.FromEuler(0.0, side * 0.15, 0.0)
+        hull.PutAt(wood,
+                   Turned([Vec2(0.0, -1.1), Vec2(0.025, -1.1), Vec2(0.025, 0.6), Vec2(0.0, 0.6)],
+                          8),
+                   Vec3(side, 0.26, 0.1), lay * Quat.FromEuler(Pi * 0.5, 0.0, 0.0))
+        hull.PutAt(wood, Beveled(Vec3(0.07, 0.012, 0.34), 0.006), Vec3(side, 0.26, 1.45), lay)
+    End For
+    hull.Meshes(boat)
+    Return (jetty, boat)
+End Function
+
+/// A log of driftwood, its grain along x, about 2 long, its underside on y 0 at its ends.
+@MainThread
+Public Function Log(): Geometry
+    Local log = Turned([Vec2(0.0, -1.0), Vec2(0.12, -1.0), Vec2(0.15, 0.0), Vec2(0.1, 1.0),
+                        Vec2(0.0, 1.0)], 10)
+    log.Transform(Mat4.Translation(Vec3(0.0, 0.11, 0.0)) * Mat4.RotationZ(Pi * 0.5))
+    Return log
+End Function
+
+// What's washed up, in its own space: how far down its underside's ends are from where it's put, and
+// how far out they are.
+Function Ends(kind: Int): Vec3[]
+    Select kind
+        Case 0
+            Return [Vec3(-0.95, 0.0, 0.0), Vec3(0.95, 0.0, 0.0)]
+        Case 1
+            Return [Vec3(-0.32, 0.0, 0.0), Vec3(0.32, 0.0, 0.0), Vec3(0.0, 0.0, -0.32),
+                    Vec3(0.0, 0.0, 0.32)]
+        Default
+            Return []
+    End Select
+End Function
+
+// How high the ground is under `at`, across.
+Function Under(at: Vec3): Vec3 => Vec3(at.x, GroundHeight(at.x, at.z), at.z)
+
+/// How what's at `spot` of ShoreSpots lies: where it's put, how it's turned, and how it's scaled, sunk
+/// a little. A log lies on the ground at both its ends; a coil on the ground at its four edges; a rock
+/// is a third in the ground, its up the ground's.
+Public Function Placed(spot: (Vec2, Int, Float, Float)): (Vec3, Quat, Vec3)
+    Local at = Vec3(spot.0.x, 0.0, spot.0.y)
+    Local size = spot.3
+    Local yaw = Quat.FromEuler(0.0, spot.2, 0.0)
+    Local level = Vec3(0.0, 1.0, 0.0)
+    Select spot.1
+        Case 0
+            // From one end to the other, on the ground at each, and its up square to that.
+            Local scale = Vec3(size * 1.4, size, size)
+            Local half = yaw * Vec3(0.95 * scale.x, 0.0, 0.0)
+            Local one = Under(at - half)
+            Local other = Under(at + half)
+            Local along = Normalize(other - one)
+            Local up = Normalize(level - along * Dot(level, along))
+            Local turn = Quat.FromMat3(Mat3(along, up, Cross(along, up)))
+            Return ((one + other) * 0.5 - up * 0.02, turn, scale)
+        Case 1
+            // On the plane through the ground at its four edges.
+            Local reach = 0.32 * size
+            Local east = Under(at + Vec3(reach, 0.0, 0.0))
+            Local west = Under(at - Vec3(reach, 0.0, 0.0))
+            Local south = Under(at + Vec3(0.0, 0.0, reach))
+            Local north = Under(at - Vec3(0.0, 0.0, reach))
+            Local up = Normalize(Vec3(-(east.y - west.y) / (2.0 * reach), 1.0,
+                                      -(south.y - north.y) / (2.0 * reach)))
+            Local middle = Vec3(at.x, (east.y + west.y + south.y + north.y) / 4.0, at.z)
+            Return (middle - up * 0.01, Quat.FromTo(level, up), Vec3(size, size, size))
+        Default
+            Local dx = GroundHeight(at.x + 0.5, at.z) - GroundHeight(at.x - 0.5, at.z)
+            Local dz = GroundHeight(at.x, at.z + 0.5) - GroundHeight(at.x, at.z - 0.5)
+            Local up = Normalize(Vec3(-dx, 1.0, -dz))
+            Return (Under(at) - up * (0.45 * 0.7 * size * 0.35), Quat.FromTo(level, up) * yaw,
+                    Vec3(size * 1.2, size * 0.7, size))
+    End Select
+End Function
+
+/// Where the underside of what's at `spot` touches, at its ends, in the world: none for a rock, which
+/// is sunk.
+Public Function Underside(spot: (Vec2, Int, Float, Float)): Vec3[]
+    Local place = Placed(spot)
+    Local touching: Vec3[] = []
+    For end In Ends(spot.1)
+        touching.Add(place.0 + place.1 * (end * place.2))
+    End For
+    Return touching
+End Function
+
+/// A rope's length, of radius 0.012, along y from 0 to 1, to stretch between two places.
+@MainThread
+Public Function RopeLine(): Geometry
+    Return Turned([Vec2(0.0, 0.0), Vec2(0.012, 0.0), Vec2(0.012, 1.0), Vec2(0.0, 1.0)], 6)
+End Function
+
+// What lies along the shores, at ShoreSpots: driftwood, weathered grey-brown with its grain, each log a
+// mesh of its own, so it can be moved; coils of rope, and rocks, a mesh of each; each fitted to the
+// ground. Gives the pivot, and each log, its length, and its radius.
+@MainThread
+Function Litter(wood: Material, stone: Material): (Pivot, (Mesh, Float, Float)[])
+    Local litter = Pivot()
+    Local rope = Material(Color(0.55, 0.46, 0.32))
+    rope.SetMetalRough(0.0, 0.9)
+    // The sea's taken its color, leaving it grey-brown, and its grain, in its normals and roughness.
+    Local weathered = wood.Clone()
+    weathered.SetTexture(0, Null)
+    weathered.SetColor(Color(0.24, 0.21, 0.17))
+    Local parts = Gathered()
+    Local logs: (Mesh, Float, Float)[] = []
+    For spot In ShoreSpots()
+        Local place = Placed(spot)
+        Select spot.1
+            Case 0
+                Local log = Mesh(Log(), litter)
+                log.SetMaterial(weathered)
+                log.SetPosition(place.0)
+                log.SetRotation(place.1)
+                log.SetScale(place.2)
+                logs.Add((log, 2.0 * place.2.x, 0.15 * place.2.y))
+            Case 1
+                parts.PutAt(rope, Turned([Vec2(0.12, 0.0), Vec2(0.32, 0.0), Vec2(0.34, 0.06),
+                                          Vec2(0.32, 0.12), Vec2(0.12, 0.12), Vec2(0.1, 0.06),
+                                          Vec2(0.12, 0.0)], 14), place.0, place.1, place.2)
+            Default
+                parts.PutAt(stone, Lumpy(0.45, spot.1 * 7 + ((spot.2 * 100.0) As Int)), place.0,
+                            place.1, place.2)
+        End Select
+    End For
+    parts.Meshes(litter)
+    Return (litter, logs)
+End Function

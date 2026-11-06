@@ -89,8 +89,24 @@ instead); saves; depth of field.
   and offers playing again or leaving, by the mouse, the keyboard, or a gamepad.
 - **The look.** PBR throughout, rock, wood, brass, and iron with their albedo, normal, and roughness maps; a sky of its
   own, baked for the light around, which is what brass reflects; a sun with shadows, lowering by the
-  clock; HDR, ACES, and bloom on the lamp; a grade as the storm comes, by the clock. Depth of field,
-  the first the design said to cut if it's long, isn't in.
+  clock; HDR, ACES, and bloom on the lamp; a grade as the storm comes, by the clock. The ground: a
+  headland of crags, and a far rock's, by ridged noise, under a cover baked from height and slope (sand,
+  wet shore, a tide line, rock where it's steep, turf, a path), and grit at two scales. The mill, of shapes built in code (beveled blocks, turned barrels, a gable):
+  a plinth, corner stones, a framed door, a roof of boards to a ridge, a spoked wheel, the lamp in a
+  cage, barrels and crates, a millstone, and a bench. Pip, rounded, of smooth parts on its joints, in
+  brass, with white eyes and dark pupils that blink, and an antenna. Ambient
+  occlusion and antialiasing over frames; `--low` has FXAA in their place. Depth of field, the first the
+  design said to cut if it's long, isn't in.
+- **The budget for 60 fps at 1080p**, 16.6 ms a frame on a mid-range GPU, as it's spent: the scene with
+  its shadows 10 ms, ambient occlusion 2, antialiasing over frames 1, bloom and the tonemap 1, the canvas
+  0.5, and 2 kept back; `--low`'s FXAA is 0.5 in place of the 3 that occlusion and TAA take. It's a
+  budget: no real GPU's measured it yet. What each landmark costs of a frame of the whole island, on
+  lavapipe, takes hundreds of frames to tell, so `--frames` says it only with SLACK_WATER_COSTS=1:
+  the lighthouse 0.4%, the jetty 1.2%, the boat 1.5%, and what's along the shores 2.8%, of 522 draws
+  and 148k triangles, a frame's time wandering 0.6%.
+- **The tests' time.** The release is cooked once, by `examples.slack_water.cook`, which each test of
+  it needs, and which fails past 120 s, saying what each file took; a fresh cook was 3 s on the
+  machine it's made on. `--frames` says what each part of it took; it was 21 s there.
 - **The number for 60 fps at 1080p.** On 2026-11-04, Slack Water lost the AMD integrated GPU of the
   machine it's made on within its first frames, each run, and the machine froze and reset. So `--fps`
   refuses a real GPU unless SLACK_WATER_REAL_GPU=1 and that GPU's the only device the loader shows,
@@ -98,6 +114,8 @@ instead); saves; depth of field.
 
       VK_LOADER_DRIVERS_SELECT='*nv-vk64*' SLACK_WATER_REAL_GPU=1 SLACK_WATER_CHECKS=1 SDL_VIDEO_DRIVER=offscreen fb run --release examples/slack_water -- --fps 0 300
 
-  A mid-range GPU's number is still open, and why the AMD was lost. On lavapipe, under GPU-assisted
-  validation, Slack Water has no out-of-bounds address or index, and sync validation's clean, which
-  doesn't say why.
+  A mid-range GPU means an RTX 3060-class one. As only the 4080 can be measured, its number is a third
+  of a 60 fps frame: a median GPU frame of 5.5 ms and a 99th percentile of 7 ms, at 1080p with vsync
+  off, by the command above (decided 2026-11-05). Why the AMD was lost is still open. On lavapipe,
+  under GPU-assisted validation, Slack Water has no out-of-bounds address or index, and sync
+  validation's clean, which doesn't say why.

@@ -22,6 +22,7 @@ Import std.io
 Import std.math
 Import std.os
 Import std.text
+Import std.time
 Import fbengine
 Import fbengine_audio
 Import "./checks"
@@ -32,6 +33,7 @@ Import "./follow"
 Import "./game"
 Import "./ground"
 Import "./island"
+Import "./landmarks"
 Import "./map"
 Import "./res" As Res
 Import "./screens"
@@ -122,6 +124,7 @@ End Function
 // The bright walk, saving the screen in `folder` when you first hold something, when the causeway
 // floods, and at its end.
 Function Framed(folder: Path) Throws GraphicsError, IOError
+    Local began = Instant.Now()
     Try Dir.CreateAll(folder)
     Local lines: String[] = []
     Local font = Font.BuiltIn(20.0)
@@ -153,7 +156,9 @@ Function Framed(folder: Path) Throws GraphicsError, IOError
     End Function)
     If failure != "" Then Throw IOError(IOErrorKind.OTHER, failure)
     Checks("saved 3 frames, ended BRIGHT", saved == 3 && ended == Ending.BRIGHT)
+    Local walked = Lap("the walk's frames", began)
     Try SaveViews(folder)
+    Lap("all of the views", walked)
 End Function
 
 // Global: whether any check of what's made went wrong, which is the program's exit code.
@@ -347,7 +352,15 @@ End Function
 
 // The island, in `folder`, from each of its views, at slack water and at high tide; and whether
 // what was drawn is what it should be, as the flow has the tide, by the pixels themselves.
-Function SaveViews(folder: Path) Throws GraphicsError, IOError
+// How long it's been since `began`, said as `what` took, for a log to show what costs.
+Function Lap(what: String, began: Instant): Instant
+    Local now = Instant.Now()
+    Print("{what} took {(now - began).TotalSeconds} s")
+    Return now
+End Function
+
+Function SaveViews(folder: Path, stillsOnly: Bool = False) Throws GraphicsError, IOError
+    Local lap = Instant.Now()
     Window.SetHeadless(True)
     Try Graphics(1280, 720)
     Defer EndGraphics()
@@ -357,29 +370,44 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     Defer island.Free()
     Local camera = Camera()
     Looked(camera)
+    Checks("it's drawn with ambient occlusion, antialiasing over frames, and bloom",
+           camera.AmbientOcclusion() > 0.0 && camera.TemporalAA() && !camera.Fxaa() &&
+           camera.BloomIntensity() > 0.0)
+    Local low = Camera()
+    Looked(low, True)
+    Checks("and low, with antialiasing from the picture alone, and bloom",
+           low.AmbientOcclusion() == 0.0 && !low.TemporalAA() && low.Fxaa() &&
+           low.BloomIntensity() > 0.0)
+    low.Free()
     Local saved = 0
     Local images = Map<String, Image>()
     For view In Views()
         camera.SetPosition(view.1)
         camera.PointAt(view.2)
-        island.Scene().Render()
+        island.Drawn(camera)
         Try Screen.Save(folder / "{view.0}.png")
         images[view.0] = Try Screen.ToImage()
         saved += 1
         Flip(False)
     End For
-    Try SaveSeaAndSky(folder, camera, island)
+    lap = Lap("the views", lap)
+    If !stillsOnly
+        Try SaveSeaAndSky(folder, camera, island)
+        lap = Lap("the sea and sky", lap)
+    End If
     // High tide, from the island's view.
     Local first = Views()[0]
     camera.SetPosition(first.1)
     camera.PointAt(first.2)
     island.Update(TIDE_IN_AT)
-    island.Scene().Render()
+    island.Drawn(camera)
     Try Screen.Save(folder / "island_high_tide.png")
     Local high = Try Screen.ToImage()
     saved += 1
     Flip(False)
     Checks("saved 5 views of the island", saved == 5)
+    // What a cooked game's views are compared by, and nothing more.
+    If stillsOnly Then Return
 
     // The numbers the flow goes by, as drawn.
     Local allAgree = True
@@ -432,11 +460,11 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     Local pipView = Views()[2]
     camera.SetPosition(pipView.1)
     camera.PointAt(pipView.2)
-    island.Scene().Render()
+    island.Drawn(camera)
     Local lit = Try Screen.ToImage()
     Flip(False)
     island.SetAround(False)
-    island.Scene().Render()
+    island.Drawn(camera)
     Local unlit = Try Screen.ToImage()
     Flip(False)
     island.SetAround(True)
@@ -444,7 +472,7 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
            Brightness(lit[640, 360]) > Brightness(unlit[640, 360]) + 30)
     Checks("the camera's in HDR, and tonemapped", camera.Hdr() && camera.Tonemap() == Tonemap.ACES)
     camera.SetHdr(False)
-    island.Scene().Render()
+    island.Drawn(camera)
     Local flat = Try Screen.ToImage()
     Flip(False)
     camera.SetHdr(True)
@@ -454,19 +482,19 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     camera.SetPosition(yardView.1)
     camera.PointAt(yardView.2)
     Local early = island.SunTurned()
-    island.Scene().Render()
+    island.Drawn(camera)
     Local yardEarly = Try Screen.ToImage()
     Flip(False)
     // The sun alone, as the sea's height would change the picture too.
     island.TurnSun(TIDE_IN_AT)
     Checks("the sun moves by the clock", island.SunTurned() != early)
-    island.Scene().Render()
+    island.Drawn(camera)
     Local yardLate = Try Screen.ToImage()
     Flip(False)
     Checks("and what's lit with it", Different(yardEarly, yardLate) > 0.1)
     // The mill's shadow, on the yard.
     island.SetSunShadows(False)
-    island.Scene().Render()
+    island.Drawn(camera)
     Local unshadowed = Try Screen.ToImage()
     Flip(False)
     island.SetSunShadows(True)
@@ -475,7 +503,7 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     Local highView = Views()[0]
     camera.SetPosition(highView.1)
     camera.PointAt(highView.2)
-    island.Scene().Render()
+    island.Drawn(camera)
     Local fromFar = Try Screen.ToImage()
     Flip(False)
     Checks("the ground's repeats don't show from far off",
@@ -490,11 +518,11 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     Local insideView = Views()[3]
     camera.SetPosition(insideView.1)
     camera.PointAt(insideView.2)
-    island.Scene().Render()
+    island.Drawn(camera)
     Local byLantern = Try Screen.ToImage()
     Flip(False)
     island.SetLantern(False)
-    island.Scene().Render()
+    island.Drawn(camera)
     Local noLantern = Try Screen.ToImage()
     Flip(False)
     island.SetLantern(True)
@@ -504,11 +532,11 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     camera.PointAt(yardView.2)
     // The storm's grade: greyer, by its saturation, and darker.
     camera.SetGrade(StormGrade(0.0))
-    island.Scene().Render()
+    island.Drawn(camera)
     Local clear = Try Screen.ToImage()
     Flip(False)
     camera.SetGrade(StormGrade(1.0))
-    island.Scene().Render()
+    island.Drawn(camera)
     Local stormy = Try Screen.ToImage()
     Flip(False)
     Try Screen.Save(folder / "storm.png")
@@ -519,17 +547,270 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     camera.SetPosition(pipView.1)
     camera.PointAt(pipView.2)
     camera.SetGrade(StormGrade(0.0))
-    island.Scene().Render()
+    island.Drawn(camera)
     Local brassy = Try Screen.ToImage()
     Flip(False)
+    // Its eyes shut, saved for a person to see, and seen.
+    island.BlinkPip(1.0)
+    island.Drawn(camera)
+    Try Screen.Save(folder / "pip_blink.png")
+    Local blinked = Try Screen.ToImage()
+    Flip(False)
+    island.BlinkPip(0.0)
+    // One of them, a little in front of its head, as Pip faces.
+    Local pipNow = island.PipEntity()
+    Local eyes = pipNow.Position(Space.WORLD) +
+                 pipNow.Rotation(Space.WORLD) * Vec3(0.05, 0.745, 0.1)
+    Local eyeAt = camera.Project(eyes)
+    Local openWhite = eyeAt != Null ? WhiteAround(brassy, eyeAt.x As Int, eyeAt.y As Int) : 0
+    Local shutWhite = eyeAt != Null ? WhiteAround(blinked, eyeAt.x As Int, eyeAt.y As Int) : 0
+    Checks("its eyes shut, as they're drawn", openWhite > 2 * shutWhite + 4)
     Local body = island.PipBody()
     island.SetPipBody(Material(Color(0.0, 1.0, 0.0)))
-    island.Scene().Render()
+    island.Drawn(camera)
     Local green = Try Screen.ToImage()
     Flip(False)
     island.SetPipBody(body)
     Checks("and what's set on its surface is what's drawn",
            (green[640, 360].g As Int) > (brassy[640, 360].g As Int) + 20)
+    // A still's drawn afresh: the yard, drawn after the dark mill, as it is drawn after itself, with
+    // nothing of the mill blended into it.
+    camera.SetPosition(yardView.1)
+    camera.PointAt(yardView.2)
+    island.Drawn(camera)
+    Local yardAgain = Try Screen.ToImage()
+    Flip(False)
+    island.SetLantern(False)
+    camera.SetPosition(insideView.1)
+    camera.PointAt(insideView.2)
+    island.Drawn(camera)
+    Flip(False)
+    island.SetLantern(True)
+    camera.SetPosition(yardView.1)
+    camera.PointAt(yardView.2)
+    island.Drawn(camera)
+    Local yardAfterDark = Try Screen.ToImage()
+    Flip(False)
+    // By how bright it is, as the sea moves between them, and their pixels move by a part of one.
+    Checks("a still's drawn afresh, with nothing of the view before it",
+           Abs(MeanBrightness(yardAgain) - MeanBrightness(yardAfterDark)) < AFRESH)
+    lap = Lap("the island's checks", lap)
+    Try CheckLandmarks(folder, island, camera)
+    lap = Lap("the landmarks", lap)
+End Function
+
+// Each of `island`'s landmarks, as `camera` sees it, with it hidden and shown: in `image` of the view
+// it's in, whether it changes what's near `place`.
+Function SeenIn(island: Island, camera: Camera, image: Image, thing: Entity,
+                place: Vec3): Bool Throws GraphicsError
+    thing.Hide()
+    island.Drawn(camera)
+    Local without = Try Screen.ToImage()
+    Flip(False)
+    thing.Show()
+    Return DiffersNear(camera, image, without, place)
+End Function
+
+// What the GPU takes for a frame of what `camera` sees, in milliseconds: the middle of 16, after 4 to
+// settle.
+Function FrameMilliseconds(island: Island): Float
+    Local costs: Float[] = []
+    For frame = 1 To 20
+        island.Scene().Render()
+        Flip(False)
+        If frame > 4 Then costs.Add(Gpu.Counters().GpuMilliseconds)
+    End For
+    costs.Sort()
+    Return costs[costs.Count / 2]
+End Function
+
+// The lighthouse, seen from the yard and from by it, its lamp lit as the storm comes; the jetty and
+// its boat, riding the sea; and what's along the shores. Each one's share of a frame of the whole
+// island, said.
+Function CheckLandmarks(folder: Path, island: Island, camera: Camera) Throws GraphicsError, IOError
+    Local marks = island.Marks()
+    Local pieces = marks.Pieces()
+    // The parts lie on the ground where they're found, neither in the air nor under it: each's bottom,
+    // its half-height under its middle, within a few centimeters of it.
+    Local lying = True
+    For part In [Part.GEAR, Part.PADDLE, Part.BELT]
+        Local thing = island.PartEntity(part)
+        Local at = thing.Position(Space.WORLD)
+        Local bottom = at.y - thing.Scale().y
+        If Abs(bottom - GroundHeight(at.x, at.z)) > 0.03 Then lying = False
+    End For
+    Checks("the parts lie on the ground", lying)
+    // What a body can move: each barrel and crate on a pivot of its own with its meshes under it, of
+    // its size; each log a mesh of its own, where it was placed; and the boat, which once driven stays
+    // where it's put, whatever the sea does.
+    Local props = island.Props()
+    Local ownPivots = props.Count == 5
+    For prop In props
+        If prop.0.ChildCount() == 0 || prop.0.Parent() != island.Works() Then ownPivots = False
+        If prop.1 == 0 && (prop.2.x != BARREL_RADIUS || prop.2.y != BARREL_HIGH) Then ownPivots = False
+    End For
+    Checks("the barrels and crates are each their own", ownPivots)
+    Local logs = marks.Logs()
+    Local logsPlaced = True
+    Local logSpots: (Vec2, Int, Float, Float)[] = []
+    For spot In ShoreSpots()
+        If spot.1 == 0 Then logSpots.Add(spot)
+    End For
+    If logs.Count != logSpots.Count Then logsPlaced = False
+    For at = 0 Until Min(logs.Count, logSpots.Count)
+        Local placed = Placed(logSpots[at])
+        Local log = logs[at]
+        Local away = log.0.Position(Space.WORLD) - placed.0
+        If Dot(away, away) > 0.0001 || Abs(log.1 - 2.0 * placed.2.x) > 0.0001 Then logsPlaced = False
+    End For
+    Checks("each log's its own, {logs.Count} of them, where it was placed",
+           logs.Count > 0 && logsPlaced)
+    Local rowboat = marks.Boat()
+    marks.DriveBoat(True)
+    rowboat.SetPosition(Vec3(1.0, 2.0, 3.0))
+    island.Update(TIDE_IN_AT)
+    marks.Animate(0.5)
+    Local stayed = rowboat.Position(Space.WORLD) == Vec3(1.0, 2.0, 3.0)
+    marks.DriveBoat(False)
+    island.Update(0.0)
+    Checks("a driven boat goes where it's driven", stayed &&
+           rowboat.Position(Space.WORLD) != Vec3(1.0, 2.0, 3.0))
+    Local yardView = Views()[1]
+    camera.SetPosition(yardView.1)
+    camera.PointAt(yardView.2)
+    island.Update(0.0)
+    island.Drawn(camera)
+    Local yard = Try Screen.ToImage()
+    Flip(False)
+    Checks("the lighthouse is seen from the yard",
+           Try SeenIn(island, camera, yard, pieces[0].1, marks.LampAt() - Vec3(0.0, 4.0, 0.0)))
+    // From the road's far end, at slack water, and as the tide's in.
+    Local by = Vec3(ROAD_EAST + 3.0, GroundHeight(ROAD_EAST + 3.0, RoadZ(ROAD_EAST + 3.0)) + 3.0,
+                    RoadZ(ROAD_EAST + 3.0) + 3.0)
+    camera.SetPosition(by)
+    camera.PointAt(marks.LampAt() - Vec3(0.0, 3.0, 0.0))
+    island.Update(0.0)
+    Local unlit = marks.Beam()
+    island.Drawn(camera)
+    Local early = Try Screen.ToImage()
+    Try Screen.Save(folder / "lighthouse.png")
+    Flip(False)
+    Checks("and from by it", Try SeenIn(island, camera, early, pieces[0].1, marks.LampAt()))
+    island.Update(TIDE_IN_AT)
+    island.Drawn(camera)
+    Local late = Try Screen.ToImage()
+    Try Screen.Save(folder / "lighthouse_lit.png")
+    Flip(False)
+    // Its beam, turned this way as it passes, out past the lamp room's frame.
+    Local toward = by - marks.LampAt()
+    marks.TurnBeam(Atan2(-toward.x, -toward.z))
+    island.Drawn(camera)
+    Try Screen.Save(folder / "lighthouse_beam.png")
+    Flip(False)
+    Local before = PixelOf(camera, early, marks.LampAt())
+    Local after = PixelOf(camera, late, marks.LampAt())
+    Checks("its lamp's lit as the storm comes, and not before",
+           unlit == 0.0 && marks.Beam() > 0.0 && before != Null && after != Null &&
+           Brightness(after) > Brightness(before) + 60)
+    // The jetty, from its landward end, and the boat by it, riding the sea up.
+    Local start = JettyStart()
+    Local end = JettyEnd()
+    camera.SetPosition(Vec3(start.x + 4.0, GroundHeight(start.x + 4.0, start.y) + 3.0,
+                            start.y + 5.0))
+    camera.PointAt(Vec3((start.x + end.x) / 2.0, 1.5, end.y))
+    island.Update(0.0)
+    Local boatLow = marks.BoatAt().y
+    island.Drawn(camera)
+    Local jetty = Try Screen.ToImage()
+    Try Screen.Save(folder / "jetty.png")
+    Flip(False)
+    Checks("the jetty's seen", Try SeenIn(island, camera, jetty, pieces[1].1,
+                                          Vec3((start.x + end.x) / 2.0, 2.0, end.y)))
+    Checks("and the boat by it", Try SeenIn(island, camera, jetty, pieces[2].1, marks.BoatAt()))
+    Local boat = marks.BoatAt()
+    camera.SetPosition(boat + Vec3(2.6, 1.8, 2.2))
+    camera.PointAt(boat + Vec3(0.0, 0.1, 0.0))
+    island.Drawn(camera)
+    Try Screen.Save(folder / "boat.png")
+    Flip(False)
+    // From over it, nothing of the sea's seen inside it: what's between its gunwales is its own.
+    camera.SetPosition(boat + Vec3(0.0, 3.5, 0.01))
+    camera.PointAt(boat)
+    island.Drawn(camera)
+    Local over = Try Screen.ToImage()
+    Flip(False)
+    Local sea = 0
+    Local looked = 0
+    For across = -2 To 2
+        For along = -8 To 8
+            Local inside = PixelOf(camera, over, boat + Vec3((across As Float) * 0.08, 0.0,
+                                                             (along As Float) * 0.08))
+            If inside == Null Then Continue
+            looked += 1
+            If (inside.b As Int) > (inside.r As Int) + 30 Then sea += 1
+        End For
+    End For
+    Checks("nothing of the sea's seen in the boat, of {looked}", looked > 60 && sea == 0)
+    island.Update(TIDE_IN_AT)
+    Checks("which rides the sea up",
+           Abs(marks.BoatAt().y - boatLow - (SeaHeight(TIDE_IN_AT) - SeaHeight(0.0))) < 0.2)
+    island.Update(0.0)
+    // What's along the shores: all of it placed, and some of it seen from the jetty.
+    Local spots = ShoreSpots()
+    Checks("what's washed up lies where it was placed, {spots.Count} of it",
+           marks.LitterCount() == spots.Count && spots.Count >= 20)
+    Local nearest = spots[0].0
+    For spot In spots
+        Local away = (spot.0.x - start.x) * (spot.0.x - start.x) +
+                     (spot.0.y - start.y) * (spot.0.y - start.y)
+        Local best = (nearest.x - start.x) * (nearest.x - start.x) +
+                     (nearest.y - start.y) * (nearest.y - start.y)
+        If away < best Then nearest = spot.0
+    End For
+    camera.SetPosition(Vec3(nearest.x + 3.0, GroundHeight(nearest.x, nearest.y) + 2.0,
+                            nearest.y + 3.0))
+    camera.PointAt(Vec3(nearest.x, GroundHeight(nearest.x, nearest.y), nearest.y))
+    island.Drawn(camera)
+    Local shore = Try Screen.ToImage()
+    Try Screen.Save(folder / "shore_litter.png")
+    Flip(False)
+    Checks("and it's seen", Try SeenIn(island, camera, shore, pieces[3].1,
+                                       Vec3(nearest.x, GroundHeight(nearest.x, nearest.y) + 0.1,
+                                            nearest.y)))
+    // Each one's share of a frame, which takes hundreds of frames to tell: only when asked.
+    If Env.Get("SLACK_WATER_COSTS") == "1" Then CostsOf(island, camera, pieces)
+End Function
+
+// Each of `pieces`' share of a frame of the whole island, from above, as `camera` sees it.
+Function CostsOf(island: Island, camera: Camera, pieces: (String, Entity)[])
+    // Each one's share of a frame of the whole island, from above: its draws and triangles, exactly,
+    // and its time, as the middle of five turns of it hidden and shown, beside how much the frame's own
+    // time wanders, which a share under can't be told from.
+    Local whole = Views()[0]
+    camera.SetPosition(whole.1)
+    camera.PointAt(whole.2)
+    FrameMilliseconds(island)
+    Local counted = Gpu.Counters()
+    Local all = FrameMilliseconds(island)
+    Print("cost's wander: {Abs(FrameMilliseconds(island) - all) / all * 100.0}% of {all} ms, " +
+          "{counted.Draws} draws, {counted.Triangles} triangles")
+    For piece In pieces
+        Local shares: Float[] = []
+        Local draws: Int64 = 0
+        Local triangles: Int64 = 0
+        For turn = 1 To 5
+            Local shown = FrameMilliseconds(island)
+            piece.1.Hide()
+            Local hidden = FrameMilliseconds(island)
+            draws = counted.Draws - Gpu.Counters().Draws
+            triangles = counted.Triangles - Gpu.Counters().Triangles
+            piece.1.Show()
+            shares.Add((shown - hidden) / shown * 100.0)
+        End For
+        shares.Sort()
+        Print("cost of the {piece.0}: {shares[2]}% of the frame's time, {draws} draws, " +
+              "{triangles} triangles")
+    End For
 End Function
 
 // How much of two images of a size differ, by more than a little, from 0 to 1.
@@ -603,11 +884,15 @@ Function Checked(folder: Path) Throws GraphicsError, IOError
     End If
     Local mesh = found As Mesh
     Local geometry = pip.Geometries()[0]
-    Checks("its surfaces, morphs, and bones are what they are", geometry.SurfaceCount() == 2 &&
-           geometry.Surface(0).MorphTargetCount() == 1 && mesh.Palette().Count == 8)
+    Local morphs = 0
+    For surface In geometry.Surfaces()
+        morphs += surface.MorphTargetCount()
+    End For
+    Checks("its surfaces, morphs, and bones are what they are", geometry.SurfaceCount() == 3 &&
+           morphs == 3 && geometry.Surface(0).MorphTargetCount() == 1 && mesh.Palette().Count == 8)
     Local bounds = geometry.Bounds()
-    Checks("it's 0.8 m high, on the ground",
-           IsClose(bounds.Max.y, 0.8, 0.001) && IsClose(bounds.Min.y, 0.0, 0.001))
+    Checks("it's 0.9 m high to its antenna's top, on the ground",
+           IsClose(bounds.Max.y, 0.9, 0.001) && IsClose(bounds.Min.y, 0.0, 0.001))
     // No clip: every joint where it was bound, so its palette's all identity.
     Local identity = True
     For matrix In mesh.Palette()
@@ -644,12 +929,12 @@ Function Checked(folder: Path) Throws GraphicsError, IOError
     Local carrying = 2.0 * Abs(mesh.Palette()[legR].TransformPoint(footAt).z - carryFrom)
     Checks("its carry's stride is too {carrying}", Abs(carrying - CARRY_STRIDE) < 0.03)
     player.Play(pip.Clips()[1])
-    // At each of its walk's keys, its lowest point's on the ground, within a centimeter.
+    // At each eighth of its walk, its lowest point's on the ground, within a few millimeters.
     Local grounded = True
     Local vertices = geometry.Surface(0).Vertices()
     Local joints = geometry.Surface(0).Joints()
-    For key = 0 To 4
-        player.SetTime((key As Float) * 0.25)
+    For key = 0 To 8
+        player.SetTime((key As Float) * 0.125)
         UpdateWorld(0.0)
         Local posed = mesh.Palette()
         Local lowest = 1000.0
@@ -657,21 +942,38 @@ Function Checked(folder: Path) Throws GraphicsError, IOError
             Local placed = posed[joints[at].Joint0 As Int].TransformPoint(vertices[at].Position)
             lowest = Min(lowest, placed.y)
         End For
-        If Abs(lowest) > 0.01
-            Print("at key {key} it's {lowest} up")
+        If Abs(lowest) > GROUNDED
+            Print("at an eighth {key} it's {lowest} up")
             grounded = False
         End If
     End For
-    Checks("at each key of its walk, it's on the ground", grounded)
-    // The blink shuts its eyes: their tops come down.
-    Local open = mesh.MorphedPositions(1)
+    Checks("at each eighth of its walk, it's on the ground", grounded)
+    // The blink shuts its eyes: everything of its pupils and whites over their bottoms comes down,
+    // its pupils to no higher than what's left of its whites.
+    Local openPupils = mesh.MorphedPositions(1)
+    Local openWhites = mesh.MorphedPositions(2)
     mesh.SetMorphWeights([1.0])
-    Local shut = mesh.MorphedPositions(1)
-    Local moved = False
-    For at = 0 Until open.Count
-        If shut[at].y < open[at].y Then moved = True
+    Local shutPupils = mesh.MorphedPositions(1)
+    Local shutWhites = mesh.MorphedPositions(2)
+    Local allDown = True
+    Local whitesTop = -1000.0
+    For at = 0 Until shutWhites.Count
+        whitesTop = Max(whitesTop, shutWhites[at].y)
     End For
-    Checks("blinking, its eyes shut", moved)
+    Local pupilsTop = -1000.0
+    For at = 0 Until shutPupils.Count
+        pupilsTop = Max(pupilsTop, shutPupils[at].y)
+    End For
+    For pair In [(openPupils, shutPupils), (openWhites, shutWhites)]
+        Local lowest = 1000.0
+        For point In pair.0
+            lowest = Min(lowest, point.y)
+        End For
+        For at = 0 Until pair.0.Count
+            If pair.0 [at].y > lowest + 0.002 && pair.1 [at].y >= pair.0 [at].y Then allDown = False
+        End For
+    End For
+    Checks("blinking, its eyes shut", allDown && pupilsTop <= whitesTop)
 End Function
 
 // Whether two folders' files are the same: every byte, but for PNGs, whose pixels are, as a PNG's
@@ -938,10 +1240,14 @@ Function Walked3d(island: Island, walk: String[], lines: String[],
     Local ended = game.Story().Ended()
     Local lampWas = island.LampMaterial()
     Local wheelWas = island.WheelTurned()
+    Local beamWas = island.Marks().BeamTurned()
     Try Simulate.PressKey(Key.E)
     Try Simulate.PressKey(Key.Q)
     Flip(False)
     game.Step(controls, 0.1)
+    // The lighthouse's lamp turns by the tenth of a second that passed, whatever the flow's clock did.
+    Checks("the lighthouse's lamp turns by real time",
+           Abs(island.Marks().BeamTurned() - beamWas - BEAM_TURN * 0.1) < 0.0001)
     Checks("nothing's done after the end", lines.Count == said && game.Story().Ended() == ended)
     Checks("nothing's offered after the end", game.Prompt() == "")
     Checks("the lamp isn't lit again each step", island.LampMaterial() == lampWas)
@@ -1246,6 +1552,11 @@ End Function
 Const CEILING_SKY: Float = 12.0
 Const SKY_BLOOM: Int = 1
 Const GROUND_APART: Float = 10.0
+// How far off the ground Pip's lowest point may be, walking.
+Const GROUNDED: Float = 0.003
+// How much brighter or darker a still may be than the same drawn after itself: the yard after the dark
+// mill, with the mill's frame blended in, was 2.5 darker, and afresh, 0.13.
+Const AFRESH: Float = 0.8
 
 Function Luma(pixel: Color32): Float
     Return 0.2126 * (pixel.r As Float) + 0.7152 * (pixel.g As Float) + 0.0722 * (pixel.b As Float)
@@ -1265,7 +1576,7 @@ Function SaveWalk(folder: Path) Throws GraphicsError, IOError, AudioError
     Local failure = ""
     Local save = Function(game: Game, name: String): Image?
         game.View().SetRenderTarget(Null)
-        island.Scene().Render()
+        island.Drawn(game.View())
         Try
             Try Screen.Save(folder / "{name}.png")
             saved += 1
@@ -1281,7 +1592,7 @@ Function SaveWalk(folder: Path) Throws GraphicsError, IOError, AudioError
     Local isSeen = Function(game: Game, image: Image?, part: Part, what: String)
         Local thing = island.PartEntity(part)
         thing.Hide()
-        island.Scene().Render()
+        island.Drawn(game.View())
         Try
             Local without = Try Screen.ToImage()
             Flip(False)
@@ -1331,17 +1642,17 @@ Function SaveWalk(folder: Path) Throws GraphicsError, IOError, AudioError
                 Checks("the wheel's seen", wheel != Null && (wheel.r As Int) > (wheel.b As Int) + 4)
                 Local lamp = PixelOf(game.View(), lit, island.LampAt())
                 island.LightLamp(False)
-                island.Scene().Render()
+                island.Drawn(game.View())
                 Try
                     Local dim = PixelOf(game.View(), Try Screen.ToImage(), island.LampAt())
                     Checks("the lamp's brighter lit than dim", lamp != Null && dim != Null &&
                            Brightness(lamp) > Brightness(dim))
                     // Its bloom: the sky just beside it's lighter with it than without.
                     island.LightLamp(True)
-                    island.Scene().Render()
+                    island.Drawn(game.View())
                     Local bloomed = Try Screen.ToImage()
                     game.View().SetBloom(0.0, 1.0)
-                    island.Scene().Render()
+                    island.Drawn(game.View())
                     Local plain = Try Screen.ToImage()
                     Looked(game.View())
                     // And the sky's past where bloom starts, far from the lamp.
@@ -1621,9 +1932,12 @@ Final Class Session
     Field left: Bool = False
     // Whether the mouse is free, to point at the end screen.
     Field pointing: Bool = False
+    // Whether it's drawn as a low GPU can.
+    Field low: Bool
 
-    New(island: Island, last: String[], game: Game, scape: Soundscape)
+    New(island: Island, last: String[], game: Game, scape: Soundscape, low: Bool)
         Self.island = island
+        Self.low = low
         Self.last = last
         controls = Controls()
         Self.game = game
@@ -1632,15 +1946,15 @@ Final Class Session
         font = Font.BuiltIn(20.0)
     End New
 
-    // One at its first moment, on `island`, with the audio started.
+    // One at its first moment, on `island`, with the audio started, drawn as a `low` GPU can, if it's one.
     @MainThread
-    Static Method Make(island: Island): Session Throws IOError, InputError
+    Static Method Make(island: Island, low: Bool): Session Throws IOError, InputError
         Try SetMouseRelative(True)
         Local last = [""]
         Local game = Game(island, Function(line: String)
             last[0] = line
-        End Function)
-        Return Session(island, last, game, Try Soundscape.Make(game, island))
+        End Function, low)
+        Return Session(island, last, game, Try Soundscape.Make(game, island), low)
     End Method
 
     // Moves it all on `seconds`, whether the window's in front or not. With the end screen shown, the
@@ -1658,7 +1972,7 @@ Final Class Session
             said[0] = ""
             game = Game(island, Function(line: String)
                 said[0] = line
-            End Function)
+            End Function, low)
             scape = Try Soundscape.Make(game, island)
             ending.Update(game.Story(), 0.0)
         End If
@@ -1765,7 +2079,7 @@ Function EndShown(folder: Path) Throws GraphicsError, IOError, AudioError, Input
     Defer island.Free()
     Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
     Defer Audio.Stop()
-    Local session = Try Session.Make(island)
+    Local session = Try Session.Make(island, False)
     Defer session.Free()
     Try Simulate.FocusWindow()
     Flip(False)
@@ -1868,12 +2182,12 @@ Function CookedWalk(kept: Path, folder: Path) Throws GraphicsError, IOError, Aud
     Try Walked3dBy(Walk3dOf("bright") ?? [], lines)
     Try Pinned(lines, kept, False)
     Try Dir.CreateAll(folder)
-    Try SaveViews(folder)
+    Try SaveViews(folder, True)
     Checks("the views from it are saved", File.Exists(folder / "island.png"))
 End Function
 
 // The game, in a window, for a person: WASD and the mouse, E, Q, and Escape.
-Function Played() Throws GraphicsError, IOError, InputError, AudioError
+Function Played(low: Bool) Throws GraphicsError, IOError, InputError, AudioError
     // Its files first, so a game missing them says so, with no window.
     Try
         Try Res.Mount()
@@ -1897,7 +2211,7 @@ Function Played() Throws GraphicsError, IOError, InputError, AudioError
         Try Audio.Start(AudioDevice.SILENT)
     End Try
     Defer Audio.Stop()
-    Local session = Try Session.Make(island)
+    Local session = Try Session.Make(island, low)
     Defer session.Free()
     While !Window.Closed() && !KeyHit(Key.ESCAPE) && !session.left
         Flip()
@@ -1909,14 +2223,14 @@ Function Played() Throws GraphicsError, IOError, InputError, AudioError
 End Function
 
 Local arguments = Process.Arguments()
-Const USAGE = "usage: slack_water [--walk <bright|dim|dark> [<kept>] | --walk3d " +
+Const USAGE = "usage: slack_water [--low | --walk <bright|dim|dark> [<kept>] | --walk3d " +
               "<bright|dim|dark|cut|swept|wing|far_end> [<kept>] | --feel | --hear | " +
               "--end <folder> | --cooked <kept> <folder> | " +
               "--frames <folder> | --check <folder> | --match <made> <kept>]"
 // What's for its tests only, so a game on a player's machine can't be made to write anywhere else.
 Local checking = Env.Get("SLACK_WATER_CHECKS") == "1"
-If arguments.Count == 0
-    Try Played()
+If PlaysLow(arguments) != Null
+    Try Played(PlaysLow(arguments) == True)
 ElseIf DrawsWithoutAPerson(arguments) && Env.Get("FBENGINE_NO_GPU") != "1" &&
        !MayDrawOn(DevicesShown())
     // By hand it would reach the best GPU there is, which has already taken a machine down.
@@ -1988,8 +2302,12 @@ ElseIf arguments.Count == 2 && arguments[0] == "--frames"
     If Env.Get("FBENGINE_NO_GPU") == "1"
         Print("no GPU here")
     Else
+        Local began = Instant.Now()
         Try Framed(Path(arguments[1]))
+        Local framed = Instant.Now()
         Try SaveWalk(Path(arguments[1]))
+        Lap("the 3D walk's frames", framed)
+        Lap("--frames", began)
     End If
 ElseIf arguments.Count == 4 && arguments[0] == "--alike"
     Try AlikeViews(Path(arguments[1]), Path(arguments[2]), Float.Parse(arguments[3]) ?? 100.0)

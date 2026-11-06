@@ -14,6 +14,7 @@ Import slack_water.controls
 Import slack_water.flow
 Import slack_water.follow
 Import slack_water.ground
+Import slack_water.landmarks
 Import slack_water.map
 Import slack_water.walks
 
@@ -957,4 +958,175 @@ Function APartIsSeenByWhatItChangesNearIt()
     Expect(DiffersAround(with, without, 32, 8))
     Expect(!DiffersAround(with, without, 33, 8))
     Expect(!DiffersAround(with, without, 32, 7))
+End Function
+
+@Test
+Function APersonPlaysHighOrLow()
+    Expect(PlaysLow([]) == False)
+    Expect(PlaysLow(["--low"]) == True)
+    Expect(PlaysLow(["--low", "x"]) == Null)
+    Expect(PlaysLow(["--frames", "x"]) == Null)
+    Expect(PlaysLow(["--fps"]) == Null)
+End Function
+
+@Test
+Function HowBrightAnImageIsIsItsChannelsMean()
+    Local image = Image(2, 1)
+    image[0, 0] = Color32(30, 60, 90, 255)
+    image[1, 0] = Color32(0, 0, 0, 0)
+    Expect(MeanBrightness(image) == 30.0)
+End Function
+
+@Test
+Function WhatsWhiteIsBrightAndGrey()
+    Local image = Image(20, 20)
+    image[10, 10] = Color32(230, 228, 220, 255)
+    image[11, 10] = Color32(240, 200, 90, 255)
+    image[12, 10] = Color32(160, 160, 160, 255)
+    // Bright, but brass's color.
+    image[10, 11] = Color32(255, 210, 175, 255)
+    image[17, 10] = Color32(250, 250, 250, 255)
+    Expect(WhiteAround(image, 10, 10) == 1)
+    Expect(WhiteAround(image, 11, 10) == 2)
+End Function
+
+@Test
+Function TurfIsWhereTheCoversGreen()
+    // Over a field of the island's heights and slopes, it's turf where the cover's green, and not where
+    // it isn't.
+    Local agreed = 0
+    Local count = 0
+    For x = -80 To 60 Step 4
+        For z = -60 To 40 Step 4
+            For slope In [0.1, 0.5, 1.2]
+                Local fx = x As Float
+                Local fz = z As Float
+                Local height = Max(GroundHeight(fx, fz), 0.0)
+                Local cover = CoverAt(fx, fz, height, slope)
+                Local green = cover.0.y > cover.0.x && cover.0.y > cover.0.z + 0.1
+                Local turf = TurfAt(fx, fz, height, slope)
+                If turf > 0.6 || turf < 0.05
+                    count += 1
+                    If (turf > 0.6) == green Then agreed += 1
+                End If
+            End For
+        End For
+    End For
+    Expect(count > 200)
+    Expect(agreed == count, "{agreed} of {count}")
+    // None on the path from the door, in the yard, on sand, or on a cliff.
+    Expect(TurfAt(MAIN_X, DoorSpot().y + 2.0, 4.0, 0.0) == 0.0)
+    Expect(TurfAt(MAIN_X + 5.0, 3.0, 4.0, 0.0) == 0.0)
+    Expect(TurfAt(MAIN_X - 30.0, 30.0, 0.8, 0.1) == 0.0)
+    Expect(TurfAt(MAIN_X - 30.0, 30.0, 10.0, 1.5) == 0.0)
+End Function
+
+@Test
+Function TheLighthouseStandsAboveTheTideAndPipCanWalkUpToIt()
+    Local spot = LighthouseSpot()
+    Expect(GroundHeight(spot.x, spot.y) > SeaHeight(TIDE_IN_AT) + 0.5)
+    Expect(PlaceAt(spot.x, spot.y) == Area.FAR_ROCK)
+    // Its foot's solid, and just past it isn't.
+    Expect(Blocked(spot.x, spot.y))
+    Expect(Blocked(spot.x + 2.4, spot.y))
+    Expect(!Blocked(spot.x + 2.5, spot.y))
+    // From where the belt lies, up to its door, a step at a time, at high water.
+    Local belt = BeltSpot()
+    Local toward = Vec2(spot.x - belt.x, spot.y - belt.y)
+    Local length = Sqrt(toward.x * toward.x + toward.y * toward.y)
+    Local steps = (length / 0.2) As Int
+    Local x = belt.x
+    Local z = belt.y
+    For step = 1 To steps
+        Local nextX = belt.x + toward.x * (step As Float) * 0.2 / length
+        Local nextZ = belt.y + toward.y * (step As Float) * 0.2 / length
+        If Sqrt((nextX - spot.x) * (nextX - spot.x) + (nextZ - spot.y) * (nextZ - spot.y)) < 2.6 Then Break
+        Expect(!Blocked(nextX, nextZ), "{nextX}, {nextZ}")
+        Expect(CanWade(x, z, nextX, nextZ, TIDE_IN_AT, True), "{nextX}, {nextZ}")
+        x = nextX
+        z = nextZ
+    End For
+    Expect(Sqrt((x - spot.x) * (x - spot.x) + (z - spot.y) * (z - spot.y)) < 2.9)
+End Function
+
+@Test
+Function TheLighthouseIsLitInTheStorm()
+    Expect(LighthouseLit(0.0) == 0.0)
+    Expect(LighthouseLit(TIDE_IN_AT) == 1.0)
+    Local was = 0.0
+    For step = 0 To 100
+        Local lit = LighthouseLit(TIDE_IN_AT * (step As Float64) / 100.0)
+        Expect(lit >= was)
+        was = lit
+    End For
+    // Before the storm's begun, it's still dark.
+    Expect(LighthouseLit(RISING_AT) == 0.0)
+End Function
+
+@Test
+Function TheBoatRidesTheSeaAndRisesAndFallsOnIt()
+    For step = 0 To 50
+        Local clock = TIDE_IN_AT * 1.2 * (step As Float64) / 50.0
+        For swell In [0.0, 0.4, 1.9]
+            Expect(Abs(BoatHeight(clock, swell) - SeaHeight(clock) - RIDES) <= BOB + 0.0001)
+        End For
+    End For
+    // On a still sea, by its own swell, up and down.
+    Local lowest = 1000.0
+    Local highest = -1000.0
+    For step = 0 To 100
+        Local height = BoatHeight(0.0, (step As Float64) * 0.05)
+        lowest = Min(lowest, height)
+        highest = Max(highest, height)
+    End For
+    Expect(highest - lowest > BOB * 1.5)
+    // However it swells, its floorboards are over the sea, and its keel's in it.
+    Expect(RIDES - BOB - KEEL + FLOORBOARDS > 0.0)
+    Expect(RIDES + BOB - KEEL < 0.0)
+End Function
+
+@Test
+Function WhatMovesOnItsOwnGoesByRealTime()
+    // However far the flow's clock runs ahead, the lamp turns BEAM_TURN a second, and the swell goes
+    // by the second.
+    Local motion = Motion()
+    For second = 1 To 3
+        motion.Step(1.0)
+    End For
+    Expect(Abs(motion.Turned - 3.0 * BEAM_TURN) < 0.0001)
+    Expect(Abs(motion.Swell - 3.0) < 0.0001)
+    Local flow = Flow(Function(line: String)
+    End Function)
+    Local before = flow.Clock()
+    flow.Step(1.0)
+    motion.Step(1.0)
+    Expect(Abs(motion.Turned - 4.0 * BEAM_TURN) < 0.0001)
+    Expect(flow.Clock() > before)
+End Function
+
+@Test
+Function TheLighthouseStandsLevelWithItsDoorOverTheGround()
+    Local base = LighthouseBase()
+    For step = 0 Until 24
+        Local angle = 2.0 * Pi * (step As Float) / 24.0
+        Local x = base.x + Cos(angle) * PLINTH
+        Local z = base.z + Sin(angle) * PLINTH
+        Expect(GroundHeight(x, z) >= base.y + 0.05, "{angle}: {GroundHeight(x, z)} {base.y}")
+    End For
+    // Its door's sill is over the ground in front of it, and the door faces the landing.
+    Local facing = DoorFacing()
+    Local door = Vec2(base.x + facing.x * 1.5, base.z + facing.y * 1.5)
+    Expect(base.y + DoorSill() > GroundHeight(door.x, door.y) + 0.3)
+    Local landing = Landing(True)
+    Local toward = Normalize(Vec2(landing.x - base.x, landing.y - base.z))
+    Expect(Abs(facing.x - toward.x) < 0.001 && Abs(facing.y - toward.y) < 0.001)
+End Function
+
+@Test
+Function WhatsWashedUpLiesOnTheGround()
+    For spot In ShoreSpots()
+        For end In Underside(spot)
+            Expect(Abs(GroundHeight(end.x, end.z) - end.y) < 0.03, "{spot.0} {spot.1}: {end}")
+        End For
+    End For
 End Function

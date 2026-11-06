@@ -231,6 +231,11 @@ if(FBENGINE_FB_TESTS)
     add_test(NAME tools.check_exports
              COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_exports_test.py")
     set_tests_properties(tools.check_exports PROPERTIES PASS_REGULAR_EXPRESSION "macOS side holds")
+    # Each target that builds gltf.cpp reads the simdjson fastgltf fetched, as its own compile says.
+    add_test(NAME tools.check_simdjson
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_simdjson.py" "${PROJECT_BINARY_DIR}")
+    set_tests_properties(tools.check_simdjson PROPERTIES
+                         PASS_REGULAR_EXPRESSION "targets read the simdjson fastgltf fetched")
   endif()
   add_test(NAME models.golden
            COMMAND fbengine_gpu_tests "the sample models' frames match their golden images")
@@ -523,6 +528,15 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(examples.slack_water.end_screen PROPERTIES RESOURCE_LOCK slack_water
                        ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
+  # Its release, cooked once, within a budget, which each test of what it cooks reads, saying what each
+  # file took to cook.
+  add_test(NAME examples.slack_water.cook
+           COMMAND "${CMAKE_COMMAND}" "-DFB=${FBENGINE_FB}"
+                   "-DSOURCE=${PROJECT_SOURCE_DIR}/examples/slack_water" -DBUDGET=120
+                   -P "${CMAKE_CURRENT_SOURCE_DIR}/slack_water_cook.cmake")
+  set_tests_properties(examples.slack_water.cook PROPERTIES RESOURCE_LOCK slack_water
+                       ENVIRONMENT "FBENGINE_SLANGC=${FBENGINE_SLANGC}"
+                       FIXTURES_SETUP slack_water_cook TIMEOUT 600)
   # As it ships: a release, from its cooked pak, into a folder this clears, as the game never does.
   set(slack_water_cooked "${PROJECT_BINARY_DIR}/example-frames/slack_water_cooked")
   add_test(NAME examples.slack_water.cooked_clean
@@ -536,7 +550,7 @@ if(FBENGINE_FB_TESTS)
                    "${slack_water_cooked}")
   set_tests_properties(examples.slack_water.cooked PROPERTIES RESOURCE_LOCK slack_water
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
-                       FIXTURES_REQUIRED slack_water_cooked_clean
+                       FIXTURES_REQUIRED "slack_water_cooked_clean;slack_water_cook"
                        FIXTURES_SETUP slack_water_cooked_views
                        SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 600)
   # What it draws from its pak is close to what it draws from its files.
@@ -546,7 +560,7 @@ if(FBENGINE_FB_TESTS)
                    "${slack_water_cooked}" 25)
   set_tests_properties(examples.slack_water.cooked_alike PROPERTIES RESOURCE_LOCK slack_water
                        ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen"
-                       FIXTURES_REQUIRED "slack_water_views;slack_water_cooked_views"
+                       FIXTURES_REQUIRED "slack_water_views;slack_water_cooked_views;slack_water_cook"
                        TIMEOUT 300)
   # Which is to say something: not from a pak, or against another walk's words, it says so.
   add_test(NAME examples.slack_water.cooked_not
@@ -559,7 +573,7 @@ if(FBENGINE_FB_TESTS)
                    -- --cooked "${PROJECT_SOURCE_DIR}/examples/slack_water/tests/walk3d_dark.txt"
                    "${PROJECT_BINARY_DIR}/example-frames/slack_water_cooked_other")
   set_tests_properties(examples.slack_water.cooked_not examples.slack_water.cooked_other_walk
-                       PROPERTIES RESOURCE_LOCK slack_water
+                       PROPERTIES RESOURCE_LOCK slack_water FIXTURES_REQUIRED slack_water_cook
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 600)
   set_tests_properties(examples.slack_water.cooked_not PROPERTIES
@@ -578,6 +592,7 @@ if(FBENGINE_FB_TESTS)
                      "-DSUFFIX=${CMAKE_EXECUTABLE_SUFFIX}" ${ARGN}
                      -P "${CMAKE_CURRENT_SOURCE_DIR}/slack_water_shipped.cmake")
     set_tests_properties(examples.slack_water.${name} PROPERTIES RESOURCE_LOCK slack_water
+                         FIXTURES_REQUIRED slack_water_cook
                          ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                          SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 600)
   endfunction()

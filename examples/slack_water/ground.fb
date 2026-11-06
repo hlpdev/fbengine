@@ -77,8 +77,22 @@ Function Ridged(x: Float, z: Float): Float
     Return wide * wide * 0.6 + fine * fine * 0.4
 End Function
 
-// How high the ground is at (`x`, `z`), but for the road.
+/// How far the lighthouse's plinth reaches from its middle.
+Public Const PLINTH: Float = 1.85
+
+// How high the ground is at (`x`, `z`), but for the road, and flat round the lighthouse, out a little
+// past its plinth, so it stands level.
 Public Function RockHeight(x: Float, z: Float): Float
+    Local spot = LighthouseSpot()
+    Local away = Sqrt((x - spot.x) * (x - spot.x) + (z - spot.y) * (z - spot.y))
+    Local pad = Clamp(1.0 - (away - PLINTH - 0.4) / 3.0, 0.0, 1.0)
+    Local height = Rock(x, z)
+    If pad <= 0.0 Then Return height
+    Return height + (Rock(spot.x, spot.y) - height) * pad
+End Function
+
+// How high the rocks are at (`x`, `z`), as they are.
+Function Rock(x: Float, z: Float): Float
     Local far = Mound(x, z, FAR_X, FAR_Z, FAR_RADIUS)
     Local headland = Mound(x, z, HEADLAND_X, HEADLAND_Z, HEADLAND_RADIUS)
     Local land = Max(Max(Mound(x, z, MAIN_X, 0.0, MAIN_RADIUS), far), headland)
@@ -187,6 +201,17 @@ Public Function Blocked(x: Float, z: Float): Bool
     If inWalls && !inside && !door Then Return True
     // The works, inside, and the wheel, outside its east wall.
     If Abs(x - (MAIN_X + 3.5)) < 1.6 && Abs(z + 3.0) < 1.6 Then Return True
+    // The lighthouse's foot.
+    Local place = LighthouseSpot()
+    If (x - place.x) * (x - place.x) + (z - place.y) * (z - place.y) <
+       LIGHTHOUSE_SOLID * LIGHTHOUSE_SOLID
+        Return True
+    End If
+    // The barrels and crates between the wheel and the door, which Pip goes around with the mill, and
+    // the millstone and bench inside.
+    If x > MAIN_X + 6.3 && x < MAIN_X + 9.3 && z > 3.5 && z < 5.6 Then Return True
+    If x > MAIN_X - 5.8 && x < MAIN_X - 4.8 && z > -3.6 && z < -1.6 Then Return True
+    If x > MAIN_X - 3.3 && x < MAIN_X + 0.3 && z > -4.8 && z < -3.7 Then Return True
     Return Abs(x - (MAIN_X + 8.0)) < 0.9 && Abs(z) < 3.4
 End Function
 
@@ -225,14 +250,54 @@ Function Mixed(from: Vec3, to: Vec3, amount: Float): Vec3
                 from.z + (to.z - from.z) * by)
 End Function
 
+// The cover's noise: fine, a meter or so across, and patches, many meters.
+Function Fine(x: Float, z: Float): Float => Noise(x * 0.8 + 1.0, z * 0.8 + 2.0)
+
+Function Patches(x: Float, z: Float): Float
+    Return Noise(x * 0.09 + 4.0, z * 0.09 + 6.0) * 0.6 + Noise(x * 0.31 + 8.0, z * 0.31 + 1.0) * 0.4
+End Function
+
+// How much turf holds on, `height` high with `slope`, in `patches`: high and flat.
+Function Turf(height: Float, slope: Float, patches: Float): Float
+    Local flat = Clamp((0.8 - slope) / 0.4, 0.0, 1.0)
+    Return flat * Clamp((patches - 0.28) * 5.0, 0.0, 1.0) * Clamp((height - 2.3) / 1.2, 0.0, 1.0)
+End Function
+
+// How trodden (`x`, `z`) is: around the mill, and from its door to the road, where it isn't steep.
+Function Trodden(x: Float, z: Float, slope: Float, patches: Float, fine: Float): Float
+    Local fromMill = Sqrt((x - MAIN_X) * (x - MAIN_X) + z * z)
+    Local trodden = Clamp((12.0 + patches * 5.0 - fromMill) / 3.0, 0.0, 1.0)
+    If x > MAIN_X && x < ROAD_WEST
+        Local across = (x - MAIN_X) / (ROAD_WEST - MAIN_X)
+        Local pathZ = DoorSpot().y + (RoadZ(ROAD_WEST) - DoorSpot().y) * across
+        trodden = Max(trodden, Clamp((2.2 + fine - Abs(z - pathZ)) / 1.2, 0.0, 1.0))
+    End If
+    Return trodden * Clamp((1.2 - slope) / 0.4, 0.0, 1.0)
+End Function
+
+// How sandy it is, `height` high with `slope`, in `patches`: low down, up to what the rock breaks.
+Function Sand(height: Float, slope: Float, patches: Float): Float
+    Return Clamp((1.5 + (patches - 0.5) * 1.8 - height) / 0.5, 0.0, 1.0) *
+           Clamp((1.3 - slope) / 0.4, 0.0, 1.0)
+End Function
+
+/// How much of what covers the ground at (`x`, `z`), `height` high with `slope` meters up to the meter,
+/// is turf that shows, from 0 to 1: CoverAt's turf, less what's trodden over it and sand: where grass
+/// grows.
+Public Function TurfAt(x: Float, z: Float, height: Float, slope: Float): Float
+    Local patches = Patches(x, z)
+    Local turf = Turf(height, slope, patches)
+    Return turf * (1.0 - Trodden(x, z, slope, patches, Fine(x, z))) *
+           (1.0 - Sand(height, slope, patches))
+End Function
+
 /// What covers the ground at (`x`, `z`), `height` high with `slope` meters up to the meter: its color, as
 /// sRGB, and how rough it is, from 0 to 1. Sand low down and wet where the sea's just been, bare rock in
 /// bands where it's steep, turf on what's high and flat, and the trodden ground by the mill and to the
 /// road. From noise at several scales, so it's patches that have nothing to do with where a map repeats.
 Public Function CoverAt(x: Float, z: Float, height: Float, slope: Float): (Vec3, Float)
-    Local fine = Noise(x * 0.8 + 1.0, z * 0.8 + 2.0)
-    Local patches = Noise(x * 0.09 + 4.0, z * 0.09 + 6.0) * 0.6 +
-                    Noise(x * 0.31 + 8.0, z * 0.31 + 1.0) * 0.4
+    Local fine = Fine(x, z)
+    Local patches = Patches(x, z)
     Local bands = Noise(x * 0.05 + z * 0.03, height * 1.6)
     Local color = Mixed(Vec3(0.27, 0.27, 0.27), Vec3(0.47, 0.46, 0.43), bands * 0.6 + fine * 0.4)
     // Its cracks, and lichen on it.
@@ -247,29 +312,19 @@ Public Function CoverAt(x: Float, z: Float, height: Float, slope: Float): (Vec3,
     color = Mixed(color, Vec3(0.18, 0.18, 0.16), tide * 0.7)
     rough -= tide * 0.3
     // Turf, where it can hold on.
-    Local flat = Clamp((0.8 - slope) / 0.4, 0.0, 1.0)
     Local blades = Noise(x * 2.3 + 3.0, z * 2.3 + 7.0)
-    Local turf = flat * Clamp((patches - 0.28) * 5.0, 0.0, 1.0) *
-                 Clamp((height - 2.3) / 1.2, 0.0, 1.0)
+    Local turf = Turf(height, slope, patches)
     color = Mixed(color,
                   Mixed(Vec3(0.29, 0.35, 0.18), Vec3(0.45, 0.47, 0.25),
                         patches * 0.6 + blades * 0.6 - 0.2),
                   turf)
     rough = rough + (0.95 - rough) * turf
     // Trodden ground around the mill, and from its door to the road.
-    Local fromMill = Sqrt((x - MAIN_X) * (x - MAIN_X) + z * z)
-    Local trodden = Clamp((12.0 + patches * 5.0 - fromMill) / 3.0, 0.0, 1.0)
-    If x > MAIN_X && x < ROAD_WEST
-        Local across = (x - MAIN_X) / (ROAD_WEST - MAIN_X)
-        Local pathZ = DoorSpot().y + (RoadZ(ROAD_WEST) - DoorSpot().y) * across
-        trodden = Max(trodden, Clamp((2.2 + fine - Abs(z - pathZ)) / 1.2, 0.0, 1.0))
-    End If
-    trodden *= Clamp((1.2 - slope) / 0.4, 0.0, 1.0)
+    Local trodden = Trodden(x, z, slope, patches, fine)
     color = Mixed(color, Mixed(Vec3(0.38, 0.33, 0.25), Vec3(0.5, 0.43, 0.32), fine), trodden)
     rough = rough + (0.88 - rough) * trodden
     // Sand, up to what's broken by the rock's own shape.
-    Local sand = Clamp((1.5 + (patches - 0.5) * 1.8 - height) / 0.5, 0.0, 1.0) *
-                 Clamp((1.3 - slope) / 0.4, 0.0, 1.0)
+    Local sand = Sand(height, slope, patches)
     color = Mixed(color, Mixed(Vec3(0.72, 0.64, 0.47), Vec3(0.83, 0.76, 0.59), fine), sand)
     rough = rough + (0.92 - rough) * sand
     // Wet, where the sea's just been: darker, and it shines.
@@ -277,4 +332,76 @@ Public Function CoverAt(x: Float, z: Float, height: Float, slope: Float): (Vec3,
     color = Mixed(color, Vec3(color.x * 0.58, color.y * 0.56, color.z * 0.54), wet)
     rough = rough + (0.28 - rough) * wet
     Return (color, Clamp(rough, 0.0, 1.0))
+End Function
+
+/// Where the far islet's lighthouse stands, on its side toward the yard.
+Public Function LighthouseSpot(): Vec2 => Vec2(FAR_X - 2.0, FAR_Z - 11.0)
+
+// How far from the lighthouse's middle its foot is solid: its plinth, and a person's width.
+Const LIGHTHOUSE_SOLID: Float = PLINTH + 0.6
+
+/// How far across the jetty runs, on the main island's west shore.
+Public Const JETTY_Z: Float = -6.0
+
+/// Where the main island's west shore is, along JETTY_Z: the first ground going west from the yard
+/// that's under 0.3, at slack water.
+Public Function JettyShore(): Vec2
+    Local x = MAIN_X - 20.0
+    While x > -(SIDE As Float) / 2.0 && GroundHeight(x, JETTY_Z) > 0.3
+        x -= 0.25
+    End While
+    Return Vec2(x, JETTY_Z)
+End Function
+
+/// The jetty's landward end, on the shore, and its seaward end, out over the sea.
+Public Function JettyStart(): Vec2 => Vec2(JettyShore().x + 3.0, JETTY_Z)
+
+Public Function JettyEnd(): Vec2 => Vec2(JettyShore().x - 12.0, JETTY_Z)
+
+/// How sandy what covers the ground is at (`x`, `z`), `height` high with `slope`, from 0 to 1, as
+/// CoverAt paints it: where what's washed up lies.
+Public Function SandAt(x: Float, z: Float, height: Float, slope: Float): Float
+    Return Sand(height, slope, Patches(x, z))
+End Function
+
+/// Whether (`x`, `z`) is kept clear of what's washed up: the road and the causeway's shores, within 3 m
+/// of a part's spot or a landing, by the jetty, and where anything's solid.
+Public Function KeptClear(x: Float, z: Float): Bool
+    If x > ROAD_WEST - ROAD_INTO && x < ROAD_EAST + ROAD_INTO && Abs(z - RoadZ(x)) < ROAD_SIDE + 3.0
+        Return True
+    End If
+    If Blocked(x, z) Then Return True
+    For spot In [GearSpot(), PaddleSpot(), BeltSpot(), Landing(False), Landing(True),
+                 PipLanding(False),
+                 PipLanding(True), JettyStart()]
+        If (spot.x - x) * (spot.x - x) + (spot.y - z) * (spot.y - z) < 9.0 Then Return True
+    End For
+    Return Abs(z - JETTY_Z) < 4.0 && x < JettyStart().x + 2.0 && x > JettyEnd().x - 2.0
+End Function
+
+/// Where what's washed up lies along the shores, each on sand above the sea at slack water: where it
+/// is, what it is (0 driftwood, 1 rope, 2 a rock), how it's turned, and how big. Never on the road or
+/// the causeway's shores, by the parts' spots or the landings, by the jetty, or where anything's solid.
+Public Function ShoreSpots(): (Vec2, Int, Float, Float)[]
+    Local spots: (Vec2, Int, Float, Float)[] = []
+    Local half = (SIDE As Float) / 2.0 - EDGE
+    For row = 0 Until 60
+        For column = 0 Until 60
+            Local x = -half + ((column As Float) + Hash(column, row + 900)) * (2.0 * half / 60.0)
+            Local z = -half + ((row As Float) + Hash(column + 900, row)) * (2.0 * half / 60.0)
+            Local height = GroundHeight(x, z)
+            If height < 0.15 || height > 1.4 Then Continue
+            Local dx = GroundHeight(x + 1.0, z) - GroundHeight(x - 1.0, z)
+            Local dz = GroundHeight(x, z + 1.0) - GroundHeight(x, z - 1.0)
+            Local slope = Sqrt(dx * dx + dz * dz) / 2.0
+            If SandAt(x, z, height, slope) < 0.7 Then Continue
+            If KeptClear(x, z) Then Continue
+            // Only some of what passes, so it's scattered.
+            If Hash(column + 300, row + 700) > 0.45 Then Continue
+            Local kind = (Hash(column + 50, row + 60) * 3.0) As Int
+            spots.Add((Vec2(x, z), Min(kind, 2), Hash(column + 70, row + 80) * 6.283,
+                       0.6 + Hash(column + 90, row + 10) * 0.8))
+        End For
+    End For
+    Return spots
 End Function
