@@ -16,12 +16,16 @@ gives, to the pixel, so it's the driver, and it's mipmaps: 25.2.8's `vkCmdBlitIm
 8-bit linear format half a 255th brighter than the mean of what's under it, 2 by level 4, where 26.2.4's is
 within 0.01, and both make sRGB's the same. What differs is what normal and metal-rough maps do from far off.
 
-| Frame | Pixels more than 2 away, x64, arm64 | Most away | Let differ |
+Measured on the frames as they are since 472aebb turned the sky, by run 42144577128, which let none
+differ. On arm64, a texture's sampling differs more besides, as AlphaBlendModeTest's marble shows,
+though not its panels, which blend and cut out, so each has its own limit.
+
+| Frame | Pixels more than 2 away, x64, arm64 | Most away, x64, arm64 | Let differ, x64, arm64 |
 | --- | --- | --- | --- |
-| AlphaBlendModeTest | 0.63%, 1.39% | 20 | 1.5% |
-| NormalTangentMirrorTest | 0.15%, 0.44% | 96 | 0.5% |
-| NormalTangentTest | 0.056%, 0.061% | 85 | 0.1% |
-| TextureTransformMultiTest | 0.004%, 0.071% | 24 | 0.1% |
+| AlphaBlendModeTest | 0.45%, 1.91% | 13, 7 | 0.6%, 2.5% |
+| NormalTangentMirrorTest | 0.13%, 0.47% | 76, 99 | 0.2%, 0.6% |
+| NormalTangentTest | 0.053%, 0.056% | 84, 73 | 0.1%, 0.1% |
+| TextureTransformMultiTest | 0.0023%, 0.081% | 3, 28 | 0.01%, 0.15% |
 
 ## What the checks can say
 
