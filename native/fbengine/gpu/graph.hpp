@@ -30,6 +30,9 @@ constexpr resource_t no_resource = UINT32_MAX;
 enum class use_t : std::uint8_t {
     /// Samples it in its shaders.
     SAMPLED,
+    /// Reads a multisampled transient target's samples in its shaders, one by one, as they were
+    /// drawn, not what they resolve to, by resource_samples_index.
+    SAMPLES_READ,
     /// Copies or blits from it.
     COPY_FROM,
     /// Clears, copies, or blits into it, any level.
@@ -131,6 +134,9 @@ bool in_graph(std::uint64_t handle);
 /// twice, or its targets don't match.
 bool add_pass(pass_t pass);
 
+/// How many samples a pixel of a resource draws, as soon as it's in the graph.
+std::uint32_t resource_samples(resource_t resource);
+
 /// Makes sure there are `count` images for transient targets of `target`, which passes that ask for
 /// them in the frame's graph then have, as many as are needed at once: false, with fbe_error's why,
 /// if one can't be made now, where what asks can say so, rather than the frame dropping its passes
@@ -140,6 +146,10 @@ bool reserve_transient(const transient_t& target, std::uint32_t count = 1);
 /// A texture's or transient target's index in the bindless set, which a pass's `record` gives its
 /// shaders to sample it by, its format, and its texture's handle; while the graph's recorded only.
 std::uint32_t resource_index(resource_t resource);
+/// A multisampled transient target's slot for its samples, no_samples_slot if it has none, where
+/// what reads them reads what they resolve to, and the graph leaves them as they are; while the
+/// graph's recorded only.
+std::uint32_t resource_samples_index(resource_t resource);
 VkFormat resource_format(resource_t resource);
 std::uint64_t resource_texture(resource_t resource);
 /// Its image, for a pass's commands: the frame's, however its texture's been let go of since it was

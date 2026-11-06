@@ -221,6 +221,9 @@ std::uint32_t take_slot() {
 /// Destroys a texture's images now, which the GPU is done with.
 void destroy(texture_t& texture) {
     const fbe::gpu::device_t& gpu = *fbe::gpu::device();
+    if (texture.samples_slot != fbe::gpu::no_samples_slot) {
+        fbe::gpu::give_samples_slot(texture.samples_slot);
+    }
     vkDestroyImageView(gpu.device, texture.view, nullptr);
     vmaDestroyImage(gpu.allocator, texture.image, texture.memory);
     vkDestroyImageView(gpu.device, texture.stored_view, nullptr);
@@ -546,12 +549,19 @@ bool make(std::uint32_t slot, const spec_t& spec) {
     }
     const auto attached = flag<VkImageUsageFlags>(VK_IMAGE_USAGE_TRANSFER_DST_BIT);
     const bool multisampled = spec.samples != VK_SAMPLE_COUNT_1_BIT;
+    // A shader reads the samples of the engine's own, as a camera's tonemap does, if the device can
+    // read as many; what can't reads what they resolve to.
+    const bool reads_samples = spec.engine && multisampled &&
+                               (gpu.properties.limits.sampledImageColorSampleCounts &
+                                flag<VkSampleCountFlags>(spec.samples)) != 0 &&
+                               !fbe::gpu::faulted(fbe::gpu::fault_t::NO_READ_SAMPLES);
+    const auto read = reads_samples ? flag<VkImageUsageFlags>(VK_IMAGE_USAGE_SAMPLED_BIT) : 0U;
     if ((multisampled &&
-         !make_attachment(texture, texture.vk_format,
-                          attached | flag<VkImageUsageFlags>(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT),
-                          flag<VkImageAspectFlags>(VK_IMAGE_ASPECT_COLOR_BIT), texture.msaa,
-                          texture.msaa_memory, texture.msaa_view,
-                          stores ? &texture.stored_msaa_view : nullptr)) ||
+         !make_attachment(
+             texture, texture.vk_format,
+             attached | read | flag<VkImageUsageFlags>(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT),
+             flag<VkImageAspectFlags>(VK_IMAGE_ASPECT_COLOR_BIT), texture.msaa, texture.msaa_memory,
+             texture.msaa_view, stores ? &texture.stored_msaa_view : nullptr)) ||
         (spec.depth && !make_attachment(texture, fbe::texture::depth_format,
                                         attached | flag<VkImageUsageFlags>(
                                                        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT),
@@ -559,6 +569,9 @@ bool make(std::uint32_t slot, const spec_t& spec) {
                                         texture.depth, texture.depth_memory, texture.depth_view))) {
         destroy(texture);
         return false;
+    }
+    if (reads_samples) {
+        texture.samples_slot = fbe::gpu::take_samples_slot(texture.msaa_view);
     }
 
     // Before any commands use the image, so it can still go.

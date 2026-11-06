@@ -10,8 +10,12 @@ commit 8f492390ddc7a2ae221a1369ef560589cf8c70fb, unchanged, with its own LICENSE
 | RiggedSimple | glTF-Binary/RiggedSimple.glb | CC-BY-4.0 | Cesium, 2017 |
 | MorphPrimitivesTest | glTF-Binary/MorphPrimitivesTest.glb | CC-BY-4.0 | ft-lab, 2018 |
 | AnimatedMorphCube | glTF-Binary/AnimatedMorphCube.glb | CC0-1.0 | Microsoft, 2017 |
+| Fox | glTF-Binary/Fox.glb | CC0-1.0, its model; CC-BY-4.0, its rigging and animation; CC-BY-4.0, its glTF | PixelMannen, 2014, its model; tomkranis, 2014, its rigging and animation; @AsoboStudio and @scurest, 2017, its conversion to glTF |
 
 They're test data, never part of a package.
+
+CesiumMan, the other skinned character of Khronos's, isn't used: its texture is Cesium's logo, a
+trademark, and Fox is a skinned character of several clips too.
 
 What E6 step 8 draws (`tests/khronos/`) is fetched by CMake at configure, not kept here, at that same
 commit, each with its `screenshot/screenshot.png` where it's held to one, under its model's license:
@@ -38,3 +42,6 @@ this repository.
 
 `tests/golden/model_RiggedSimple_*.png` and `tests/golden/model_MorphPrimitivesTest_*.png` are
 renderings of those two models, modified from them by being drawn, and are CC-BY-4.0, as they are.
+`tests/golden/model_Fox_*.png` are renderings of Fox, modified from it by being drawn, under its
+licenses: CC0-1.0 for PixelMannen's model, and CC-BY-4.0 for tomkranis's rigging and animation and
+@AsoboStudio's and @scurest's glTF.

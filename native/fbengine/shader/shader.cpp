@@ -135,7 +135,7 @@ bool binds_only_the_scene(std::span<const std::uint32_t> words) {
             const std::uint32_t value = words[at + 3];
             if ((kind == decoration_set && value != 0) ||
                 (kind == decoration_binding && value != gpu::sampler_binding &&
-                 value != gpu::texture_binding)) {
+                 value != gpu::samples_binding && value != gpu::texture_binding)) {
                 return false;
             }
         }

@@ -208,7 +208,7 @@ if(FBENGINE_FB_TESTS)
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        FIXTURES_SETUP model_frames TIMEOUT 300
                        PASS_REGULAR_EXPRESSION "
-25 of 25 frames as worked out\r?\n$")
+32 of 32 frames as worked out\r?\n$")
   # What masks.bin and worked_out.fb were worked out from, and that it refuses what it can't work out.
   find_program(FBENGINE_PYTHON NAMES python3 python)
   if(FBENGINE_PYTHON)
