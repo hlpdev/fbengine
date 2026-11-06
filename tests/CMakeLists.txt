@@ -1327,8 +1327,12 @@ add_executable(fbengine_scene_tests scene/world_tests.cpp scene/transform_tests.
                scene/handles_tests.cpp scene/pick_tests.cpp scene/sprite_tests.cpp
                scene/plane_tests.cpp scene/draw_tests.cpp
                scene/terrain_tests.cpp scene/clusters_tests.cpp scene/effects_tests.cpp
-               "${PROJECT_SOURCE_DIR}/native/fbengine/scene/bvh.cpp")
+               scene/stability_tests.cpp "${PROJECT_SOURCE_DIR}/native/fbengine/scene/bvh.cpp")
 target_link_libraries(fbengine_scene_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
+if(WIN32)
+  # What the soak measures the process holds by.
+  target_link_libraries(fbengine_scene_tests PRIVATE psapi)
+endif()
 fbengine_set_warnings(fbengine_scene_tests)
 # bvh.cpp, built here too, rounds as the DLL's does.
 if(NOT MSVC)
@@ -1364,6 +1368,8 @@ catch_discover_tests(fbengine_scene_tests TEST_PREFIX "scene."
 # what it does.
 if(FBENGINE_FB_TESTS)
   set(fbengine_scene_panics
+      "position-not-finite=SetPosition on a Pivot: a position isn't finite"
+      "translate-past-a-float=Translate on a Pivot: where the translation goes isn't finite"
       "particles-colors=SetColors on a Particles: a particle's alpha is 0 to 1, not 2"
       "particles-roll=SetRoll on a Particles: a particle's roll is up to 0 to Pi each way, not -1"
       "decal-limit=Decal: a decal's limit is above 0 and up to Pi / 2, not 2"
@@ -2328,8 +2334,11 @@ catch_discover_tests(fbengine_core_tests TEST_PREFIX "core."
 # fbengine's C API, with no window or GPU.
 add_executable(fbengine_anim_tests anim/sample_tests.cpp anim/clip_tests.cpp anim/player_tests.cpp
                anim/skin_tests.cpp anim/model_tests.cpp anim/morph_tests.cpp anim/fuzz_tests.cpp
-               "${PROJECT_SOURCE_DIR}/native/fbengine/clip/sample.cpp")
+               anim/model_fuzz_tests.cpp "${PROJECT_SOURCE_DIR}/native/fbengine/clip/sample.cpp")
 target_link_libraries(fbengine_anim_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
+# The sample models model_fuzz_tests.cpp changes, as they're kept beside the tests.
+target_compile_definitions(fbengine_anim_tests PRIVATE
+                           FBENGINE_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/models")
 fbengine_set_warnings(fbengine_anim_tests)
 catch_discover_tests(fbengine_anim_tests TEST_PREFIX "anim."
                      DL_PATHS "${fbengine_test_dll_paths}" "${PROJECT_BINARY_DIR}/native/fbengine")

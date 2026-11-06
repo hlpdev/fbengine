@@ -635,6 +635,8 @@ bool instances_bounds(instances_t& found, vec3_t& min, vec3_t& max);
 /// The box its instances are in, in its space, by its geometry's bounds whatever its cull box, as
 /// Bounds and InView give it: false for none.
 bool instances_own_bounds(instances_t& found, vec3_t& min, vec3_t& max);
+/// Whether each of an instance's matrix's numbers is finite.
+bool instance_finite(const fbe_instance_t& instance);
 /// Which of its geometry's levels of detail a cluster draws, by the size of the biggest of it where
 /// it's nearest, none for nothing.
 std::uint32_t cluster_lod(const instances_t& found, const instance_cluster_t& cluster,

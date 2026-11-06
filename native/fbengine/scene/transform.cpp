@@ -9,8 +9,10 @@
 #include <cmath>
 #include <cstdint>
 #include <format>
+#include <initializer_list>
 #include <new>
 #include <ranges>
+#include <string_view>
 #include <vector>
 
 namespace fbe::scene {
@@ -19,6 +21,17 @@ namespace {
 
 /// Shorter vectors have no direction to point or align to.
 constexpr float shortest = 1e-6F;
+
+/// Whether each of `values` is a finite number: false, saying `what` isn't, if one's NaN or
+/// infinite, as a transform of one would spread to all under it and all it's tested against.
+bool finite_or_fail(std::initializer_list<float> values, std::string_view what) {
+    for (const float value : values) {
+        if (!std::isfinite(value)) {
+            return fail(std::format("{} isn't finite", what));
+        }
+    }
+    return true;
+}
 
 bool valid_space(std::int32_t space) {
     if (space != FBE_SPACE_LOCAL && space != FBE_SPACE_WORLD) {
@@ -292,7 +305,7 @@ extern "C" {
 
 FBE_API bool fbe_entity_set_position(uint64_t entity, float x, float y, float z, int32_t space) {
     const std::uint32_t slot = entity_in(entity, space);
-    if (slot == none) {
+    if (slot == none || !fbe::scene::finite_or_fail({ x, y, z }, "a position")) {
         return false;
     }
     fbe::scene::set_position_in(slot, { x, y, z }, space);
@@ -311,7 +324,7 @@ FBE_API bool fbe_entity_position(uint64_t entity, int32_t space, fbe_vec3_t* pos
 FBE_API bool fbe_entity_set_rotation(uint64_t entity, float x, float y, float z, float w,
                                      int32_t space) {
     const std::uint32_t slot = entity_in(entity, space);
-    if (slot == none) {
+    if (slot == none || !fbe::scene::finite_or_fail({ x, y, z, w }, "a rotation")) {
         return false;
     }
     fbe::scene::set_rotation_in(slot, { x, y, z, w }, space);
@@ -329,7 +342,7 @@ FBE_API bool fbe_entity_rotation(uint64_t entity, int32_t space, fbe_quat_t* rot
 
 FBE_API bool fbe_entity_set_scale(uint64_t entity, float x, float y, float z, int32_t space) {
     const std::uint32_t slot = entity_in(entity, space);
-    if (slot == none) {
+    if (slot == none || !fbe::scene::finite_or_fail({ x, y, z }, "a scale")) {
         return false;
     }
     if (space == FBE_SPACE_LOCAL) {
@@ -357,35 +370,46 @@ FBE_API bool fbe_entity_scale(uint64_t entity, int32_t space, fbe_vec3_t* scale)
 
 FBE_API bool fbe_entity_move(uint64_t entity, float x, float y, float z) {
     const std::uint32_t slot = entity_slot(entity);
-    if (slot == none) {
+    if (slot == none || !fbe::scene::finite_or_fail({ x, y, z }, "a move")) {
         return false;
     }
     fbe::scene::entities_t& entities = scene().entities;
-    entities.position[slot] = entities.position[slot] + entities.rotation[slot] * vec3_t(x, y, z);
+    const vec3_t to = entities.position[slot] + entities.rotation[slot] * vec3_t(x, y, z);
+    if (!fbe::scene::finite_or_fail({ to.x, to.y, to.z }, "where the move goes")) {
+        return false;
+    }
+    entities.position[slot] = to;
     fbe::scene::mark_moved(slot);
     return true;
 }
 
 FBE_API bool fbe_entity_translate(uint64_t entity, float x, float y, float z, int32_t space) {
     const std::uint32_t slot = entity_in(entity, space);
-    if (slot == none) {
+    if (slot == none || !fbe::scene::finite_or_fail({ x, y, z }, "a translation")) {
         return false;
     }
     if (space == FBE_SPACE_LOCAL) {
         fbe::scene::entities_t& entities = scene().entities;
-        entities.position[slot] = entities.position[slot] + vec3_t{ x, y, z };
+        const vec3_t to = entities.position[slot] + vec3_t{ x, y, z };
+        if (!fbe::scene::finite_or_fail({ to.x, to.y, to.z }, "where the translation goes")) {
+            return false;
+        }
+        entities.position[slot] = to;
         fbe::scene::mark_moved(slot);
     } else {
         fbe::scene::update_world(slot);
-        const vec3_t at = scene().entities.world_matrix[slot].axis(3);
-        fbe::scene::set_world_position(slot, at + vec3_t{ x, y, z });
+        const vec3_t to = scene().entities.world_matrix[slot].axis(3) + vec3_t{ x, y, z };
+        if (!fbe::scene::finite_or_fail({ to.x, to.y, to.z }, "where the translation goes")) {
+            return false;
+        }
+        fbe::scene::set_world_position(slot, to);
     }
     return true;
 }
 
 FBE_API bool fbe_entity_turn(uint64_t entity, float x, float y, float z, float w, int32_t space) {
     const std::uint32_t slot = entity_in(entity, space);
-    if (slot == none) {
+    if (slot == none || !fbe::scene::finite_or_fail({ x, y, z, w }, "a turn")) {
         return false;
     }
     const quat_t turn = fbe::scene::normalize(quat_t{ x, y, z, w });
@@ -399,7 +423,7 @@ FBE_API bool fbe_entity_turn(uint64_t entity, float x, float y, float z, float w
 
 FBE_API bool fbe_entity_point_at(uint64_t entity, float x, float y, float z, float roll) {
     const std::uint32_t slot = entity_slot(entity);
-    if (slot == none) {
+    if (slot == none || !fbe::scene::finite_or_fail({ x, y, z, roll }, "what it points at")) {
         return false;
     }
     const vec3_t direction = vec3_t{ x, y, z } - fbe::scene::position_in(slot, FBE_SPACE_WORLD);
@@ -412,7 +436,7 @@ FBE_API bool fbe_entity_point_at(uint64_t entity, float x, float y, float z, flo
 FBE_API bool fbe_entity_align(uint64_t entity, float x, float y, float z, int32_t axis,
                               float rate) {
     const std::uint32_t slot = entity_slot(entity);
-    if (slot == none) {
+    if (slot == none || !fbe::scene::finite_or_fail({ x, y, z, rate }, "what it aligns to")) {
         return false;
     }
     vec3_t own;
@@ -539,6 +563,7 @@ FBE_API bool fbe_entity_set_poses(const uint64_t* entities, const fbe_pose_t* po
         return false;
     }
     bool all = true;
+    bool finite = true;
     for (std::int32_t i = 0; i < count; ++i) {
         const std::uint32_t slot = entity_slot(entities[i]);
         if (slot == none) {
@@ -546,9 +571,19 @@ FBE_API bool fbe_entity_set_poses(const uint64_t* entities, const fbe_pose_t* po
             continue;
         }
         const fbe_pose_t& pose = poses[i];
+        if (!std::isfinite(pose.position.x) || !std::isfinite(pose.position.y) ||
+            !std::isfinite(pose.position.z) || !std::isfinite(pose.rotation.x) ||
+            !std::isfinite(pose.rotation.y) || !std::isfinite(pose.rotation.z) ||
+            !std::isfinite(pose.rotation.w)) {
+            finite = false;
+            continue;
+        }
         fbe::scene::set_rotation_in(
             slot, { pose.rotation.x, pose.rotation.y, pose.rotation.z, pose.rotation.w }, space);
         fbe::scene::set_position_in(slot, fbe::scene::to_vec(pose.position), space);
+    }
+    if (!finite) {
+        return fbe::fail("a pose in the batch isn't finite; the rest were set");
     }
     return all || fbe::fail("an entity in the batch was freed; the rest were set");
 }

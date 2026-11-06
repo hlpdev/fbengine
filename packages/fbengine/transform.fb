@@ -41,7 +41,9 @@ End Struct
 /// An entity's transform. Its matrix scales, then turns, then moves, and its world matrix is its
 /// parent's times its own. Its world rotation is its parent's times its own, and its world scale
 /// its parent's times its own on each axis, which a turned child of a parent scaled unevenly
-/// shears away from, as any matrix hierarchy does.
+/// shears away from, as any matrix hierarchy does. Each method that sets, moves, or turns it
+/// panics at a number that isn't finite, NaN or infinite, or a move that would end at one,
+/// leaving it as it was.
 Extend Entity
     /// Puts the entity at `position`, in its parent's space or the world's.
     @MainThread @PanicsAtCaller
