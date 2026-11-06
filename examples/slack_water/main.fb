@@ -37,6 +37,7 @@ Import "./landmarks"
 Import "./map"
 Import "./res" As Res
 Import "./screens"
+Import "./shapes"
 Import "./sky"
 Import "./soundscape"
 Import "./walks"
@@ -628,26 +629,191 @@ Function FineDetail(image: Image): Float
     Return sum / (count As Float)
 End Function
 
-// How much more `image`'s brightness changes across than up and down, in its lower half's middle:
-// about 1 for detail that's alike every way, more for what's been stretched up and down.
-Function Stretched(image: Image): Float
+// What the ground's own detail is at (`x`, `y`): how much brighter `with` it is than `without`.
+Function DetailAt(with: Image, without: Image, x: Int, y: Int): Float
+    Return Luma(with[x, y]) - Luma(without[x, y])
+End Function
+
+// How much more the ground's own detail, `with` it against `without`, changes across than up and
+// down, in the `half` pixels round `at` each way: about 1 for detail that's alike every way, more for
+// what's stretched up and down, less for what's stretched across.
+Function Stretched(with: Image, without: Image, at: Vec2, half: Int): Float
     Local across = 0.0
     Local up = 0.0
-    For y = image.Height / 2 Until image.Height - 1
-        For x = image.Width / 4 Until (image.Width * 3) / 4
-            across += Abs(Luma(image[x + 1, y]) - Luma(image[x, y]))
-            up += Abs(Luma(image[x, y + 1]) - Luma(image[x, y]))
+    For y = Max((at.y As Int) - half, 0) Until Min((at.y As Int) + half, with.Height - 1)
+        For x = Max((at.x As Int) - half, 0) Until Min((at.x As Int) + half, with.Width - 1)
+            Local here = DetailAt(with, without, x, y)
+            across += Abs(DetailAt(with, without, x + 1, y) - here)
+            up += Abs(DetailAt(with, without, x, y + 1) - here)
         End For
     End For
     Return across / Max(up, 0.001)
 End Function
 
-// How stretched a crag's rock may be, by Stretched: mapped three ways it was 0.62, and mapped from
-// above alone, down the cliff, 0.73.
-Const CLIFF_STRETCH: Float = 0.68
+// How far from alike every way rock's grain may be on a wall, as Abs(Log(Stretched)): mapped three
+// ways, as it is, it was 0.05 facing z and 0.01 facing x; mapped from above alone, stretched down the
+// wall, 5.4 and 15; by its height alone, banded across it, no change across at all.
+Const ROCK_ALIKE: Float = 0.4
+
+// How alike the ground's detail round a point must stay when the eye moves 0.3 m, by DetailAlike: it
+// was 0.97, the world's; 0.66 with the noise in the camera's view, and 0.75 shimmering, its finest
+// octaves kept past a pixel.
+Const WORLD_LOCKED: Float = 0.85
+
+// How much the ground's own detail, `with` it against `without`, changes from pixel to pixel in the
+// `half` pixels round `at` each way: the mean of how far each one's is from its four neighbors'.
+Function DetailAround(with: Image, without: Image, at: Vec2, half: Int): Float
+    Local sum = 0.0
+    Local count = 0
+    For y = (at.y As Int) - half To (at.y As Int) + half
+        For x = (at.x As Int) - half To (at.x As Int) + half
+            If x < 1 || y < 1 || x >= with.Width - 1 || y >= with.Height - 1 Then Continue
+            Local around = DetailAt(with, without, x - 1, y) + DetailAt(with, without, x + 1, y) +
+                           DetailAt(with, without, x, y - 1) + DetailAt(with, without, x, y + 1)
+            sum += Abs(DetailAt(with, without, x, y) * 4.0 - around)
+            count += 1
+        End For
+    End For
+    Return count > 0 ? sum / (count As Float) : 0.0
+End Function
+
+// How alike the ground's own detail is round `one` in the first pair of images and round `other` in
+// the second, `half` pixels each way: their correlation, 1 for the same, about 0 for unrelated.
+Function DetailAlike(with: Image, without: Image, one: Vec2, laterWith: Image, laterWithout: Image,
+                     other: Vec2, half: Int): Float
+    Local first: Float[] = []
+    Local second: Float[] = []
+    For dy = -half To half
+        For dx = -half To half
+            first.Add(DetailAt(with, without, (one.x As Int) + dx, (one.y As Int) + dy))
+            second.Add(DetailAt(laterWith, laterWithout, (other.x As Int) + dx,
+                                (other.y As Int) + dy))
+        End For
+    End For
+    Local n = first.Count As Float
+    Local meanFirst = 0.0
+    Local meanSecond = 0.0
+    For at = 0 Until first.Count
+        meanFirst += first[at] / n
+        meanSecond += second[at] / n
+    End For
+    Local both = 0.0
+    Local firstSpread = 0.0
+    Local secondSpread = 0.0
+    For at = 0 Until first.Count
+        both += (first[at] - meanFirst) * (second[at] - meanSecond)
+        firstSpread += (first[at] - meanFirst) * (first[at] - meanFirst)
+        secondSpread += (second[at] - meanSecond) * (second[at] - meanSecond)
+    End For
+    Return both / Max(Sqrt(firstSpread * secondSpread), 0.001)
+End Function
+
+// How far apart two images are: the mean of how far each pixel's brightness is, and how many of
+// their pixels are more than 2 apart.
+Function Apart(one: Image, other: Image): (Float, Int)
+    Local sum = 0.0
+    Local far = 0
+    For y = 0 Until one.Height
+        For x = 0 Until one.Width
+            Local by = Abs(Luma(one[x, y]) - Luma(other[x, y]))
+            sum += by
+            If by > 2.0 Then far += 1
+        End For
+    End For
+    Return (sum / ((one.Width * one.Height) As Float), far)
+End Function
+
+// What `island` looks like as `camera` sees it, with the ground's own shader, and without: with no
+// temporal antialiasing, whose jitter moves each frame its own way.
+Function WithAndWithout(island: Island, camera: Camera, ground: Material?,
+                        own: Shader?): (Image, Image) Throws GraphicsError
+    Local smoothed = camera.TemporalAA()
+    camera.SetTemporalAA(False)
+    island.Drawn(camera)
+    Local with = Try Screen.ToImage()
+    Flip(False)
+    ground?.SetShader(Null)
+    island.Drawn(camera)
+    Local without = Try Screen.ToImage()
+    Flip(False)
+    ground?.SetShader(own)
+    camera.SetTemporalAA(smoothed)
+    Return (with, without)
+End Function
 
 // What fine detail the ground up close has at least, of FineDetail's.
 Const GROUND_FINE_DETAIL: Float = 6.0
+
+// The ground's own shader on a square 2 meters across, colored `cover`, its face turned to `facing`,
+// before `camera`, high over the island, as each of `shown`, parameter 0's w, shows it: its face's
+// middle, 81 pixels a side, with no temporal antialiasing.
+@MainThread
+Function OnASquare(island: Island, camera: Camera, ground: Material?, cover: Color32, facing: Vec3,
+                   shown: Float[]): Image[] Throws GraphicsError
+    Local images: Image[] = []
+    If ground == Null Then Return images
+    Local image = Image(1, 1)
+    image[0, 0] = cover
+    Local covered = Try Texture.FromImage(image, False, TextureFormat.RGBA8)
+    Local material = ground.Clone()
+    material.SetTexture(0, covered)
+    Local given = ground.Parameter(0)
+    Local previous = World.Current()
+    World.SetCurrent(island.Scene())
+    Local square = Mesh(Beveled(Vec3(1.0, 1.0, 0.05), 0.01))
+    World.SetCurrent(previous)
+    square.SetMaterial(material)
+    Local place = Vec3(MAIN_X, 300.0, 0.0)
+    square.SetPosition(place)
+    square.SetRotation(Quat.FromTo(Vec3(0.0, 0.0, 1.0), facing))
+    camera.SetPosition(place + facing * 4.0)
+    camera.PointAt(place)
+    Local smoothed = camera.TemporalAA()
+    camera.SetTemporalAA(False)
+    For mode In shown
+        material.SetParameter(0, Vec4(given.x, given.y, given.z, mode))
+        island.Drawn(camera)
+        Local whole = Try Screen.ToImage()
+        Flip(False)
+        Local middle = Image(81, 81)
+        For y = 0 Until 81
+            For x = 0 Until 81
+                middle[x, y] = whole[whole.Width / 2 - 40 + x, whole.Height / 2 - 40 + y]
+            End For
+        End For
+        images.Add(middle)
+    End For
+    camera.SetTemporalAA(smoothed)
+    square.Free()
+    Return images
+End Function
+
+// How far from a half, in brightness, the sum of the ground's covers' weights shows, on a square half
+// steep, its up 0.63, colored between turf and sand: the most of any pixel.
+@MainThread
+Function WeightsShown(island: Island, camera: Camera, ground: Material?): Float Throws GraphicsError
+    Local images = Try OnASquare(island, camera, ground, Color32(128, 153, 77, 255),
+                                 Normalize(Vec3(0.0, 0.633, 0.774)), [1.0, 2.0])
+    If images.Count < 2 Then Return 1000.0
+    Local most = 0.0
+    For y = 0 Until images[0].Height
+        For x = 0 Until images[0].Width
+            most = Max(most, Abs(Luma(images[0][x, y]) - Luma(images[1][x, y])))
+        End For
+    End For
+    Return most
+End Function
+
+// How stretched rock's detail is on a wall facing `facing`, seen square on, as Stretched has it: the
+// shader showing rock's detail alone, against a half.
+@MainThread
+Function RockStretched(island: Island, camera: Camera, ground: Material?,
+                       facing: Vec3): Float Throws GraphicsError
+    Local images = Try OnASquare(island, camera, ground, Color32(110, 110, 110, 255), facing,
+                                 [3.0, 2.0])
+    If images.Count < 2 Then Return 1000.0
+    Return Stretched(images[0], images[1], Vec2(40.0, 40.0), 39)
+End Function
 
 // What the GPU takes for a frame of what `camera` sees, in milliseconds: the middle of 16, after 4 to
 // settle.
@@ -899,21 +1065,64 @@ Function CheckLandmarks(folder: Path, island: Island, camera: Camera) Throws Gra
     camera.SetPosition(eye)
     camera.PointAt(Vec3(standX + 1.0, GroundHeight(standX + 1.0, standZ - 6.0), standZ - 6.0))
     island.Drawn(camera)
-    Local detailed = Try Screen.ToImage()
     Try Screen.Save(folder / "ground_close.png")
     Flip(False)
     Local ground = island.GroundMaterial()
     Local own = ground?.Shader()
-    ground?.SetShader(Null)
-    island.Drawn(camera)
-    Local smeared = Try Screen.ToImage()
-    Flip(False)
-    ground?.SetShader(own)
+    Local pair = Try WithAndWithout(island, camera, ground, own)
+    Local detailed = pair.0
+    Local smeared = pair.1
     Local fine = FineDetail(detailed)
     Local smear = FineDetail(smeared)
     Checks("the ground up close has fine detail, {fine} against {smear} without",
            fine > smear * 1.5 &&
            fine > GROUND_FINE_DETAIL)
+    // Its detail fades as it goes away, rather than shimmering: what changes from pixel to pixel 3, 6,
+    // and 11 meters out along the ground.
+    Local ahead = Normalize(Vec2(1.0, -6.0))
+    Local energies: Float[] = []
+    For out In [3.0, 6.0, 11.0]
+        Local x = standX + ahead.x * out
+        Local z = standZ + ahead.y * out
+        Local at = camera.Project(Vec3(x, GroundHeight(x, z), z))
+        If at == Null Then Continue
+        energies.Add(DetailAround(detailed, smeared, Vec2(at.x, at.y), 12))
+    End For
+    // It was 9.9, 2.3, and 1.2; with its finest octaves kept past a pixel, 13, 28, and 41.
+    Checks("its detail fades as it goes away, {energies}",
+           energies.Count == 3 && energies[1] < energies[0] && energies[2] < energies[1])
+    // It's the world's: moved a little, the eye sees the same detail on the same ground.
+    Local fixedX = standX + ahead.x * 4.0
+    Local fixedZ = standZ + ahead.y * 4.0
+    Local fixed = Vec3(fixedX, GroundHeight(fixedX, fixedZ), fixedZ)
+    Local seenBefore = camera.Project(fixed)
+    Local nudge = Vec3(0.3, 0.05, 0.0)
+    camera.SetPosition(eye + nudge)
+    camera.PointAt(Vec3(standX + 1.0, GroundHeight(standX + 1.0, standZ - 6.0), standZ - 6.0) +
+                   nudge)
+    Local moved = Try WithAndWithout(island, camera, ground, own)
+    Local seenAfter = camera.Project(fixed)
+    Local alike = -1.0
+    If seenBefore != Null && seenAfter != Null
+        alike = DetailAlike(detailed, smeared, Vec2(seenBefore.x, seenBefore.y), moved.0, moved.1,
+                            Vec2(seenAfter.x, seenAfter.y), 10)
+    End If
+    Checks("and it's the world's, moved a little, {alike} alike", alike > WORLD_LOCKED)
+    // Far off, past where it's faded, the ground's as if it had no shader of its own.
+    camera.SetPosition(Vec3(MAIN_X, 70.0, 0.0))
+    camera.PointAt(Vec3(MAIN_X + 1.0, 0.0, 0.0))
+    Local farOff = Try WithAndWithout(island, camera, ground, own)
+    Local apart = Apart(farOff.0, farOff.1)
+    // It was the same to the bit; with no fade, 2.9 apart, and 400843 pixels by more than 2.
+    Checks("far off, the ground's as without its shader, {apart.0} apart, {apart.1} by more than 2",
+           apart.0 < 0.1 && apart.1 < 1000)
+    // Its covers' weights are each a share of the whole, on a slope half steep, colored between turf
+    // and sand: the shader showing their sum as a half each, against a half.
+    Local weights = Try WeightsShown(island, camera, ground)
+    // It was the same; their sum as it was, 8 apart.
+    Checks("its covers' weights come to the whole, {weights} from it", weights < 2.0)
+    camera.SetPosition(eye)
+    camera.PointAt(Vec3(standX + 1.0, GroundHeight(standX + 1.0, standZ - 6.0), standZ - 6.0))
     // What the ground's own shader costs, here, where it's most of the picture: when asked.
     If Env.Get("SLACK_WATER_COSTS") == "1"
         Local with = FrameMilliseconds(island)
@@ -922,7 +1131,7 @@ Function CheckLandmarks(folder: Path, island: Island, camera: Camera) Throws Gra
         ground?.SetShader(own)
         Print("cost of the ground's detail: {(with - without) / with * 100.0}% of {with} ms, up close")
     End If
-    // A crag, close: its rock mapped three ways, so a cliff's detail isn't stretched down it.
+    // A crag, close: fine detail on its rock, as on the ground.
     Local crag = Vec2(0.0, 0.0)
     Local steepest = 0.0
     For across = -20 To 20
@@ -943,18 +1152,20 @@ Function CheckLandmarks(folder: Path, island: Island, camera: Camera) Throws Gra
     camera.SetPosition(Vec3(standing, GroundHeight(standing, crag.y) + 1.7, crag.y + 1.0))
     camera.PointAt(Vec3(crag.x, cragHeight + 0.5, crag.y))
     island.Drawn(camera)
-    Local cliff = Try Screen.ToImage()
     Try Screen.Save(folder / "crag_close.png")
     Flip(False)
-    ground?.SetShader(Null)
-    island.Drawn(camera)
-    Local cliffSmeared = Try Screen.ToImage()
-    Flip(False)
-    ground?.SetShader(own)
+    Local cragPair = Try WithAndWithout(island, camera, ground, own)
+    Local cliff = cragPair.0
+    Local cliffSmeared = cragPair.1
     Checks("and a crag up close, {FineDetail(cliff)} against {FineDetail(cliffSmeared)}, {steepest} steep",
            steepest > 1.0 && FineDetail(cliff) > FineDetail(cliffSmeared) * 1.3)
-    Checks("and its rock's not stretched down it, {Stretched(cliff)}",
-           Stretched(cliff) < CLIFF_STRETCH)
+    // Its rock's detail is alike every way on a wall, facing either way: mapped three ways, by its
+    // normal, never from above alone, which stretches it down the wall, nor by its height alone, which
+    // bands it across.
+    Local facingZ = Try RockStretched(island, camera, ground, Vec3(0.0, 0.0, 1.0))
+    Local facingX = Try RockStretched(island, camera, ground, Vec3(1.0, 0.0, 0.0))
+    Checks("and its rock's grain is alike every way on a wall, {facingZ} facing z, {facingX} x",
+           Abs(Log(facingZ)) < ROCK_ALIKE && Abs(Log(facingX)) < ROCK_ALIKE)
     // Each one's share of a frame, which takes hundreds of frames to tell: only when asked.
     If Env.Get("SLACK_WATER_COSTS") == "1" Then CostsOf(island, camera, pieces)
 End Function

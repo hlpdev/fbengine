@@ -162,9 +162,7 @@ struct camera_data_t {
     std::uint32_t shadow_atlas;
     float lod_bias;
     /// The rows of what turns its view's directions into the world's, which an environment's are
-    /// in.
-    // What turns the view's directions into the world's, a row an axis, each with where the eye is
-    // on that axis in its w.
+    /// in, a row an axis, each with where the eye is on that axis in its w.
     std::array<std::array<float, 4>, 3> world_rows;
     /// What it's lit by, and whether it's lit by it.
     environment::shader_data_t environment;

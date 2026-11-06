@@ -117,9 +117,13 @@ instead); saves; depth of field.
 - **The ground up close.** A shader of the game's own, assets/ground.slang, on the terrain's material:
   each cover's own detail, from noise in the world, turf's blades, sand's ripples and grain, trodden
   ground's pebbles, and rock's grain and cracks, mapped three ways by its normal where it's steep, its
-  albedo varied and its normal bumped, fading out from 12 m to 30 m. At a person's eye, its foreground
-  has six times the fine detail of the cover map alone; it costs a tenth of a frame there, on lavapipe,
-  where it's most of the picture.
+  albedo varied and its normal bumped, each octave of its noise gone as its cells near a pixel, fading
+  out from 12 m to 30 m, past which it's as if it weren't there. At a person's eye, its foreground has
+  four times the fine detail of the cover map alone. `--frames` checks that, that its detail fades with
+  distance, stays on the ground as the eye moves, and is gone far off, that its covers' weights come to
+  one, and that rock's grain is alike every way on a wall facing either way. What it costs isn't
+  checked: measured once, on 2026-11-06, with SLACK_WATER_COSTS=1 on lavapipe, it was 6.8% of a
+  93 ms frame up close, where it's most of the picture.
 - **The tests' time.** The release is cooked once, by `examples.slack_water.cook`, which each test of
   it needs, and which fails past 120 s, saying what each file took; a fresh cook was 3 s on the
   machine it's made on. `--frames` says what each part of it took; it was 21 s there.
