@@ -55,6 +55,12 @@ Add `-- --watch` for a window a person watches, and `-- --watch --frames 40` for
 no window, which is how the tests walk it. There, on its last frame, a sample reads what it drew and
 prints it, so a test checks the frame as well as the numbers. `tools/show.py` opens them too.
 
+## Their files
+
+streamed_and_positional_sound's tone.ogg is the repository's own, the same file as examples/sound's
+and fbengine_audio's tests/data/tone.ogg: a quarter second of 440 Hz in stereo, made by ffmpeg with
+the command its main.fb's header gives.
+
 ## What takes a person
 
 A flag can't show how long a flip waits, so timing it takes a window and a display:
