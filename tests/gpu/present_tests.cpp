@@ -408,6 +408,33 @@ TEST_CASE("a lost GPU runs nothing, says so, and starts again", "[gpu]") {
     stop_gpu();
 }
 
+// The GPU's lost as work run now is, as a read's is: the read fails saying so, nothing runs from
+// then on, and stopping and starting it makes it again.
+TEST_CASE("a GPU lost running work now says so, and starts again", "[gpu]") {
+    REQUIRE(fbe_window_set_headless(true));
+    require(fbe_gpu_start());
+    const std::uint64_t texture = fbe_texture_create(4, 4, FBE_TEXTURE_RGBA8, false);
+    REQUIRE(texture != 0);
+    std::array<std::uint8_t, 64> pixels{};
+    fbe::gpu::inject(fbe::gpu::fault_t::LOST_NOW);
+    CHECK(!fbe_texture_read(texture, 0, pixels.data(), 64));
+    CHECK(fbe_gpu_lost());
+    CHECK(std::string(fbe_error()).starts_with("the GPU was lost"));
+    const std::int64_t presented = fbe_gpu_presented();
+    fbe_frame_flip(false);
+    CHECK(fbe_gpu_presented() == presented);
+    CHECK(fbe_texture_create(4, 4, FBE_TEXTURE_RGBA8, false) == 0);
+    fbe_texture_release(texture);
+    stop_gpu();
+    CHECK(!fbe_gpu_lost());
+    require(fbe_gpu_start());
+    const std::uint64_t again = fbe_texture_create(4, 4, FBE_TEXTURE_RGBA8, false);
+    CHECK(again != 0);
+    CHECK(fbe_texture_read(again, 0, pixels.data(), 64));
+    fbe_texture_release(again);
+    stop_gpu();
+}
+
 // Every device lacks dynamic rendering, as a GPU from before Vulkan 1.3 can: the GPU doesn't start,
 // and says which lacks what, as each device does.
 TEST_CASE("a GPU that lacks what fbengine needs says what it lacks", "[gpu]") {

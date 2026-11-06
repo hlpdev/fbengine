@@ -279,6 +279,8 @@ enum class fault_t : std::uint8_t {
     NO_FILE_FORMAT,
     /// Making a multisampled image of the engine's, as if the device couldn't read its samples.
     NO_READ_SAMPLES,
+    /// Running work now, as a read or a buffer's upload does, as the device is lost.
+    LOST_NOW,
 };
 
 /// Makes the next `fault` happen.
