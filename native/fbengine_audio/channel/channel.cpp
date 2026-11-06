@@ -9,6 +9,7 @@
 #include "audio/pool.hpp"
 #include "channel/voices.hpp"
 #include "fbengine_audio.h"
+#include "sound/sound.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -458,6 +459,7 @@ std::uint64_t play(std::shared_ptr<const sound_data_t> data, const play_t& how) 
     voice->data = std::move(data);
     ma_result result = MA_SUCCESS;
     if (voice->data->streamed()) {
+        fbe::audio::ready_decoders();
         const ma_decoder_config config = ma_decoder_config_init(ma_format_f32, 0, 0);
         result = ma_decoder_init_memory(voice->data->encoded.data(), voice->data->encoded.size(),
                                         &config, &voice->decoder);

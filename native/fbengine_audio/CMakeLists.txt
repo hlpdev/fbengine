@@ -28,6 +28,10 @@ FetchContent_MakeAvailable(miniaudio)
 #   them as they're freed, and frees what's left in vorbis_deinit (a codebook's codewords, which
 #   are temporary too, it frees already).
 # - get32_packet shifts get8_packet's -1, at a packet's end, left; the copy shifts it as a uint32.
+# - Each decoder's start makes the CRC table again, in place, while the mix's thread reads it for a
+#   stream it seeks: a data race (ThreadSanitizer). The copy makes it only in
+#   fbengine_vorbis_crc32_init, which fbengine_audio calls once, before its first decoder
+#   (sound/sound.cpp's ready_decoders).
 # Each patch's text has to be there, once, or configuring fails.
 file(READ "${miniaudio_SOURCE_DIR}/extras/stb_vorbis.c" fbengine_stb_vorbis)
 set(fbengine_stb_vorbis_patches
@@ -52,7 +56,11 @@ set(fbengine_stb_vorbis_patches
     "   int i,j\;\n\n   setup_free(p, p->vendor)\;\n"
     "   int i,j\;\n\n   if (!p->alloc.alloc_buffer) {\n      free(p->fbe_temp_lengths)\;\n      free(p->fbe_temp_values)\;\n   }\n   setup_free(p, p->vendor)\;\n"
     "   x += get8_packet(f) << 8\;\n   x += get8_packet(f) << 16\;\n"
-    "   x += (uint32) get8_packet(f) << 8\;\n   x += (uint32) get8_packet(f) << 16\;\n")
+    "   x += (uint32) get8_packet(f) << 8\;\n   x += (uint32) get8_packet(f) << 16\;\n"
+    "static void crc32_init(void)\n{"
+    "void fbengine_vorbis_crc32_init(void)\n{"
+    "   crc32_init()\; // always init it, to avoid multithread race conditions\n"
+    "   // fbengine_audio makes the CRC table once, before its first decoder.\n")
 list(LENGTH fbengine_stb_vorbis_patches fbengine_patch_count)
 math(EXPR fbengine_patch_last "${fbengine_patch_count} - 1")
 foreach(fbengine_patch RANGE 0 ${fbengine_patch_last} 2)
@@ -88,6 +96,12 @@ target_compile_definitions(fbengine_miniaudio PUBLIC MA_NO_MP3 MA_NO_ENCODING)
 # needs, is on the same thread; multithreaded, miniaudio's default, would make OleInitialize fail.
 target_compile_definitions(fbengine_miniaudio PRIVATE MA_COINIT_VALUE=2)
 set_target_properties(fbengine_miniaudio PROPERTIES POSITION_INDEPENDENT_CODE ON)
+# Its decoders add and multiply a file's samples and coefficients in signed ints, which a corrupt
+# file overflows: dr_flac's prediction does, which is undefined, so they're made to wrap, as the
+# code takes them to (tests/audio/fuzz_tests.cpp, and tools.miniaudio_wraps).
+if(NOT MSVC)
+  target_compile_options(fbengine_miniaudio PRIVATE -fwrapv)
+endif()
 find_package(Threads REQUIRED)
 target_link_libraries(fbengine_miniaudio PUBLIC Threads::Threads)
 if(APPLE)

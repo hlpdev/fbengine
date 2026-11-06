@@ -19,6 +19,9 @@
 #include <utility>
 #include <vector>
 
+// stb_vorbis's CRC table, made once (native/fbengine_audio/CMakeLists.txt's patch).
+extern "C" void fbengine_vorbis_crc32_init(void);
+
 namespace {
 
 /// The most channels a sound has, as the mix.
@@ -70,6 +73,7 @@ bool open(decoder_t& decoder, const std::uint8_t* data, std::int64_t size) {
     if (data == nullptr || size <= 0) {
         return fbe::audio::fail("there are no bytes to read a sound from");
     }
+    fbe::audio::ready_decoders();
     const ma_decoder_config config = ma_decoder_config_init(ma_format_f32, 0, 0);
     const ma_result result =
         ma_decoder_init_memory(data, static_cast<std::size_t>(size), &config, &decoder.decoder);
@@ -176,6 +180,15 @@ std::uint64_t out_of_memory() {
 } // namespace
 
 namespace fbe::audio {
+
+void ready_decoders() {
+    // A function's static is made once, and what it makes is seen by every thread after.
+    static const bool made = [] {
+        fbengine_vorbis_crc32_init();
+        return true;
+    }();
+    static_cast<void>(made);
+}
 
 std::shared_ptr<const sound_data_t> find_sound(std::uint64_t sound) {
     const sound_t* found = sounds().find(sound);

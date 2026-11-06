@@ -230,6 +230,12 @@ if(FBENGINE_FB_TESTS)
              COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_simdjson_test.py")
     set_tests_properties(tools.check_simdjson_reads PROPERTIES
                          PASS_REGULAR_EXPRESSION "reads commands and rules as it should")
+    # miniaudio's decoders wrap a signed int's overflow, which a corrupt file's FLAC overflows.
+    add_test(NAME tools.miniaudio_wraps
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_miniaudio_wraps.py"
+                     "${PROJECT_BINARY_DIR}")
+    set_tests_properties(tools.miniaudio_wraps PROPERTIES SKIP_RETURN_CODE 77
+                         PASS_REGULAR_EXPRESSION "decoders wrap a signed int's overflow")
   endif()
   add_test(NAME models.golden
            COMMAND fbengine_gpu_tests "the sample models' frames match their golden images")
@@ -1771,10 +1777,13 @@ catch_discover_tests(fbengine_app_tests TEST_PREFIX "app."
                      DL_PATHS "${fbengine_test_dll_paths}")
 
 # fbengine_video, through its DLL, against its test videos with bytes changed at random.
-add_executable(fbengine_video_tests video/mutation_tests.cpp)
+add_executable(fbengine_video_tests video/mutation_tests.cpp video/soak_tests.cpp)
 target_link_libraries(fbengine_video_tests PRIVATE fbengine_video_native Catch2::Catch2WithMain)
 target_compile_definitions(fbengine_video_tests PRIVATE
                            FBE_VIDEO_MEDIA="${PROJECT_SOURCE_DIR}/packages/fbengine_video/tests/media")
+if(WIN32)
+  target_link_libraries(fbengine_video_tests PRIVATE psapi)
+endif()
 fbengine_set_warnings(fbengine_video_tests)
 catch_discover_tests(fbengine_video_tests TEST_PREFIX "video."
                      DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_video_native>")
@@ -2163,11 +2172,13 @@ catch_discover_tests(fbengine_audio_tests TEST_PREFIX "audio."
 
 # fbengine_audio_native's C API, with a thread of the test's own mixing, as a device's does, and on
 # Windows, with OLE, on the null backend.
-add_executable(fbengine_audio_native_tests audio/native_tests.cpp audio/memory_tests.cpp)
+add_executable(fbengine_audio_native_tests audio/native_tests.cpp audio/memory_tests.cpp
+               audio/fuzz_tests.cpp audio/race_tests.cpp)
 target_link_libraries(fbengine_audio_native_tests PRIVATE fbengine_audio_native
                       Catch2::Catch2WithMain)
 target_compile_definitions(fbengine_audio_native_tests PRIVATE
-                           FBE_AUDIO_TEST_DATA="${PROJECT_SOURCE_DIR}/packages/fbengine_audio/tests/data")
+                           FBE_AUDIO_TEST_DATA="${PROJECT_SOURCE_DIR}/packages/fbengine_audio/tests/data"
+                           FBE_AUDIO_TEST_CORPUS="${CMAKE_CURRENT_SOURCE_DIR}/audio/corpus")
 if(WIN32)
   target_sources(fbengine_audio_native_tests PRIVATE audio/ole_tests.cpp)
   target_link_libraries(fbengine_audio_native_tests PRIVATE ole32 psapi)

@@ -24,6 +24,10 @@ struct sound_data_t {
     }
 };
 
+/// Makes what every decoder reads and none may make again under another thread's reading,
+/// stb_vorbis's CRC table, the first time it's called, on any thread; each decoder's made after it.
+void ready_decoders();
+
 /// What the handle fbe_sound_load gave is for, or null when it's gone.
 std::shared_ptr<const sound_data_t> find_sound(std::uint64_t sound);
 
