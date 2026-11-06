@@ -124,6 +124,15 @@ void stop();
 /// wasn't freed.
 std::uint32_t allocations_left();
 
+/// VMA's allocations now, and their bytes, as its statistics count them; none before the GPU
+/// starts.
+struct allocations_t {
+    std::uint32_t count = 0;
+    std::uint64_t bytes = 0;
+    bool operator==(const allocations_t&) const = default;
+};
+allocations_t allocations();
+
 /// Makes a frame a command pool of its own and its three command buffers, uploads, its own, and
 /// its first timestamp's; false,
 /// with fbe_error's why, if they can't be, and then it's left as it was.

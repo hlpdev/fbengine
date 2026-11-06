@@ -431,10 +431,6 @@ std::uint32_t pipelines_refused() {
     return refused_count;
 }
 
-std::size_t pipelines_made() {
-    return pipelines().size();
-}
-
 VkPipeline pipeline(const pipeline_desc_t& desc) {
     const auto found = pipelines().find(desc);
     if (found != pipelines().end()) {

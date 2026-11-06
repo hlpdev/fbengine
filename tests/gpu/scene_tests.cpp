@@ -11418,13 +11418,13 @@ struct prepass_scene_t : scene_t {
 
 TEST_CASE("a scene that keeps the GPU started leaves the next the pipelines it made",
           "[gpu][scene]") {
-    std::size_t made = 0;
+    std::int32_t made = 0;
     {
         const scene_t first(false);
         const std::uint64_t material = by_game_shader();
         cube(first.world, 0.0F, 0.0F, -9.0F, material);
         static_cast<void>(first.drawn());
-        made = fbe::gpu::pipelines_made();
+        made = fbe_gpu_pipelines();
         CHECK(made > 0);
         fbe_material_release(material);
     }
@@ -11434,7 +11434,7 @@ TEST_CASE("a scene that keeps the GPU started leaves the next the pipelines it m
         const std::uint64_t material = by_game_shader();
         cube(second.world, 0.0F, 0.0F, -9.0F, material);
         static_cast<void>(second.drawn());
-        CHECK(fbe::gpu::pipelines_made() == made);
+        CHECK(fbe_gpu_pipelines() == made);
         fbe_material_release(material);
     }
     CHECK_FALSE(fbe_gpu_started());
@@ -11684,6 +11684,86 @@ TEST_CASE("a shader of its own reaches the prepass: what it moves, and what it c
             fbe_skin_release(skinned.skin);
         });
     on_one_gpu(parts);
+}
+
+namespace {
+
+/// What the GPU holds that a frame's making and freeing could leave: VMA's allocations, the
+/// pipelines, and the set's free slots. Not fbe_gpu_memory_usage, which is the driver's, and
+/// lavapipe's is the machine's.
+struct held_t {
+    fbe::gpu::allocations_t allocations;
+    std::int32_t pipelines = 0;
+    std::uint32_t free_samples = 0;
+    bool operator==(const held_t&) const = default;
+};
+
+held_t held() {
+    return {
+        .allocations = fbe::gpu::allocations(),
+        .pipelines = fbe_gpu_pipelines(),
+        .free_samples = fbe::gpu::free_samples_slot_count(),
+    };
+}
+
+} // namespace
+
+// Each frame makes and frees a texture with mipmaps, a material of it and one of a game's shader,
+// a mesh of each, and a camera drawing them into a target of its own, of 1 or 4 samples, in HDR or
+// not, besides the scene's: once the first frames have made the pipelines and pools there are,
+// what the GPU holds is the same, frame after frame, and nothing's left once it stops. CI runs 600
+// frames, and FBE_SOAK_FRAMES asks for more.
+TEST_CASE("frames of making and freeing leave the GPU holding what it did", "[gpu][scene]") {
+    const char* asked = std::getenv("FBE_SOAK_FRAMES");
+    const int frames = asked != nullptr ? std::atoi(asked) : 600;
+    REQUIRE(frames >= 100);
+    const scene_t scene;
+    const std::vector<std::uint8_t> pixels(std::size_t{ 16 } * 16 * 4, 200);
+    const auto frame = [&](int at) {
+        const std::uint64_t texture = fbe_texture_create(16, 16, FBE_TEXTURE_RGBA8, true);
+        require(texture != 0);
+        require(fbe_texture_write(texture, 0, 0, 16, 16, pixels.data(), 16 * 4));
+        const std::uint64_t painted = fbe_material_create();
+        require(fbe_material_set_texture(painted, 0, texture));
+        const std::uint64_t shaded = by_game_shader();
+        const std::uint64_t first = wall(scene.world, -5.0F, 1.0F, painted);
+        const std::uint64_t second = cube(scene.world, 1.0F, 0.0F, -6.0F, shaded);
+        const std::uint64_t target =
+            fbe_texture_create_target(32, 32, FBE_TEXTURE_RGBA8, at % 2 == 0 ? 1 : 4, true);
+        require(target != 0);
+        const std::uint64_t camera = fbe_entity_create(scene.world, 0, FBE_ENTITY_CAMERA);
+        require(fbe_camera_set_target(camera, target));
+        require(fbe_camera_set_hdr(camera, at % 3 == 0));
+        static_cast<void>(scene.drawn());
+        require(fbe_entity_free(camera));
+        require(fbe_entity_free(first));
+        require(fbe_entity_free(second));
+        fbe_material_release(painted);
+        fbe_material_release(shaded);
+        fbe_texture_release(texture);
+        fbe_texture_release(target);
+    };
+    // What the first frames make, of each kind, and what's kept while they're in flight.
+    for (int at = 0; at < 12; ++at) {
+        frame(at);
+    }
+    const held_t settled = held();
+    CAPTURE(settled.allocations.count, settled.allocations.bytes, settled.pipelines);
+    CHECK(settled.allocations.count > 0);
+    int differed = 0;
+    for (int at = 12; at < frames; ++at) {
+        frame(at);
+        // At the same place in the cycle of samples and HDR.
+        if (at % 6 == 5 && held() != settled) {
+            ++differed;
+            const held_t now = held();
+            CAPTURE(at, now.allocations.count, now.allocations.bytes, now.pipelines,
+                    now.free_samples);
+            CHECK(now == settled);
+        }
+    }
+    CHECK(differed == 0);
+    CHECK(fbe_gpu_validation_errors() == 0);
 }
 
 TEST_CASE("a camera in stored values blends with what's stored, as DirectX 7 did", "[gpu][scene]") {

@@ -788,6 +788,18 @@ std::uint32_t allocations_left() {
     return leftovers;
 }
 
+allocations_t allocations() {
+    if (!started || current.allocator == VK_NULL_HANDLE) {
+        return {};
+    }
+    VmaTotalStatistics statistics{};
+    vmaCalculateStatistics(current.allocator, &statistics);
+    return {
+        .count = statistics.total.statistics.allocationCount,
+        .bytes = statistics.total.statistics.allocationBytes,
+    };
+}
+
 bool remake_frame(const device_t& gpu, frame_t& frame) {
     vkDestroyFence(gpu.device, frame.done, nullptr);
     vkDestroySemaphore(gpu.device, frame.acquired, nullptr);
