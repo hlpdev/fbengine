@@ -112,6 +112,9 @@ TEST_CASE("what isn't a finite number, given as where an entity is, its turn, or
         CHECK_FALSE(fbe_entity_move(entity, 0.0F, bad, 0.0F));
         CHECK_FALSE(fbe_entity_point_at(entity, bad, 0.0F, 0.0F, 0.0F));
         CHECK_FALSE(fbe_entity_point_at(entity, 0.0F, 0.0F, 5.0F, bad));
+        CHECK_FALSE(fbe_entity_align(entity, 0.0F, bad, 0.0F, 1, 1.0F));
+        CHECK(says("isn't finite"));
+        CHECK_FALSE(fbe_entity_align(entity, 0.0F, 1.0F, 0.0F, 1, bad));
         const fbe_pose_t pose{
             .position = { .x = bad, .y = 0.0F, .z = 0.0F },
             .rotation = { .x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F },
