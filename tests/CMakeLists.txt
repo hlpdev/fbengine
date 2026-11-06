@@ -1704,7 +1704,7 @@ endif()
 # The loaders' decoders, built into the tests from their own sources, with libktx's writer and
 # encoder, which make the KTX2 files the tests read, and stb_image_write, the PNGs and JPEGs.
 add_executable(fbengine_assets_tests assets/images_tests.cpp assets/models_tests.cpp
-               assets/files.cpp
+               assets/fuzz_tests.cpp assets/files.cpp
                "${PROJECT_SOURCE_DIR}/native/fbengine/assets/image.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/assets/gltf.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/assets/stb.cpp"
@@ -2087,6 +2087,19 @@ if(FBENGINE_FB_TESTS)
                          FIXTURES_REQUIRED fbengine_references PASS_REGULAR_EXPRESSION
                          "\nbuilt\r?\n$")
   endforeach()
+endif()
+
+# A soak of the asset pipeline, headless: a folder cooked, its pak mounted, loaded, reloaded, and
+# let go of, 2000 times, the loads coming back to as many each time and the process's memory not
+# growing over the second half; tests/soak says how it went.
+if(FBENGINE_FB_TESTS)
+  add_test(NAME soak.cook_load_reload COMMAND "${FBENGINE_FB}" --color never run
+           "${CMAKE_CURRENT_SOURCE_DIR}/soak")
+  set_tests_properties(soak.cook_load_reload PROPERTIES TIMEOUT 1800
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;FBENGINE_SLANGC=${FBENGINE_SLANGC}"
+                       PASS_REGULAR_EXPRESSION "
+soaked?
+$")
 endif()
 
 # The job system's threads, started as the process ends, which mustn't hang its exit.

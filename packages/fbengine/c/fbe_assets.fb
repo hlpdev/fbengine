@@ -54,6 +54,7 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_assets_wait(load: UInt64): Bool
     Function fbe_assets_free(load: UInt64): Bool
     Function fbe_assets_count(): Int64
+    Function fbe_assets_resident_bytes(): Int64
     Function fbe_assets_size(load: UInt64): Int64
     Function fbe_assets_bytes(load: UInt64): Ptr<UInt8>
     Function fbe_assets_image(load: UInt64, info: Ptr<fbe_image_info_t>): Bool

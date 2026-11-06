@@ -1,0 +1,155 @@
+// A soak of the asset pipeline, headless: a folder of a PNG and a glTF, changed each time round,
+// cooked to a pak, the pak mounted, both loaded, the PNG reloaded, and all let go of and
+// unmounted, FBENGINE_SOAK_ITERATIONS times, 2000 unless it says. Each time round, the loads
+// there are and the holds on assets come back to what there were, and over the second half of the rounds, once caches have
+// settled, the process's own memory doesn't grow by more than SOAK_GROWTH. It prints how it went,
+// and exits 1 if it didn't.
+
+Import std.core
+Import std.image.image
+Import std.image.png
+Import std.io
+Import std.os
+Import std.text
+Import std.time
+Import fbengine
+Import fbengine_tools
+
+// How much the process's memory may grow over the second half of the rounds, in bytes: what an
+// allocator's pages wander by, far under what a leak of a load a round, of a few kilobytes, makes
+// over a thousand.
+Const SOAK_GROWTH: Int64 = 4 * 1024 * 1024
+
+// An image load, reloaded in place, as a texture is.
+Class SoakPicture Implements Asset
+    Field Width: UInt32
+
+    New(width: UInt32)
+        Width = width
+    End New
+
+    Public Static Method LoadKind(): AssetKind => AssetKind.IMAGE
+
+    Public Static Method FromLoad(load: AssetLoad): SoakPicture Throws IOError
+        Return SoakPicture(load.Image().Width)
+    End Method
+
+    Method Reload(load: AssetLoad): Bool Throws IOError
+        Width = load.Image().Width
+        Return True
+    End Method
+End Class
+
+// A model load: how many meshes it has.
+Class SoakModel Implements Asset
+    Field Meshes: Int32
+
+    New(meshes: Int32)
+        Meshes = meshes
+    End New
+
+    Public Static Method LoadKind(): AssetKind => AssetKind.MODEL
+
+    Public Static Method FromLoad(load: AssetLoad): SoakModel Throws IOError
+        Return SoakModel(load.Model().Meshes)
+    End Method
+End Class
+
+// A triangle's glTF, `name`.gltf, and its buffer beside it, `name`.bin: (0, 0, 0), (1, 0, 0),
+// (0, 1, 0), and the indices 0, `second`, 3 - `second`.
+Function WriteTriangle(folder: Path, name: String, second: UInt8) Throws IOError
+    Local buffer = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x80, 0x3F, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0x80, 0x3F, 0, 0, 0, 0, 0, 0, second, 0, 3 - second,
+                    0] As UInt8[]
+    Try File.WriteBytes(folder / "{name}.bin", buffer)
+    Try File.WriteText(folder / "{name}.gltf",
+                       "{{\"asset\":{{\"version\":\"2.0\"}},\"buffers\":[{{\"byteLength\":42," +
+                       "\"uri\":\"{name}.bin\"}}],\"bufferViews\":[{{\"buffer\":0,\"byteLength\":36}}," +
+                       "{{\"buffer\":0,\"byteOffset\":36,\"byteLength\":6}}],\"accessors\":[" +
+                       "{{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"," +
+                       "\"min\":[0,0,0],\"max\":[1,1,0]}},{{\"bufferView\":1,\"componentType\":5123," +
+                       "\"count\":3,\"type\":\"SCALAR\"}}],\"meshes\":[{{\"primitives\":[{{" +
+                       "\"attributes\":{{\"POSITION\":0}},\"indices\":1}}]}}],\"nodes\":[{{\"mesh\":0}}]," +
+                       "\"scenes\":[{{\"nodes\":[0]}}]}}")
+End Function
+
+// Flips until what's reloaded has `path`, or a minute's gone by: whether it did, and why it failed,
+// if it did.
+Function Reloaded(path: String): (Bool, IOError?)
+    Local since = Instant.Now()
+    While (Instant.Now() - since) < 60.Seconds
+        Flip()
+        Sleep(1.Milliseconds)
+        For done In Assets.Reloaded()
+            If done.Path == path Then Return (True, done.Error)
+        End For
+    End While
+    Return (False, Null)
+End Function
+
+// One round: the folder written, cooked, mounted, loaded, reloaded, and let go of. What went wrong,
+// or "".
+Function Round(round: Int, source: Path, pak: Path, cache: Path): String Throws IOError
+    Local side = 2 + round % 7
+    Try File.WriteBytes(source / "a.png", Png.Encode(Image(side, side)))
+    Try WriteTriangle(source, "m", ((round % 2) + 1) As UInt8)
+    Try Cooker.CookFolder(source, pak, cache)
+    Try Assets.MountPak("res://soak", pak)
+    Defer Assets.Unmount("res://soak")
+    Local picture = Try Assets.Load<SoakPicture>("res://soak/a.png")
+    Local model = Try Assets.Load<SoakModel>("res://soak/m.gltf")
+    Local wrong = ""
+    If picture.Width != (side As UInt32) Then wrong = "the picture's {picture.Width} wide, not {side}"
+    If model.Meshes != 1 Then wrong = "the model has {model.Meshes} meshes"
+    Assets.Reloaded()
+    Try Assets.Reload("res://soak/a.png")
+    Local done, failed = Reloaded("res://soak/a.png")
+    If !done Then wrong = "the reload didn't finish"
+    If failed != Null Then wrong = "the reload failed: {failed.Message}"
+    Assets.Release(picture)
+    Assets.Release(model)
+    Return wrong
+End Function
+
+// The rounds, and what they leave.
+Local iterations = Int.Parse(Env.Get("FBENGINE_SOAK_ITERATIONS") ?? "2000") ?? 2000
+Local root = Try Dir.Temp() / "fbengine-soak-{Process.Id}"
+Local source = root / "source"
+Try Dir.CreateAll(source)
+Local pak = root / "soak.pak"
+Local cache = root / "cache"
+Local loads = Assets.Loads()
+Local holds = Assets.Holds()
+Local settled: Int64 = 0
+Local started = Instant.Now()
+Local wrong = ""
+For round = 0 Until iterations
+    wrong = Try Round(round, source, pak, cache)
+    If wrong == "" && Assets.Loads() != loads
+        wrong = "{Assets.Loads()} loads are left, not {loads}"
+    End If
+    If wrong == "" && Assets.Holds() != holds
+        wrong = "{Assets.Holds()} holds on assets are left, not {holds}"
+    End If
+    If wrong != ""
+        wrong = "round {round}: {wrong}"
+        Break
+    End If
+    If round == iterations / 2 Then settled = Assets.ResidentBytes()
+    If round % 250 == 0
+        Print("round {round}: {Assets.ResidentBytes() / 1024} KiB, {Assets.Loads()} loads")
+    End If
+End For
+Try? Dir.RemoveAll(root)
+If wrong != ""
+    Print(wrong)
+    Process.Exit(1)
+End If
+Local grew = Assets.ResidentBytes() - settled
+Print("{iterations} rounds in {Instant.Now() - started}; the second half grew " +
+      "{grew / 1024} KiB")
+If grew > SOAK_GROWTH
+    Print("grew more than {SOAK_GROWTH / 1024} KiB")
+    Process.Exit(1)
+End If
+Print("soaked")

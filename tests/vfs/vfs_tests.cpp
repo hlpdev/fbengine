@@ -15,6 +15,8 @@
 #include <windows.h>
 #endif
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
@@ -981,4 +983,122 @@ TEST_CASE("a change on a disk of coarse times is seen", "[vfs]") {
     put_back(folder.path, written);
     REQUIRE(read(files, "res://b.txt") == "b");
     REQUIRE(list(files, "res://") == std::vector<std::string>{ "a.txt", "b.txt" });
+}
+
+namespace {
+
+// `seed` broken `count` ways by `random`, as the loaders' fuzz tests break theirs: cut short, a few
+// bytes flipped, a 4-byte number made 0, 1, huge, or negative, a piece repeated or taken out.
+std::vector<vfs::bytes_t> broken(const vfs::bytes_t& seed, std::mt19937& random, int count) {
+    std::vector<vfs::bytes_t> out;
+    for (std::size_t length = 0; length < seed.size(); length += 3) {
+        out.emplace_back(seed.begin(), seed.begin() + static_cast<std::ptrdiff_t>(length));
+    }
+    const auto at = [&random](std::size_t size) {
+        return std::uniform_int_distribution<std::size_t>(0, size - 1)(random);
+    };
+    constexpr std::array<std::uint32_t, 6> numbers{ 0,           1,           0x7fffffffU,
+                                                    0xffffffffU, 0x80000000U, 0xffffU };
+    for (int made = 0; made < count; ++made) {
+        vfs::bytes_t bytes = seed;
+        switch (random() % 5) {
+        case 0:
+            bytes.resize(at(bytes.size()));
+            break;
+        case 1:
+            for (std::uint32_t flips = 1 + random() % 4; flips > 0; --flips) {
+                bytes[at(bytes.size())] ^= static_cast<std::uint8_t>(1U << (random() % 8));
+            }
+            break;
+        case 2: {
+            const std::size_t from = at(bytes.size() - 1);
+            const std::uint32_t number = numbers.at(random() % numbers.size());
+            for (std::size_t byte = 0; byte < 4 && from + byte < bytes.size(); ++byte) {
+                bytes[from + byte] = static_cast<std::uint8_t>(number >> (8U * byte));
+            }
+            break;
+        }
+        case 3: {
+            const std::size_t from = at(bytes.size());
+            const std::size_t length =
+                std::min<std::size_t>(1 + random() % 48, bytes.size() - from);
+            const vfs::bytes_t piece(bytes.begin() + static_cast<std::ptrdiff_t>(from),
+                                     bytes.begin() + static_cast<std::ptrdiff_t>(from + length));
+            bytes.insert(bytes.begin() + static_cast<std::ptrdiff_t>(from), piece.begin(),
+                         piece.end());
+            break;
+        }
+        default: {
+            const std::size_t from = at(bytes.size());
+            const std::size_t length =
+                std::min<std::size_t>(1 + random() % 48, bytes.size() - from);
+            bytes.erase(bytes.begin() + static_cast<std::ptrdiff_t>(from),
+                        bytes.begin() + static_cast<std::ptrdiff_t>(from + length));
+            break;
+        }
+        }
+        out.push_back(std::move(bytes));
+    }
+    return out;
+}
+
+// Everything under `folder` in `view`, listed and read, as a game walking a mounted pak would;
+// how many files it read.
+int walk(const vfs::view_t& view, const std::string& folder, int depth) {
+    if (depth > 16) {
+        return 0;
+    }
+    const vfs::result_t<std::vector<vfs::entry_t>> listed = view.list(path(folder));
+    if (!listed.has_value()) {
+        return 0;
+    }
+    int read = 0;
+    for (const vfs::entry_t& entry : *listed) {
+        const std::string at = folder + (folder.ends_with('/') ? "" : "/") + entry.name;
+        const vfs::result_t<vfs::path_t> parsed = vfs::parse(at);
+        if (!parsed.has_value()) {
+            continue;
+        }
+        if (entry.kind == vfs::kind_t::FOLDER) {
+            read += walk(view, at, depth + 1);
+        } else {
+            (void)view.read(*parsed, 1U << 20U);
+            ++read;
+        }
+    }
+    return read;
+}
+
+} // namespace
+
+// A broken pak isn't one, or is one whose index is what it has: none that crashes, hangs, or
+// reads past its end, opened, listed, and read.
+TEST_CASE("broken paks fail, never crash or hang", "[vfs][fuzz]") {
+    std::mt19937 random(20261109);
+    for (const bool zip64 : { false, true }) {
+        INFO(zip64);
+        const vfs::bytes_t seed = zip({ { .name = "a.txt", .data = "first" },
+                                        { .name = "models/b.glb", .data = std::string(300, 'b') },
+                                        { .name = "models/deep/c.png", .data = "cc" },
+                                        { .name = "d/", .data = "" },
+                                        { .name = "e.bin", .data = std::string(40, '\0') } },
+                                      zip64);
+        {
+            vfs::result_t<std::shared_ptr<vfs::source_t>> whole = vfs::pak(seed);
+            REQUIRE(whole.has_value());
+            vfs::vfs_t mounted;
+            mounted.mount(path("res://"), *whole);
+            REQUIRE(walk(mounted.view(), "res://", 0) == 4);
+        }
+        for (const vfs::bytes_t& bytes : broken(seed, random, 4000)) {
+            const auto started = std::chrono::steady_clock::now();
+            vfs::result_t<std::shared_ptr<vfs::source_t>> source = vfs::pak(bytes);
+            if (source.has_value()) {
+                vfs::vfs_t files;
+                files.mount(path("res://"), *source);
+                (void)walk(files.view(), "res://", 0);
+            }
+            REQUIRE(std::chrono::steady_clock::now() - started < std::chrono::seconds(2));
+        }
+    }
 }
