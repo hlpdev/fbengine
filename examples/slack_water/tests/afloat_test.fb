@@ -486,6 +486,12 @@ End Function
 // a boat whose center of mass is off its origin, as one taller on a side is, spun about the
 // vertical on still water, turns where it is, not drifting sideways. Over the first half second,
 // most of a quarter turn: about its origin, the water would push it 1 cm aside in it.
+//
+// It does drift after that, about 9 cm in 3 s, and that's the swell, not the drag: the swell heels
+// it a degree or three, so the points on its low side are deeper, and hold back more of its
+// turning than those on its high side, as a heeled hull's low side, more of it in the water, would.
+// With the swell's roll and pitch taken out, the water's side force on it averages 0.002 N over 3 s
+// and it drifts 1.2 mm; with them, 2.75 N. So the bound over 3 s is the swell's, with room.
 @Test
 Function ASpunBoatTurnsWhereItIs() Throws ShapeError
     Local world = World()
@@ -517,4 +523,8 @@ Function ASpunBoatTurnsWhereItIs() Throws ShapeError
     Local moved = made.Boat().CenterOfMass()
     Print("spun, its center of mass went from {middle} to {moved}")
     Expect(Distance(Vec2(moved.x, moved.z), Vec2(middle.x, middle.z)) < 0.004, "{moved}")
+    Run(made, 25, 0.0, 0.0, 0.0)
+    Local later = made.Boat().CenterOfMass()
+    Print("3 s on, it's at {later}")
+    Expect(Distance(Vec2(later.x, later.z), Vec2(middle.x, middle.z)) < 0.15, "{later}")
 End Function
