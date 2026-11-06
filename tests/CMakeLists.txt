@@ -44,8 +44,13 @@ if(NOT fbengine_vulkan_driver STREQUAL "")
   cmake_path(NATIVE_PATH fbengine_vulkan_driver fbengine_vulkan_driver)
   set(fbengine_vulkan_environment "VK_DRIVER_FILES=${fbengine_vulkan_driver}")
 endif()
-# Every Catch2 test found at build time sees only the tests' Vulkan driver too.
+# Every Catch2 test found at build time sees only the tests' Vulkan driver too. A call gives no
+# ENVIRONMENT of its own: where the driver is the job's, as macOS's MoltenVK is, the environment is
+# "", which passing ${ARGV} on drops, and the property after it, a TIMEOUT, went as its value.
 function(catch_discover_tests)
+  if("ENVIRONMENT" IN_LIST ARGV)
+    message(FATAL_ERROR "catch_discover_tests(${ARGV0}) gives an ENVIRONMENT, which this one does")
+  endif()
   if(fbengine_vulkan_environment STREQUAL "")
     _catch_discover_tests(${ARGV})
   else()
@@ -96,7 +101,7 @@ fbengine_add_shaders(TARGETS fbengine_gpu_tests NAMESPACE fbe::test_shaders
                      INCLUDES gpu/shaders/own)
 catch_discover_tests(fbengine_gpu_tests TEST_PREFIX "gpu." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}"
-                     PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}" TIMEOUT 300)
+                     PROPERTIES TIMEOUT 300)
 
 # The scene's insides, built in from fbengine_internal: how moves are run, and their scratch.
 add_executable(fbengine_scene_internal_tests scene/moves_tests.cpp)
@@ -2344,9 +2349,9 @@ catch_discover_tests(fbengine_anim_tests TEST_PREFIX "anim."
 add_executable(fbengine_effects_oom_tests scene/effects_oom_tests.cpp)
 target_link_libraries(fbengine_effects_oom_tests PRIVATE fbengine_internal Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_effects_oom_tests)
+# A deadlock is a failure too.
 catch_discover_tests(fbengine_effects_oom_tests TEST_PREFIX "scene." ADD_TAGS_AS_LABELS
-                     DL_PATHS "${fbengine_test_dll_paths}"
-                     PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}")
+                     DL_PATHS "${fbengine_test_dll_paths}" PROPERTIES TIMEOUT 120)
 
 add_executable(fbengine_anim_oom_tests anim/oom_tests.cpp)
 target_link_libraries(fbengine_anim_oom_tests PRIVATE fbengine_internal Catch2::Catch2WithMain
@@ -2365,8 +2370,7 @@ endif()
 fbengine_set_warnings(fbengine_anim_oom_tests)
 # A deadlock is a failure too, as an allocation failing inside a layer's lock was.
 catch_discover_tests(fbengine_anim_oom_tests TEST_PREFIX "anim." ADD_TAGS_AS_LABELS
-                     DL_PATHS "${fbengine_test_dll_paths}"
-                     PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}" TIMEOUT 120)
+                     DL_PATHS "${fbengine_test_dll_paths}" PROPERTIES TIMEOUT 120)
 
 # A program of the whole of it, as a game would write it.
 if(FBENGINE_FB_TESTS)
