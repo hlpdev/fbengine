@@ -114,9 +114,10 @@ Public Function Beveled(half: Vec3, bevel: Float): Geometry
 End Function
 
 /// What's turned around y by its `outline`, of radius and height in x and y, from its bottom up, in
-/// `segments` around, smooth, with a flat cap at each end that isn't at the axis.
+/// `segments` around, smooth, with a flat cap at each end that isn't at the axis, if it's `capped`; an
+/// outline whose first point is its last is a ring, round its axis, and has none.
 @MainThread
-Public Function Turned(outline: Vec2[], segments: Int): Geometry
+Public Function Turned(outline: Vec2[], segments: Int, capped: Bool = True): Geometry
     Local geometry = Geometry()
     Local surface = geometry.AddSurface()
     Local widest = 0.0
@@ -124,10 +125,17 @@ Public Function Turned(outline: Vec2[], segments: Int): Geometry
         widest = Max(widest, point.x)
     End For
     Local around = 2.0 * Pi * widest
+    // A ring, its outline closed, goes round from its last point to its first.
+    Local last = outline.Count - 1
+    Local ring = outline[0] == outline[last]
     For at = 0 Until outline.Count
         // Its slope there, from its neighbors, turned out a quarter.
         Local before = outline[Max(at - 1, 0)]
-        Local after = outline[Min(at + 1, outline.Count - 1)]
+        Local after = outline[Min(at + 1, last)]
+        If ring && (at == 0 || at == last)
+            before = outline[last - 1]
+            after = outline[1]
+        End If
         Local outward = Normalize(Vec2(after.y - before.y, before.x - after.x))
         For step = 0 To segments
             Local angle = 2.0 * Pi * (step As Float) / (segments As Float)
@@ -148,7 +156,8 @@ Public Function Turned(outline: Vec2[], segments: Int): Geometry
             surface.AddTriangle(a + 1, b, b + 1)
         End For
     End For
-    // The caps.
+    // The caps, but for a ring's, which has none, or one left open.
+    If ring || !capped Then Return geometry
     For which In [0, outline.Count - 1]
         Local point = outline[which]
         If point.x <= 0.0 Then Continue

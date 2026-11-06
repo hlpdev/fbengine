@@ -32,6 +32,7 @@ Import "./follow"
 Import "./game"
 Import "./ground"
 Import "./island"
+Import "./landmarks"
 Import "./map"
 Import "./res" As Res
 Import "./screens"
@@ -635,6 +636,12 @@ Function CheckLandmarks(folder: Path, island: Island, camera: Camera) Throws Gra
     Local late = Try Screen.ToImage()
     Try Screen.Save(folder / "lighthouse_lit.png")
     Flip(False)
+    // Its beam, turned this way as it passes, out past the lamp room's frame.
+    Local toward = by - marks.LampAt()
+    marks.TurnBeam(Atan2(-toward.x, -toward.z))
+    island.Drawn(camera)
+    Try Screen.Save(folder / "lighthouse_beam.png")
+    Flip(False)
     Local before = PixelOf(camera, early, marks.LampAt())
     Local after = PixelOf(camera, late, marks.LampAt())
     Checks("its lamp's lit as the storm comes, and not before",
@@ -1138,10 +1145,14 @@ Function Walked3d(island: Island, walk: String[], lines: String[],
     Local ended = game.Story().Ended()
     Local lampWas = island.LampMaterial()
     Local wheelWas = island.WheelTurned()
+    Local beamWas = island.Marks().BeamTurned()
     Try Simulate.PressKey(Key.E)
     Try Simulate.PressKey(Key.Q)
     Flip(False)
     game.Step(controls, 0.1)
+    // The lighthouse's lamp turns by the tenth of a second that passed, whatever the flow's clock did.
+    Checks("the lighthouse's lamp turns by real time",
+           Abs(island.Marks().BeamTurned() - beamWas - BEAM_TURN * 0.1) < 0.0001)
     Checks("nothing's done after the end", lines.Count == said && game.Story().Ended() == ended)
     Checks("nothing's offered after the end", game.Prompt() == "")
     Checks("the lamp isn't lit again each step", island.LampMaterial() == lampWas)

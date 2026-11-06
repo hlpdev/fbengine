@@ -6,6 +6,7 @@ Import std.math
 Import std.test
 Import fbengine
 Import slack_water.ground
+Import slack_water.landmarks
 Import slack_water.map
 Import slack_water.shapes
 
@@ -98,4 +99,76 @@ Function ARockIsLumpyAboutItsRadiusAndFacesOut()
     Local other = Lumpy(0.5, 8)
     Defer other.Free()
     Expect(other.Positions()[20] != rock.Positions()[20])
+End Function
+
+@Test
+Function ARingTurnedHasNoCapsAcrossIt()
+    Local coil = Turned([Vec2(0.12, 0.0), Vec2(0.32, 0.0), Vec2(0.34, 0.06), Vec2(0.32, 0.12),
+                         Vec2(0.12, 0.12), Vec2(0.1, 0.06), Vec2(0.12, 0.0)], 14)
+    Defer coil.Free()
+    For point In coil.Positions()
+        Expect(point.x * point.x + point.z * point.z > 0.0081, "{point}")
+    End For
+    // Round its seam, where its outline closes, it's as smooth as anywhere: its first ring's normals are
+    // its last's.
+    Local vertices = coil.Surface(0).Vertices()
+    Local row = 15
+    Local last = vertices.Count - row
+    For step = 0 Until row
+        Local first = vertices[step].Normal
+        Local closing = vertices[last + step].Normal
+        Expect(Dot(first, closing) > 0.999, "{first} {closing}")
+    End For
+    // And what's left open has no lid.
+    Local bowl = Turned([Vec2(0.0, 0.0), Vec2(0.5, 0.1), Vec2(0.8, 0.5)], 12, False)
+    Defer bowl.Free()
+    For point In bowl.Positions()
+        Expect(point.y < 0.2 || point.x * point.x + point.z * point.z > 0.01, "{point}")
+    End For
+End Function
+
+@Test
+Function TheBoatsHullIsOpenAtItsTop()
+    Local hull = BoatHull()
+    Defer hull.Free()
+    For point In hull.Positions()
+        Expect(!(point.x * point.x + point.z * point.z < 0.01 && point.y > 0.4), "{point}")
+    End For
+    Local bounds = hull.Bounds()
+    Expect(Abs(bounds.Max.y - 0.5) < 0.001 && bounds.Max.z > 1.8 && bounds.Max.x > 0.55)
+End Function
+
+@Test
+Function GatheredPiecesKeepTheirNormalsAcrossTheirFaces()
+    Local material = Material(Color(1.0, 1.0, 1.0))
+    Local gathered = Gathered()
+    gathered.PutAt(material, Lumpy(0.5, 3), Vec3(1.0, 2.0, 3.0), Quat.FromEuler(0.3, 0.7, 0.1),
+                   Vec3(1.2, 0.7, 1.0))
+    Local rock = gathered.Of(material)
+    Expect(rock != Null)
+    If rock == Null Then Return
+    Local surface = rock.Surface(0)
+    Local vertices = surface.Vertices()
+    Local indices = surface.Triangles()
+    For at = 0 Until indices.Count / 3
+        Local a = vertices[indices[at * 3]]
+        Local b = vertices[indices[at * 3 + 1]]
+        Local c = vertices[indices[at * 3 + 2]]
+        For edge In [b.Position - a.Position, c.Position - a.Position]
+            Local across = Normalize(edge)
+            Expect(Abs(Dot(a.Normal, across)) < 0.001, "{a.Normal} {across}")
+        End For
+    End For
+End Function
+
+@Test
+Function ALogsUndersideIsOnItsGroundAtItsEnds()
+    Local log = Log()
+    Defer log.Free()
+    // Its ends, underneath, on y 0, a little either way.
+    For point In log.Positions()
+        If Abs(Abs(point.x) - 0.95) < 0.06 Then Expect(point.y > -0.02, "{point}")
+    End For
+    Local bounds = log.Bounds()
+    Expect(Abs(bounds.Max.x - 1.0) < 0.001 && bounds.Min.y > -0.06)
 End Function

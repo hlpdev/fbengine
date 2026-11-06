@@ -142,6 +142,8 @@ Public Final Class Game
         Seat()
         PlacePip(seconds)
         island.Update(flow.Clock())
+        // What moves on its own goes by real time, as the flow's clock runs ahead while it waits.
+        island.Animate(seconds)
         camera.SetGrade(StormGrade(StormAt(flow.Clock())))
         Sync()
         TellWhatLies()

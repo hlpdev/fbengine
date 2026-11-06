@@ -77,8 +77,22 @@ Function Ridged(x: Float, z: Float): Float
     Return wide * wide * 0.6 + fine * fine * 0.4
 End Function
 
-// How high the ground is at (`x`, `z`), but for the road.
+/// How far the lighthouse's plinth reaches from its middle.
+Public Const PLINTH: Float = 1.85
+
+// How high the ground is at (`x`, `z`), but for the road, and flat round the lighthouse, out a little
+// past its plinth, so it stands level.
 Public Function RockHeight(x: Float, z: Float): Float
+    Local spot = LighthouseSpot()
+    Local away = Sqrt((x - spot.x) * (x - spot.x) + (z - spot.y) * (z - spot.y))
+    Local pad = Clamp(1.0 - (away - PLINTH - 0.4) / 3.0, 0.0, 1.0)
+    Local height = Rock(x, z)
+    If pad <= 0.0 Then Return height
+    Return height + (Rock(spot.x, spot.y) - height) * pad
+End Function
+
+// How high the rocks are at (`x`, `z`), as they are.
+Function Rock(x: Float, z: Float): Float
     Local far = Mound(x, z, FAR_X, FAR_Z, FAR_RADIUS)
     Local headland = Mound(x, z, HEADLAND_X, HEADLAND_Z, HEADLAND_RADIUS)
     Local land = Max(Max(Mound(x, z, MAIN_X, 0.0, MAIN_RADIUS), far), headland)
@@ -323,8 +337,8 @@ End Function
 /// Where the far islet's lighthouse stands, on its side toward the yard.
 Public Function LighthouseSpot(): Vec2 => Vec2(FAR_X - 2.0, FAR_Z - 11.0)
 
-// How far from the lighthouse's middle its foot is solid.
-Const LIGHTHOUSE_SOLID: Float = 1.9
+// How far from the lighthouse's middle its foot is solid: its plinth, and a person's width.
+Const LIGHTHOUSE_SOLID: Float = PLINTH + 0.6
 
 /// How far across the jetty runs, on the main island's west shore.
 Public Const JETTY_Z: Float = -6.0

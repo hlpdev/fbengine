@@ -617,6 +617,12 @@ Public Final Class Island
         landmarks.Update(clock)
     End Method
 
+    /// Moves what moves on its own on `seconds` of real time: the lighthouse's lamp, and the boat.
+    @MainThread
+    Public Method Animate(seconds: Float)
+        landmarks.Animate(seconds)
+    End Method
+
     /// Draws what `camera` sees afresh, for a still: what the frames before had there, which
     /// antialiasing over frames blends in, forgotten, as at a cut.
     @MainThread

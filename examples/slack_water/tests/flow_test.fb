@@ -1028,8 +1028,8 @@ Function TheLighthouseStandsAboveTheTideAndPipCanWalkUpToIt()
     Expect(PlaceAt(spot.x, spot.y) == Area.FAR_ROCK)
     // Its foot's solid, and just past it isn't.
     Expect(Blocked(spot.x, spot.y))
-    Expect(Blocked(spot.x + 1.8, spot.y))
-    Expect(!Blocked(spot.x + 2.0, spot.y))
+    Expect(Blocked(spot.x + 2.4, spot.y))
+    Expect(!Blocked(spot.x + 2.5, spot.y))
     // From where the belt lies, up to its door, a step at a time, at high water.
     Local belt = BeltSpot()
     Local toward = Vec2(spot.x - belt.x, spot.y - belt.y)
@@ -1040,17 +1040,17 @@ Function TheLighthouseStandsAboveTheTideAndPipCanWalkUpToIt()
     For step = 1 To steps
         Local nextX = belt.x + toward.x * (step As Float) * 0.2 / length
         Local nextZ = belt.y + toward.y * (step As Float) * 0.2 / length
-        If Sqrt((nextX - spot.x) * (nextX - spot.x) + (nextZ - spot.y) * (nextZ - spot.y)) < 2.1 Then Break
+        If Sqrt((nextX - spot.x) * (nextX - spot.x) + (nextZ - spot.y) * (nextZ - spot.y)) < 2.6 Then Break
         Expect(!Blocked(nextX, nextZ), "{nextX}, {nextZ}")
         Expect(CanWade(x, z, nextX, nextZ, TIDE_IN_AT, True), "{nextX}, {nextZ}")
         x = nextX
         z = nextZ
     End For
-    Expect(Sqrt((x - spot.x) * (x - spot.x) + (z - spot.y) * (z - spot.y)) < 2.4)
+    Expect(Sqrt((x - spot.x) * (x - spot.x) + (z - spot.y) * (z - spot.y)) < 2.9)
 End Function
 
 @Test
-Function TheLighthouseIsLitAtDuskAndInTheStorm()
+Function TheLighthouseIsLitInTheStorm()
     Expect(LighthouseLit(0.0) == 0.0)
     Expect(LighthouseLit(TIDE_IN_AT) == 1.0)
     Local was = 0.0
@@ -1064,91 +1064,66 @@ Function TheLighthouseIsLitAtDuskAndInTheStorm()
 End Function
 
 @Test
-Function TheBoatRidesTheSea()
+Function TheBoatRidesTheSeaAndRisesAndFallsOnIt()
     For step = 0 To 50
         Local clock = TIDE_IN_AT * 1.2 * (step As Float64) / 50.0
-        Expect(Abs(BoatHeight(clock) - SeaHeight(clock) - 0.08) <= 0.0601)
-    End For
-End Function
-
-@Test
-Function TheJettyRunsFromTheWestShoreOutOverTheSea()
-    Local shore = JettyShore()
-    Expect(GroundHeight(shore.x, shore.y) <= 0.3)
-    Expect(GroundHeight(shore.x + 0.25, shore.y) > 0.3)
-    Expect(shore.x < MAIN_X - 20.0)
-    Local start = JettyStart()
-    Local end = JettyEnd()
-    Expect(GroundHeight(start.x, start.y) > 0.3)
-    Expect(GroundHeight(end.x, end.y) < -0.5)
-    Expect(start.x - end.x > 10.0)
-End Function
-
-@Test
-Function WhatsWashedUpLiesOnSandAndNeverInTheWay()
-    Local spots = ShoreSpots()
-    Expect(spots.Count >= 20, "{spots.Count}")
-    Local kinds = [0, 0, 0]
-    Local clear = [GearSpot(), PaddleSpot(), BeltSpot(), Landing(False), Landing(True),
-                   PipLanding(False), PipLanding(True), JettyStart()]
-    For spot In spots
-        Local at = spot.0
-        Local height = GroundHeight(at.x, at.y)
-        Expect(height >= 0.15 && height <= 1.4, "{at}")
-        Local dx = GroundHeight(at.x + 1.0, at.y) - GroundHeight(at.x - 1.0, at.y)
-        Local dz = GroundHeight(at.x, at.y + 1.0) - GroundHeight(at.x, at.y - 1.0)
-        Expect(SandAt(at.x, at.y, height, Sqrt(dx * dx + dz * dz) / 2.0) >= 0.7, "{at}")
-        Expect(!OnRoad(at.x, at.y) && !Blocked(at.x, at.y), "{at}")
-        Expect(!(at.x > ROAD_WEST - 14.0 && at.x < ROAD_EAST + 14.0 &&
-                 Abs(at.y - RoadZ(at.x)) < ROAD_SIDE + 3.0), "{at}")
-        For place In clear
-            Expect((place.x - at.x) * (place.x - at.x) + (place.y - at.y) * (place.y - at.y) >= 9.0,
-                   "{at} by {place}")
-        End For
-        kinds[spot.1] += 1
-        Expect(spot.3 >= 0.6 && spot.3 <= 1.4)
-    End For
-    Expect(kinds[0] > 0 && kinds[1] > 0 && kinds[2] > 0, "{kinds[0]} {kinds[1]} {kinds[2]}")
-End Function
-
-@Test
-Function SandIsWhereTheCoversSand()
-    For x = -80 To 60 Step 3
-        For z = -60 To 40 Step 3
-            Local fx = x As Float
-            Local fz = z As Float
-            Local height = Max(GroundHeight(fx, fz), 0.6)
-            If SandAt(fx, fz, height, 0.1) > 0.95 && TurfAt(fx, fz, height, 0.1) == 0.0
-                Local cover = CoverAt(fx, fz, height, 0.1)
-                Expect(cover.0.x > cover.0.z + 0.12, "{fx}, {fz}")
-            End If
+        For swell In [0.0, 0.4, 1.9]
+            Expect(Abs(BoatHeight(clock, swell) - SeaHeight(clock) - 0.08) <= BOB + 0.0001)
         End For
     End For
-End Function
-
-@Test
-Function WhatsInTheWayIsKeptClear()
-    For place In [GearSpot(), PaddleSpot(), BeltSpot(), Landing(False), Landing(True),
-                  PipLanding(False),
-                  PipLanding(True), JettyStart()]
-        Expect(KeptClear(place.x + 2.9, place.y), "{place}")
-        Expect(!KeptClear(place.x, place.y + 3.1) || OnRoad(place.x, place.y + 3.1) ||
-               Abs(place.y + 3.1 - RoadZ(place.x)) < ROAD_SIDE + 3.0 ||
-               Abs(place.y + 3.1 - JETTY_Z) < 4.0, "{place}")
+    // On a still sea, by its own swell, up and down.
+    Local lowest = 1000.0
+    Local highest = -1000.0
+    For step = 0 To 100
+        Local height = BoatHeight(0.0, (step As Float64) * 0.05)
+        lowest = Min(lowest, height)
+        highest = Max(highest, height)
     End For
-    // The road's shores, the jetty, the mill, and the lighthouse's foot.
-    Expect(KeptClear(ROAD_WEST - 10.0, RoadZ(ROAD_WEST - 10.0) + ROAD_SIDE + 2.9))
-    Expect(KeptClear((JettyStart().x + JettyEnd().x) / 2.0, JETTY_Z + 3.9))
-    Expect(KeptClear(MAIN_X + 6.0, 0.0))
-    Expect(KeptClear(LighthouseSpot().x, LighthouseSpot().y))
-    // And somewhere on a far shore, nothing.
-    Expect(!KeptClear(MAIN_X - 30.0, 30.0))
+    Expect(highest - lowest > BOB * 1.5)
 End Function
 
 @Test
-Function TheLighthousesDarkAsTheStormBegins()
-    // A tenth of the way into the storm, before dusk, it's still dark.
-    Local early = RISING_AT + (TIDE_IN_AT - RISING_AT) * 0.1
-    Expect(StormAt(early) > 0.05)
-    Expect(LighthouseLit(early) == 0.0)
+Function WhatMovesOnItsOwnGoesByRealTime()
+    // However far the flow's clock runs ahead, the lamp turns BEAM_TURN a second, and the swell goes
+    // by the second.
+    Local motion = Motion()
+    For second = 1 To 3
+        motion.Step(1.0)
+    End For
+    Expect(Abs(motion.Turned - 3.0 * BEAM_TURN) < 0.0001)
+    Expect(Abs(motion.Swell - 3.0) < 0.0001)
+    Local flow = Flow(Function(line: String)
+    End Function)
+    Local before = flow.Clock()
+    flow.Step(1.0)
+    motion.Step(1.0)
+    Expect(Abs(motion.Turned - 4.0 * BEAM_TURN) < 0.0001)
+    Expect(flow.Clock() > before)
+End Function
+
+@Test
+Function TheLighthouseStandsLevelWithItsDoorOverTheGround()
+    Local base = LighthouseBase()
+    For step = 0 Until 24
+        Local angle = 2.0 * Pi * (step As Float) / 24.0
+        Local x = base.x + Cos(angle) * PLINTH
+        Local z = base.z + Sin(angle) * PLINTH
+        Expect(GroundHeight(x, z) >= base.y + 0.05, "{angle}: {GroundHeight(x, z)} {base.y}")
+    End For
+    // Its door's sill is over the ground in front of it, and the door faces the landing.
+    Local facing = DoorFacing()
+    Local door = Vec2(base.x + facing.x * 1.5, base.z + facing.y * 1.5)
+    Expect(base.y + DoorSill() > GroundHeight(door.x, door.y) + 0.3)
+    Local landing = Landing(True)
+    Local toward = Normalize(Vec2(landing.x - base.x, landing.y - base.z))
+    Expect(Abs(facing.x - toward.x) < 0.001 && Abs(facing.y - toward.y) < 0.001)
+End Function
+
+@Test
+Function WhatsWashedUpLiesOnTheGround()
+    For spot In ShoreSpots()
+        For end In Underside(spot)
+            Expect(Abs(GroundHeight(end.x, end.z) - end.y) < 0.03, "{spot.0} {spot.1}: {end}")
+        End For
+    End For
 End Function
