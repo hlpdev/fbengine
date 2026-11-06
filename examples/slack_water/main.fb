@@ -610,6 +610,16 @@ End Function
 Function CheckLandmarks(folder: Path, island: Island, camera: Camera) Throws GraphicsError, IOError
     Local marks = island.Marks()
     Local pieces = marks.Pieces()
+    // The parts lie on the ground where they're found, neither in the air nor under it: each's bottom,
+    // its half-height under its middle, within a few centimeters of it.
+    Local lying = True
+    For part In [Part.GEAR, Part.PADDLE, Part.BELT]
+        Local thing = island.PartEntity(part)
+        Local at = thing.Position(Space.WORLD)
+        Local bottom = at.y - thing.Scale().y
+        If Abs(bottom - GroundHeight(at.x, at.z)) > 0.03 Then lying = False
+    End For
+    Checks("the parts lie on the ground", lying)
     Local yardView = Views()[1]
     camera.SetPosition(yardView.1)
     camera.PointAt(yardView.2)
@@ -662,6 +672,12 @@ Function CheckLandmarks(folder: Path, island: Island, camera: Camera) Throws Gra
     Checks("the jetty's seen", Try SeenIn(island, camera, jetty, pieces[1].1,
                                           Vec3((start.x + end.x) / 2.0, 2.0, end.y)))
     Checks("and the boat by it", Try SeenIn(island, camera, jetty, pieces[2].1, marks.BoatAt()))
+    Local boat = marks.BoatAt()
+    camera.SetPosition(boat + Vec3(2.6, 1.8, 2.2))
+    camera.PointAt(boat + Vec3(0.0, 0.1, 0.0))
+    island.Drawn(camera)
+    Try Screen.Save(folder / "boat.png")
+    Flip(False)
     island.Update(TIDE_IN_AT)
     Checks("which rides the sea up",
            Abs(marks.BoatAt().y - boatLow - (SeaHeight(TIDE_IN_AT) - SeaHeight(0.0))) < 0.2)

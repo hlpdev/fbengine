@@ -781,7 +781,9 @@ Public Final Class Island
             Local spot = PartSpot(number As Part)
             Local thing = parts[number]
             thing.SetParent(Null, False)
-            thing.SetPosition(Vec3(spot.x, GroundHeight(spot.x, spot.y) + 0.15, spot.y))
+            // Lying on the ground, by its half-height, which its scale is, a centimeter in it.
+            thing.SetPosition(Vec3(spot.x, GroundHeight(spot.x, spot.y) + sizes[number].y - 0.01,
+                                   spot.y))
             thing.SetRotation(0.0, 0.0, 0.0)
             thing.SetScale(sizes[number])
             thing.Show()
