@@ -2,6 +2,7 @@
 // default, numbers kept to their ranges, a file that's gone or isn't one; and the prompts' names and
 // colors by the pad.
 
+Import std.collections
 Import std.core
 Import std.io
 Import std.math
@@ -11,6 +12,7 @@ Import std.text
 Import fbengine
 Import slack_water.hud
 Import slack_water.prompts
+Import slack_water.screenmode
 Import slack_water.settings
 
 @Test
@@ -75,9 +77,15 @@ Function TheyreKeptInTheirFileAndFoundAgain() Throws IOError
     options.Look = 1.5
     Try KeepOptions(options, file)
     Expect(KeptOptions(file).Look == 1.5)
-    // A test's folder, by SLACK_WATER_SETTINGS.
+    // A test's folder, by SLACK_WATER_SETTINGS, only in a test, with SLACK_WATER_CHECKS.
+    Local checking = Env.Get("SLACK_WATER_CHECKS")
     Env.Set("SLACK_WATER_SETTINGS", folder.Path.Text)
+    Env.Unset("SLACK_WATER_CHECKS")
+    Expect(OptionsFile() != folder.Path / "options.ini", "a player's build took a test's folder")
+    Env.Set("SLACK_WATER_CHECKS", "1")
     Expect(OptionsFile() == folder.Path / "options.ini")
+    If checking != Null Then Env.Set("SLACK_WATER_CHECKS",
+                                     checking) Else Env.Unset("SLACK_WATER_CHECKS")
     Env.Unset("SLACK_WATER_SETTINGS")
     Local mine = OptionsFile()
     Expect(mine == Null || mine.Text.EndsWith("options.ini") && mine.Text.Contains("Slack Water"))
@@ -97,11 +105,11 @@ Function APadsButtonsAreItsOwn()
     Expect(ButtonMark(GamepadType.PS5, GamepadButton.NORTH) == "T")
     Expect(ButtonColor(GamepadType.XBOX_ONE, GamepadButton.SOUTH) == Color32(96, 176, 64, 255))
     Expect(ButtonColor(GamepadType.PS5, GamepadButton.SOUTH) == Color32(92, 140, 220, 255))
-    Expect(PromptName(Device.KEYS, GamepadType.XBOX_ONE, Prompted.USE) == "E")
-    Expect(PromptName(Device.PAD, GamepadType.XBOX_ONE, Prompted.USE) == "A")
-    Expect(PromptName(Device.KEYS, GamepadType.STANDARD, Prompted.HAND) == "Q")
-    Expect(PromptName(Device.PAD, GamepadType.PS5, Prompted.HAND) == "Square")
-    Expect(PromptName(Device.KEYS, GamepadType.STANDARD, Prompted.PAUSE) == "Esc")
+    Expect(PromptName(Device.KEYS, GamepadType.XBOX_ONE, Prompted.USE, KeyMap()) == "E")
+    Expect(PromptName(Device.PAD, GamepadType.XBOX_ONE, Prompted.USE, KeyMap()) == "A")
+    Expect(PromptName(Device.KEYS, GamepadType.STANDARD, Prompted.HAND, KeyMap()) == "Q")
+    Expect(PromptName(Device.PAD, GamepadType.PS5, Prompted.HAND, KeyMap()) == "Square")
+    Expect(PromptName(Device.KEYS, GamepadType.STANDARD, Prompted.PAUSE, KeyMap()) == "Esc")
 End Function
 
 @Test
@@ -112,4 +120,109 @@ Function AGamesPromptIsReadForItsKey()
     Expect(hand != Null && hand.0 == Prompted.HAND && hand.1 == "hand Pip the belt")
     Expect(PromptOf("") == Null)
     Expect(PromptOf("nothing here") == Null)
+End Function
+
+@Test
+Function KeysAreBoundOnceEach()
+    Local keys = KeyMap()
+    Expect(keys.Of(Bound.FORWARD) == Key.W && keys.Of(Bound.USE) == Key.E &&
+           keys.Of(Bound.PAUSE) == Key.ESCAPE)
+    Expect(keys.BoundTo(Key.Q) == Bound.HAND && keys.BoundTo(Key.F) == Null)
+    Expect(keys.Bind(Bound.USE, Key.F) == Null && keys.Of(Bound.USE) == Key.F)
+    // What another has is refused, changing nothing; its own again is fine.
+    Expect(keys.Bind(Bound.HAND, Key.F) == Bound.USE && keys.Of(Bound.HAND) == Key.Q)
+    Expect(keys.Bind(Bound.USE, Key.F) == Null)
+    // A copy's its own.
+    Local copy = keys.Clone()
+    copy.Bind(Bound.USE, Key.G)
+    Expect(keys.Of(Bound.USE) == Key.F)
+End Function
+
+@Test
+Function KeysAreKeptByName()
+    Expect(KeyNamed("W") == Key.W && KeyNamed("ESCAPE") == Key.ESCAPE &&
+           KeyNamed("SPACE") == Key.SPACE)
+    Expect(KeyNamed("") == Null && KeyNamed("NOT_A_KEY") == Null && KeyNamed("UNKNOWN") == Null)
+    Local options = Options()
+    options.Keys.Bind(Bound.USE, Key.F)
+    options.Keys.Bind(Bound.PAUSE, Key.P)
+    Local read = Options.Read(options.Written())
+    Expect(read.Keys.Of(Bound.USE) == Key.F && read.Keys.Of(Bound.PAUSE) == Key.P, read.Written())
+    // A swap's read whole, though each alone would clash.
+    Local swapped = Options.Read("[keys]\nuse = Q\nhand = e\n")
+    Expect(swapped.Keys.Of(Bound.USE) == Key.Q && swapped.Keys.Of(Bound.HAND) == Key.E)
+    // Two the same, or what isn't a key, and it's the defaults.
+    Local clash = Options.Read("[keys]\nuse = W\n")
+    Expect(clash.Keys.Of(Bound.USE) == Key.E && clash.Keys.Of(Bound.FORWARD) == Key.W)
+    Expect(Options.Read("[keys]\nuse = nonsense\n").Keys.Of(Bound.USE) == Key.E)
+    Expect(KeyLabel(Key.ESCAPE) == "Esc" && KeyLabel(Key.RETURN) == "Enter" &&
+           KeyLabel(Key.F) == "F")
+    Expect(KeyLabel(Key.LEFT_SHIFT) == "Left Shift", KeyLabel(Key.LEFT_SHIFT))
+    Expect(PromptName(Device.KEYS, GamepadType.STANDARD, Prompted.USE, options.Keys) == "F")
+End Function
+
+// A window a test stands in for, which can't be resized while fullscreen, as a real one can't.
+Final Class Stand Implements WindowLike
+    Field mode: WindowMode = WindowMode.WINDOWED
+    Field width: Int32 = 1280
+    Field height: Int32 = 720
+    Public Field Calls: String[] = []
+
+    Public New()
+    End New
+
+    Public Method Mode(): WindowMode => mode
+
+    Public Method SetMode(to: WindowMode) Throws GraphicsError
+        Calls.Add("{to}")
+        mode = to
+    End Method
+
+    Public Method SetSize(across: Int32, down: Int32) Throws GraphicsError
+        If mode == WindowMode.FULLSCREEN Then Throw GraphicsError("fullscreen")
+        Calls.Add("{across}x{down}")
+        width = across
+        height = down
+    End Method
+
+    Public Method Width(): Int32 => width
+
+    Public Method Height(): Int32 => height
+End Class
+
+@Test
+Function AWindowGoesFromOneWayToAnother() Throws GraphicsError
+    Local modes = [DisplayMode(1920, 1080, 60.0, 1.0), DisplayMode(1920, 1080, 144.0, 1.0),
+                   DisplayMode(1280, 720, 60.0, 1.0)]
+    Local choices = ChoicesOf(Display("two", modes[0], modes))
+    Local names: String[] = []
+    For each In choices
+        names.Add(each.Name())
+    End For
+    Expect(names.Join(", ") == "Windowed, Borderless, Fullscreen 1920x1080, Fullscreen 1280x720",
+           names.Join(", "))
+    Expect(ChoicesOf(Null).Count == 2)
+    // What's there, and the nearest to what isn't.
+    Expect(ChoiceFor(choices, WindowChoice(WindowMode.FULLSCREEN, 1280, 720)) == (3, False))
+    Expect(ChoiceFor(choices, WindowChoice(WindowMode.FULLSCREEN, 2560, 1440)) == (2, True))
+    Expect(ChoiceFor(choices, WindowChoice(WindowMode.FULLSCREEN, 1366, 768)) == (3, True))
+    Expect(ChoiceFor(choices, WindowChoice(WindowMode.BORDERLESS)) == (1, False))
+    Expect(ChoiceFor(ChoicesOf(Null), WindowChoice(WindowMode.FULLSCREEN, 800, 600)) == (0, False))
+    // From fullscreen to another size, through windowed, as a fullscreen size can't change.
+    Local stand = Stand()
+    Try Switched(stand, choices[2], (1280, 720))
+    Expect(stand.Mode() == WindowMode.FULLSCREEN && stand.Width() == 1920)
+    stand.Calls = []
+    Try Switched(stand, choices[3], (1280, 720))
+    Expect(stand.Calls.Join(" ") == "WINDOWED 1280x720 FULLSCREEN" && stand.Width() == 1280,
+           stand.Calls.Join(" "))
+    // Back to windowed, framed at what it was.
+    Try Switched(stand, choices[2], (1280, 720))
+    Try Switched(stand, choices[0], (1000, 600))
+    Expect(stand.Mode() == WindowMode.WINDOWED && stand.Width() == 1000 && stand.Height() == 600)
+    // Borderless from fullscreen, through windowed.
+    Try Switched(stand, choices[2], (1280, 720))
+    stand.Calls = []
+    Try Switched(stand, choices[1], (1280, 720))
+    Expect(stand.Calls.Join(" ") == "WINDOWED BORDERLESS", stand.Calls.Join(" "))
 End Function

@@ -3,6 +3,7 @@
 Import std.math
 Import fbengine
 Import "./flow"
+Import "./settings"
 
 // How fast a stick held all the way over turns you, in radians a second.
 Const TURN_SPEED: Float = 2.4
@@ -44,7 +45,8 @@ Public Final Class TextControls
     End Method
 End Class
 
-/// A game's keys, mouse, and gamepad on the island, bound to what they do.
+/// A game's keys, mouse, and gamepad on the island, bound to what they do: the keys as `keys` says,
+/// or as they're made.
 Public Final Class Controls
     Public Field Set: ActionSet
     Public Field Move: Action
@@ -56,14 +58,15 @@ Public Final Class Controls
     Field sensitivity: Float = 1.0
     Field inverted: Bool = False
 
-    Public New()
+    Public New(keys: KeyMap? = Null)
+        Local bound = keys ?? KeyMap()
         Set = ActionSet()
         Move = Set.Add("move")
-        Move.Bind(Binding.OfKey(Key.D))
-        Move.Bind(Binding.OfKey(Key.A, -1.0))
+        Move.Bind(Binding.OfKey(bound.Of(Bound.RIGHT)))
+        Move.Bind(Binding.OfKey(bound.Of(Bound.LEFT), -1.0))
         Move.Bind(Binding.OfGamepadAxis(GamepadAxis.LEFT_X))
-        Move.BindY(Binding.OfKey(Key.W))
-        Move.BindY(Binding.OfKey(Key.S, -1.0))
+        Move.BindY(Binding.OfKey(bound.Of(Bound.FORWARD)))
+        Move.BindY(Binding.OfKey(bound.Of(Bound.BACK), -1.0))
         Move.BindY(Binding.OfGamepadAxis(GamepadAxis.LEFT_Y, -1.0))
         Look = Set.Add("look")
         Look.Bind(Binding.OfMouseAxis(MouseAxis.X))
@@ -72,10 +75,10 @@ Public Final Class Controls
         Turn.Bind(Binding.OfGamepadAxis(GamepadAxis.RIGHT_X))
         Turn.BindY(Binding.OfGamepadAxis(GamepadAxis.RIGHT_Y))
         Use = Set.Add("use")
-        Use.Bind(Binding.OfKey(Key.E))
+        Use.Bind(Binding.OfKey(bound.Of(Bound.USE)))
         Use.Bind(Binding.OfGamepadButton(GamepadButton.SOUTH))
         Hand = Set.Add("hand")
-        Hand.Bind(Binding.OfKey(Key.Q))
+        Hand.Bind(Binding.OfKey(bound.Of(Bound.HAND)))
         Hand.Bind(Binding.OfGamepadButton(GamepadButton.WEST))
     End New
 

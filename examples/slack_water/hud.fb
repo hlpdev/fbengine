@@ -58,8 +58,7 @@ Public Final Class Hud
         Local y = height - MARGIN - MARK - 12
         canvas.SetColor(SEA_DARK)
         canvas.DrawRect(x - 14, y - 8, promptWide + 28, MARK + 16, True)
-        DrawPrompt(canvas, font, device.Current(), device.PadKind(), prompted, text, x, y, MARK,
-                   PAPER)
+        DrawPrompt(canvas, font, device, prompted, text, x, y, MARK, PAPER)
     End Method
 
     // How wide `text` is in its font.

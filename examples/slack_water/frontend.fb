@@ -11,6 +11,7 @@ Import fbengine
 Import fbengine_ui
 Import "./hud"
 Import "./prompts"
+Import "./screenmode"
 Import "./settings"
 
 /// Which of the front end is showing.
@@ -23,6 +24,8 @@ Public Enum Page
     PAUSED = 2
     /// Options, from the title or the pause menu.
     OPTIONS = 3
+    /// Options' keys.
+    KEYS = 4
 End Enum
 
 // The flight round the island: where it looks, how far out and up it is, and how fast it goes round,
@@ -76,6 +79,10 @@ Public Function SlackTheme(): Theme
     title.Foreground = brass
     title.FontSize = 60.0
     theme.SetFields("title", title)
+    Local heading = StyleFields()
+    heading.Foreground = brass
+    heading.FontSize = 40.0
+    theme.SetFields("heading", heading)
     Local quiet = StyleFields()
     quiet.Foreground = Shade(FAINT)
     quiet.FontSize = 18.0
@@ -83,19 +90,23 @@ Public Function SlackTheme(): Theme
     Return theme
 End Function
 
-/// A button that steps through `choices`: clicked, or Enter, or a gamepad's south, goes to the next,
-/// and Left and Right go back and on.
+/// A button that steps through `choices`: Left and Right go back and on, and a click goes to the next.
+/// Enter, or a gamepad's south, goes to the next too, or, one that `confirms`, says it's chosen, as a
+/// window's mode is, which applies only then.
 Public Final Class Chooser Extends Button
     Field heading: String = ""
     Field choices: String[] = []
     Field at: Int = 0
     Field moved: Bool = False
+    Field confirms: Bool = False
+    Field confirmed: Bool = False
 
     @MainThread
-    Public New(called: String, among: String[], name: String = "")
+    Public New(called: String, among: String[], name: String = "", confirming: Bool = False)
         Super.New("", name)
         heading = called
         choices = among
+        confirms = confirming
         Relabeled()
     End New
 
@@ -112,13 +123,11 @@ Public Final Class Chooser Extends Button
         Relabeled()
     End Method
 
-    /// Gives it other choices, keeping it at the one of the same text, or its first.
+    /// Gives it other choices, at `choice`.
     @MainThread
-    Public Method SetChoices(others: String[])
-        Local was = choices[at]
+    Public Method SetChoices(others: String[], choice: Int)
         choices = others
-        at = Max(0, others.IndexOf(was) ?? 0)
-        Relabeled()
+        SetAt(choice)
     End Method
 
     /// Whether a player moved it since this was last asked.
@@ -126,6 +135,14 @@ Public Final Class Chooser Extends Button
     Public Method TakeMoved(): Bool
         Local was = moved
         moved = False
+        Return was
+    End Method
+
+    /// Whether a player said it's chosen since this was last asked, by Enter or a gamepad's south.
+    @MainThread
+    Public Method TakeConfirmed(): Bool
+        Local was = confirmed
+        confirmed = False
         Return was
     End Method
 
@@ -150,10 +167,24 @@ Public Final Class Chooser Extends Button
         Return False
     End Method
 
+    @MainThread
+    Public Override Method Activate()
+        If confirms
+            confirmed = True
+        Else
+            Super.Activate()
+        End If
+    End Method
+
     @MainThread Method Relabeled()
         SetText("{heading}: {choices[at]}")
     End Method
 End Class
+
+// How long a window's change waits to be kept before it goes back, and how long an option's change
+// waits to be kept, if its row's still focused.
+Const KEEP_WAIT: Float = 10.0
+Const SAVE_WAIT: Float = 1.0
 
 /// The front end.
 Public Final Class Frontend
@@ -170,20 +201,39 @@ Public Final Class Frontend
     Field settings: Node
     Field master: Slider
     Field music: Slider
-    Field musicRow: Node
     Field ambience: Slider
     Field effects: Slider
     Field quality: Chooser
     Field window: Chooser
+    Field apply: Button
     Field look: Slider
     Field invert: Toggle
+    Field controls: Button
     Field back: Button
+    // Keeping a window's change, or going back.
+    Field keeping: Node
+    Field keepSaid: Label
+    Field keep: Button
+    Field revert: Button
+    Field keepLeft: Float = 0.0
+    // The keys, each a button that takes the next key pressed.
+    Field keysPanel: Node
+    Field keyButtons: Button[]
+    Field keysSaid: Label
+    Field keysBack: Button
+    Field waitingFor: Bound? = Null
     Field page: Page = Page.TITLE
     Field optionsFrom: Page = Page.TITLE
     Field options: Options
     Field file: Path?
-    // The window's modes, as the window Chooser lists them.
-    Field modes: (WindowMode, Int, Int)[]
+    // The window's choices, which is applied, and which it was before the one waiting to be kept.
+    Field windows: WindowChoice[]
+    Field applied: Int = 0
+    Field before: Int = 0
+    // What's changed and not yet kept, how long ago, and what had the focus.
+    Field unkept: Bool = False
+    Field unkeptFor: Float = 0.0
+    Field unkeptAt: Widget? = Null
     Field flown: Float = 0.0
     Field device: LastDevice
     Field font: Font
@@ -192,6 +242,7 @@ Public Final Class Frontend
     Field quitChosen: Bool = False
     Field leaveChosen: Bool = False
     Field changed: Bool = False
+    Field windowAsked: WindowChoice? = Null
 
     /// The front end, at the title, with the options kept in `file`, or the defaults for Null.
     @MainThread
@@ -199,8 +250,10 @@ Public Final Class Frontend
         Self.file = file
         options = KeptOptions(file)
         device = LastDevice()
+        device.SetKeys(options.Keys)
         font = Font.BuiltIn(18.0)
-        modes = []
+        windows = ChoicesOf(Null)
+        keyButtons = []
         screen = Node("screen")
         screen.SetArrangement(Arrangement.STACK)
         title = Panel("title")
@@ -231,39 +284,73 @@ Public Final Class Frontend
         paused.Add(leave)
         settings = Panel("options")
         Local heading = Label("Options", "options.name")
-        heading.SetStyleName("title")
+        heading.SetStyleName("heading")
         settings.Add(heading)
-        master = Slider(0.0, 1.0, options.Master)
-        music = Slider(0.0, 1.0, options.Music)
-        ambience = Slider(0.0, 1.0, options.Ambience)
-        effects = Slider(0.0, 1.0, options.Effects)
-        look = Slider(LEAST_LOOK, MOST_LOOK, options.Look)
+        master = Slider(0.0, 1.0, options.Master, "options.master")
+        music = Slider(0.0, 1.0, options.Music, "options.music")
+        ambience = Slider(0.0, 1.0, options.Ambience, "options.ambience")
+        effects = Slider(0.0, 1.0, options.Effects, "options.effects")
+        look = Slider(LEAST_LOOK, MOST_LOOK, options.Look, "options.look")
         For each In [master, music, ambience, effects, look]
             each.SetStep(0.05)
             each.SetWidth(Sizing.Fixed(280.0))
         End For
         settings.Add(Row("Master volume", master))
-        musicRow = Row("Music", music)
-        settings.Add(musicRow)
+        settings.Add(Row("Music", music))
         settings.Add(Row("Ambience", ambience))
         settings.Add(Row("Effects", effects))
         quality = Chooser("Quality", ["High", "Low"], "options.quality")
         quality.SetAt(options.Picture As Int)
         settings.Add(quality)
-        window = Chooser("Window", ["Windowed", "Borderless"], "options.window")
-        settings.Add(window)
+        window = Chooser("Window", ["Windowed", "Borderless"], "options.window", True)
+        window.SetWidth(Sizing.Fill())
+        apply = Button("Apply", "options.apply")
+        Local windowRow = Node("row")
+        windowRow.SetArrangement(Arrangement.ROW)
+        windowRow.SetGap(10.0)
+        windowRow.Add(window)
+        windowRow.Add(apply)
+        settings.Add(windowRow)
         settings.Add(Row("Look sensitivity", look))
         invert = Toggle("Invert Y", options.InvertY, "options.invert")
         settings.Add(invert)
+        controls = Button("Controls", "options.keys")
+        settings.Add(controls)
         back = Button("Back", "options.back")
         settings.Add(back)
+        keeping = Panel("keep")
+        keepSaid = Label("", "keep.said")
+        keep = Button("Keep", "keep.keep")
+        revert = Button("Go back", "keep.revert")
+        keeping.Add(keepSaid)
+        keeping.Add(keep)
+        keeping.Add(revert)
+        keysPanel = Panel("keys")
+        Local keysHeading = Label("Controls", "keys.name")
+        keysHeading.SetStyleName("heading")
+        keysPanel.Add(keysHeading)
+        For at = 0 Until 7
+            Local button = Button("", "keys.{at}")
+            keyButtons.Add(button)
+            keysPanel.Add(button)
+        End For
+        keysSaid = Label("", "keys.said")
+        keysSaid.SetStyleName("quiet")
+        keysPanel.Add(keysSaid)
+        keysBack = Button("Back", "keys.back")
+        keysPanel.Add(keysBack)
         screen.Add(title)
         screen.Add(paused)
         screen.Add(settings)
+        screen.Add(keysPanel)
+        screen.Add(keeping)
         ui = Ui(screen, SlackTheme())
         ui.SetNavigable(True)
         Showing(Page.TITLE)
+        keeping.SetVisible(False)
         ui.Focus(play)
+        Windowed()
+        Relabeled()
     End New
 
     // A panel in the middle of the screen, its widgets one under the other.
@@ -309,29 +396,52 @@ Public Final Class Frontend
 
     @MainThread Public Method OptionsChanged(): Bool => changed
 
-    /// Lists the window's choices: windowed, borderless, and fullscreen at each of `display`'s modes,
-    /// each size once, as a display has many rates; and puts it at what the options say.
+    /// How the window's to be put, if that was asked for in the last Update: a change chosen, or going
+    /// back from one, or Null.
+    @MainThread Public Method WindowAsked(): WindowChoice? => windowAsked
+
+    /// Whether a window's change is waiting to be kept.
+    @MainThread Public Method Keeping(): Bool => keeping.Visible()
+
+    /// The window's choices: windowed, borderless, and fullscreen at each of `display`'s sizes; and
+    /// which the options say, or for a size it hasn't, the nearest, which it says, and which the
+    /// options take. It gives that choice, for the window to be put as it says.
     @MainThread
-    Public Method SetModes(display: Display?)
-        modes = [(WindowMode.WINDOWED, 0, 0), (WindowMode.BORDERLESS, 0, 0)]
-        Local named = ["Windowed", "Borderless"]
-        If display != Null
-            For mode In display.Modes
-                Local said = "Fullscreen {mode.Width}x{mode.Height}"
-                If named.Contains(said) Then Continue
-                modes.Add((WindowMode.FULLSCREEN, mode.Width As Int, mode.Height As Int))
-                named.Add(said)
+    Public Method SetModes(display: Display?): WindowChoice
+        windows = ChoicesOf(display)
+        Local wanted = WindowChoice(options.Shown, options.Width, options.Height)
+        Local at, nearest = ChoiceFor(windows, wanted)
+        applied = at
+        before = at
+        Windowed()
+        If nearest
+            Local names: String[] = []
+            For each In windows
+                names.Add(each.Name())
             End For
+            names[at] = "{windows[at].Name()} (nearest to {wanted.Width}x{wanted.Height})"
+            window.SetChoices(names, at)
         End If
-        window.SetChoices(named)
-        For at = 0 Until modes.Count
-            Local shown, width, height = modes[at]
-            If shown == options.Shown &&
-               (shown != WindowMode.FULLSCREEN ||
-                width == options.Width && height == options.Height)
-                window.SetAt(at)
-            End If
+        Took(windows[at])
+        Return windows[at]
+    End Method
+
+    // The window Chooser's choices, at what's applied.
+    @MainThread
+    Method Windowed()
+        Local names: String[] = []
+        For each In windows
+            names.Add(each.Name())
         End For
+        window.SetChoices(names, applied)
+    End Method
+
+    // The options as `choice` says.
+    @MainThread
+    Method Took(choice: WindowChoice)
+        options.Shown = choice.Shown
+        options.Width = choice.Width
+        options.Height = choice.Height
     End Method
 
     /// Points `camera` along the title's flight, `seconds` on, while the title's showing.
@@ -344,20 +454,29 @@ Public Final Class Frontend
         camera.PointAt(ISLAND_MIDDLE)
     End Method
 
-    /// Moves it on: what's been pressed or clicked since the last Flip, with the game `ended` or not,
-    /// whose own end screen has the keys then.
+    /// Moves it on `seconds`: what's been pressed or clicked since the last Flip, with the game
+    /// `ended` or not, whose own end screen has the keys then.
     @MainThread
-    Public Method Update(ended: Bool)
+    Public Method Update(ended: Bool, seconds: Float)
         playChosen = False
         quitChosen = False
         leaveChosen = False
         changed = False
+        windowAsked = Null
         device.Update()
         If page == Page.PLAYING
             If !ended && PauseHit() Then Open(Page.PAUSED)
             Return
         End If
+        If page == Page.KEYS && waitingFor != Null
+            Rebound()
+            Return
+        End If
         ui.Update()
+        If keeping.Visible()
+            Kept(seconds)
+            Return
+        End If
         Select page
             Case Page.TITLE
                 If play.Clicked()
@@ -369,7 +488,7 @@ Public Final Class Frontend
                     quitChosen = True
                 End If
             Case Page.PAUSED
-                If resume.Clicked() || ui.Back() || PadStartHit()
+                If resume.Clicked() || ui.Back() || PauseHit()
                     Showing(Page.PLAYING)
                 ElseIf optionsFromPause.Clicked()
                     OpenOptions(Page.PAUSED)
@@ -379,20 +498,33 @@ Public Final Class Frontend
                 End If
             Case Page.OPTIONS
                 Read()
-                If back.Clicked() || ui.Back()
-                    Try
-                        Keep()
-                    Catch e As IOError
-                        PrintError("the options couldn't be kept: {e.Message}")
-                    End Try
+                Saved(seconds)
+                If controls.Clicked()
+                    Open(Page.KEYS)
+                ElseIf back.Clicked() || ui.Back()
+                    KeepNow()
                     Open(optionsFrom)
+                End If
+            Case Page.KEYS
+                Local chosen = -1
+                For at = 0 Until keyButtons.Count
+                    If keyButtons[at].Clicked() Then chosen = at
+                End For
+                If chosen >= 0
+                    waitingFor = chosen As Bound
+                    keysSaid.SetText(
+                        "Press a key for {BoundName(chosen As Bound)}, or Escape for none")
+                    Relabeled()
+                ElseIf keysBack.Clicked() || ui.Back()
+                    Open(Page.OPTIONS)
                 End If
             Default
         End Select
     End Method
 
-    // Whether Escape, or a gamepad's Start, was pressed.
-    @MainThread Method PauseHit(): Bool => KeyHit(Key.ESCAPE) || PadStartHit()
+    // Whether the pause key, Escape as it's made, or a gamepad's Start, was pressed.
+    @MainThread
+    Method PauseHit(): Bool => KeyHit(options.Keys.Of(Bound.PAUSE)) || PadStartHit()
 
     @MainThread
     Method PadStartHit(): Bool
@@ -402,7 +534,45 @@ Public Final Class Frontend
         Return False
     End Method
 
-    // What the options' widgets say now, into the options; changed if that's different.
+    // The key pressed for what's waiting for one: bound, unless another has it, which it says; or
+    // none, for Escape, but for the pause, which Escape can be.
+    @MainThread
+    Method Rebound()
+        Local hit = KeysHit()
+        If hit.Count == 0 Then Return
+        Local key = hit[0]
+        Local bound = waitingFor
+        If bound == Null Then Return
+        waitingFor = Null
+        If key == Key.ESCAPE && bound != Bound.PAUSE
+            keysSaid.SetText("")
+        Else
+            Local had = options.Keys.Bind(bound, key)
+            If had != Null
+                keysSaid.SetText("{KeyLabel(key)} is {BoundName(had)}'s already")
+            Else
+                keysSaid.SetText("")
+                device.SetKeys(options.Keys)
+                changed = True
+                KeepNow()
+            End If
+        End If
+        Relabeled()
+        ui.Focus(keyButtons[bound As Int])
+    End Method
+
+    // Each key's button, saying what it's bound to.
+    @MainThread
+    Method Relabeled()
+        For at = 0 Until keyButtons.Count
+            Local bound = at As Bound
+            Local said = waitingFor == bound ? "..." : KeyLabel(options.Keys.Of(bound))
+            keyButtons[at].SetText("{BoundName(bound)}: {said}")
+        End For
+    End Method
+
+    // What the options' widgets say now, into the options; changed if that's different. A window's
+    // choice is asked for only once it's confirmed, and kept once that's kept.
     @MainThread
     Method Read()
         Local was = options.Written()
@@ -410,28 +580,81 @@ Public Final Class Frontend
         options.Music = music.Value()
         options.Ambience = ambience.Value()
         options.Effects = effects.Value()
-        options.Picture = quality.At() == 1 ? Quality.LOW : Quality.HIGH
-        If window.TakeMoved() || window.Clicked()
-            If window.Clicked() Then window.Step(1)
-            If modes.Count > window.At()
-                Local shown, width, height = modes[window.At()]
-                options.Shown = shown
-                options.Width = width
-                options.Height = height
-            End If
-        End If
         If quality.Clicked() Then quality.Step(1)
         options.Picture = quality.At() == 1 ? Quality.LOW : Quality.HIGH
         options.Look = look.Value()
         options.InvertY = invert.On()
+        If window.Clicked() Then window.Step(1)
+        window.TakeMoved()
+        apply.SetEnabled(window.At() != applied)
+        If (window.TakeConfirmed() || apply.Clicked()) && window.At() != applied
+            before = applied
+            applied = window.At()
+            windowAsked = windows[applied]
+            keepLeft = KEEP_WAIT
+            KeepSaid()
+            keeping.SetVisible(True)
+            ui.Focus(keep)
+        End If
         changed = options.Written() != was
+        If changed
+            unkept = True
+            unkeptFor = 0.0
+            unkeptAt = ui.Focused()
+        End If
     End Method
 
-    /// Keeps the options in their file, if they have one.
+    // Keeps what's changed a second on, or once the focus leaves where it was changed.
     @MainThread
-    Public Method Keep() Throws IOError
+    Method Saved(seconds: Float)
+        If !unkept Then Return
+        unkeptFor += seconds
+        Local focused = ui.Focused()
+        Local moved = focused == Null && unkeptAt != Null || focused != Null && unkeptAt == Null ||
+                      focused != Null && unkeptAt != Null && !RefEquals(focused, unkeptAt)
+        If unkeptFor >= SAVE_WAIT || moved Then KeepNow()
+    End Method
+
+    // A window's change, kept, or going back, by Keep, Go back, Escape, or its time running out.
+    @MainThread
+    Method Kept(seconds: Float)
+        keepLeft -= seconds
+        KeepSaid()
+        If keep.Clicked()
+            Took(windows[applied])
+            KeepNow()
+            Closed()
+        ElseIf revert.Clicked() || ui.Back() || keepLeft <= 0.0
+            applied = before
+            window.SetAt(applied)
+            windowAsked = windows[applied]
+            Closed()
+        End If
+    End Method
+
+    @MainThread
+    Method KeepSaid()
+        keepSaid.SetText(
+            "Keep this? Back to {windows[before].Name()} in {Ceil(Max(keepLeft, 0.0)) As Int}")
+    End Method
+
+    @MainThread
+    Method Closed()
+        keeping.SetVisible(False)
+        ui.Focus(window)
+    End Method
+
+    /// Keeps the options in their file, if they have one, saying so if they can't be.
+    @MainThread
+    Public Method KeepNow()
+        unkept = False
         Local kept = file
-        If kept != Null Then Try KeepOptions(options, kept)
+        If kept == Null Then Return
+        Try
+            Try KeepOptions(options, kept)
+        Catch e As IOError
+            PrintError("the options couldn't be kept: {e.Message}")
+        End Try
     End Method
 
     // Opens Options, to go back to `from`.
@@ -452,6 +675,9 @@ Public Final Class Frontend
                 ui.Focus(resume)
             Case Page.OPTIONS
                 ui.Focus(master)
+            Case Page.KEYS
+                keysSaid.SetText("")
+                ui.Focus(keyButtons[0])
             Default
                 ui.Focus(Null)
         End Select
@@ -463,6 +689,7 @@ Public Final Class Frontend
         title.SetVisible(shown == Page.TITLE)
         paused.SetVisible(shown == Page.PAUSED)
         settings.SetVisible(shown == Page.OPTIONS)
+        keysPanel.SetVisible(shown == Page.KEYS)
     End Method
 
     /// Where `name`'s widget is on the screen, for a test's mouse.
@@ -479,7 +706,7 @@ Public Final Class Frontend
     @MainThread
     Public Method OverGame(): Bool
         Return page == Page.PLAYING || page == Page.PAUSED ||
-               page == Page.OPTIONS && optionsFrom == Page.PAUSED
+               (page == Page.OPTIONS || page == Page.KEYS) && optionsFrom == Page.PAUSED
     End Method
 
     /// Draws it over what's drawn, with what to press at the bottom, unless the game's being played.
@@ -490,12 +717,8 @@ Public Final Class Frontend
         Local canvas = Screen.Canvas()
         Local y = Screen.Height() - 56
         Local x = 32
-        x += DrawPrompt(canvas, font, device.Current(), device.PadKind(), Prompted.CHOOSE, "Choose",
-                        x, y, 28, PAPER) + 28
-        If page != Page.TITLE
-            DrawPrompt(canvas, font, device.Current(), device.PadKind(), Prompted.BACK, "Back", x,
-                       y,
-                       28, PAPER)
-        End If
+        x += DrawPrompt(canvas, font, device, Prompted.CHOOSE, "Choose", x, y, 28, PAPER) + 28
+        If page != Page.TITLE Then DrawPrompt(canvas, font, device, Prompted.BACK, "Back", x, y, 28,
+                                              PAPER)
     End Method
 End Class

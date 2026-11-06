@@ -1,10 +1,12 @@
 // What says how to do something: a key, or a gamepad's button by the pad's own name for it, whichever
 // was used last, drawn as a key's cap or a button's disc, by the canvas alone.
 
+Import std.collections
 Import std.core
 Import std.math
 Import std.text
 Import fbengine
+Import "./settings"
 
 /// Which a player's using: the keyboard and mouse, or a gamepad.
 Public Enum Device
@@ -31,13 +33,24 @@ Const STICK_USED: Float32 = 0.5
 // How far the mouse moves in a frame before it's taken as used, in pixels.
 Const MOUSE_USED: Float32 = 2.0
 
-/// Which was used last, the keys and mouse or a gamepad, and which kind of gamepad.
+/// Which was used last, the keys and mouse or a gamepad, and which kind of gamepad; and which key does
+/// what, for the keys' prompts.
 Public Final Class LastDevice
     Field device: Device = Device.KEYS
     Field kind: GamepadType = GamepadType.STANDARD
+    Field keys: KeyMap
 
     Public New()
+        keys = KeyMap()
     End New
+
+    /// Which key does what, as the prompts say.
+    Public Method SetKeys(bound: KeyMap)
+        keys = bound.Clone()
+    End Method
+
+    /// Which key does what.
+    Public Method Keys(): KeyMap => keys
 
     /// Looks at what's been pressed or moved since the last Flip.
     @MainThread
@@ -73,13 +86,33 @@ Function PadUsed(pad: Gamepad): Bool
     Return False
 End Function
 
-/// The key for `prompted`.
-Public Function KeyFor(prompted: Prompted): String
+/// What a key's cap says: "E", "Esc", "Enter", "Space", or its name's words, as "Left Shift".
+Public Function KeyLabel(key: Key): String
+    Select key
+        Case Key.ESCAPE
+            Return "Esc"
+        Case Key.RETURN
+            Return "Enter"
+        Default
+            Local named = "{key}"
+            If named.Length <= 1 Then Return named
+            Local words: String[] = []
+            For word In named.Split("_")
+                words.Add(word.Slice(0, 1) + word.Slice(1, word.Length).ToLower())
+            End For
+            Return words.Join(" ")
+    End Select
+End Function
+
+/// The key for `prompted`, as `keys` binds them.
+Public Function KeyFor(prompted: Prompted, keys: KeyMap): String
     Select prompted
         Case Prompted.USE
-            Return "E"
+            Return KeyLabel(keys.Of(Bound.USE))
         Case Prompted.HAND
-            Return "Q"
+            Return KeyLabel(keys.Of(Bound.HAND))
+        Case Prompted.PAUSE
+            Return KeyLabel(keys.Of(Bound.PAUSE))
         Case Prompted.CHOOSE
             Return "Enter"
         Default
@@ -162,18 +195,21 @@ Public Function ButtonColor(kind: GamepadType, button: GamepadButton): Color32
 End Function
 
 /// What `prompted` is called on `device`, as a person reads it: "E", or "A", "Cross".
-Public Function PromptName(device: Device, kind: GamepadType, prompted: Prompted): String
-    Return device == Device.PAD ? ButtonName(kind, ButtonFor(prompted)) : KeyFor(prompted)
+Public Function PromptName(device: Device, kind: GamepadType, prompted: Prompted,
+                           keys: KeyMap): String
+    Return device == Device.PAD ? ButtonName(kind, ButtonFor(prompted)) : KeyFor(prompted, keys)
 End Function
 
 /// Draws `prompted`'s key's cap, or its button's disc, at `x`, `y`, `size` high, and `text` after
 /// it, in `font`, in `color`; gives how wide that all was.
 @MainThread
-Public Function DrawPrompt(canvas: Canvas, font: Font, device: Device, kind: GamepadType,
-                           prompted: Prompted, text: String, x: Int32, y: Int32, size: Int32,
-                           color: Color32): Int32
+Public Function DrawPrompt(canvas: Canvas, font: Font, last: LastDevice, prompted: Prompted,
+                           text: String, x: Int32, y: Int32, size: Int32, color: Color32): Int32
     Local was = canvas.Color()
-    Local mark = device == Device.PAD ? ButtonMark(kind, ButtonFor(prompted)) : KeyFor(prompted)
+    Local device = last.Current()
+    Local kind = last.PadKind()
+    Local mark = device == Device.PAD ? ButtonMark(kind, ButtonFor(prompted)) : KeyFor(prompted,
+                                                                                       last.Keys())
     Local markWide = font.Width(mark) As Int32
     Local wide = size
     If device == Device.PAD

@@ -24,6 +24,7 @@ Import std.os
 Import std.text
 Import fbengine
 Import fbengine_audio
+Import fbengine_ui
 Import "./checks"
 Import "./controls"
 Import "./cues"
@@ -37,6 +38,7 @@ Import "./island"
 Import "./map"
 Import "./prompts"
 Import "./res" As Res
+Import "./screenmode"
 Import "./screens"
 Import "./settings"
 Import "./sky"
@@ -1822,8 +1824,12 @@ Final Class Session
     // The title, pause, and options, and the HUD.
     Field front: Frontend
     Field hud: Hud
-    // Whether it's in a window of its own, a player's, which its options may change.
-    Field windowed: Bool = False
+    // The window its options put, a player's or a test's, or Null for one they leave as it is; and
+    // the size it's framed at.
+    Field port: WindowLike? = Null
+    Field framed: (Int32, Int32)
+    // Whether it was paused at the last Step: the game stopped under the menus.
+    Field held: Bool = False
 
     New(island: Island, last: String[], game: Game, scape: Soundscape, front: Frontend)
         Self.island = island
@@ -1835,6 +1841,7 @@ Final Class Session
         ending = EndScreen()
         font = Font.BuiltIn(20.0)
         hud = Hud()
+        framed = (1280, 720)
     End New
 
     // One at its first moment, on `island`, with the audio started, being played, or `atTitle`, with
@@ -1860,22 +1867,36 @@ Final Class Session
     @MainThread
     Method Applied()
         Local options = front.Current()
+        // Paused, the effects stop, and the music and the wind and sea go on, quieter.
+        Local quieter = held ? PAUSED_LEVEL : 1.0
         scape.SetLevel(Mix.MASTER, options.Master)
-        scape.SetLevel(Mix.MUSIC, options.Music)
-        scape.SetLevel(Mix.AMBIENCE, options.Ambience)
-        scape.SetLevel(Mix.EFFECTS, options.Effects)
+        scape.SetLevel(Mix.MUSIC, options.Music * quieter)
+        scape.SetLevel(Mix.AMBIENCE, options.Ambience * quieter)
+        scape.SetLevel(Mix.EFFECTS, held ? 0.0 : options.Effects)
+        controls = Controls(options.Keys)
         controls.SetLook(options.Look, options.InvertY)
         Pictured(island, game.View(), options.Picture)
-        If !windowed Then Return
+    End Method
+
+    // Puts the window as `choice` says, if it's one its options put.
+    @MainThread
+    Method Put(choice: WindowChoice)
+        Local window = port
+        If window == Null Then Return
         Try
-            If options.Shown == WindowMode.FULLSCREEN && options.Width > 0 &&
-               Window.Mode() != WindowMode.FULLSCREEN
-                Try Window.SetSize(options.Width As Int32, options.Height As Int32)
-            End If
-            If Window.Mode() != options.Shown Then Try Window.SetMode(options.Shown)
+            Try Switched(window, choice, framed)
         Catch e As GraphicsError
-            PrintError("the window can't be that: {e.Message}")
+            PrintError("the window can't be {choice.Name()}: {e.Message}")
         End Try
+    End Method
+
+    // Gives it `window` to put, at the choice its options say, framed at the size it is now.
+    @MainThread
+    Method Windowing(window: WindowLike, display: Display?)
+        port = window
+        If window.Mode() == WindowMode.WINDOWED Then framed = (window.Width(), window.Height())
+        Local choice = front.SetModes(display)
+        If choice.Shown != window.Mode() || choice.Shown == WindowMode.FULLSCREEN Then Put(choice)
     End Method
 
     // A game at its first moment, in place of the one there was.
@@ -1897,11 +1918,19 @@ Final Class Session
     // mouse and keys are its, not the game's. It plays again if that's been chosen.
     @MainThread
     Method Step(seconds: Float) Throws IOError, InputError
-        front.Update(ending.Showing())
+        front.Update(ending.Showing(), seconds)
         If front.QuitChosen() Then left = True
         If front.LeaveChosen() Then Try Fresh()
-        If front.OptionsChanged() Then Applied()
+        Local asked = front.WindowAsked()
+        If asked != Null Then Put(asked)
         Local page = front.Showing()
+        Local holding = page != Page.PLAYING && front.OverGame()
+        If front.OptionsChanged() || holding != held
+            held = holding
+            Applied()
+        End If
+        // Paused, Pip's clip stands where it is; the game's next step sets its pace again.
+        If held Then island.PipEntity().Player().SetSpeed(0.0)
         controls.Set.SetEnabled(page == Page.PLAYING && !ending.Showing())
         If page == Page.TITLE
             front.Fly(game.View(), seconds)
@@ -1938,6 +1967,9 @@ Final Class Session
         game.Free()
     End Method
 End Class
+
+// How loud the music and the wind and sea are, paused, of what they'd be.
+Const PAUSED_LEVEL: Float = 0.5
 
 // Sets what `camera` and `island` spend on the picture for `quality`: everything, or, low, no bloom
 // and no sun's shadows.
@@ -2173,9 +2205,8 @@ Function Played() Throws GraphicsError, IOError, InputError, AudioError
     Defer Audio.Stop()
     Local session = Try Session.Make(island, OptionsFile(), True)
     Defer session.Free()
-    session.windowed = True
-    session.front.SetModes(FirstDisplay())
-    session.Applied()
+    session.Windowing(RealWindow(), FirstDisplay())
+    Defer session.front.KeepNow()
     While !Window.Closed() && !session.left
         Flip()
         Try session.Step(FrameStep(Frame.Delta()) As Float)
@@ -2305,12 +2336,26 @@ Function MenusShown(folder: Path) Throws GraphicsError, IOError, AudioError, Inp
     Checks("and the clock runs", session.game.Story().Clock() > clock)
     Checks("its prompts are the pad's", session.front.Device().Current() == Device.PAD)
 
-    // Paused by Start: the clock stops, and the menu's over the game, with the HUD under it.
+    // Paused by Escape, and resumed by it.
+    Try Pressed(session, Key.ESCAPE)
+    Checks("paused, by Escape", session.front.Showing() == Page.PAUSED)
+    Try Pressed(session, Key.ESCAPE)
+    Checks("resumed, by Escape", session.front.Showing() == Page.PLAYING)
+    Try Stepped(session, 3)
+
+    // Paused by Start: the clock stops, and Pip, and the effects, and the music and the wind and sea
+    // go on quieter; and the menu's over the game, with the HUD under it.
+    Local pip = island.PipEntity().Player()
     Try PadPressed(session, pad, GamepadButton.START)
     Checks("paused, by Start", session.front.Showing() == Page.PAUSED)
     Local stopped = session.game.Story().Clock()
-    Try Stepped(session, 5)
+    Local pipAt = pip.Time()
+    Try Stepped(session, 10)
     Checks("its clock stops", session.game.Story().Clock() == stopped)
+    Checks("Pip's clip stops", pip.Time() == pipAt)
+    Checks("the effects stop", session.scape.Level(Mix.EFFECTS) == 0.0)
+    Checks("the music goes on, quieter", Abs(session.scape.Level(Mix.MUSIC) - 0.4) < 0.001 &&
+           Abs(session.scape.Level(Mix.AMBIENCE) - 0.5) < 0.001)
     Checks("the mouse is free", !MouseRelative())
     Local paused = Try Pictured(session, folder, "pause")
     Checks("its heading's drawn in brass",
@@ -2323,23 +2368,175 @@ Function MenusShown(folder: Path) Throws GraphicsError, IOError, AudioError, Inp
     Checks("its prompts are the keys' now", session.front.Device().Current() == Device.KEYS)
     Try Clicked(session, "options.invert")
     Checks("Invert Y, by a click", session.front.Current().InvertY)
+    // Look, by a click three quarters along its slider.
+    Local track = BoxOf(session, "options.look")
+    Try Simulate.MoveMouse(track.X + track.Width * 0.75, track.Y + track.Height * 0.5)
+    Try Stepped(session, 1)
+    Try Simulate.Click(MouseButton.LEFT)
+    Try Stepped(session, 2)
+    Local look = session.front.Current().Look
+    Checks("Look, by a click", look > 2.0 && look < 2.6)
     Try PadPressed(session, pad, GamepadButton.EAST)
     Checks("back to the pause menu, by the pad", session.front.Showing() == Page.PAUSED)
     Checks("and kept", KeptOptions(file).InvertY)
     // Resumed by Escape, and the game's looking's inverted.
     Try Pressed(session, Key.ESCAPE)
     Checks("resumed, by Escape", session.front.Showing() == Page.PLAYING)
+    Checks("the effects back", session.scape.Level(Mix.EFFECTS) == 1.0 &&
+           Abs(session.scape.Level(Mix.MUSIC) - 0.8) < 0.001)
     Local pitch = session.game.Pitch()
     Try Simulate.MouseMotion(0.0, 100.0)
     Try Stepped(session, 1)
     Checks("the mouse down looks up, inverted", session.game.Pitch() > pitch)
+    // The mouse turns by the look's sensitivity: 100 pixels at 0.003 a pixel, by it.
+    Local yaw = session.game.Yaw()
+    Try Simulate.MouseMotion(100.0, 0.0)
+    Try Stepped(session, 1)
+    Checks("the mouse turns by the sensitivity",
+           Abs(Abs(session.game.Yaw() - yaw) - 0.3 * look) < 0.01)
+    // And the right stick, down, looks up too, inverted.
+    pitch = session.game.Pitch()
+    pad.SetAxis(GamepadAxis.RIGHT_Y, 0.5)
+    Try Stepped(session, 1)
+    pad.SetAxis(GamepadAxis.RIGHT_Y, 0.0)
+    Try Stepped(session, 1)
+    Checks("the stick down looks up, inverted", session.game.Pitch() > pitch)
     // And leaves to the title, by the mouse, a new game waiting.
     Try PadPressed(session, pad, GamepadButton.START)
     Try Clicked(session, "pause.leave")
     Checks("Leave goes to the title", session.front.Showing() == Page.TITLE)
     Checks("with a game at its first moment", session.game.Story().Clock() == 0.0)
+    // Controls: Use to F by a click and a key, and Hand to F refused, as Use has it.
+    Try Clicked(session, "title.options")
+    Try Clicked(session, "options.keys")
+    Checks("Controls, by the mouse", session.front.Showing() == Page.KEYS)
+    Try Clicked(session, "keys.4")
+    Try Pressed(session, Key.F)
+    Checks("Use is F", session.front.Current().Keys.Of(Bound.USE) == Key.F)
+    Checks("and says so", (session.front.Find("keys.4") As? Button)?.Text() == "Use: F")
+    Checks("and kept", KeptOptions(file).Keys.Of(Bound.USE) == Key.F)
+    Checks("its prompts say F", PromptName(Device.KEYS, GamepadType.STANDARD, Prompted.USE,
+                                           session.front.Device().Keys()) == "F")
+    Try Clicked(session, "keys.5")
+    Try Pressed(session, Key.F)
+    Checks("Hand to F is refused", session.front.Current().Keys.Of(Bound.HAND) == Key.Q)
+    Checks("and says why",
+           (session.front.Find("keys.said") As? Label)?.Text() == "F is Use's already")
+    // Escape, waiting for one, leaves it as it was.
+    Try Clicked(session, "keys.0")
+    Try Pressed(session, Key.ESCAPE)
+    Checks("Escape leaves Forward as it was",
+           session.front.Current().Keys.Of(Bound.FORWARD) == Key.W)
+    Try Pressed(session, Key.ESCAPE)
+    Try Pressed(session, Key.ESCAPE)
+    Checks("back to the title", session.front.Showing() == Page.TITLE)
+    // The game's Use is F now.
+    Local use = session.controls.Use.Bindings()
+    Checks("the game's Use is F", use.Count > 0 && use[0].Code == Key.F As Int32)
     Try Clicked(session, "title.quit")
     Checks("Quit, by the mouse", session.left)
+End Function
+
+// A window a test stands in for, framed at first, which can't be resized while it's fullscreen, as a
+// real one can't, and is fullscreen at the size it was set to.
+Final Class FakeWindow Implements WindowLike
+    Field mode: WindowMode = WindowMode.WINDOWED
+    Field width: Int32 = 1280
+    Field height: Int32 = 720
+    Public Field Calls: String[] = []
+
+    Public New()
+    End New
+
+    Public Method Mode(): WindowMode => mode
+
+    Public Method SetMode(to: WindowMode) Throws GraphicsError
+        Calls.Add("{to}")
+        mode = to
+    End Method
+
+    Public Method SetSize(across: Int32, down: Int32) Throws GraphicsError
+        If mode == WindowMode.FULLSCREEN Then Throw GraphicsError("a fullscreen window's size is its mode's")
+        Calls.Add("{across}x{down}")
+        width = across
+        height = down
+    End Method
+
+    Public Method Width(): Int32 => width
+
+    Public Method Height(): Int32 => height
+End Class
+
+// A display of two sizes, at two rates each.
+Function TwoSizes(): Display
+    Local modes = [DisplayMode(1920, 1080, 60.0, 1.0), DisplayMode(1920, 1080, 144.0, 1.0),
+                   DisplayMode(1280, 720, 60.0, 1.0), DisplayMode(1280, 720, 144.0, 1.0)]
+    Return Display("two sizes", modes[0], modes)
+End Function
+
+// The window's choices, a thing at a time, through a window the test stands in for: a size kept that
+// the display hasn't, the nearest taken and said; stepping changes nothing until it's confirmed; from
+// one fullscreen size to another; going back after ten seconds; and keeping it.
+Function WindowsShown() Throws GraphicsError, IOError, AudioError, InputError
+    Local kept = Try TempDir()
+    Local file = kept.Path / "options.ini"
+    Local options = Options()
+    options.Shown = WindowMode.FULLSCREEN
+    options.Width = 2560
+    options.Height = 1440
+    Try KeepOptions(options, file)
+    Local island = Try Opened()
+    Defer EndGraphics()
+    Defer Assets.StopWatching()
+    Defer island.Free()
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Defer Audio.Stop()
+    Local session = Try Session.Make(island, file, True)
+    Defer session.Free()
+    Local window = FakeWindow()
+    session.Windowing(window, TwoSizes())
+    Try Simulate.FocusWindow()
+    Flip(False)
+    Local chooser = session.front.Find("options.window") As? Chooser
+    If chooser == Null Then Panic("there's no window chooser")
+    Checks("a size it hasn't is the nearest, and says so",
+           chooser.Text() == "Window: Fullscreen 1920x1080 (nearest to 2560x1440)")
+    Checks("and the window's that",
+           window.Mode() == WindowMode.FULLSCREEN && window.Width() == 1920)
+    // Stepping to the other size changes nothing, until Enter.
+    Try Clicked(session, "title.options")
+    session.front.Open(Page.OPTIONS)
+    For step = 1 To 5
+        Try Pressed(session, Key.DOWN)
+    End For
+    Try Pressed(session, Key.RIGHT)
+    Checks("a step's only a step", chooser.Text() == "Window: Fullscreen 1280x720" &&
+           window.Width() == 1920)
+    window.Calls = []
+    Try Pressed(session, Key.RETURN)
+    Checks("Enter puts it, through windowed", window.Mode() == WindowMode.FULLSCREEN &&
+           window.Width() == 1280 && window.Calls.Join(" ") == "WINDOWED 1280x720 FULLSCREEN")
+    Checks("and asks to keep it", session.front.Keeping())
+    // Ten seconds go by, and it goes back.
+    Try Stepped(session, 105)
+    Checks("unkept, it goes back", !session.front.Keeping() && window.Width() == 1920 &&
+           chooser.Text().StartsWith("Window: Fullscreen 1920x1080"))
+    Checks("and isn't kept", KeptOptions(file).Width != 1280)
+    // Again, kept by the mouse.
+    Try Pressed(session, Key.RIGHT)
+    Try Pressed(session, Key.RETURN)
+    Try Clicked(session, "keep.keep")
+    Checks("kept, by the mouse", !session.front.Keeping() && window.Width() == 1280 &&
+           KeptOptions(file).Width == 1280)
+    // Windowed again: framed at the size it was.
+    Try Pressed(session, Key.LEFT)
+    Try Pressed(session, Key.LEFT)
+    Try Pressed(session, Key.LEFT)
+    Try Pressed(session, Key.RETURN)
+    Checks("windowed, at the size it was", window.Mode() == WindowMode.WINDOWED &&
+           window.Width() == 1280 && window.Height() == 720)
+    Try Clicked(session, "keep.keep")
+    Checks("and kept", KeptOptions(file).Shown == WindowMode.WINDOWED)
 End Function
 
 // Changes options on one run, by the mouse, the keyboard, and a gamepad, in the folder `kept`, or, on
@@ -2479,6 +2676,7 @@ ElseIf arguments.Count == 2 && arguments[0] == "--menus"
         Print("no GPU here")
     Else
         Try MenusShown(Path(arguments[1]))
+        Try WindowsShown()
     End If
 ElseIf arguments.Count == 3 && arguments[0] == "--kept" &&
        (arguments[1] == "set" || arguments[1] == "check")

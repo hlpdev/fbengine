@@ -540,8 +540,11 @@ if(FBENGINE_FB_TESTS)
     add_test(NAME examples.slack_water.kept_${stage}
              COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
                      -- --kept ${stage} "${slack_water_kept}")
+    # A pass is its lines, which ignores how it exits, so a panic, a leak, or an exit that isn't 0
+    # fails it.
     set_tests_properties(examples.slack_water.kept_${stage} PROPERTIES RESOURCE_LOCK slack_water
                          ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                         FAIL_REGULAR_EXPRESSION "panic:|leak|exited with code [1-9]"
                          SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
   endforeach()
   set_tests_properties(examples.slack_water.kept_set PROPERTIES
