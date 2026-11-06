@@ -183,8 +183,9 @@ constexpr std::uint32_t samples_binding = 1;
 constexpr std::uint32_t texture_binding = 2;
 /// How many samplers the set has: one for each filter and wrap in U and V, and room.
 constexpr std::uint32_t sampler_slots = 32;
-/// How many multisampled images the set has, the engine's own, which is one for each size of a
-/// camera's HDR image at once, and what's past that reads its average.
+/// How many multisampled images the set has, the engine's own whose samples a shader reads: one for
+/// each size of an HDR camera's image at once, but for one with temporal antialiasing; what's past
+/// that reads its average.
 constexpr std::uint32_t samples_slots = 64;
 /// A multisampled image with no slot.
 constexpr std::uint32_t no_samples_slot = UINT32_MAX;
@@ -207,6 +208,15 @@ void write_texture(std::uint32_t index, VkImageView view);
 /// done with what it was.
 std::uint32_t take_samples_slot(VkImageView view);
 void give_samples_slot(std::uint32_t slot);
+/// How many of the set's slots for samples are free.
+std::uint32_t free_samples_slot_count();
+/// Points every free slot for samples at `view`, and those given back from now on, a multisampled
+/// image in SHADER_READ_ONLY_OPTIMAL that's there as long as it is; VK_NULL_HANDLE, before it goes,
+/// for none.
+void point_free_samples_at(VkImageView view);
+/// What a slot for samples points at, and what a free one does: for tests.
+VkImageView samples_slot_view(std::uint32_t slot);
+VkImageView free_samples_view();
 
 /// The screen, for a window `window` pixels big: made again if the size it should be, its own or
 /// the window's, or its samples changed, its handle, or the old one's, or 0, if it can't be made.

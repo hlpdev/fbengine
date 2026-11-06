@@ -333,6 +333,8 @@ struct spec_t {
     VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
     bool depth = false;
     bool engine = false;
+    /// Whether a shader reads its samples, the engine's own, so it takes a slot for them.
+    bool reads_samples = false;
     /// A file's image, which it's made of, of this format; its levels, and more made from the
     /// first if `mipmaps`, in place of being cleared.
     const fbe::assets::image_t* image = nullptr;
@@ -549,13 +551,17 @@ bool make(std::uint32_t slot, const spec_t& spec) {
     }
     const auto attached = flag<VkImageUsageFlags>(VK_IMAGE_USAGE_TRANSFER_DST_BIT);
     const bool multisampled = spec.samples != VK_SAMPLE_COUNT_1_BIT;
-    // A shader reads the samples of the engine's own, as a camera's tonemap does, if the device can
-    // read as many; what can't reads what they resolve to.
-    const bool reads_samples = spec.engine && multisampled &&
-                               (gpu.properties.limits.sampledImageColorSampleCounts &
-                                flag<VkSampleCountFlags>(spec.samples)) != 0 &&
-                               !fbe::gpu::faulted(fbe::gpu::fault_t::NO_READ_SAMPLES);
-    const auto read = reads_samples ? flag<VkImageUsageFlags>(VK_IMAGE_USAGE_SAMPLED_BIT) : 0U;
+    // A shader reads the samples of the engine's own that says so, as an HDR camera's tonemap does,
+    // if the device can read as many; what can't reads what they resolve to. What isn't bound, the
+    // free slots' placeholder, takes no slot.
+    const bool sampled_samples = spec.engine && spec.reads_samples && multisampled &&
+                                 (gpu.properties.limits.sampledImageColorSampleCounts &
+                                  flag<VkSampleCountFlags>(spec.samples)) != 0;
+    const bool reads_samples =
+        sampled_samples && spec.bound && !fbe::gpu::faulted(fbe::gpu::fault_t::NO_READ_SAMPLES);
+    const auto read = (reads_samples || (sampled_samples && !spec.bound))
+                          ? flag<VkImageUsageFlags>(VK_IMAGE_USAGE_SAMPLED_BIT)
+                          : 0U;
     if ((multisampled &&
          !make_attachment(
              texture, texture.vk_format,
@@ -1005,6 +1011,44 @@ std::optional<spec_t> spec_of(const fbe::assets::image_t& image, bool srgb, bool
     };
 }
 
+/// What a free slot for samples points at: a pixel of as many samples as the device draws and
+/// reads, the fewest past 1, read in SHADER_READ_ONLY_OPTIMAL as a camera's are, so a shader that
+/// read one reads what's there. A device that reads none takes no slot, so it needs none.
+bool make_samples_placeholder() {
+    const VkPhysicalDeviceLimits& limits = fbe::gpu::device()->properties.limits;
+    const VkSampleCountFlags both =
+        limits.sampledImageColorSampleCounts & limits.framebufferColorSampleCounts;
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+    for (const VkSampleCountFlagBits count :
+         { VK_SAMPLE_COUNT_2_BIT, VK_SAMPLE_COUNT_4_BIT, VK_SAMPLE_COUNT_8_BIT }) {
+        if ((both & flag<VkSampleCountFlags>(count)) != 0) {
+            samples = count;
+            break;
+        }
+    }
+    if (samples == VK_SAMPLE_COUNT_1_BIT) {
+        return true;
+    }
+    const std::uint32_t slot = take_slot();
+    if (slot == UINT32_MAX || !make(slot, {
+                                              .format = FBE_TEXTURE_RGBA16F,
+                                              .target = true,
+                                              .samples = samples,
+                                              .engine = true,
+                                              .reads_samples = true,
+                                              .bound = false,
+                                          })) {
+        return false;
+    }
+    fbe::gpu::barrier(fbe::gpu::upload_commands(),
+                      fbe::gpu::color_transition(textures[slot].msaa,
+                                                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, output,
+                                                 output_access, resting_stages, shader_read));
+    fbe::gpu::point_free_samples_at(textures[slot].msaa_view);
+    return true;
+}
+
 } // namespace
 
 namespace fbe::texture {
@@ -1092,7 +1136,7 @@ std::uint64_t pixel_readbacks() {
 }
 
 std::uint64_t create_engine_target(std::uint32_t width, std::uint32_t height, std::int32_t format,
-                                   VkSampleCountFlagBits samples, bool depth) {
+                                   VkSampleCountFlagBits samples, bool depth, bool reads_samples) {
     return create({
         .width = width,
         .height = height,
@@ -1101,6 +1145,7 @@ std::uint64_t create_engine_target(std::uint32_t width, std::uint32_t height, st
         .samples = samples,
         .depth = depth,
         .engine = true,
+        .reads_samples = reads_samples,
     });
 }
 
@@ -1179,10 +1224,15 @@ bool start_textures() {
         return false;
     }
     const std::array<std::uint8_t, 4> white{ 255, 255, 255, 255 };
-    return upload(handle_of(slot), textures[slot], 0, 0, 1, 1, white.data(), 4);
+    if (!upload(handle_of(slot), textures[slot], 0, 0, 1, 1, white.data(), 4)) {
+        return false;
+    }
+    return make_samples_placeholder();
 }
 
 void stop_textures() {
+    // Before it goes, so what's given back as the rest go points at none.
+    fbe::gpu::point_free_samples_at(VK_NULL_HANDLE);
     for (std::uint32_t slot = 0; slot < textures.size(); ++slot) {
         if (textures[slot].image != VK_NULL_HANDLE) {
             destroy(textures[slot]);

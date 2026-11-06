@@ -98,6 +98,9 @@ struct transient_t {
     std::int32_t format = 0;
     std::uint32_t samples = 1;
     bool depth = false;
+    /// Whether a shader reads its samples one by one, as an HDR camera's tonemap does, so it takes
+    /// a slot of the set's for them, if there's one, and the device can.
+    bool reads_samples = false;
     bool operator==(const transient_t&) const = default;
 };
 

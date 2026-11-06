@@ -298,6 +298,7 @@ TEST_CASE("only a multisampled transient target's samples are read", "[gpu]") {
         .height = 8,
         .format = FBE_TEXTURE_RGBA16F,
         .samples = 4,
+        .reads_samples = true,
     })));
     fbe::gpu::drop_passes();
     fbe_texture_release(own);

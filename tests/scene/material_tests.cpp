@@ -323,8 +323,62 @@ TEST_CASE("a shader binds only what the scene's pipelines have") {
     fbe_shader_release(made);
     CHECK(fbe_shader_check(good.data(), static_cast<std::int64_t>(good.size())));
     CHECK(shader_of(decorated(33, 0)) != 0);
-    CHECK(shader_of(decorated(33, 1)) != 0);
     CHECK(shader_of(decorated(34, 0)) != 0);
+    // At 1, an array of 2D multisampled images, as the set's is, and nothing else there.
+    const auto at_samples = [](std::uint32_t multisampled, bool sized) {
+        std::vector<std::uint32_t> words = good_spirv();
+        words.insert(words.end(), {
+                                      (3U << 16U) | 22U,
+                                      20,
+                                      32,
+                                      (9U << 16U) | 25U,
+                                      21,
+                                      20,
+                                      1,
+                                      0,
+                                      0,
+                                      multisampled,
+                                      1,
+                                      0,
+                                      (4U << 16U) | 21U,
+                                      25,
+                                      32,
+                                      0,
+                                      (4U << 16U) | 43U,
+                                      25,
+                                      26,
+                                      64,
+                                  });
+        if (sized) {
+            words.insert(words.end(), { (4U << 16U) | 28U, 22, 21, 26 });
+        } else {
+            words.insert(words.end(), { (3U << 16U) | 29U, 22, 21 });
+        }
+        words.insert(words.end(), {
+                                      (4U << 16U) | 32U,
+                                      23,
+                                      0,
+                                      22,
+                                      (4U << 16U) | 59U,
+                                      23,
+                                      24,
+                                      0,
+                                      (4U << 16U) | 71U,
+                                      24,
+                                      33,
+                                      1,
+                                  });
+        return cooked(fbe_version(), words);
+    };
+    const std::uint64_t samples = shader_of(at_samples(1, true));
+    CHECK(samples != 0);
+    fbe_shader_release(samples);
+    const std::uint64_t unsized = shader_of(at_samples(1, false));
+    CHECK(unsized != 0);
+    fbe_shader_release(unsized);
+    CHECK(shader_of(at_samples(0, true)) == 0);
+    CHECK(error_says("don't bind"));
+    CHECK(shader_of(decorated(33, 1)) == 0);
     // A global's, as Slang gives one, past the set's, a texture's, and a set of its own.
     CHECK(shader_of(decorated(33, 3)) == 0);
     CHECK(error_says("don't bind"));
