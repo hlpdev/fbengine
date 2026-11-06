@@ -103,7 +103,8 @@ Function AStartPlaysOnTheOutputItNames() Throws AudioError
     Expect(!Audio.Started())
 End Function
 
-// A device mixes the period it's asked for at a time, which MANUAL has none of.
+// A device mixes the period it's asked for at a time; MANUAL says it mixes what it was given, as the
+// game's own device does, or none.
 @Test
 Function AStartMixesThePeriodItAsks() Throws AudioError
     Try Audio.Start(AudioDevice.SILENT, 48000, 2, "", 0.005)
@@ -111,7 +112,11 @@ Function AStartMixesThePeriodItAsks() Throws AudioError
     Audio.Stop()
     Expect(Audio.Period() == 0.0)
     Try Audio.Start(AudioDevice.MANUAL)
-    Defer Audio.Stop()
+    Expect(Audio.Period() == 0.0)
+    Audio.Stop()
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 2, "", 0.1)
+    Expect(Audio.Period() == 0.1)
+    Audio.Stop()
     Expect(Audio.Period() == 0.0)
 End Function
 

@@ -233,6 +233,10 @@ Public Final Class GameRun
         stopFails = message
     End Method
 
+    /// How many reads of its processes' pipes there have been, each of what one held, for a test that
+    /// what comes fast is read faster than once a frame.
+    Public Method Reads(): Int => reads
+
     /// Where its program's built to, once it's started.
     Public Method Program(): Path? => program
 
