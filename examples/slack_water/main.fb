@@ -2271,8 +2271,8 @@ Function EndAndAgain(session: Session, said: String, wheelAtFirst: Quat) Throws 
     Checks("nor do keys walk you", session.game.Location() == at)
     // The player's levels, set in the options, and kept as it begins again.
     Local scapeWas = session.scape
-    session.scape.SetLevel(Mix.MUSIC, 0.25)
-    session.scape.SetLevel(Mix.EFFECTS, 0.5)
+    Checks("its levels the player's", session.scape.Level(Mix.MUSIC) == 0.25 &&
+           session.scape.Level(Mix.EFFECTS) == 0.5)
     // E, with it: not a key the new game hears.
     Try Simulate.PressKey(Key.E)
     Try Simulate.PressKey(Key.SPACE)
@@ -2300,13 +2300,19 @@ End Function
 // the keyboard, the mouse, and a gamepad.
 Function EndShown(folder: Path) Throws GraphicsError, IOError, AudioError, InputError
     Try Dir.CreateAll(folder)
+    Local kept = Try TempDir()
+    Local file = kept.Path / "options.ini"
+    Local options = Options()
+    options.Music = 0.25
+    options.Effects = 0.5
+    Try KeepOptions(options, file)
     Local island = Try Opened()
     Defer EndGraphics()
     Defer Assets.StopWatching()
     Defer island.Free()
     Try StartAudio(AudioDevice.MANUAL, 44100)
     Defer Audio.Stop()
-    Local session = Try Session.Make(island)
+    Local session = Try Session.Make(island, file)
     Defer session.Free()
     Try Simulate.FocusWindow()
     Flip(False)
