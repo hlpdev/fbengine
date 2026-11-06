@@ -2,6 +2,7 @@
 // is a frame late.
 
 Import std.core
+Import std.math
 Import std.test
 Import fbengine_audio
 Import "./wav"
@@ -37,6 +38,39 @@ Function ABussVolumeScalesWhatsInIt() Throws AudioError, SoundError
     Expect(sound.Bus() == effects)
     sound.Play()
     Expect(Audio.Mix(2) == [0.0, 0.25] As Float32[])
+End Function
+
+// A bus's volume changed while it's heard is ramped, as a channel's is, so a sine through it cut to
+// half at its peak steps no further than the sine does by itself, not by a quarter at once.
+@Test
+Function ABussVolumeChangeIsRamped() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 1)
+    Defer Audio.Stop()
+    Local music = Bus()
+    // 400 Hz, 120 frames a cycle, at half of full.
+    Local samples: Int[] = []
+    For i = 0 Until 48000
+        samples.Add((16384.0 * Sin(6.283185307179586 * (i As Float64) / 120.0)) As Int)
+    End For
+    Local sound = Try Sound.FromBytes(Wav(samples))
+    sound.SetBus(music)
+    sound.Play()
+    // Played a frame late, the sine's 4830th frame, a quarter cycle in, is its peak.
+    Local before = Audio.Mix(4831)
+    music.SetVolume(0.5)
+    Local after = Audio.Mix(4800)
+    Local own = 0.0
+    For i = 2 Until before.Count
+        own = Max(own, Abs(before[i] - before[i - 1]))
+    End For
+    Expect(Abs(before[4830]) > 0.49)
+    Local largest = Abs(after[0] - before[4830])
+    For i = 1 Until after.Count
+        largest = Max(largest, Abs(after[i] - after[i - 1]))
+    End For
+    Expect(largest <= own)
+    // And it's at half once the ramp's done: 4799 frames on is a peak again, the sine's 9629th.
+    Expect(Abs(after[4799] - 0.25) < 0.001)
 End Function
 
 @Test

@@ -15,7 +15,8 @@ extern "C" {
 FBE_AUDIO_API uint64_t fbe_bus_add(uint64_t parent);
 // Lets the bus go; its channels and buses play on through it. A bus that's gone already is nothing.
 FBE_AUDIO_API void fbe_bus_free(uint64_t bus);
-// What its channels are multiplied by, 0 or more; false if it's out of range or the bus is gone.
+// What its channels are multiplied by, 0 or more, a change heard ramped over the next 5 ms of the
+// mix, as a channel's is; false if it's out of range or the bus is gone.
 FBE_AUDIO_API bool fbe_bus_set_volume(uint64_t bus, float volume);
 FBE_AUDIO_API float fbe_bus_volume(uint64_t bus);
 // A fourth-order low-pass at `cutoff` Hz, from 10 to 24000, or none for 0, held to between 1/2400
