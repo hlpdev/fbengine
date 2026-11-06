@@ -339,19 +339,20 @@ TEST_CASE("a shader binds only what the scene's pipelines have") {
     const auto at_samples = [](const image_t& image) {
         std::vector<std::uint32_t> words = good_spirv();
         // A float, an int, and 64 of it.
-        words.insert(words.end(), { (3U << 16U) | 22U, 20, 32, (4U << 16U) | 21U, 25, 32, 0,
-                                    (4U << 16U) | 43U, 25, 26, 64 });
+        words.insert(words.end(), { (3U << 16U) | 22U, 20, 32 });
+        words.insert(words.end(), { (4U << 16U) | 21U, 25, 32, 0 });
+        words.insert(words.end(), { (4U << 16U) | 43U, 25, 26, 64 });
         if (image.sized) {
             words.insert(words.end(), { (4U << 16U) | 28U, 22, 21, 26 });
         } else {
             words.insert(words.end(), { (3U << 16U) | 29U, 22, 21 });
         }
         // A pointer to them, a variable of it, at binding 1, and the images last.
-        words.insert(words.end(), { (4U << 16U) | 32U, 23, 0, 22, (4U << 16U) | 59U, 23, 24, 0,
-                                    (4U << 16U) | 71U, 24, 33, 1 });
-        const std::array<std::uint32_t, 9> type{
-            (9U << 16U) | 25U, 21, image.of, 1, 0, 0, image.multisampled, image.sampled, 0,
-        };
+        words.insert(words.end(), { (4U << 16U) | 32U, 23, 0, 22 });
+        words.insert(words.end(), { (4U << 16U) | 59U, 23, 24, 0 });
+        words.insert(words.end(), { (4U << 16U) | 71U, 24, 33, 1 });
+        std::vector<std::uint32_t> type{ (9U << 16U) | 25U, 21, image.of, 1, 0, 0 };
+        type.insert(type.end(), { image.multisampled, image.sampled, 0 });
         words.insert(words.end(), type.begin(),
                      type.begin() + static_cast<std::ptrdiff_t>(image.there));
         return cooked(fbe_version(), words);

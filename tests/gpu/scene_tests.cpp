@@ -8460,7 +8460,7 @@ TEST_CASE("a bright edge of 2 samples is their average's tonemap too", "[gpu][sc
         const scene_t scene;
         const VkPhysicalDeviceLimits& limits = fbe::gpu::device()->properties.limits;
         has_two = (limits.framebufferColorSampleCounts & limits.sampledImageColorSampleCounts &
-                   VK_SAMPLE_COUNT_2_BIT) != 0;
+                   static_cast<VkSampleCountFlags>(VK_SAMPLE_COUNT_2_BIT)) != 0;
     }
     if (!has_two) {
         SKIP("this GPU doesn't draw and read 2 samples");
