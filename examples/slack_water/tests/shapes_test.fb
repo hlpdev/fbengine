@@ -70,10 +70,13 @@ End Function
 
 @Test
 Function WhatsStackedByTheMillIsSolid()
-    // The barrels and crates between the wheel and the door, the millstone, and the bench.
-    For place In [Vec2(MAIN_X + 7.0, 4.0), Vec2(MAIN_X + 8.6, 4.3), Vec2(MAIN_X - 5.4, -2.6),
-                  Vec2(MAIN_X - 1.5, -4.25)]
+    // The millstone and the bench. The barrels and crates between the wheel and the door are bodies,
+    // which you knock over, not walls.
+    For place In [Vec2(MAIN_X - 5.4, -2.6), Vec2(MAIN_X - 1.5, -4.25)]
         Expect(Blocked(place.x, place.y), "{place}")
+    End For
+    For place In [Vec2(MAIN_X + 7.0, 4.0), Vec2(MAIN_X + 8.6, 4.3)]
+        Expect(!Blocked(place.x, place.y), "{place}")
     End For
     // And not past them.
     Expect(!Blocked(MAIN_X + 9.6, 4.5))

@@ -25,6 +25,7 @@ Import std.text
 Import std.time
 Import fbengine
 Import fbengine_audio
+Import fbengine_physics
 Import "./checks"
 Import "./controls"
 Import "./cues"
@@ -32,6 +33,7 @@ Import "./flow"
 Import "./follow"
 Import "./game"
 Import "./ground"
+Import "./afloat"
 Import "./island"
 Import "./landmarks"
 Import "./map"
@@ -597,6 +599,8 @@ Function SaveViews(folder: Path, stillsOnly: Bool = False) Throws GraphicsError,
     lap = Lap("the island's checks", lap)
     Try CheckLandmarks(folder, island, camera)
     lap = Lap("the landmarks", lap)
+    Try CheckBodies(folder, island, camera)
+    lap = Lap("the bodies", lap)
 End Function
 
 // Each of `island`'s landmarks, as `camera` sees it, with it hidden and shown: in `image` of the view
@@ -666,6 +670,7 @@ Function CheckLandmarks(folder: Path, island: Island, camera: Camera) Throws Gra
     Checks("each log's its own, {logs.Count} of them, where it was placed",
            logs.Count > 0 && logsPlaced)
     Local rowboat = marks.Boat()
+    Local afloat = rowboat.Position(Space.WORLD)
     marks.DriveBoat(True)
     rowboat.SetPosition(Vec3(1.0, 2.0, 3.0))
     island.Update(TIDE_IN_AT)
@@ -675,6 +680,9 @@ Function CheckLandmarks(folder: Path, island: Island, camera: Camera) Throws Gra
     island.Update(0.0)
     Checks("a driven boat goes where it's driven", stayed &&
            rowboat.Position(Space.WORLD) != Vec3(1.0, 2.0, 3.0))
+    // Its body drives it, from where it was.
+    marks.DriveBoat(True)
+    rowboat.SetPosition(afloat)
     Local yardView = Views()[1]
     camera.SetPosition(yardView.1)
     camera.PointAt(yardView.2)
@@ -751,10 +759,11 @@ Function CheckLandmarks(folder: Path, island: Island, camera: Camera) Throws Gra
         End For
     End For
     Checks("nothing of the sea's seen in the boat, of {looked}", looked > 60 && sea == 0)
-    island.Update(TIDE_IN_AT)
+    // Floated up by the tide, in real time, as its body is.
+    Tide(island, 0.0, TIDE_IN_AT, 10.0)
     Checks("which rides the sea up",
            Abs(marks.BoatAt().y - boatLow - (SeaHeight(TIDE_IN_AT) - SeaHeight(0.0))) < 0.2)
-    island.Update(0.0)
+    Tide(island, TIDE_IN_AT, 0.0, 10.0)
     // What's along the shores: all of it placed, and some of it seen from the jetty.
     Local spots = ShoreSpots()
     Checks("what's washed up lies where it was placed, {spots.Count} of it",
@@ -779,6 +788,133 @@ Function CheckLandmarks(folder: Path, island: Island, camera: Camera) Throws Gra
                                             nearest.y)))
     // Each one's share of a frame, which takes hundreds of frames to tell: only when asked.
     If Env.Get("SLACK_WATER_COSTS") == "1" Then CostsOf(island, camera, pieces)
+End Function
+
+// Moves the island's tide from `from` to `to` over `seconds` of real time, by tenths, as the flow's
+// clock would, its bodies stepped as they go.
+Function Tide(island: Island, from: Float64, to: Float64, seconds: Float)
+    Local frames = Max(Round(seconds * 10.0) As Int, 1)
+    For frame = 1 To frames
+        island.Update(from + (to - from) * ((frame As Float64) / (frames As Float64)))
+        island.Animate(0.1)
+    End For
+End Function
+
+// The bodies, by fbengine_physics: the boat at low tide and at high tide, riding up and swinging on its
+// rope; a barrel knocked over, by walking into it; and the driftwood the flood floats, and settles as
+// it falls. Each saved, and what the bodies cost a frame, as a share of one at 60 fps.
+Function CheckBodies(folder: Path, island: Island, camera: Camera) Throws GraphicsError, IOError
+    Local bodies = island.Bodies()
+    Local marks = island.Marks()
+    Local spentFrom = bodies.Spent()
+    Local stepsFrom = bodies.Steps()
+    Tide(island, 0.0, 0.0, 3.0)
+    Local boat = bodies.Boat().Position()
+    Local tied, bollard = bodies.RopeEnds()
+    Checks("the boat floats on the slack water, on its rope",
+           Abs(boat.y - (bodies.WaterAt(boat.x, boat.z) + RIDES)) < 0.15 &&
+           Distance(tied, bollard) < bodies.RopeLength() + 0.05)
+    Local start = JettyStart()
+    Local end = JettyEnd()
+    camera.SetPosition(Vec3(start.x + 4.0, GroundHeight(start.x + 4.0, start.y) + 3.0,
+                            start.y + 5.0))
+    camera.PointAt(Vec3((start.x + end.x) / 2.0, 1.5, end.y))
+    island.Drawn(camera)
+    Local low = Try Screen.ToImage()
+    Try Screen.Save(folder / "boat_low_tide.png")
+    Flip(False)
+    Checks("and it's seen, at low tide", Try SeenIn(island, camera, low, marks.Boat(), boat))
+    // The tide comes in, in a minute of real time, as the flow's clock goes at thirty times, the boat
+    // never under the jetty's deck.
+    Local under = False
+    For second = 1 To 60
+        Tide(island, TIDE_IN_AT * ((second - 1) As Float64) / 60.0,
+             TIDE_IN_AT * (second As Float64) / 60.0, 1.0)
+        Local at = bodies.Boat().Position()
+        If at.x > end.x - 0.5 && at.x < start.x && Abs(at.z - end.y) < 1.9 Then under = True
+    End For
+    Checks("and keeps clear of the jetty", !under)
+    Tide(island, TIDE_IN_AT, TIDE_IN_AT, 3.0)
+    Local high = bodies.Boat().Position()
+    tied, bollard = bodies.RopeEnds()
+    Checks("it's risen with the tide, {high.y - boat.y} m, on its rope",
+           Abs(high.y - (bodies.WaterAt(high.x, high.z) + RIDES)) < 0.15 &&
+           Distance(tied, bollard) < bodies.RopeLength() + 0.05)
+    Checks("and swung on it, {Distance(Vec2(high.x, high.z), Vec2(boat.x, boat.z))} m",
+           Distance(Vec2(high.x, high.z), Vec2(boat.x, boat.z)) > 0.2)
+    island.Drawn(camera)
+    Local highImage = Try Screen.ToImage()
+    Try Screen.Save(folder / "boat_high_tide.png")
+    Flip(False)
+    Checks("and it's seen, at high tide", Try SeenIn(island, camera, highImage, marks.Boat(), high))
+    // The driftwood the flood's reached floats, at the water's height.
+    Local floating = 0
+    Local afloat: Vec3? = Null
+    For log In bodies.Logs()
+        Local at = log.Position()
+        If Abs(at.y - bodies.WaterAt(at.x, at.z)) < 0.2
+            floating += 1
+            If afloat == Null Then afloat = at
+        End If
+    End For
+    Local some = afloat
+    Checks("the flood floats driftwood, {floating} of {bodies.Logs().Count}",
+           floating > 0 && some != Null)
+    If some != Null
+        camera.SetPosition(some + Vec3(3.0, 2.0, 3.0))
+        camera.PointAt(some)
+        island.Drawn(camera)
+        Try Screen.Save(folder / "driftwood_afloat.png")
+        Flip(False)
+    End If
+    // As the water falls, each settles near where it lay: at rest on the sand, or, where the slack
+    // water's over its sand, as most of them are, afloat on it, riding the swell.
+    Local lay = bodies.Logs().Map(Function(log: Body) => log.Position())
+    Tide(island, TIDE_IN_AT, 0.0, 60.0)
+    Tide(island, 0.0, 0.0, 5.0)
+    Local resting = 0
+    Local riding = 0
+    Local strayed = False
+    For at = 0 Until bodies.Logs().Count
+        Local log = bodies.Logs()[at]
+        Local place = log.Position()
+        Local water = bodies.WaterAt(place.x, place.z)
+        If Distance(log.Velocity(), Vec3(0.0, 0.0, 0.0)) < 0.05 && place.y > water
+            resting += 1
+        ElseIf Abs(place.y - water) < 0.15
+            riding += 1
+        End If
+        If Distance(Vec2(place.x, place.z), Vec2(lay[at].x, lay[at].z)) > 3.0 Then strayed = True
+    End For
+    Checks("and settles as the water falls, near where it lay: {resting} at rest on the sand, " +
+           "{riding} afloat in the shallows",
+           resting + riding == bodies.Logs().Count && resting > 0 && !strayed)
+    // The barrel that stands alone, walked into from the south, is knocked over, and lies still.
+    Local barrel = island.Props()[1].0.Position(Space.WORLD)
+    For step = 0 To 30
+        Local z = barrel.z - 2.5 + (step As Float) * 0.15
+        island.SetWalker(Vec3(barrel.x, island.FloorAt(barrel.x, z), z))
+        island.Animate(0.1)
+    End For
+    Tide(island, 0.0, 0.0, 4.0)
+    Local knocked = bodies.Props()[1]
+    Local up = knocked.Rotation() * Vec3(0.0, 1.0, 0.0)
+    Checks("a barrel you walk into is knocked over, {up}, and lies still",
+           up.y < 0.5 && Distance(knocked.Velocity(), Vec3(0.0, 0.0, 0.0)) < 0.05 &&
+           knocked.Position().y > GroundHeight(knocked.Position().x, knocked.Position().z) - 0.05)
+    camera.SetPosition(knocked.Position() + Vec3(2.5, 1.8, 2.5))
+    camera.PointAt(knocked.Position())
+    island.Drawn(camera)
+    Try Screen.Save(folder / "barrel_knocked.png")
+    Flip(False)
+    // What the bodies take of a frame at 60 fps: a step of each, on the machine's time.
+    Local steps = bodies.Steps() - stepsFrom
+    Local each = (bodies.Spent() - spentFrom) / (Max(steps, 1) As Float64)
+    Print(
+        "the bodies take {each * 1000.0} ms a step, {each * 60.0 * 100.0}% of a frame at 60 fps, " +
+        "over {steps} steps")
+    Checks("which is under a twentieth of a frame", each * 60.0 < 0.05)
+    island.Reset()
 End Function
 
 // Each of `pieces`' share of a frame of the whole island, from above, as `camera` sees it.
@@ -1199,6 +1335,7 @@ Function Walked3d(island: Island, walk: String[], lines: String[],
     // Before anything's said its level, it's already not loud.
     Checks("it starts quiet, before its first step", PeakOf(Audio.Mix(1024)) < 0.2)
     Local mixedFrom = Audio.Frames()
+    Local bodiesFrom = island.Bodies().Steps()
     Local steps = 0
     Local loudest: Float = 0.0
     Local walker = Walker(walk)
@@ -1235,12 +1372,16 @@ Function Walked3d(island: Island, walk: String[], lines: String[],
     Checks("you hear from where you see", IsClose(Listener.Position(), game.View().Position(), 1.0))
     Checks("its mix went at the pace of the game",
            Audio.Frames() - mixedFrom == (steps As Int64) * 4410)
+    // As do the bodies, six steps a tenth of a second, however fast the flow's clock went as it waited.
+    Checks("the bodies stepped by real time all along",
+           island.Bodies().Steps() - bodiesFrom == (steps As Int64) * 6)
     // Once it's ended, nothing more can happen, nor is anything offered, though the wheel goes round.
     Local said = lines.Count
     Local ended = game.Story().Ended()
     Local lampWas = island.LampMaterial()
     Local wheelWas = island.WheelTurned()
     Local beamWas = island.Marks().BeamTurned()
+    Local stepsWas = island.Bodies().Steps()
     Try Simulate.PressKey(Key.E)
     Try Simulate.PressKey(Key.Q)
     Flip(False)
@@ -1248,6 +1389,8 @@ Function Walked3d(island: Island, walk: String[], lines: String[],
     // The lighthouse's lamp turns by the tenth of a second that passed, whatever the flow's clock did.
     Checks("the lighthouse's lamp turns by real time",
            Abs(island.Marks().BeamTurned() - beamWas - BEAM_TURN * 0.1) < 0.0001)
+    // And so do the bodies: six steps of a 60th of a second for that tenth.
+    Checks("the bodies step by real time", island.Bodies().Steps() - stepsWas == 6)
     Checks("nothing's done after the end", lines.Count == said && game.Story().Ended() == ended)
     Checks("nothing's offered after the end", game.Prompt() == "")
     Checks("the lamp isn't lit again each step", island.LampMaterial() == lampWas)

@@ -30,6 +30,8 @@ Const BEAM_OUT: Float = 1.75
 Const LENS_GLOW: Float = 6.0
 // How high the jetty's deck is, over the sea at slack water, above the high water.
 Const DECK: Float = 2.0
+/// How high the jetty's deck is.
+Public Const JETTY_DECK: Float = DECK
 /// How far the boat rises and falls on the sea, and how often, in radians a second.
 Public Const BOB: Float = 0.06
 Const BOB_RATE: Float = 1.7

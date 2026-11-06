@@ -143,6 +143,7 @@ Public Final Class Game
         PlacePip(seconds)
         island.Update(flow.Clock())
         // What moves on its own goes by real time, as the flow's clock runs ahead while it waits.
+        island.SetWalker(Vec3(x, island.FloorAt(x, z), z))
         island.Animate(seconds)
         camera.SetGrade(StormGrade(StormAt(flow.Clock())))
         Sync()

@@ -6,6 +6,8 @@ Import std.core
 Import std.image.image
 Import std.math
 Import fbengine
+Import fbengine_physics
+Import "./afloat"
 Import "./flow"
 Import "./follow"
 Import "./ground"
@@ -476,6 +478,9 @@ Public Final Class Island
     Field pipHead: Entity
     Field pipMesh: Mesh
     Field landmarks: Landmarks
+    Field afloat: Afloat? = Null
+    Field rope: Mesh? = Null
+    Field walker: Vec3? = Null
     Field props: (Entity, Int, Vec3)[]
 
     New(scene: World, ground: Terrain, sea: Sea, sunShown: SunShown, model: Model, pip: Entity,
@@ -561,9 +566,127 @@ Public Final Class Island
         // Facing the yard's view, as glTF's front is +Z.
         pip.SetRotation(0.0, ToRadians(20.0), 0.0)
         pip.Player().Play(model.Clips()[0])
-        Return Island(scene, ground, sea, sunShown, model, pip, held, mill, wheel, lamp, parts, sun,
-                      around,
-                      lantern, landmarks, props)
+        Local made = Island(scene, ground, sea, sunShown, model, pip, held, mill, wheel, lamp,
+                            parts,
+                            sun, around, lantern, landmarks, props)
+        Try made.MakeBodies()
+        Return made
+    End Method
+
+    // What moves as bodies, from where it all is now: the boat, its rope drawn to the bollard; the
+    // barrels and crates; and the driftwood, on the ground under them and among the mill's walls, the
+    // jetty, and the wheel.
+    @MainThread
+    Method MakeBodies() Throws GraphicsError
+        Local hull = BoatHull().Positions()
+        Local down: Vec3[] = []
+        For point In hull
+            down.Add(point - Vec3(0.0, KEEL, 0.0))
+        End For
+        Local logs: (Entity, Float, Float)[] = []
+        For log In landmarks.Logs()
+            logs.Add((log.0 As Entity, log.1, log.2))
+        End For
+        Local boat = landmarks.Boat()
+        Local spots: (Vec2, Float)[] = [(Vec2(boat.Position(Space.WORLD).x,
+                                              boat.Position(Space.WORLD).z), 14.0)]
+        For prop In props
+            Local at = prop.0.Position(Space.WORLD)
+            spots.Add((Vec2(at.x, at.z), 5.0))
+        End For
+        For log In logs
+            Local at = log.0.Position(Space.WORLD)
+            spots.Add((Vec2(at.x, at.z), 6.0))
+        End For
+        Local you = Vec3(MAIN_X, FloorAt(MAIN_X, 0.0), 0.0)
+        Try
+            afloat = Try Afloat.Make(boat, down, landmarks.RopeOnBoat(), landmarks.BollardTop(),
+                                     props,
+                                     logs, GroundUnder(spots), Statics(), you,
+                                     pip.Position(Space.WORLD))
+        Catch error As ShapeError
+            Throw GraphicsError(error.Message)
+        End Try
+        landmarks.DriveBoat(True)
+        Local line = Mesh(RopeLine())
+        line.SetMaterial(Material(Color(0.55, 0.46, 0.32)))
+        rope = line
+        ShowRope()
+    End Method
+
+    // The ground as triangles, of a metre each, as the terrain's are, over each of `spots`, out as
+    // far as it says each way.
+    Method GroundUnder(spots: (Vec2, Float)[]): (Vec3[], Int32[])
+        Local points: Vec3[] = []
+        Local corners: Int32[] = []
+        For spot In spots
+            Local middle, reach = spot
+            Local fromX = Floor(middle.x - reach) As Int
+            Local fromZ = Floor(middle.y - reach) As Int
+            Local across = (Ceil(reach * 2.0) As Int) + 1
+            Local first = points.Count
+            For z = 0 To across
+                For x = 0 To across
+                    Local placeX = (fromX + x) As Float
+                    Local placeZ = (fromZ + z) As Float
+                    points.Add(Vec3(placeX, GroundHeight(placeX, placeZ), placeZ))
+                End For
+            End For
+            For z = 0 Until across
+                For x = 0 Until across
+                    Local a = (first + z * (across + 1) + x) As Int32
+                    Local b = a + 1
+                    Local c = a + (across + 1) As Int32
+                    Local d = c + 1
+                    corners.Add(a)
+                    corners.Add(c)
+                    corners.Add(b)
+                    corners.Add(b)
+                    corners.Add(c)
+                    corners.Add(d)
+                End For
+            End For
+        End For
+        Return (points, corners)
+    End Method
+
+    // What's solid and still, as boxes, by their middles, half sizes, and turns: the mill, the
+    // wheel by its east wall, and the jetty's deck and posts.
+    Method Statics(): (Vec3, Vec3, Quat)[]
+        Local floor = mill.Position(Space.WORLD)
+        Local boxes: (Vec3, Vec3, Quat)[] = [(floor + Vec3(0.0, 3.0, 0.0),
+                                              Vec3(MILL_W + 0.6, 3.0, MILL_D + 0.6), Quat.Identity)]
+        Local wheelAt = wheel.Position(Space.WORLD)
+        boxes.Add((wheelAt, Vec3(0.35, 2.0, 2.0), Quat.Identity))
+        Local start = JettyStart()
+        Local end = JettyEnd()
+        Local long = (start.x - end.x) * 0.5
+        boxes.Add((Vec3(end.x + long, JETTY_DECK - 0.1, end.y), Vec3(long + 0.2, 0.1, 1.2),
+                   Quat.Identity))
+        For at = 0 Until 6
+            Local x = end.x + long * 2.0 * (at As Float) / 5.0
+            For side In [-1.1, 1.1]
+                Local foot = GroundHeight(x, end.y + side) - 0.6
+                Local high = JETTY_DECK + 0.35
+                boxes.Add((Vec3(x, (foot + high) * 0.5, end.y + side),
+                           Vec3(0.13, (high - foot) * 0.5, 0.13), Quat.Identity))
+            End For
+        End For
+        Return boxes
+    End Method
+
+    // Draws the boat's rope, straight from the bollard to where it's tied on the boat.
+    @MainThread
+    Method ShowRope()
+        Local bodies = afloat
+        Local line = rope
+        If bodies == Null || line == Null Then Return
+        Local tied, bollard = bodies.RopeEnds()
+        Local along = tied - bollard
+        Local long = Distance(tied, bollard)
+        line.SetPosition(bollard)
+        line.SetRotation(Quat.FromTo(Vec3(0.0, 1.0, 0.0), along * (1.0 / Max(long, 0.001))))
+        line.SetScale(Vec3(1.0, long, 1.0))
     End Method
 
     /// The World it's in.
@@ -640,12 +763,34 @@ Public Final Class Island
         sea.Update(clock)
         TurnSun(clock)
         landmarks.Update(clock)
+        afloat?.SetClock(clock)
     End Method
 
-    /// Moves what moves on its own on `seconds` of real time: the lighthouse's lamp, and the boat.
+    /// Moves what moves on its own on `seconds` of real time: the lighthouse's lamp, and the bodies,
+    /// the boat, the barrels and crates, and the driftwood.
     @MainThread
     Public Method Animate(seconds: Float)
         landmarks.Animate(seconds)
+        Local bodies = afloat
+        If bodies != Null
+            Local pipAt = pip.Position(Space.WORLD)
+            bodies.SetWalkers(walker ?? pipAt, pipAt)
+            bodies.Step(seconds)
+            ShowRope()
+        End If
+    End Method
+
+    /// Where you stand, for what you knock over.
+    @MainThread Public Method SetWalker(at: Vec3)
+        walker = at
+    End Method
+
+    /// What moves as bodies, of fbengine_physics.
+    @MainThread
+    Public Method Bodies(): Afloat
+        Local bodies = afloat
+        If bodies == Null Then Panic("the island's bodies aren't made")
+        Return bodies
     End Method
 
     /// Draws what `camera` sees afresh, for a still: what the frames before had there, which
@@ -802,6 +947,7 @@ Public Final Class Island
     /// and the lamp and wheel as they were; a Game's first Step says where the sea is.
     @MainThread
     Public Method Reset()
+        afloat?.Reset()
         lamp.SetMaterial(lampUnlit)
         Local light = lampLight
         If light != Null Then light.Free()
@@ -856,6 +1002,7 @@ Public Final Class Island
     /// Frees it.
     @MainThread
     Public Method Free()
+        afloat?.Free()
         model.Free()
         scene.Free()
         around.Free()

@@ -1,0 +1,238 @@
+// What moves as bodies, by their numbers, with nothing drawn: a boat on a rope, a barrel and a crate,
+// and a log, on a flat sea floor, by the tide's real heights. Each run twice is the same to the bit,
+// and what they do goes by real time, whatever the flow's clock does.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.test
+Import fbengine
+Import fbengine_physics
+Import slack_water.afloat
+Import slack_water.flow
+Import slack_water.ground
+
+// How high the log's beach is, over the slack water.
+Const BEACH: Float = 0.3
+
+// A boat's hull as points, 1.2 wide, 0.5 deep, and 4 long, its keel 0.18 under its middle, as the
+// rowboat's is.
+Function Hull(): Vec3[]
+    Local points: Vec3[] = []
+    For x In [-0.6, 0.6]
+        For y In [-0.18, 0.32]
+            For z In [-2.0, 2.0]
+                points.Add(Vec3(x, y, z))
+            End For
+        End For
+    End For
+    Return points
+End Function
+
+// The ground: a flat square, 40 m each way, its top at `height`.
+Function Flat(height: Float): (Vec3[], Int32[])
+    Return ([Vec3(-20, height, -20), Vec3(20, height, -20), Vec3(-20, height, 20),
+             Vec3(20, height, 20)], [0 As Int32, 2, 1, 1, 2, 3])
+End Function
+
+// A scene of it all: the sea floor 1.5 m under the slack water's, the boat by its bollard, a barrel
+// and a crate on a bank at the slack water's height, and a log on a beach 0.3 m over it, which the
+// flood covers.
+Function Scene(): (World, Afloat, Pivot, Pivot, Pivot, Pivot) Throws ShapeError
+    Local world = World()
+    World.SetCurrent(world)
+    Local boat = Pivot()
+    boat.SetPosition(Vec3(0, 0.12, 0))
+    Local barrel = Pivot()
+    barrel.SetPosition(Vec3(8, 0.3, 0))
+    Local crate = Pivot()
+    crate.SetPosition(Vec3(8, 0.7, 2))
+    Local log = Pivot()
+    log.SetPosition(Vec3(-6, BEACH + 0.15, 4))
+    Local bank = (Vec3(9, -0.6, 1), Vec3(3, 0.9, 3), Quat.Identity)
+    Local made = Try Afloat.Make(boat, Hull(), Vec3(0, 0.3, 1.9), Vec3(0, 1.6, 3.5),
+                                 [(barrel As Entity, 0, Vec3(0.37, 0.9, 0.37)),
+                                  (crate As Entity, 1, Vec3(0.4, 0.4, 0.4))],
+                                 [(log As Entity, 2.0, 0.15)], Flat(-1.5),
+                                 [bank,
+                                  (Vec3(-6, BEACH - 0.9, 0), Vec3(4, 0.9, 25), Quat.Identity)],
+                                 Vec3(20, 0, 20),
+                                 Vec3(20, 0, 22))
+    Return (world, made, boat, barrel, crate, log)
+End Function
+
+// Runs `made` on: `seconds` of real time a frame, by tenths, as the tide's clock goes from `from` to
+// `to`, with you walking from (5, 0.3, 0) along x by `walk` metres.
+Function Run(made: Afloat, frames: Int, from: Float64, to: Float64, walk: Float)
+    For frame = 1 To frames
+        Local through = (frame As Float64) / (frames As Float64)
+        made.SetClock(from + (to - from) * through)
+        made.SetWalkers(Vec3(5.0 + walk * (through As Float), 0.3, 0), Vec3(20, 0, 22))
+        made.Step(0.1)
+    End For
+End Function
+
+@Test
+Function TheBoatFloatsAtTheTidesHeightOnItsRope() Throws ShapeError
+    Local world, made, boat, barrel, crate, log = Try Scene()
+    Defer world.Free()
+    Defer made.Free()
+    Run(made, 100, 0.0, 0.0, 0.0)
+    // On the slack water, riding a little over it, within its swell.
+    Local low = made.Boat().Position()
+    Print("at slack water the boat's at {low}, going {made.Boat().Velocity()}")
+    Expect(Abs(low.y - (SeaHeight(0.0) + 0.12)) < 0.12, "{low}")
+    // Riding the swell, no faster than it rises and falls, not still bouncing from where it was put.
+    Expect(Distance(made.Boat().Velocity(), Vec3(0, 0, 0)) < 0.1, "{made.Boat().Velocity()}")
+    // As the tide comes in, it rises with it, still on its rope.
+    Run(made, 300, 0.0, TIDE_IN_AT, 0.0)
+    Run(made, 50, TIDE_IN_AT, TIDE_IN_AT, 0.0)
+    Local high = made.Boat().Position()
+    Print("at high water the boat's at {high}")
+    Expect(Abs(high.y - (SeaHeight(TIDE_IN_AT) + 0.12)) < 0.12, "{high}")
+    Local tied, bollard = made.RopeEnds()
+    Expect(Distance(tied, bollard) < made.RopeLength() + 0.05)
+    // It's swung on its rope, as the tide pulled it.
+    Expect(Distance(Vec2(high.x, high.z), Vec2(low.x, low.z)) > 0.2, "{low} to {high}")
+    // The boat's entity is where its body is.
+    Expect(Distance(boat.Position(Space.WORLD), high) < 0.001)
+End Function
+
+@Test
+Function WhatYouWalkIntoIsKnockedOverAndSettles() Throws ShapeError
+    Local world, made, boat, barrel, crate, log = Try Scene()
+    Defer world.Free()
+    Defer made.Free()
+    Run(made, 20, 0.0, 0.0, 0.0)
+    Local before = made.Props()[0].Position()
+    // Walked into, along x, through where it is.
+    Run(made, 30, 0.0, 0.0, 5.0)
+    Run(made, 80, 0.0, 0.0, 5.0)
+    Local after = made.Props()[0].Position()
+    Local tipped = made.Props()[0].Rotation() * Vec3(0, 1, 0)
+    Print("the barrel's gone from {before} to {after}, its up now {tipped}")
+    Expect(Distance(after, before) > 0.3)
+    // Knocked over: on its side, not slid along standing.
+    Expect(tipped.y < 0.5, "its up is {tipped}")
+    For prop In made.Props()
+        Expect(Distance(prop.Velocity(), Vec3(0, 0, 0)) < 0.05, "{prop.Position()} still moving")
+        Expect(prop.Position().y > -1.5, "{prop.Position()} through the floor")
+    End For
+    Expect(Distance(barrel.Position(Space.WORLD), after) < 0.001)
+End Function
+
+@Test
+Function TheFloodFloatsTheLogAndItSettlesAsTheWaterFalls() Throws ShapeError
+    Local world, made, boat, barrel, crate, log = Try Scene()
+    Defer world.Free()
+    Defer made.Free()
+    Run(made, 30, 0.0, 0.0, 0.0)
+    Local lying = made.Logs()[0].Position()
+    Expect(Abs(lying.y - (BEACH + 0.15)) < 0.05, "{lying}")
+    // The flood comes over it: it floats, half in the water.
+    Run(made, 300, 0.0, TIDE_IN_AT, 0.0)
+    Run(made, 50, TIDE_IN_AT, TIDE_IN_AT, 0.0)
+    Local afloat = made.Logs()[0].Position()
+    Print("at high water the log's at {afloat}")
+    Expect(Abs(afloat.y - SeaHeight(TIDE_IN_AT)) < 0.15, "{afloat}")
+    // And as the water falls it comes down, and lies on the beach again, near where it was, at rest.
+    Run(made, 300, TIDE_IN_AT, 0.0, 0.0)
+    Run(made, 100, 0.0, 0.0, 0.0)
+    Local back = made.Logs()[0]
+    Print("the water gone, the log's at {back.Position()}")
+    Expect(Abs(back.Position().y - (BEACH + 0.15)) < 0.05, "{back.Position()}")
+    Expect(Distance(Vec2(back.Position().x, back.Position().z), Vec2(lying.x, lying.z)) < 3.0)
+    Expect(Distance(back.Velocity(), Vec3(0, 0, 0)) < 0.05)
+End Function
+
+// The same run twice is the same to the bit: every body's place, turn, and velocity, and the world's
+// state.
+@Test
+Function TwoRunsAreAlikeToTheBit() Throws ShapeError
+    Local said: String[] = []
+    Local hashes: UInt64[] = []
+    For time = 1 To 2
+        Local world, made, boat, barrel, crate, log = Try Scene()
+        Run(made, 120, 0.0, FLOOD_AT, 5.0)
+        Run(made, 120, FLOOD_AT, TIDE_IN_AT, 0.0)
+        Local text = ""
+        Local bodies = [made.Boat()]
+        bodies.AddAll(made.Props())
+        bodies.AddAll(made.Logs())
+        For body In bodies
+            text +=
+                " {body.Position()} {body.Rotation()} {body.Velocity()} {body.AngularVelocity()}"
+        End For
+        said.Add(text)
+        hashes.Add(made.StateHash())
+        made.Free()
+        world.Free()
+    End For
+    Expect(said[0] == said[1], "{said[0]}\nand{said[1]}")
+    Expect(hashes[0] == hashes[1])
+End Function
+
+// It's stepped by real time: thirty times as fast a clock, as the flow's while it waits, takes no
+// more steps, and swells the sea no faster.
+@Test
+Function ItGoesByRealTimeNotTheFlowsClock() Throws ShapeError
+    Local world, made, boat, barrel, crate, log = Try Scene()
+    Defer world.Free()
+    Defer made.Free()
+    Run(made, 10, 0.0, 0.0, 0.0)
+    Local steps = made.Steps()
+    Run(made, 10, 0.0, 30.0, 0.0)
+    Expect(made.Steps() - steps == 60)
+    Local swell = made.WaterAt(1, 1) - SeaHeight(30.0)
+    Expect(Abs(swell - SwellAt(1, 1, 2.0)) < 0.0001)
+End Function
+
+// Played again, each body's back where it was made, still.
+@Test
+Function AResetPutsItAllBack() Throws ShapeError
+    Local world, made, boat, barrel, crate, log = Try Scene()
+    Defer world.Free()
+    Defer made.Free()
+    Local boatAt = made.Boat().Position()
+    Local barrelAt = made.Props()[0].Position()
+    Local logAt = made.Logs()[0].Position()
+    Run(made, 120, 0.0, TIDE_IN_AT, 5.0)
+    Expect(Distance(made.Boat().Position(), boatAt) > 0.5)
+    made.Reset()
+    Expect(made.Boat().Position() == boatAt && made.Props()[0].Position() == barrelAt &&
+           made.Logs()[0].Position() == logAt)
+    Expect(made.Boat().Velocity() == Vec3(0, 0, 0))
+    Expect(made.WaterAt(1, 1) == SeaHeight(made.Clock()) + SwellAt(1, 1, 0.0))
+End Function
+
+// Someone put somewhere at once, as the flood puts you ashore, is there at once, flinging nothing on
+// the way.
+@Test
+Function AJumpPushesNothing() Throws ShapeError
+    Local world, made, boat, barrel, crate, log = Try Scene()
+    Defer world.Free()
+    Defer made.Free()
+    made.SetWalkers(Vec3(4, 0.3, 0), Vec3(20, 0, 22))
+    made.Step(0.1)
+    Run(made, 20, 0.0, 0.0, 0.0)
+    Local before = made.Props()[0].Position()
+    // From one side of the barrel to the other, in a frame.
+    made.SetWalkers(Vec3(12, 0.3, 0), Vec3(20, 0, 22))
+    made.Step(0.1)
+    Run(made, 10, 0.0, 0.0, 0.0)
+    Expect(Distance(made.Props()[0].Position(), before) < 0.01, "{made.Props()[0].Position()}")
+End Function
+
+// Dropped onto the water, the boat's held back by it, riding the swell in a few seconds, not
+// bouncing on.
+@Test
+Function ABoatDroppedOnTheWaterSettlesOnIt() Throws ShapeError
+    Local world, made, boat, barrel, crate, log = Try Scene()
+    Defer world.Free()
+    Defer made.Free()
+    made.Boat().Teleport(made.Boat().Position() + Vec3(0, 0.6, 0), Quat.Identity)
+    Run(made, 50, 0.0, 0.0, 0.0)
+    Local going = made.Boat().Velocity()
+    Print("dropped, 5 s on, it's going {going}")
+    Expect(Distance(going, Vec3(0, 0, 0)) < 0.1, "{going}")
+End Function

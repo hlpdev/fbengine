@@ -207,9 +207,8 @@ Public Function Blocked(x: Float, z: Float): Bool
        LIGHTHOUSE_SOLID * LIGHTHOUSE_SOLID
         Return True
     End If
-    // The barrels and crates between the wheel and the door, which Pip goes around with the mill, and
-    // the millstone and bench inside.
-    If x > MAIN_X + 6.3 && x < MAIN_X + 9.3 && z > 3.5 && z < 5.6 Then Return True
+    // The millstone and bench inside. The barrels and crates between the wheel and the door are
+    // bodies, which you and Pip walk into and knock over, so they're not solid here.
     If x > MAIN_X - 5.8 && x < MAIN_X - 4.8 && z > -3.6 && z < -1.6 Then Return True
     If x > MAIN_X - 3.3 && x < MAIN_X + 0.3 && z > -4.8 && z < -3.7 Then Return True
     Return Abs(x - (MAIN_X + 8.0)) < 0.9 && Abs(z) < 3.4
