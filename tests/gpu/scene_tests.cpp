@@ -11713,6 +11713,113 @@ held_t held() {
 // not, besides the scene's: once the first frames have made the pipelines and pools there are,
 // what the GPU holds is the same, frame after frame, and nothing's left once it stops. CI runs 600
 // frames, and FBE_SOAK_FRAMES asks for more.
+namespace {
+
+/// The game's shader but for the generator's word of its header, which SPIR-V's own tools say and
+/// nothing reads, so it's new code for each `generation`.
+std::vector<std::uint8_t> generation_of(std::uint32_t generation) {
+    const std::span<const std::uint32_t> seed = fbe::test_shaders::game_shader.code;
+    std::vector<std::uint32_t> words(seed.begin(), seed.end());
+    words[2] = generation;
+    return cooked_shader(words);
+}
+
+std::uint64_t shader_of_generation(std::uint32_t generation) {
+    const std::vector<std::uint8_t> bytes = generation_of(generation);
+    return fbe_shader_create(bytes.data(), static_cast<std::int64_t>(bytes.size()), "reloaded");
+}
+
+} // namespace
+
+// A game's shader cooked again, as a game's hot reload does, each time of new code, drawn with,
+// then freed or replaced: once nothing draws with an old one, its pipelines go, and its code with
+// them, so there's no more of either after many than after one.
+TEST_CASE("a game's shaders made again and freed leave no pipelines of them", "[gpu][scene]") {
+    const scene_t scene;
+    const auto drawn = [&](std::uint64_t material) {
+        const std::uint64_t mesh = cube(scene.world, 0.0F, 0.0F, -6.0F, material);
+        static_cast<void>(scene.drawn());
+        require(fbe_entity_free(mesh));
+        // Frames on, as what's freed waits for those in flight.
+        for (int frame = 0; frame < 4; ++frame) {
+            static_cast<void>(scene.drawn());
+        }
+    };
+    SECTION("made again") {
+        const auto drawn_with = [&](std::uint32_t generation) {
+            const std::uint64_t shader = shader_of_generation(generation);
+            require(shader != 0);
+            const std::uint64_t material = fbe_material_create();
+            require(fbe_material_set_shader(material, shader));
+            require(fbe_shader_release(shader));
+            drawn(material);
+            fbe_material_release(material);
+        };
+        drawn_with(1);
+        drawn_with(1);
+        const std::int32_t one = fbe_gpu_pipelines();
+        CHECK(one > 0);
+        for (std::uint32_t generation = 2; generation < 40; ++generation) {
+            drawn_with(generation);
+        }
+        CHECK(fbe_gpu_pipelines() == one);
+    }
+    SECTION("replaced, as a reload replaces it") {
+        const std::uint64_t shader = shader_of_generation(1);
+        require(shader != 0);
+        const std::uint64_t material = fbe_material_create();
+        require(fbe_material_set_shader(material, shader));
+        drawn(material);
+        const std::int32_t one = fbe_gpu_pipelines();
+        for (std::uint32_t generation = 2; generation < 40; ++generation) {
+            const std::vector<std::uint8_t> bytes = generation_of(generation);
+            require(fbe_shader_replace(shader, bytes.data(),
+                                       static_cast<std::int64_t>(bytes.size()), "reloaded"));
+            drawn(material);
+        }
+        CHECK(fbe_gpu_pipelines() == one);
+        // Replaced by itself, it's kept.
+        const std::vector<std::uint8_t> same = generation_of(39);
+        require(fbe_shader_replace(shader, same.data(), static_cast<std::int64_t>(same.size()),
+                                   "reloaded"));
+        drawn(material);
+        CHECK(fbe_gpu_pipelines() == one);
+        fbe_material_release(material);
+        require(fbe_shader_release(shader));
+    }
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+// As many different shaders at once as a pipeline's key numbers, 4095: one more is refused, and
+// once one's freed, and its frames done, there's room for another.
+TEST_CASE("as many shaders as a pipeline's key numbers are kept at once", "[gpu][scene]") {
+    const scene_t scene;
+    std::vector<std::uint64_t> made;
+    for (std::uint32_t generation = 1; generation <= 4095; ++generation) {
+        const std::uint64_t shader = shader_of_generation(generation);
+        if (shader == 0) {
+            break;
+        }
+        made.push_back(shader);
+    }
+    // Some may be the test program's own, made already.
+    CHECK(made.size() > 4000);
+    CHECK(shader_of_generation(5000) == 0);
+    CHECK(std::string(fbe_error()) ==
+          "there are more different shaders than a pipeline's key can number");
+    require(fbe_shader_release(made.back()));
+    made.pop_back();
+    for (int frame = 0; frame < 4; ++frame) {
+        static_cast<void>(scene.drawn());
+    }
+    const std::uint64_t another = shader_of_generation(5000);
+    CHECK(another != 0);
+    made.push_back(another);
+    for (const std::uint64_t shader : made) {
+        require(fbe_shader_release(shader));
+    }
+}
+
 TEST_CASE("frames of making and freeing leave the GPU holding what it did", "[gpu][scene]") {
     const char* asked = std::getenv("FBE_SOAK_FRAMES");
     const int frames = asked != nullptr ? std::atoi(asked) : 600;
