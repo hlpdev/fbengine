@@ -1929,8 +1929,6 @@ Final Class Session
             held = holding
             Applied()
         End If
-        // Paused, Pip's clip stands where it is; the game's next step sets its pace again.
-        If held Then island.PipEntity().Player().SetSpeed(0.0)
         controls.Set.SetEnabled(page == Page.PLAYING && !ending.Showing())
         If page == Page.TITLE
             front.Fly(game.View(), seconds)
@@ -2376,6 +2374,9 @@ Function MenusShown(folder: Path) Throws GraphicsError, IOError, AudioError, Inp
     Try Stepped(session, 2)
     Local look = session.front.Current().Look
     Checks("Look, by a click", look > 2.0 && look < 2.6)
+    // Kept a second on, before Back, as closing the window then wouldn't lose it.
+    Try Stepped(session, 12)
+    Checks("kept a second on", Abs(KeptOptions(file).Look - look) < 0.01)
     Try PadPressed(session, pad, GamepadButton.EAST)
     Checks("back to the pause menu, by the pad", session.front.Showing() == Page.PAUSED)
     Checks("and kept", KeptOptions(file).InvertY)
