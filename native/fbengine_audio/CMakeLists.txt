@@ -29,7 +29,9 @@ FetchContent_MakeAvailable(miniaudio)
 #   are temporary too, it frees already).
 # - get32_packet shifts get8_packet's -1, at a packet's end, left; the copy shifts it as a uint32.
 # - Each decoder's start makes the CRC table again, in place, while the mix's thread reads it for a
-#   stream it seeks: a data race (ThreadSanitizer). The copy makes it only in
+#   stream it seeks: a data race (ThreadSanitizer), in stb_vorbis itself, v1.22 as nothings/stb and
+#   miniaudio 0.11.26's extras have it, whose start_decoder calls crc32_init (line 992) at line
+#   3707, "to avoid multithread race conditions". The copy makes it only in
 #   fbengine_vorbis_crc32_init, which fbengine_audio calls once, before its first decoder
 #   (sound/sound.cpp's ready_decoders).
 # Each patch's text has to be there, once, or configuring fails.
