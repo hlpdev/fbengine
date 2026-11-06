@@ -194,8 +194,8 @@ Public Final Class Afloat
     Field owed: Float64 = 0.0
     Field spent: Float64 = 0.0
     Field steps: Int64 = 0
-    // Each body as it was made, to put back.
-    Field starts: (Body, Vec3, Quat)[] = []
+    // The world as it was made, to put back: its bodies, walkers, and what Jolt keeps between steps.
+    Field start: PhysicsState? = Null
     // The lowest the boat's ridden over the sea, at the end of a step, since it was last asked.
     Field lowest: Float = 1000.0
 
@@ -248,11 +248,15 @@ Public Final Class Afloat
         End For
         Local bottom = low + 0.02
         Local draft = Max(-(rides + bottom), 0.01)
+        // Its points are about its center of mass, so it floats level, and what the water holds back
+        // of its turning is even about it, so it turns where it is.
+        Local center = Inverse(floated.Rotation()) * (floated.CenterOfMass() - floated.Position())
         Local points: Floater[] = []
         For along In [-0.6, -0.2, 0.2, 0.6]
             For across In [-0.45, 0.45]
-                points.Add(Floater(Vec3(across * wide, bottom, along * longest), 0.0,
-                                   2.0 * BOAT_MASS / 8.0, 2.0 * draft))
+                points.Add(Floater(Vec3(center.x + across * wide, bottom,
+                                        center.z + along * longest),
+                                   0.0, 2.0 * BOAT_MASS / 8.0, 2.0 * draft))
             End For
         End For
         Local tied = floated.Position() + floated.Rotation() * tie
@@ -305,30 +309,28 @@ Public Final Class Afloat
                                               Floater(Vec3(0.3 * long, 0, 0), radius, holds,
                                                       2.0 * radius)], LOG_DRAG, LOG_HEAVE, False))
         End For
-        Local all = [floated]
-        all.AddAll(made.props)
-        all.AddAll(made.logs)
-        For body In all
-            made.starts.Add((body, body.Position(), body.Rotation()))
-        End For
+        made.start = world.Save()
         Return made
     End Method
 
-    /// Puts each body back where it was made, still, and you and Pip where you began, for another
-    /// game, the swell's time to 0, and what's drawn of them there at once.
+    /// Puts it all back as it was made, for another game: each body where it was, still, you and Pip
+    /// where you began, the tide's clock and the swell's time at 0, and what's drawn of them there at
+    /// once. A game after it goes as one in a new Afloat does, to the bit.
     @MainThread
     Public Method Reset()
-        For start In starts
-            Local body, place, turn = start
-            body.Teleport(place, turn)
-        End For
+        Local made = start
+        If made == Null Then Return
+        Try
+            Try world.Restore(made)
+        Catch e As PhysicsStateError
+            Panic("Afloat.Reset: {e.Message}")
+        End Try
         youAt = youStart
         pipAt = pipStart
-        you.SetPosition(youStart + Vec3(0, WALKER_KNEE + WALKER_HIGH * 0.5, 0))
-        pip.SetPosition(pipStart + Vec3(0, PIP_HIGH * 0.5, 0))
         owed = 0.0
         time = 0.0
-        clock = target
+        clock = 0.0
+        target = 0.0
         world.Sync()
     End Method
 
@@ -414,7 +416,6 @@ Public Final Class Afloat
     // back, by how fast each point goes about its body's center of mass; pulls the boat out from its
     // bollard as the tide rises; and rolls and pitches it in the swell.
     Method Buoy()
-        Local sea = SeaHeight(clock)
         Local rising = TideRising(clock)
         For each In floating
             Local body = each.body
@@ -426,7 +427,7 @@ Public Final Class Afloat
             Local wet = False
             For point In each.points
                 Local at = place + turn * point.at
-                Local under = sea - at.y + point.below
+                Local under = WaterAt(at.x, at.z) - at.y + point.below
                 If under <= 0 Then Continue
                 wet = True
                 Local share = Min(under / point.deep, 1.0)

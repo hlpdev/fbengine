@@ -950,8 +950,8 @@ Function CheckBodies(folder: Path, island: Island, camera: Camera) Throws Graphi
         island.Animate(0.1)
     End For
     Local worst = (bodies.Spent() - worstSpent) / (Max(bodies.Steps() - worstSteps, 1) As Float64)
-    Print("at their worst, all awake, flooded and pushed, the bodies take {worst * 1000.0} ms a step, " +
-          "{worst * 60.0 * 100.0}% of a frame at 60 fps")
+    Print("at their worst, all awake, flooded and pushed, the bodies take " +
+          "{worst * 1000.0} ms a step, {worst * 60.0 * 100.0}% of a frame at 60 fps")
     Checks("which is under a tenth of a frame", worst * 60.0 < 0.1)
     island.Reset()
 End Function

@@ -326,10 +326,11 @@ Function AResetPutsItAllBack() Throws ShapeError
     Local logAt = made.Logs()[0].Position()
     Local you, _ = made.Walkers()
     Local youAt = you.Position()
+    // A game ended at high water: the next starts at slack water, without being told.
     Run(made, 120, 0.0, TIDE_IN_AT, 5.0)
     Expect(Distance(made.Boat().Position(), boatAt) > 0.5)
-    made.SetClock(0.0)
     made.Reset()
+    Expect(made.Clock() == 0.0)
     Expect(made.Boat().Position() == boatAt && made.Props()[0].Position() == barrelAt &&
            made.Logs()[0].Position() == logAt)
     Expect(boat.Position(Space.WORLD) == boatAt && barrel.Position(Space.WORLD) == barrelAt &&
@@ -341,16 +342,25 @@ Function AResetPutsItAllBack() Throws ShapeError
         Expect(body.Velocity() == Vec3(0, 0, 0) && body.AngularVelocity() == Vec3(0, 0, 0))
     End For
     Expect(you.Position() == youAt)
-    // Played on, as a game is from its start.
+    // A frame on, with no clock set, the sea's still at slack water and the boat still on it.
+    made.SetWalkers(Vec3(5, 0.3, 0), Vec3(20, 0, 22))
+    made.Step(0.1)
+    Expect(made.Clock() == 0.0 && made.WaterAt(0, 0) == SeaHeight(0.0))
+    Expect(Distance(made.Boat().Velocity(), Vec3(0, 0, 0)) < 0.05, "{made.Boat().Velocity()}")
+    // Played on, as a game is from its start, it goes as a new one does, to the bit.
     Run(made, 60, 0.0, FLOOD_AT, 5.0)
-    Local again = made.Boat().Position()
+    Local again = made.StateHash()
+    Local againAt = made.Boat().Position()
     Local otherWorld, fresh, _, _, _, _ = Try Scene()
+    fresh.SetWalkers(Vec3(5, 0.3, 0), Vec3(20, 0, 22))
+    fresh.Step(0.1)
     Run(fresh, 60, 0.0, FLOOD_AT, 5.0)
-    Local first = fresh.Boat().Position()
+    Local first = fresh.StateHash()
+    Local firstAt = fresh.Boat().Position()
     fresh.Free()
     otherWorld.Free()
     World.SetCurrent(world)
-    Expect(Distance(again, first) < 0.01, "{again} and {first}")
+    Expect(again == first && againAt == firstAt, "{againAt} and {firstAt}")
 End Function
 
 // The ground under what moves is one grid: no metre of it's there twice, however the spots overlap.
@@ -470,4 +480,41 @@ Function TheFloodsSurgeLiftsTheBoat() Throws ShapeError
     Expect(lowest - 0.18 + BOARDS > 0.02, "{lowest}")
     Run(made, 50, FLOOD_AT + 2.0, FLOOD_AT + 3.0, 0.0)
     Expect(Abs(made.Boat().Position().y - (SeaHeight(made.Clock()) + RIDING)) < 0.02)
+End Function
+
+// What the water holds back, it holds by how fast each point goes about the body's center of mass:
+// a boat whose center of mass is off its origin, as one taller on a side is, spun about the
+// vertical on still water, turns where it is, not drifting sideways. Over the first half second,
+// most of a quarter turn: about its origin, the water would push it 1 cm aside in it.
+@Test
+Function ASpunBoatTurnsWhereItIs() Throws ShapeError
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local boat = Pivot()
+    boat.SetPosition(Vec3(0, RIDING, 0))
+    Local hull: Vec3[] = []
+    For x In [-0.6, 0.6]
+        For y In [-0.18, x > 0 ? 0.9 : 0.32]
+            For z In [-2.0, 2.0]
+                hull.Add(Vec3(x, y, z))
+            End For
+        End For
+    End For
+    // Tied at its middle, under its bollard, so the rope never pulls it as it turns.
+    Local made = Try Afloat.Make(boat, hull, Vec3(0, 0.3, 0), Vec3(0, 1.6, 0), RIDING, [], [],
+                                 Flat(-1.5), [], Vec3(20, 0, 20), Vec3(20, 0, 22))
+    Defer made.Free()
+    Run(made, 50, 0.0, 0.0, 0.0)
+    Local middle = made.Boat().CenterOfMass()
+    Expect(Abs(middle.x - made.Boat().Position().x) > 0.03, "{middle}")
+    // Held up about its center of mass, it floats level.
+    Local up = made.Boat().Rotation() * Vec3(0, 1, 0)
+    Print("before it's spun, its up is {up}")
+    Expect(Abs(up.x) < Sin(1.0 * Pi / 180.0), "{up}")
+    made.Boat().SetAngularVelocity(Vec3(0, 3, 0))
+    Run(made, 5, 0.0, 0.0, 0.0)
+    Local moved = made.Boat().CenterOfMass()
+    Print("spun, its center of mass went from {middle} to {moved}")
+    Expect(Distance(Vec2(moved.x, moved.z), Vec2(middle.x, middle.z)) < 0.004, "{moved}")
 End Function
