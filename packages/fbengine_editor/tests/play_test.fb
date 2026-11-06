@@ -770,11 +770,21 @@ Function AGameSayingALotIsntKeptWaiting() Throws IOError, GraphicsError
     Defer Frame.SetLimit(0)
     editor.Play()
     StepUntil(editor, Function() => editor.Run.State() != PlayState.BUILDING)
+    // Its frames, from its running to its end, and its pipes' reads: one a frame would be a frame a
+    // read. How long that takes is the machine's, as a busy one's slower either way, so it's frames
+    // to reads that tell, at least three reads for each two frames.
+    Local readsBefore = editor.Run.Reads()
+    Local frames = 0
     Local since = Instant.Now()
-    StepUntil(editor, Function() => !editor.Run.Going())
+    While editor.Run.Going() && (Instant.Now() - since) < 180.Seconds
+        editor.Step()
+        frames += 1
+    End While
     Expect(editor.Run.State() == PlayState.ENDED, Said(editor))
-    // One read a frame takes 40 seconds; this took 17 with the machine busy.
-    Expect((Instant.Now() - since) < 30.Seconds, "8 MB took {Instant.Now() - since}")
+    // Here, 35 frames for 124 reads of 64 KB, each that long to take in, 18 s in all: more than
+    // three a frame. One a frame would be as many frames as reads.
+    Local reads = editor.Run.Reads() - readsBefore
+    Expect(frames * 3 < reads * 2, "{frames} frames for {reads} reads, in {Instant.Now() - since}")
 End Function
 
 // Its folder and its scene can be called anything.

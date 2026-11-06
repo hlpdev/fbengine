@@ -27,10 +27,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <exception>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <numbers>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -51,12 +54,18 @@ struct scene_t {
     std::uint64_t target =
         fbe_texture_create_target(frame_size, frame_size, FBE_TEXTURE_RGBA8, 1, true);
     std::uint64_t camera = fbe_entity_create(world, 0, FBE_ENTITY_CAMERA);
+    /// Whether the GPU stops as it goes: unless a test of many scenes in turn keeps it, for the
+    /// next to draw with the pipelines this one made, which lavapipe takes seconds over.
+    bool stops_gpu = true;
 
     scene_t() {
         require(target != 0);
         require(fbe_camera_set_target(camera, target));
         // Nothing but what a test lights.
         require(fbe_world_set_ambient(world, 0.0F, 0.0F, 0.0F));
+    }
+    explicit scene_t(bool stops) : scene_t() {
+        stops_gpu = stops;
     }
     scene_t(const scene_t&) = delete;
     scene_t& operator=(const scene_t&) = delete;
@@ -68,7 +77,10 @@ struct scene_t {
         std::array<std::uint64_t, 64> some{};
         while (fbe_entity_freed(some.data(), some.size()) != 0) {}
         fbe_texture_release(target);
-        stop_gpu();
+        // As a failure leaves it too, so what's after starts as it would.
+        if (stops_gpu || std::uncaught_exceptions() > 0) {
+            stop_gpu();
+        }
     }
 
     /// What's been drawn into the target since it was last cleared, once its camera's drawn.
@@ -11776,14 +11788,69 @@ TEST_CASE("a shader of its own draws an Instances, each moved in its own space",
     fbe_material_release(material);
 }
 
+namespace {
+
+/// A scene for what a shader of its own's prepass has: a wall behind, lit by a quarter of white and
+/// occluded within 3, and two materials of the shader, one to move what it draws and one to draw
+/// what's placed where that's moved to.
+struct prepass_scene_t : scene_t {
+    std::uint64_t paint = fbe_material_create();
+    std::uint64_t back = wall(world, -10.0F, 30.0F, paint);
+    std::uint64_t moved = by_game_shader();
+    std::uint64_t placed = by_game_shader();
+
+    explicit prepass_scene_t(bool stops) : scene_t(stops) {
+        require(fbe_world_set_ambient(world, 0.25F, 0.25F, 0.25F));
+        require(fbe_camera_set_ambient_occlusion_radius(camera, 3.0F));
+        require(fbe_camera_set_ambient_occlusion(camera, 1.0F));
+    }
+    prepass_scene_t(const prepass_scene_t&) = delete;
+    prepass_scene_t& operator=(const prepass_scene_t&) = delete;
+    prepass_scene_t(prepass_scene_t&&) = delete;
+    prepass_scene_t& operator=(prepass_scene_t&&) = delete;
+
+    ~prepass_scene_t() {
+        CHECK(fbe_gpu_validation_errors() == 0);
+        fbe_material_release(placed);
+        fbe_material_release(moved);
+    }
+};
+
+} // namespace
+
+TEST_CASE("a scene that keeps the GPU started leaves the next the pipelines it made",
+          "[gpu][scene]") {
+    std::size_t made = 0;
+    {
+        const scene_t first(false);
+        const std::uint64_t material = by_game_shader();
+        cube(first.world, 0.0F, 0.0F, -9.0F, material);
+        static_cast<void>(first.drawn());
+        made = fbe::gpu::pipelines_made();
+        CHECK(made > 0);
+        fbe_material_release(material);
+    }
+    CHECK(fbe_gpu_started());
+    {
+        const scene_t second;
+        const std::uint64_t material = by_game_shader();
+        cube(second.world, 0.0F, 0.0F, -9.0F, material);
+        static_cast<void>(second.drawn());
+        CHECK(fbe::gpu::pipelines_made() == made);
+        fbe_material_release(material);
+    }
+    CHECK_FALSE(fbe_gpu_started());
+    // One that fails stops it, kept or not.
+    try {
+        const scene_t kept(false);
+        throw std::runtime_error("a part failed");
+    } catch (const std::runtime_error&) {
+        CHECK_FALSE(fbe_gpu_started());
+    }
+}
+
 TEST_CASE("a shader of its own reaches the prepass: what it moves, and what it cuts",
           "[gpu][scene]") {
-    const scene_t scene;
-    const std::uint64_t paint = fbe_material_create();
-    const std::uint64_t back = wall(scene.world, -10.0F, 30.0F, paint);
-    require(fbe_world_set_ambient(scene.world, 0.25F, 0.25F, 0.25F));
-    require(fbe_camera_set_ambient_occlusion_radius(scene.camera, 3.0F));
-    require(fbe_camera_set_ambient_occlusion(scene.camera, 1.0F));
     // Beside what's in front of the wall, as its occlusion darkens it.
     const auto darkened = [](const fbe::golden::frame_t& frame) {
         return pixel(frame, 64 + 16, 64)[0] < srgb(0.25F) - 8;
@@ -11791,223 +11858,246 @@ TEST_CASE("a shader of its own reaches the prepass: what it moves, and what it c
     const auto same = [](const fbe::golden::frame_t& one, const fbe::golden::frame_t& other) {
         return fbe::golden::compare(one, other, 1).pixels == 0;
     };
-    const std::uint64_t moved = by_game_shader();
-    const std::uint64_t placed = by_game_shader();
-    SECTION("a mesh it moves is where it's moved to") {
-        const std::uint64_t by_place = cube(scene.world, 0.0F, 0.0F, -9.0F, placed);
+    // Each part in a scene of its own, in turn, on one GPU: lavapipe takes seconds to make a
+    // pipeline of the shader as it first draws with it, so that's once, not once a part, as
+    // sections would, each starting the GPU again.
+    std::vector<std::pair<std::string_view, std::function<void(const prepass_scene_t&)>>> parts;
+    parts.emplace_back("a mesh it moves is where it's moved to", [&](const prepass_scene_t& scene) {
+        const std::uint64_t by_place = cube(scene.world, 0.0F, 0.0F, -9.0F, scene.placed);
         const fbe::golden::frame_t reference = scene.drawn();
         REQUIRE(darkened(reference));
         require(fbe_entity_free(by_place));
-        require(fbe_material_set_parameter(moved, 1, 0.0F, 5.0F, 0.0F, 0.0F));
-        cube(scene.world, 0.0F, -5.0F, -9.0F, moved);
+        require(fbe_material_set_parameter(scene.moved, 1, 0.0F, 5.0F, 0.0F, 0.0F));
+        cube(scene.world, 0.0F, -5.0F, -9.0F, scene.moved);
         CHECK(same(reference, scene.drawn()));
-    }
-    SECTION("an instance it moves, in its own space, is too") {
-        const std::uint64_t by_place = cube(scene.world, 0.0F, 0.0F, -9.0F, placed);
-        const fbe::golden::frame_t reference = scene.drawn();
-        REQUIRE(darkened(reference));
-        require(fbe_entity_free(by_place));
-        require(fbe_material_set_parameter(moved, 1, 3.0F, 0.0F, 0.0F, 0.0F));
-        cubes_at(scene.world, moved, { turned_instance_at(0.0F, -3.0F, -9.0F) });
-        CHECK(same(reference, scene.drawn()));
-    }
-    SECTION("it's given a morph's normal, as when it's drawn") {
-        const std::uint64_t by_place = wall(scene.world, -9.0F, 1.0F, placed);
-        require(fbe_entity_set_position(by_place, 2.0F, 0.0F, -9.0F, FBE_SPACE_WORLD));
-        const fbe::golden::frame_t reference = scene.drawn();
-        require(fbe_entity_free(by_place));
-        require(fbe_material_set_parameter(moved, 3, 2.0F, 0.0F, 0.0F, 0.0F));
-        const std::uint64_t quad = wall(scene.world, -9.0F, 1.0F, moved);
-        // No move of its own, and its normals +X, from +Z.
-        const std::array<float, 12> still{};
-        const std::array<float, 12> to_x{ 1, 0, -1, 1, 0, -1, 1, 0, -1, 1, 0, -1 };
-        require(fbe_morph_add_target(fbe_mesh_geometry(quad), 0, still.data(), to_x.data(), 4) ==
-                0);
-        const std::array<float, 1> one{ 1.0F };
-        require(fbe_morph_set_weights(quad, one.data(), 1));
-        CHECK(same(reference, scene.drawn()));
-    }
-    SECTION("it's given a skin's normal, as when it's drawn") {
-        // A joint turned an eighth around up, which has its normal at 45 degrees from +Z to +X.
-        const float half_turn = std::numbers::pi_v<float> / 8.0F;
-        const auto turned = [&](std::uint64_t material, float along) {
-            const skinned_wall_t made = skinned_wall(scene.world, material, -9.0F, 1.0F);
-            all_on(made.geometry, 1, 1.0F);
-            require(
-                fbe_entity_set_position(made.moving, along, 0.0F, -9.0F + along, FBE_SPACE_WORLD));
-            require(fbe_entity_set_rotation(made.moving, 0.0F, std::sin(half_turn), 0.0F,
-                                            std::cos(half_turn), FBE_SPACE_WORLD));
-            return made;
-        };
-        const float along = 2.0F * std::numbers::sqrt2_v<float> / 2.0F;
-        const skinned_wall_t by_place = turned(placed, along);
-        const fbe::golden::frame_t reference = scene.drawn();
-        require(fbe_entity_free(by_place.mesh));
-        fbe_skin_release(by_place.skin);
-        require(fbe_material_set_parameter(moved, 3, 2.0F, 0.0F, 0.0F, 0.0F));
-        const skinned_wall_t made = turned(moved, 0.0F);
-        CHECK(same(reference, scene.drawn()));
-        fbe_skin_release(made.skin);
-    }
-    SECTION("what it cuts by what it returns isn't there") {
-        const fbe::golden::frame_t nothing = scene.drawn();
-        require(fbe_material_set_alpha_cutoff(moved, 0.5F));
-        require(fbe_material_set_parameter(moved, 2, 1.0F, 0.0F, 0.0F, 0.0F));
-        const std::uint64_t by_shader = cube(scene.world, 0.0F, 0.0F, -9.0F, moved);
-        CHECK(same(nothing, scene.drawn()));
-        // An instance's the same.
-        require(fbe_entity_free(by_shader));
-        cubes_at(scene.world, moved, { instance_at(0.0F, 0.0F, -9.0F) });
-        CHECK(same(nothing, scene.drawn()));
-    }
-    SECTION("what its material's alpha would cut and it keeps is there") {
-        const std::uint64_t by_place = cube(scene.world, 0.0F, 0.0F, -9.0F, placed);
-        const fbe::golden::frame_t reference = scene.drawn();
-        REQUIRE(darkened(reference));
-        require(fbe_entity_free(by_place));
-        require(fbe_material_set_alpha_cutoff(moved, 0.5F));
-        require(fbe_material_set_color(moved, 1.0F, 1.0F, 1.0F, 0.0F));
-        cube(scene.world, 0.0F, 0.0F, -9.0F, moved);
-        CHECK(same(reference, scene.drawn()));
-    }
-    SECTION("it cuts by what it's drawn with: where, facing what, of what vertex, lit how") {
-        // What's left of a quad cut at x 0.
-        const std::uint64_t half = wall(scene.world, -9.0F, 1.0F, placed);
-        require(fbe_entity_set_position(half, -0.5F, 0.0F, -9.0F, FBE_SPACE_WORLD));
-        require(fbe_entity_set_scale(half, 0.5F, 1.0F, 1.0F, FBE_SPACE_WORLD));
-        const fbe::golden::frame_t reference = scene.drawn();
-        require(fbe_entity_free(half));
-        require(fbe_material_set_alpha_cutoff(moved, 0.5F));
-        require(fbe_material_set_parameter(moved, 0, 6.0F, 0.0F, 0.0F, 0.0F));
-        const std::uint64_t whole_quad = wall(scene.world, -9.0F, 1.0F, moved);
-        CHECK(same(reference, scene.drawn()));
-        require(fbe_entity_free(whole_quad));
-        // Lit by the ambient light alone, 0.25 of white, over its 0.2; without any, it's cut.
-        const std::uint64_t by_place = wall(scene.world, -9.0F, 1.0F, placed);
-        const fbe::golden::frame_t whole_reference = scene.drawn();
-        require(fbe_entity_free(by_place));
-        require(fbe_material_set_shading(moved, FBE_SHADING_VERTEX));
-        require(fbe_material_set_parameter(moved, 0, 7.0F, 0.0F, 0.0F, 0.0F));
-        const std::uint64_t lit_quad = wall(scene.world, -9.0F, 1.0F, moved);
-        CHECK(same(whole_reference, scene.drawn()));
-        require(fbe_world_set_ambient(scene.world, 0.0F, 0.0F, 0.0F));
-        const fbe::golden::frame_t unlit_frame = scene.drawn();
-        require(fbe_entity_free(lit_quad));
-        CHECK(same(unlit_frame, scene.drawn()));
-    }
-    SECTION("what it lights, cut in its prepass, reads no occlusion that isn't there yet") {
-        require(fbe_material_set_alpha_cutoff(moved, 0.5F));
-        require(fbe_material_set_parameter(moved, 0, 4.0F, 0.0F, 0.0F, 0.0F));
-        cube(scene.world, 0.0F, 0.0F, -9.0F, moved);
-        CHECK(darkened(scene.drawn()));
-    }
-    SECTION(
-        "what it cuts by its color, in its prepass, isn't by the occlusion of the frame before") {
-        // The wall, 0.25 by its ambient light, cut where its occlusion takes it under 0.2, which is
-        // only known after its prepass: what that's cut by is its color with none, the same each
-        // frame, so its occlusion is too.
-        require(fbe_material_set_alpha_cutoff(moved, 0.5F));
-        require(fbe_material_set_parameter(moved, 0, 7.0F, 0.0F, 0.0F, 0.0F));
-        require(fbe_mesh_set_material(back, moved));
-        cube(scene.world, 0.0F, 0.0F, -9.0F, placed);
-        const fbe::golden::frame_t first = scene.drawn();
-        const fbe::golden::frame_t second = scene.drawn();
-        const fbe::golden::frame_t third = scene.drawn();
-        CHECK(pixel(third, 64 + 16, 64) != pixel(third, 4, 4));
-        CHECK(same(first, second));
-        CHECK(same(second, third));
-    }
-    SECTION("its motion's from where it's moved to, then and now") {
-        require(fbe_entity_set_position(scene.camera, 0.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
-        require(fbe_camera_set_ambient_occlusion(scene.camera, 0.0F));
-        require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
-        require(fbe_camera_set_hdr(scene.camera, true));
-        require(fbe_camera_set_temporal_aa(scene.camera, true));
-        const std::uint64_t white = by_game_shader(5.0F);
-        require(fbe_material_set_shading(white, FBE_SHADING_UNLIT));
-        // Moved 3 across, by its shader, in its space, scaled by 3; two whole pixels a frame.
-        require(fbe_material_set_parameter(white, 1, 1.0F, 0.0F, 0.0F, 0.0F));
-        const std::uint64_t made =
-            cubes_at(scene.world, white, { instance_at(0.0F, 0.0F, 0.0F, 3.0F) });
-        const float across = std::tan(std::numbers::pi_v<float> / 6.0F) * 7.0F / 64.0F;
-        fbe::golden::frame_t last;
-        for (int frame = 0; frame <= 24; ++frame) {
-            const float pixels = static_cast<float>(frame - 24) * 2.0F;
-            require(fbe_entity_set_position(made, (0.5F + pixels) * across, 0.0F, -10.0F,
-                                            FBE_SPACE_WORLD));
-            last = scene.drawn();
-        }
-        const float value = static_cast<float>(pixel(last, 64, 64)[0]) / 255.0F;
-        CAPTURE(value);
-        CHECK(value > 0.4F);
-        CHECK(value < 0.9F);
-        fbe_material_release(white);
-    }
-    SECTION("a mesh's, or a skinned one's, motion is that of what's placed where it's moved to") {
-        // Each above the middle by what's placed there, below it by what its shader moves, going
-        // across together two pixels a frame, so a row of each ends the same only if what the frame
-        // before had of each is from the same place.
-        require(fbe_entity_set_position(scene.camera, 0.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
-        require(fbe_camera_set_ambient_occlusion(scene.camera, 0.0F));
-        require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
-        require(fbe_camera_set_hdr(scene.camera, true));
-        require(fbe_camera_set_temporal_aa(scene.camera, true));
-        const float tangent = std::tan(std::numbers::pi_v<float> / 6.0F);
-        const auto alike = [&](float depth, auto&& move_to) {
-            const float across = tangent * depth / 64.0F;
+    });
+    parts.emplace_back(
+        "an instance it moves, in its own space, is too", [&](const prepass_scene_t& scene) {
+            const std::uint64_t by_place = cube(scene.world, 0.0F, 0.0F, -9.0F, scene.placed);
+            const fbe::golden::frame_t reference = scene.drawn();
+            REQUIRE(darkened(reference));
+            require(fbe_entity_free(by_place));
+            require(fbe_material_set_parameter(scene.moved, 1, 3.0F, 0.0F, 0.0F, 0.0F));
+            cubes_at(scene.world, scene.moved, { turned_instance_at(0.0F, -3.0F, -9.0F) });
+            CHECK(same(reference, scene.drawn()));
+        });
+    parts.emplace_back(
+        "it's given a morph's normal, as when it's drawn", [&](const prepass_scene_t& scene) {
+            const std::uint64_t by_place = wall(scene.world, -9.0F, 1.0F, scene.placed);
+            require(fbe_entity_set_position(by_place, 2.0F, 0.0F, -9.0F, FBE_SPACE_WORLD));
+            const fbe::golden::frame_t reference = scene.drawn();
+            require(fbe_entity_free(by_place));
+            require(fbe_material_set_parameter(scene.moved, 3, 2.0F, 0.0F, 0.0F, 0.0F));
+            const std::uint64_t quad = wall(scene.world, -9.0F, 1.0F, scene.moved);
+            // No move of its own, and its normals +X, from +Z.
+            const std::array<float, 12> still{};
+            const std::array<float, 12> to_x{ 1, 0, -1, 1, 0, -1, 1, 0, -1, 1, 0, -1 };
+            require(fbe_morph_add_target(fbe_mesh_geometry(quad), 0, still.data(), to_x.data(),
+                                         4) == 0);
+            const std::array<float, 1> one{ 1.0F };
+            require(fbe_morph_set_weights(quad, one.data(), 1));
+            CHECK(same(reference, scene.drawn()));
+        });
+    parts.emplace_back(
+        "it's given a skin's normal, as when it's drawn", [&](const prepass_scene_t& scene) {
+            // A joint turned an eighth around up, which has its normal at 45 degrees from +Z to +X.
+            const float half_turn = std::numbers::pi_v<float> / 8.0F;
+            const auto turned = [&](std::uint64_t material, float along) {
+                const skinned_wall_t made = skinned_wall(scene.world, material, -9.0F, 1.0F);
+                all_on(made.geometry, 1, 1.0F);
+                require(fbe_entity_set_position(made.moving, along, 0.0F, -9.0F + along,
+                                                FBE_SPACE_WORLD));
+                require(fbe_entity_set_rotation(made.moving, 0.0F, std::sin(half_turn), 0.0F,
+                                                std::cos(half_turn), FBE_SPACE_WORLD));
+                return made;
+            };
+            const float along = 2.0F * std::numbers::sqrt2_v<float> / 2.0F;
+            const skinned_wall_t by_place = turned(scene.placed, along);
+            const fbe::golden::frame_t reference = scene.drawn();
+            require(fbe_entity_free(by_place.mesh));
+            fbe_skin_release(by_place.skin);
+            require(fbe_material_set_parameter(scene.moved, 3, 2.0F, 0.0F, 0.0F, 0.0F));
+            const skinned_wall_t made = turned(scene.moved, 0.0F);
+            CHECK(same(reference, scene.drawn()));
+            fbe_skin_release(made.skin);
+        });
+    parts.emplace_back(
+        "what it cuts by what it returns isn't there", [&](const prepass_scene_t& scene) {
+            const fbe::golden::frame_t nothing = scene.drawn();
+            require(fbe_material_set_alpha_cutoff(scene.moved, 0.5F));
+            require(fbe_material_set_parameter(scene.moved, 2, 1.0F, 0.0F, 0.0F, 0.0F));
+            const std::uint64_t by_shader = cube(scene.world, 0.0F, 0.0F, -9.0F, scene.moved);
+            CHECK(same(nothing, scene.drawn()));
+            // An instance's the same.
+            require(fbe_entity_free(by_shader));
+            cubes_at(scene.world, scene.moved, { instance_at(0.0F, 0.0F, -9.0F) });
+            CHECK(same(nothing, scene.drawn()));
+        });
+    parts.emplace_back("what its material's alpha would cut and it keeps is there",
+                       [&](const prepass_scene_t& scene) {
+                           const std::uint64_t by_place =
+                               cube(scene.world, 0.0F, 0.0F, -9.0F, scene.placed);
+                           const fbe::golden::frame_t reference = scene.drawn();
+                           REQUIRE(darkened(reference));
+                           require(fbe_entity_free(by_place));
+                           require(fbe_material_set_alpha_cutoff(scene.moved, 0.5F));
+                           require(fbe_material_set_color(scene.moved, 1.0F, 1.0F, 1.0F, 0.0F));
+                           cube(scene.world, 0.0F, 0.0F, -9.0F, scene.moved);
+                           CHECK(same(reference, scene.drawn()));
+                       });
+    parts.emplace_back(
+        "it cuts by what it's drawn with: where, facing what, of what vertex, lit how",
+        [&](const prepass_scene_t& scene) {
+            // What's left of a quad cut at x 0.
+            const std::uint64_t half = wall(scene.world, -9.0F, 1.0F, scene.placed);
+            require(fbe_entity_set_position(half, -0.5F, 0.0F, -9.0F, FBE_SPACE_WORLD));
+            require(fbe_entity_set_scale(half, 0.5F, 1.0F, 1.0F, FBE_SPACE_WORLD));
+            const fbe::golden::frame_t reference = scene.drawn();
+            require(fbe_entity_free(half));
+            require(fbe_material_set_alpha_cutoff(scene.moved, 0.5F));
+            require(fbe_material_set_parameter(scene.moved, 0, 6.0F, 0.0F, 0.0F, 0.0F));
+            const std::uint64_t whole_quad = wall(scene.world, -9.0F, 1.0F, scene.moved);
+            CHECK(same(reference, scene.drawn()));
+            require(fbe_entity_free(whole_quad));
+            // Lit by the ambient light alone, 0.25 of white, over its 0.2; without any, it's cut.
+            const std::uint64_t by_place = wall(scene.world, -9.0F, 1.0F, scene.placed);
+            const fbe::golden::frame_t whole_reference = scene.drawn();
+            require(fbe_entity_free(by_place));
+            require(fbe_material_set_shading(scene.moved, FBE_SHADING_VERTEX));
+            require(fbe_material_set_parameter(scene.moved, 0, 7.0F, 0.0F, 0.0F, 0.0F));
+            const std::uint64_t lit_quad = wall(scene.world, -9.0F, 1.0F, scene.moved);
+            CHECK(same(whole_reference, scene.drawn()));
+            require(fbe_world_set_ambient(scene.world, 0.0F, 0.0F, 0.0F));
+            const fbe::golden::frame_t unlit_frame = scene.drawn();
+            require(fbe_entity_free(lit_quad));
+            CHECK(same(unlit_frame, scene.drawn()));
+        });
+    parts.emplace_back(
+        "what it lights, cut in its prepass, reads no occlusion that isn't there yet",
+        [&](const prepass_scene_t& scene) {
+            require(fbe_material_set_alpha_cutoff(scene.moved, 0.5F));
+            require(fbe_material_set_parameter(scene.moved, 0, 4.0F, 0.0F, 0.0F, 0.0F));
+            cube(scene.world, 0.0F, 0.0F, -9.0F, scene.moved);
+            CHECK(darkened(scene.drawn()));
+        });
+    parts.emplace_back(
+        "what it cuts by its color, in its prepass, isn't by the occlusion of the frame before",
+        [&](const prepass_scene_t& scene) {
+            // The wall, 0.25 by its ambient light, cut where its occlusion takes it under 0.2,
+            // which is only known after its prepass: what that's cut by is its color with none, the
+            // same each frame, so its occlusion is too.
+            require(fbe_material_set_alpha_cutoff(scene.moved, 0.5F));
+            require(fbe_material_set_parameter(scene.moved, 0, 7.0F, 0.0F, 0.0F, 0.0F));
+            require(fbe_mesh_set_material(scene.back, scene.moved));
+            cube(scene.world, 0.0F, 0.0F, -9.0F, scene.placed);
+            const fbe::golden::frame_t first = scene.drawn();
+            const fbe::golden::frame_t second = scene.drawn();
+            const fbe::golden::frame_t third = scene.drawn();
+            CHECK(pixel(third, 64 + 16, 64) != pixel(third, 4, 4));
+            CHECK(same(first, second));
+            CHECK(same(second, third));
+        });
+    parts.emplace_back(
+        "its motion's from where it's moved to, then and now", [&](const prepass_scene_t& scene) {
+            require(fbe_entity_set_position(scene.camera, 0.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+            require(fbe_camera_set_ambient_occlusion(scene.camera, 0.0F));
+            require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+            require(fbe_camera_set_hdr(scene.camera, true));
+            require(fbe_camera_set_temporal_aa(scene.camera, true));
+            const std::uint64_t white = by_game_shader(5.0F);
+            require(fbe_material_set_shading(white, FBE_SHADING_UNLIT));
+            // Moved 3 across, by its shader, in its space, scaled by 3; two whole pixels a frame.
+            require(fbe_material_set_parameter(white, 1, 1.0F, 0.0F, 0.0F, 0.0F));
+            const std::uint64_t made =
+                cubes_at(scene.world, white, { instance_at(0.0F, 0.0F, 0.0F, 3.0F) });
+            const float across = std::tan(std::numbers::pi_v<float> / 6.0F) * 7.0F / 64.0F;
             fbe::golden::frame_t last;
             for (int frame = 0; frame <= 24; ++frame) {
-                move_to((0.5F + (static_cast<float>(frame - 24) * 2.0F)) * across);
+                const float pixels = static_cast<float>(frame - 24) * 2.0F;
+                require(fbe_entity_set_position(made, (0.5F + pixels) * across, 0.0F, -10.0F,
+                                                FBE_SPACE_WORLD));
                 last = scene.drawn();
             }
-            // Each one's middle row, a mirror of the other about the view's middle.
-            const auto row = static_cast<std::uint32_t>(64.0F - (2.0F / (depth * tangent) * 64.0F));
-            int differing = 0;
-            for (std::uint32_t x = 0; x < frame_size; ++x) {
-                for (std::size_t k = 0; k < 3; ++k) {
-                    if (std::abs(pixel(last, x, row)[k] - pixel(last, x, frame_size - 1 - row)[k]) >
-                        2) {
-                        ++differing;
-                    }
+            const float value = static_cast<float>(pixel(last, 64, 64)[0]) / 255.0F;
+            CAPTURE(value);
+            CHECK(value > 0.4F);
+            CHECK(value < 0.9F);
+            fbe_material_release(white);
+        });
+    // Each above the middle by what's placed there, below it by what its shader moves, going across
+    // together two pixels a frame, so a row of each ends the same only if what the frame before had
+    // of each is from the same place.
+    const float tangent = std::tan(std::numbers::pi_v<float> / 6.0F);
+    const auto alike = [&](const scene_t& scene, float depth, auto&& move_to) {
+        require(fbe_entity_set_position(scene.camera, 0.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+        require(fbe_camera_set_ambient_occlusion(scene.camera, 0.0F));
+        require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+        require(fbe_camera_set_hdr(scene.camera, true));
+        require(fbe_camera_set_temporal_aa(scene.camera, true));
+        const float across = tangent * depth / 64.0F;
+        fbe::golden::frame_t last;
+        for (int frame = 0; frame <= 24; ++frame) {
+            move_to((0.5F + (static_cast<float>(frame - 24) * 2.0F)) * across);
+            last = scene.drawn();
+        }
+        // Each one's middle row, a mirror of the other about the view's middle.
+        const auto row = static_cast<std::uint32_t>(64.0F - (2.0F / (depth * tangent) * 64.0F));
+        int differing = 0;
+        for (std::uint32_t x = 0; x < frame_size; ++x) {
+            for (std::size_t k = 0; k < 3; ++k) {
+                if (std::abs(pixel(last, x, row)[k] - pixel(last, x, frame_size - 1 - row)[k]) >
+                    2) {
+                    ++differing;
                 }
             }
-            return differing;
-        };
-        SECTION("a mesh") {
-            require(fbe_material_set_parameter(moved, 1, 3.0F, 0.0F, 0.0F, 0.0F));
-            const std::uint64_t there = cube(scene.world, 0.0F, 2.0F, -10.0F, placed);
-            const std::uint64_t from = cube(scene.world, 0.0F, -2.0F, -10.0F, moved);
-            CHECK(alike(10.0F, [&](float x) {
+        }
+        return differing;
+    };
+    parts.emplace_back(
+        "a mesh's motion is that of what's placed where it's moved to",
+        [&](const prepass_scene_t& scene) {
+            require(fbe_material_set_parameter(scene.moved, 1, 3.0F, 0.0F, 0.0F, 0.0F));
+            const std::uint64_t there = cube(scene.world, 0.0F, 2.0F, -10.0F, scene.placed);
+            const std::uint64_t from = cube(scene.world, 0.0F, -2.0F, -10.0F, scene.moved);
+            CHECK(alike(scene, 10.0F, [&](float x) {
                       require(
                           fbe_entity_set_position(there, x + 3.0F, 2.0F, -10.0F, FBE_SPACE_WORLD));
                       require(fbe_entity_set_position(from, x, -2.0F, -10.0F, FBE_SPACE_WORLD));
                   }) == 0);
-        }
-        SECTION("a skinned mesh, along a normal its joint turns") {
+        });
+    parts.emplace_back(
+        "a skinned mesh's, along a normal its joint turns, is too",
+        [&](const prepass_scene_t& scene) {
             // Turned 30 degrees about up, so 3 along its normal is 1.5 across and 2.6 nearer.
             const float half_turn = std::numbers::pi_v<float> / 12.0F;
             const float away = 3.0F * std::sin(2.0F * half_turn);
             const float toward = 3.0F * std::cos(2.0F * half_turn);
-            require(fbe_material_set_parameter(moved, 3, 3.0F, 0.0F, 0.0F, 0.0F));
-            const skinned_wall_t skinned = skinned_wall(scene.world, moved, -10.0F, 1.0F);
+            require(fbe_material_set_parameter(scene.moved, 3, 3.0F, 0.0F, 0.0F, 0.0F));
+            const skinned_wall_t skinned = skinned_wall(scene.world, scene.moved, -10.0F, 1.0F);
             all_on(skinned.geometry, 0, 1.0F);
             require(fbe_entity_set_rotation(skinned.still, 0.0F, std::sin(half_turn), 0.0F,
                                             std::cos(half_turn), FBE_SPACE_WORLD));
-            const std::uint64_t there = wall(scene.world, -10.0F, 1.0F, placed);
+            const std::uint64_t there = wall(scene.world, -10.0F, 1.0F, scene.placed);
             require(fbe_entity_set_rotation(there, 0.0F, std::sin(half_turn), 0.0F,
                                             std::cos(half_turn), FBE_SPACE_WORLD));
-            CHECK(alike(10.0F - toward, [&](float x) {
+            CHECK(alike(scene, 10.0F - toward, [&](float x) {
                       require(fbe_entity_set_position(there, x + away, 2.0F, -10.0F + toward,
                                                       FBE_SPACE_WORLD));
                       require(fbe_entity_set_position(skinned.still, x, -2.0F, -10.0F,
                                                       FBE_SPACE_WORLD));
                   }) == 0);
             fbe_skin_release(skinned.skin);
+        });
+    for (std::size_t at = 0; at < parts.size(); ++at) {
+        INFO(parts[at].first);
+        const bool last = at + 1 == parts.size();
+        {
+            const prepass_scene_t scene(last);
+            parts[at].second(scene);
         }
+        // Kept for the next part, and stopped after the last.
+        CHECK(fbe_gpu_started() == (at + 1 < parts.size()));
     }
-    CHECK(fbe_gpu_validation_errors() == 0);
-    fbe_material_release(placed);
-    fbe_material_release(moved);
 }
 
 TEST_CASE("a camera in stored values blends with what's stored, as DirectX 7 did", "[gpu][scene]") {

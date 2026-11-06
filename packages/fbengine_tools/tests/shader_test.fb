@@ -175,6 +175,94 @@ Function ADepfileNamesWhatItsTargetReads()
     Expect(Cooker.DepfileNames("own.spv:\n").Count == 0)
 End Function
 
+// What's in the scratch folder isn't the game's, as Slang says it, through a link followed or not.
+@Test
+Function WhatSlangReadOfTheScratchFolderIsntTheGames()
+    Local scratch = Path("/var/folders/T/fb-a1b2c3")
+    Local names = ["/private/var/folders/T/fb-a1b2c3/fbe_own.slang",
+                   "/private/var/folders/T/fb-a1b2c3/scene.slang",
+                   "/var/folders/T/fb-a1b2c3/pbr.slang",
+                   "/private/var/folders/T/game/tinted.inc.slang",
+                   "/private/var/folders/T/fb-a1b2c3d/near.slang"]
+    Local games = Cooker.OfTheGames(names, scratch)
+    Expect(games.Count == 2)
+    Expect(games[0] == "/private/var/folders/T/game/tinted.inc.slang")
+    // A folder whose name only starts with the scratch's isn't it.
+    Expect(games[1] == "/private/var/folders/T/fb-a1b2c3d/near.slang")
+    // On Windows, by either slash.
+    Local windows = Cooker.OfTheGames(["C:\\t\\fb-x\\fbe_own.slang", "C:\\t\\fb-x\\scene.slang",
+                                       "C:\\game\\a.slang"], Path("C:/t/fb-x"))
+    Expect(windows.Count == 1 && windows[0] == "C:\\game\\a.slang")
+    // A game's own fbe_own.slang, in a folder that isn't the scratch's, is the game's.
+    Expect(Cooker.OfTheGames(["/game/fbe_own.slang"], scratch).Count == 1)
+End Function
+
+// Links `link` to the folder `target`, as a junction on Windows, which needs no privilege.
+Function LinkFolder(link: Path, target: Path) Throws IOError
+    If System.Platform == Platform.WINDOWS
+        // cmd takes a forward slash as a switch's.
+        Try Command("cmd").Args(["/c", "mklink", "/J", link.Text.Replace("/", "\\"),
+                                 target.Text.Replace("/", "\\")]).Output()
+    Else
+        Try Command("ln").Args(["-s", target.Text, link.Text]).Output()
+    End If
+End Function
+
+// Sets each of the environment's `names` to what's `before` it, or takes it out for "".
+Function SetAgain(names: String[], before: String[])
+    For at = 0 Until names.Count
+        If before[at] == "" Then Env.Unset(names[at]) Else Env.Set(names[at], before[at])
+    End For
+End Function
+
+// A shader cooked through a linked folder, the temp folder too, as macOS's is: what it includes is
+// read through the link, it's kept with what it read, and what it includes changing compiles it again.
+@Test
+Function AShaderThroughALinkedFolderIsKeptByWhatItReads() Throws IOError
+    If NoSlangc() Then Skip("no slangc here")
+    Local top = Try TempDir()
+    Defer Try? top.Close()
+    Try Dir.CreateAll(top.Path / "real")
+    Local linked = top.Path / "linked"
+    Try LinkFolder(linked, top.Path / "real")
+    Expect(Dir.Exists(linked))
+    // The cooker's scratch folder is made in the linked one.
+    Local names = System.Platform == Platform.WINDOWS ? ["TMP", "TEMP"] : ["TMPDIR"]
+    Local before: String[] = []
+    For name In names
+        before.Add(Env.Get(name) ?? "")
+        Env.Set(name, linked.Text)
+    End For
+    Defer SetAgain(names, before)
+    Local source = linked / "game"
+    Try Dir.CreateAll(source)
+    Try File.WriteText(source / "tinted.inc.slang", "static const float tint = 0.5;\n")
+    Try File.WriteText(source / "tinted.slang",
+                       "#include \"tinted.inc.slang\"\nfloat4 shade(Surface surface)\n" +
+                       "{{\n    return float4(tint, tint, tint, 1.0);\n}}\n")
+    Local cache = top.Path / "cache"
+    Try Cooker.CookFolder(source, top.Path / "game.pak", cache)
+    // The file, and what it read, which is only the game's: the scratch folder's gone.
+    Expect((Try Dir.Entries(cache)).Count == 2)
+    For entry In Try Dir.Entries(cache)
+        If entry.Path.Extension() == ".reads"
+            Local reads = (Try File.ReadText(entry.Path)).SplitLines()
+            Expect(reads.Count == 1 && reads[0].EndsWith("tinted.inc.slang"))
+            Expect(File.Exists(Path(reads[0])))
+        End If
+    End For
+    // From the cache the second time, so nothing's added.
+    Try Cooker.CookFolder(source, top.Path / "game.pak", cache)
+    Expect((Try Dir.Entries(cache)).Count == 2)
+    Try File.WriteText(source / "tinted.inc.slang", "static const float tint = nothing;\n")
+    Try
+        Try Cooker.CookFolder(source, top.Path / "game.pak", cache)
+        Expect(False)
+    Catch e As IOError
+        Expect(e.Kind == IOErrorKind.INVALID_DATA)
+    End Try
+End Function
+
 // No compiler there, and one of another release, each saying which to get.
 @Test
 Function ACompilerThatIsntTheOneAskedForSaysSo() Throws IOError
