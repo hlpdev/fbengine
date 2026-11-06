@@ -27,10 +27,21 @@ Public Enum Cue
     FIT = 14
     /// The sluice opened, and the water let into the race.
     SLUICE = 15
+    /// Pip: catching up with you, taking a part, giving one back, worried at the flood, and glad or
+    /// sad at how it ended.
+    PIP_HELLO = 16
+    PIP_TAKES = 17
+    PIP_GIVES = 18
+    PIP_WORRIES = 19
+    PIP_GLAD = 20
+    PIP_SAD = 21
 End Enum
 
 /// How many cues there are.
-Public Const CUES: Int = 16
+Public Const CUES: Int = 22
+
+// How long after it's ended Pip says how it feels, so it's after the sluice's rush, not over it.
+Const PIP_AFTER_ENDING: Float = 2.5
 
 /// What you're walking on: bare rock, the tidal road's stones, the mill's boards, the shallows, sand,
 /// and turf, which trodden ground sounds as.
@@ -98,6 +109,8 @@ Public Function CueLevel(cue: Cue): Float
             Return 0.2
         Case Cue.FIT
             Return 0.25
+        Case Cue.PIP_GLAD, Cue.PIP_SAD
+            Return 0.15
         Default
             Return 0.2
     End Select
@@ -244,10 +257,13 @@ End Function
 Public Function StepPitch(surface: Surface): Float => surface == Surface.ROAD ? 0.85 : 1.0
 
 /// Whether `cue` is one of your steps.
-Public Function IsStep(cue: Cue): Bool
-    Return cue != Cue.GULL && cue != Cue.CREAK && cue != Cue.SPLASH && cue != Cue.FIT &&
-           cue != Cue.SLUICE
-End Function
+Public Function IsStep(cue: Cue): Bool => (cue As Int) <= (Cue.WADE_2 As Int) && cue != Cue.GULL &&
+                                          cue != Cue.CREAK && cue != Cue.SPLASH ||
+                                          cue == Cue.SAND_1 || cue == Cue.SAND_2 ||
+                                          cue == Cue.TURF_1 || cue == Cue.TURF_2
+
+/// Whether `cue` is Pip's voice.
+Public Function IsPip(cue: Cue): Bool => (cue As Int) >= (Cue.PIP_HELLO As Int)
 
 // The steps that a surface can be.
 Function StepsOn(surface: Surface): Cue[]
@@ -277,6 +293,12 @@ Public Final Class Cues
     Field flooded: Bool = False
     Field fitted: Int = 0
     Field opened: Bool = False
+    // What Pip was doing, as of the last Step: whether it was with you, what it held, and how long
+    // it's been since the end.
+    Field pipWasHere: Bool = True
+    Field pipHeld: Bool = False
+    Field pipWorried: Bool = False
+    Field sinceEnded: Float = -1.0
 
     Public New()
         untilGull = GULL_AT_LEAST + Random() * GULL_MORE
@@ -322,6 +344,26 @@ Public Final Class Cues
         If !opened && flow.SluiceOpen()
             opened = True
             cues.Add(Cue.SLUICE)
+        End If
+        // Pip: catching up, taking and giving back, worried as the flood comes, and how it feels,
+        // a while after it's ended.
+        Local pipHere = flow.PipHere()
+        If pipHere && !pipWasHere && flow.Ended() == Ending.NONE Then cues.Add(Cue.PIP_HELLO)
+        pipWasHere = pipHere
+        Local holds = flow.PipHolds() != Null
+        If holds && !pipHeld Then cues.Add(Cue.PIP_TAKES)
+        If !holds && pipHeld Then cues.Add(Cue.PIP_GIVES)
+        pipHeld = holds
+        If !pipWorried && flow.Flooded()
+            pipWorried = True
+            cues.Add(Cue.PIP_WORRIES)
+        End If
+        If flow.Ended() != Ending.NONE
+            Local was = sinceEnded
+            sinceEnded = was < 0.0 ? 0.0 : was + seconds
+            If was < PIP_AFTER_ENDING && sinceEnded >= PIP_AFTER_ENDING
+                cues.Add(flow.Ended() == Ending.BRIGHT ? Cue.PIP_GLAD : Cue.PIP_SAD)
+            End If
         End If
         Return cues
     End Method

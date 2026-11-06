@@ -928,6 +928,14 @@ Function Walked3d(island: Island, walk: String[], lines: String[],
     Try walker.Stop()
     stepped(game, "ended")
     Checks("it stood as the flow says, all along", fault == Null)
+    // Heard on for 3 seconds past the end, as the game goes on, so Pip says how it feels.
+    For step = 1 To 30
+        Flip(False)
+        game.Step(controls, 0.1)
+        scape.Update(game, 0.1)
+        loudest = Max(loudest, PeakOf(Audio.Mix(4410)))
+        steps += 1
+    End For
     Heard(scape, game.Story(), loudest)
     Flip(False)
     Checks("you hear from where you see", IsClose(Listener.Position(), game.View().Position(), 1.0))
@@ -1017,6 +1025,13 @@ Function Heard(scape: Soundscape, flow: Flow, loudest: Float)
            scape.Played(Cue.TURF_1) + scape.Played(Cue.TURF_2) > 0 &&
            scape.Played(Cue.FLOOR_1) + scape.Played(Cue.FLOOR_2) > 0)
     Checks("there's a sound for each cue", scape.CueCount() == CUES)
+    // Pip: caught up with you at least once, worried at the flood, and glad or sad by how it ended.
+    Checks("Pip says hello, and is worried at the flood",
+           scape.Played(Cue.PIP_HELLO) > 0 &&
+           scape.Played(Cue.PIP_WORRIES) == (flow.Flooded() ? 1 : 0))
+    Checks("Pip's glad or sad, as it ended",
+           scape.Played(Cue.PIP_GLAD) == (flow.Ended() == Ending.BRIGHT ? 1 : 0) &&
+           scape.Played(Cue.PIP_SAD) == (flow.Ended() == Ending.BRIGHT ? 0 : 1))
     Checks("the flood splashes, once", scape.Played(Cue.SPLASH) == 1)
     // A clank for each part fitted, and the sluice once, as how it ended says.
     Local fitted = 0
@@ -1208,21 +1223,30 @@ Function Listened() Throws GraphicsError, IOError, AudioError
     Local road = scape.SplashAt()
     For cue In [Cue.STEP_1, Cue.STEP_2, Cue.STEP_3, Cue.FLOOR_1, Cue.FLOOR_2, Cue.WADE_1,
                 Cue.WADE_2, Cue.SAND_1, Cue.SAND_2, Cue.TURF_1, Cue.TURF_2,
-                Cue.CREAK, Cue.SPLASH, Cue.FIT, Cue.SLUICE]
-        Local near = cue == Cue.SPLASH ? road : mill
+                Cue.CREAK, Cue.SPLASH, Cue.FIT, Cue.SLUICE, Cue.PIP_HELLO, Cue.PIP_TAKES,
+                Cue.PIP_GIVES, Cue.PIP_WORRIES, Cue.PIP_GLAD, Cue.PIP_SAD]
+        Local near = cue == Cue.SPLASH ? road : IsPip(cue) ? scape.PipAt() : mill
         Listener.SetPosition(Vec3(near.x, near.y, near.z + 1.0))
+        // From inside for what's in the mill, Pip's voice too while it's there, as it is to start.
+        Local fromInside = IsPip(cue) ? scape.PipInMill() : cue != Cue.SPLASH
         For step = 1 To 30
-            scape.Surroundings(0.0, cue != Cue.SPLASH, 1.0 / 60.0)
+            scape.Surroundings(0.0, fromInside, 1.0 / 60.0)
             Audio.Mix(735)
         End For
         scape.Play(cue, door)
         Local peak = PeakOf(Audio.Mix(rate))
+        Print("cue {cue As Int} peaks at {peak}")
         Checks("cue {cue As Int} reaches the mix", peak > 0.05 && peak < 0.5)
     End For
-    // A gull, out over the water, heard from where you stand.
+    // A gull, out over the water, heard from where you stand, outside.
     Listener.SetPosition(Vec3(door.x, 5.0, door.y))
+    For step = 1 To 60
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
     scape.Play(Cue.GULL, door)
     Local gullPeak = PeakOf(Audio.Mix(rate))
+    Print("a gull peaks at {gullPeak}")
     Checks("a gull reaches the mix", gullPeak > 0.01 && gullPeak < 0.5)
     Checks("what's outside is on its buses, under the options' levels", scape.OutsideOnItsBus())
     // Each of the options' levels at 0 silences its own, and only that; Master, all of it.

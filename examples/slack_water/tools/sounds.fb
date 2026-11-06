@@ -354,6 +354,62 @@ Public Function Storm(): Float[]
     Return Leveled(made, 0.6)
 End Function
 
+// Pip's voice: a little brass helper's, by frequency modulation, a tone at twice the note bending it
+// as much as its envelope says, so it's bright as it starts and rounder as it dies. Each of `notes` is
+// its hertz at its start and end, and how long it is; each one's swells in and out over 15 ms.
+Function Chirps(notes: (Float, Float, Float)[]): Float[]
+    Local made: Float[] = []
+    Local phase = 0.0
+    Local turn = 0.0
+    For note In notes
+        Local count = Samples(note.2)
+        For at = 0 Until count
+            Local part = (at As Float) / (count As Float)
+            Local hertz = note.0 + (note.1 - note.0) * part
+            phase += hertz * TAU / (RATE As Float)
+            turn += hertz * 2.0 * TAU / (RATE As Float)
+            Local t = (at As Float) / (RATE As Float)
+            Local edge = Min(Min(t / 0.015, (note.2 - t) / 0.015), 1.0)
+            Local bright = 1.5 * (1.0 - part * 0.7)
+            made.Add(Sine(phase + bright * Sine(turn)) * edge)
+        End For
+    End For
+    Return Ended(Leveled(made, 0.6))
+End Function
+
+// Pip's hello: two notes up, E5 to A5, as it catches up.
+Public Function PipHello(): Float[] => Chirps([(659.0, 680.0, 0.12), (0.0, 0.0, 0.05),
+                                               (880.0, 900.0, 0.16)])
+
+// Pip taking something: a quick glide up.
+Public Function PipTakes(): Float[] => Chirps([(600.0, 1200.0, 0.16)])
+
+// Pip giving something back: a quick glide down.
+Public Function PipGives(): Float[] => Chirps([(1200.0, 600.0, 0.16)])
+
+// Pip worried, as the flood comes over the road: three wobbling notes, each lower.
+Public Function PipWorries(): Float[]
+    Local notes: (Float, Float, Float)[] = []
+    For each = 0 Until 3
+        Local base = 760.0 - (each As Float) * 70.0
+        notes.Add((base, base - 40.0, 0.14))
+        notes.Add((base - 40.0, base + 10.0, 0.08))
+        notes.Add((0.0, 0.0, 0.05))
+    End For
+    Return Chirps(notes)
+End Function
+
+// Pip glad, as the lamp burns bright: C6, E6, G6, C7, up.
+Public Function PipGlad(): Float[]
+    Return Chirps([(1047.0, 1047.0, 0.09), (1319.0, 1319.0, 0.09), (1568.0, 1568.0, 0.09),
+                   (2093.0, 2100.0, 0.22)])
+End Function
+
+// Pip sad, as the lamp burns dim or not at all: G5, E5, C5, slowly down, each sagging.
+Public Function PipSad(): Float[]
+    Return Chirps([(784.0, 760.0, 0.22), (659.0, 630.0, 0.22), (523.0, 480.0, 0.4)])
+End Function
+
 // A part fitted: iron struck on iron, a few partials that aren't harmonics, ringing down, and a
 // ratchet's clicks as it's seated.
 Public Function Fit(): Float[]
@@ -493,6 +549,12 @@ Public Function WriteSounds(folder: Path) Throws IOError
     Try WriteWav(folder / "fit.wav", Fit())
     Try WriteWav(folder / "sluice.wav", Sluice())
     Try WriteWav(folder / "works.wav", Works())
+    Try WriteWav(folder / "pip_hello.wav", PipHello())
+    Try WriteWav(folder / "pip_takes.wav", PipTakes())
+    Try WriteWav(folder / "pip_gives.wav", PipGives())
+    Try WriteWav(folder / "pip_worries.wav", PipWorries())
+    Try WriteWav(folder / "pip_glad.wav", PipGlad())
+    Try WriteWav(folder / "pip_sad.wav", PipSad())
     Try WriteWav(folder / "calm.wav", Calm())
     Try File.WriteText(folder / "calm.wav.toml", "streamed = true\n")
     Try WriteWav(folder / "storm.wav", Storm())

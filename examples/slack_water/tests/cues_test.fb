@@ -432,6 +432,61 @@ Function TheMusicDucksUnderACueWithoutAClick()
     Expect(backAt >= 228 && backAt <= 232)
 End Function
 
+// Pip's voice by the flow: a hello each time it catches up, never at the start, as it's with you; a
+// chirp up as it takes something and down as it gives it back, one each; worried once, at the flood;
+// and glad, or sad, once, 2.5 s after the end, not over the sluice's rush.
+@Test
+Function PipSaysWhatTheFlowDoes()
+    For ending In ["bright", "dim", "dark"]
+        Local flow = Quiet()
+        Local cues = Cues()
+        Local steps = WalkOf(ending) ?? []
+        Local next = 0
+        Local heard = [0, 0, 0, 0, 0, 0]
+        Local caughtUp = 0
+        Local takes = 0
+        Local gives = 0
+        Local wasHere = flow.PipHere()
+        Local held = False
+        Local endedAt = -1.0
+        Local feltAt = -1.0
+        For tick = 0 Until 4000
+            If next < steps.Count && WalkReady(flow, steps[next])
+                Select steps[next]
+                    Case "W"
+                        flow.GoOut()
+                    Case "S"
+                        flow.GoBack()
+                    Case "E"
+                        flow.Use()
+                    Case "Q"
+                        flow.Hand()
+                End Select
+                next += 1
+            End If
+            flow.Step(0.1)
+            If flow.Ended() != Ending.NONE && endedAt < 0.0 Then endedAt = (tick As Float) * 0.1
+            If flow.PipHere() && !wasHere && flow.Ended() == Ending.NONE Then caughtUp += 1
+            wasHere = flow.PipHere()
+            Local holds = flow.PipHolds() != Null
+            If holds && !held Then takes += 1
+            If !holds && held Then gives += 1
+            held = holds
+            For cue In cues.Step(flow, 0.0, 0.1, Surface.ROCK, False)
+                If IsPip(cue) Then heard[(cue As Int) - (Cue.PIP_HELLO As Int)] += 1
+                If cue == Cue.PIP_GLAD || cue == Cue.PIP_SAD Then feltAt = (tick As Float) * 0.1
+            End For
+        End For
+        Expect(heard[0] == caughtUp && caughtUp > 0)
+        Expect(heard[1] == takes && heard[2] == gives)
+        Expect(heard[3] == (flow.Flooded() ? 1 : 0))
+        Expect(heard[4] == (flow.Ended() == Ending.BRIGHT ? 1 : 0))
+        Expect(heard[5] == (flow.Ended() == Ending.BRIGHT ? 0 : 1))
+        Expect(IsClose(feltAt - endedAt, 2.5, 0.11))
+    End For
+    Expect(!IsStep(Cue.PIP_HELLO) && IsPip(Cue.PIP_SAD) && !IsPip(Cue.SLUICE) && IsStep(Cue.TURF_2))
+End Function
+
 // What can sound at once, each at the tools' peak, doesn't clip: to the end, the sluice opening as the
 // wheel and works start, a part being fitted, and the flood.
 @Test
@@ -448,7 +503,14 @@ Function NothingAtOnceClips()
                      CueLevel(Cue.STEP_1) * 0.7 + CueLevel(Cue.CREAK) * 0.6 +
                      CueLevel(Cue.SLUICE) * 0.7 + music
     Expect(toTheEnd < 1.0)
-    // A part fitted, before the wheel turns.
+    // Pip glad, after the sluice's rush, with the wheel and works going.
+    Local pipGlad = loudestBeds * 0.7 + WheelLevel(1.0) * 0.7 + WorksLevel(1.0) * 0.6 +
+                    CueLevel(Cue.STEP_1) * 0.7 + CueLevel(Cue.CREAK) * 0.6 +
+                    CueLevel(Cue.PIP_GLAD) * 0.6 + music
+    Expect(pipGlad < 1.0)
+    // A part fitted, before the wheel turns, and Pip taking or giving one.
+    Expect(loudestBeds * 0.7 + CueLevel(Cue.PIP_TAKES) * 0.6 + CueLevel(Cue.STEP_1) * 0.7 +
+           CueLevel(Cue.CREAK) * 0.6 + music < 1.0)
     Local fitting = loudestBeds * 0.7 + CueLevel(Cue.FIT) * 0.6 + CueLevel(Cue.STEP_1) * 0.7 +
                     CueLevel(Cue.CREAK) * 0.6 + music
     Expect(fitting < 1.0)
