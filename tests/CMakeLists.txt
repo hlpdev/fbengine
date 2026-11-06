@@ -71,7 +71,7 @@ add_executable(fbengine_gpu_tests gpu/vulkan_tests.cpp gpu/present_tests.cpp
                gpu/buffer_tests.cpp gpu/graph_tests.cpp gpu/canvas_tests.cpp
                gpu/environment_tests.cpp
                gpu/pixels_tests.cpp gpu/text_tests.cpp gpu/example_tests.cpp
-               gpu/scene_tests.cpp
+               gpu/scene_tests.cpp gpu/swapchain_tests.cpp
                golden/golden.cpp golden/golden_tests.cpp golden/stb.cpp)
 target_link_libraries(fbengine_gpu_tests PRIVATE volk Vulkan::Headers Catch2::Catch2WithMain
                       fbengine_internal)

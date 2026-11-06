@@ -242,6 +242,9 @@ void stop_screen();
 std::vector<std::uint8_t> read_window();
 /// Whether a window's open, which the GPU draws the screen for.
 bool window_open();
+/// For a test: what makes a shown window's surface in SDL's place, so its swapchain's made even on
+/// SDL's offscreen video, which shows none; nullptr for SDL's.
+void make_surfaces_by(VkSurfaceKHR (*make)());
 
 /// The index of the sampler for a filter and a wrap in U and V, fbe_texture.h's.
 std::uint32_t sampler_index(std::int32_t filter, std::int32_t wrap_u, std::int32_t wrap_v);
