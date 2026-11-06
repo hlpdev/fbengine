@@ -2173,7 +2173,8 @@ if(WIN32)
   target_link_libraries(fbengine_audio_native_tests PRIVATE ole32 psapi)
 endif()
 fbengine_set_warnings(fbengine_audio_native_tests)
-catch_discover_tests(fbengine_audio_native_tests TEST_PREFIX "audio."
+# A test tagged [stability], a fuzz, race, or soak, is labeled so, for sanitizers.yml.
+catch_discover_tests(fbengine_audio_native_tests TEST_PREFIX "audio." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_audio_native>")
 
 # fbengine_audio_native's C API with each of a call's allocations failing in turn: its sources built
