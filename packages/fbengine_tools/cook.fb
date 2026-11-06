@@ -116,6 +116,8 @@ Public Final Class Cooker
     /// light, and its alpha for the material's cutoff, blend, and fog to go on with:
     ///
     /// - `surface.place`, `float3`: in the camera's view, x right, y up, looking down -z.
+    /// - `surface.world()`, `float3`: where it is in the world, and `surface.worldNormal()` its normal
+    ///   there, for what's mapped by the world, as rock on a cliff is.
     /// - `surface.normal`, `float3`: length 1, or 0 for what has none, facing the camera for a
     ///   two-sided material's back.
     /// - `surface.uv0`, `surface.uv1`, `float2`.

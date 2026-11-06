@@ -705,6 +705,8 @@ if(FBENGINE_FB_TESTS)
       "whatever its shading: 255, 18[78], 137"
       "its UVs, a half each: 18[789], 18[789], 0"
       "its normal, toward the camera: 18[78], 18[78], 255"
+      "where it is in the world, a quarter each: 18[6-8], 13[4-7], 9[6-9]"
+      "its normal in the world, along x: 255, 18[78], 18[78]"
       "its vertices' color, a half each: 18[78], 18[78], 18[78]"
       "what it would have drawn, with no layer: 137, 18[78], 255"
       "its layer's texture, a half each: 18[789], 18[789], 18[789]"
