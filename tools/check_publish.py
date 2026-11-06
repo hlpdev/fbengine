@@ -3,7 +3,8 @@ order publish.yml publishes them, with futureblitz.dev's registry a folder of it
 are copied into a temporary folder, with the DLLs they have, and each copy's project.toml names
 that folder as futureblitz's, so a package's registry dependencies are found there; after each dry
 run, the package is published into the folder, for the next one's to find. publish.yml's order is
-the one checked, so a package published before what it needs fails here first.
+the one checked, so a package published before what it needs fails here first; and it's checked
+whole: every package whose project.toml says type = "library", once each, and no other.
 
     python tools/check_publish.py <fb> [the repository's folder]
 """
@@ -15,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 
 
 def order(root):
@@ -24,6 +26,32 @@ def order(root):
     if found is None:
         raise SystemExit("publish.yml has no `for package in ...; do fb publish \"packages/$package\"` loop")
     return found.group(1).replace("\\\n", " ").split()
+
+
+def libraries(root):
+    """Every package whose project.toml says it's a library, by its folder's name."""
+    found = []
+    for toml in sorted((root / "packages").glob("*/project.toml")):
+        project = tomllib.loads(toml.read_text(encoding="utf-8"))
+        if project.get("project", {}).get("type") == "library":
+            found.append(toml.parent.name)
+    return found
+
+
+def listed(root):
+    """What's wrong with publish.yml's list, or None: a package twice, a library it leaves out, or
+    what isn't a library."""
+    packages = order(root)
+    if len(set(packages)) != len(packages):
+        return f"publish.yml publishes a package twice: {packages}"
+    every = libraries(root)
+    missing = [package for package in every if package not in packages]
+    if missing:
+        return f"publish.yml doesn't publish {', '.join(missing)}, which project.toml says is a library"
+    others = [package for package in packages if package not in every]
+    if others:
+        return f"publish.yml publishes {', '.join(others)}, which isn't a library package"
+    return None
 
 
 def run(fb, folder, *words):
@@ -38,10 +66,11 @@ def main():
         return 2
     fb = sys.argv[1]
     root = pathlib.Path(sys.argv[2] if len(sys.argv) == 3 else pathlib.Path(__file__).parent.parent).resolve()
-    packages = order(root)
-    if len(set(packages)) != len(packages):
-        print(f"publish.yml publishes a package twice: {packages}")
+    wrong = listed(root)
+    if wrong:
+        print(wrong)
         return 1
+    packages = order(root)
     with tempfile.TemporaryDirectory() as folder:
         temp = pathlib.Path(folder)
         registry = temp / "registry"

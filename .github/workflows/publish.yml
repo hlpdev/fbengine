@@ -5,8 +5,9 @@ name: Publish
 # It runs by hand, on the tag v<version>: `gh workflow run publish.yml --ref v0.1.0 -f
 # registry=staging`. Each target's DLLs are built first (native.yml), into the packages' target
 # archives; then fb's release adds each package from the registry, on each target, and runs it.
-# fbengine_editor is a program, which the registry doesn't take: it's built for each target with
-# its DLLs beside it and attached to the tag's GitHub release, which has to be made first.
+# fbengine_editor is a program, which the registry doesn't take: published to futureblitz, it's built
+# for each target with its DLLs beside it and attached to the tag's GitHub release, which has to be
+# made first.
 # Published to futureblitz, it's posted last in the Discord server's releases channel, through the
 # webhook DISCORD_RELEASES_WEBHOOK, pinging the role DISCORD_RELEASES_ROLE.
 
@@ -105,11 +106,13 @@ jobs:
             fb publish "packages/$package" --registry "$INDEX"
           done
 
-  # The editor, built for each target as a release's programs are, with the DLLs it loads beside it,
-  # packed, and attached to the tag's release.
+  # The editor, built for each target as a release's programs are, with the DLLs it loads beside it
+  # and the notices of what they bundle, packed, and attached to the tag's release: only for
+  # futureblitz, once its packages are published, as staging's runs have no release to touch.
   editor:
     name: editor ${{ matrix.target }}
-    needs: [version, native]
+    needs: [version, native, publish]
+    if: inputs.registry == 'futureblitz'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     permissions:
@@ -133,10 +136,16 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: actions/download-artifact@v8
         with:
           name: native-${{ matrix.target }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
 
       - uses: ./.github/actions/install-fb
         with:
@@ -153,20 +162,10 @@ jobs:
             echo "::error::There's no release v$VERSION to attach the editor to: make it first"
             exit 1
           fi
-          name="fbengine_editor-$VERSION-$TARGET"
-          mkdir -p "$RUNNER_TEMP/$name"
-          cp packages/fbengine_editor/README.md packages/fbengine_editor/LICENSE "$RUNNER_TEMP/$name/"
-          # Its DLLs are fbengine's, whose notices go with them.
-          cp -r packages/fbengine/notices "$RUNNER_TEMP/$name/notices"
-          fb --color never build packages/fbengine_editor --release -o "$RUNNER_TEMP/$name/fbengine_editor"
-          cd "$RUNNER_TEMP"
-          if [ "$TARGET" = windows-x64 ]; then
-            archive="$name.zip"
-            7z a -tzip "$archive" "$name" > /dev/null
-          else
-            archive="$name.tar.gz"
-            tar -czf "$archive" "$name"
-          fi
+          # The program by its OS's name, its DLLs, and notices/: what fb build says it bundled, and
+          # each DLL's package's. The archive's path is the last line.
+          python tools/pack_editor.py fb "$VERSION" "$TARGET" "$RUNNER_TEMP/editor" | tee "$RUNNER_TEMP/packed"
+          archive="$(tail -n 1 "$RUNNER_TEMP/packed")"
           gh release upload "v$VERSION" "$archive" --clobber -R "$GITHUB_REPOSITORY"
 
   check:

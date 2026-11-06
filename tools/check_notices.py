@@ -1,98 +1,175 @@
-"""Checks each package's notices name every third-party library its DLL links: each DLL's
-target_link_libraries in native/<package>/CMakeLists.txt, with the lists it set()s there, is read
-for what it links, and each of those has the notices its code asks for in packages/<package>/notices/,
-which the package's README names. A library this doesn't know stops it, so a new one gets its notice
-before it ships. MinGW-w64's winpthreads, linked into every Windows DLL, and what a DLL embeds that
-isn't linked, Font.BuiltIn's font, are each DLL's too.
+"""Checks each package's notices name every third-party library its DLL has in it, as the build
+made it: CMake's file API, which tests/CMakeLists.txt asks for, gives each DLL's targets, what they
+link through every step, and their sources and include folders. Each library it links, each
+FetchContent folder its code is compiled from or includes, and each vendored file one of its own
+sources #includes has the notices its code asks for in packages/<package>/notices/, which the
+package's README names. A library this doesn't know stops it, so a new one gets its notice before it
+ships. MinGW-w64's winpthreads, linked into every Windows DLL, is each DLL's too.
 
-    python tools/check_notices.py [the repository's folder]
+    python tools/check_notices.py <the build's folder> [the repository's folder]
 """
 
+import json
 import pathlib
 import re
 import sys
 
-# Each library a DLL links, by its name in target_link_libraries, and the notices its code needs:
-# what's built from it, and what it has inside.
-NOTICES = {
-    "SDL3::SDL3-static": ["sdl.txt"],
+# Each library a DLL links, by its target's name, and the notices its code needs: what's built
+# from it, and what it has inside. A name is matched whole, as a regular expression.
+LINKED = {
+    "SDL3-static": ["sdl.txt"],
     "freetype": ["freetype.txt"],
     "fbengine_harfbuzz": ["harfbuzz.txt", "harfbuzz-ms-use.txt"],
     "fbengine_sheenbidi": ["sheenbidi.txt"],
-    "fbengine_stb": ["stb.txt"],
     "ktx_read": ["ktx.txt", "basisu.txt", "zstd.txt"],
-    "ktx": ["ktx.txt", "basisu.txt", "astc-encoder.txt", "zstd.txt"],
-    "fastgltf::fastgltf": ["fastgltf.txt", "simdjson.txt"],
+    "ktx": ["ktx.txt", "basisu.txt", "zstd.txt"],
+    "ktx_version": [],
+    r"astcenc-[\w.]+-static": ["astc-encoder.txt"],
+    "fastgltf": ["fastgltf.txt", "simdjson.txt"],
     "volk": ["volk.txt"],
-    "Vulkan::Headers": ["vulkan-headers.txt"],
-    "fbengine_vma": ["vma.txt"],
     "fbengine_miniaudio": ["miniaudio.txt"],
     "Jolt": ["jolt.txt"],
     "meshoptimizer": ["meshoptimizer.txt"],
     "pl_mpeg": ["pl_mpeg.txt"],
 }
-# What's the system's, which needs no notice.
-SYSTEM = {"Threads::Threads", "${CMAKE_DL_LIBS}", "m"}
+# Each FetchContent folder, _deps/<name>-src, a DLL's code is compiled from or includes, and its
+# notices: header-only libraries are only these.
+FOLDERS = {
+    "sdl3": ["sdl.txt"],
+    "freetype": ["freetype.txt"],
+    "harfbuzz": ["harfbuzz.txt", "harfbuzz-ms-use.txt"],
+    "sheenbidi": ["sheenbidi.txt"],
+    "stb": ["stb.txt"],
+    "ktx": ["ktx.txt"],
+    "fastgltf": ["fastgltf.txt"],
+    "volk": ["volk.txt"],
+    "vulkanheaders": ["vulkan-headers.txt"],
+    "vulkanmemoryallocator": ["vma.txt"],
+    "miniaudio": ["miniaudio.txt"],
+    "joltphysics": ["jolt.txt"],
+    "meshoptimizer": ["meshoptimizer.txt"],
+}
+# A vendored file one of a DLL's own sources (the repository's, or the build's own) #includes, by
+# its name, and its notice: what's compiled in that no target or folder says.
+INCLUDED = {
+    "stb_vorbis.c": ["stb_vorbis.txt"],
+    "ma_reverb_node.c": ["verblib.txt"],
+    "default_font.inc": ["noto-sans.txt"],
+}
 # Every DLL's, as cmake/native.cmake links MinGW's winpthreads into each statically.
 EVERY_DLL = ["winpthreads.txt"]
-# What a DLL embeds in its own sources, by the source that does, and its notice.
-EMBEDDED = {"fbengine": [("native/fbengine/text/default_font.inc", "noto-sans.txt")]}
+# What's no library: the build's own steps.
+UTILITY = {"UTILITY"}
 
 
-def calls(text, name):
-    """The words of each call of `name` in a CMake file, its comments left out."""
-    text = re.sub(r"#[^\n]*", "", text)
-    return [body.split() for body in re.findall(rf"\b{name}\s*\(([^)]*)\)", text)]
+def known(table, name):
+    """The notices `table` gives `name`, or None if it doesn't know it."""
+    for pattern, notices in table.items():
+        if re.fullmatch(pattern, name):
+            return notices
+    return None
 
 
-def linked(root, package):
-    """What the package's DLL links, or None if it has no DLL."""
-    cmake = root / "native" / package / "CMakeLists.txt"
-    if not cmake.is_file():
+def graph(build):
+    """Each DLL's targets and what they're made of, from CMake's file API: {package: (the targets it
+    links, through every step, the FetchContent folders they're compiled from or include, and their
+    own sources)}. None if the build has no reply."""
+    reply = build / ".cmake" / "api" / "v1" / "reply"
+    indexes = sorted(reply.glob("index-*.json")) if reply.is_dir() else []
+    if not indexes:
         return None
-    text = cmake.read_text(encoding="utf-8")
-    dll = f"{package}_native"
-    if not any(words and words[0] == dll for words in calls(text, "fbengine_add_native")):
-        return None
-    lists = {words[0]: words[1:] for words in calls(text, "set") if words}
-    found = []
-    for words in calls(text, "target_link_libraries"):
-        if not words or words[0] != dll:
+    index = json.loads(indexes[-1].read_text(encoding="utf-8"))
+    codemodel = next(entry for entry in index["objects"] if entry["kind"] == "codemodel")
+    model = json.loads((reply / codemodel["jsonFile"]).read_text(encoding="utf-8"))
+    source = pathlib.Path(model["paths"]["source"])
+    targets = {target["id"]: target for target in model["configurations"][0]["targets"]}
+
+    def read(target_id):
+        return json.loads((reply / targets[target_id]["jsonFile"]).read_text(encoding="utf-8"))
+
+    dlls = {}
+    for target in targets.values():
+        package = target["name"].removesuffix("_native")
+        if package == target["name"]:
             continue
-        for word in words[1:]:
-            if word in ("PRIVATE", "PUBLIC", "INTERFACE"):
+        linked = set()
+        folders = set()
+        own = set()
+        seen = set()
+        todo = [target["id"]]
+        while todo:
+            target_id = todo.pop()
+            if target_id in seen:
                 continue
-            listed = re.fullmatch(r"\$\{(\w+)\}", word)
-            if listed and listed.group(1) in lists:
-                found += lists[listed.group(1)]
-            else:
-                found.append(word)
+            seen.add(target_id)
+            made = read(target_id)
+            if made["type"] in UTILITY:
+                continue
+            if target_id != target["id"]:
+                linked.add(made["name"])
+            todo += [each["id"] for each in made.get("dependencies", [])]
+            paths = [each["path"] for each in made.get("sources", [])]
+            includes = [each["path"] for group in made.get("compileGroups", []) for each in group.get("includes", [])]
+            for path in paths + includes:
+                folder = re.search(r"(?:^|/)_deps/([^/]+?)-(?:src|build|subbuild)(?:/|$)", path.replace("\\", "/"))
+                if folder:
+                    folders.add(folder.group(1))
+                elif path in paths:
+                    own.add(path if pathlib.Path(path).is_absolute() else str(source / path))
+        dlls[package] = (sorted(linked), sorted(folders), sorted(own))
+    return dlls
+
+
+def included(sources):
+    """The vendored files INCLUDED knows that `sources` #include, by name."""
+    found = set()
+    for path in sources:
+        try:
+            text = pathlib.Path(path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for name in re.findall(r'^\s*#\s*include\s*["<]([^">]+)[">]', text, re.MULTILINE):
+            name = name.rsplit("/", 1)[-1]
+            if name in INCLUDED:
+                found.add(name)
     return found
 
 
-def problems(root):
+def problems(build, root):
     """What's wrong with the notices, and how many DLLs were checked."""
+    dlls = graph(build)
+    if dlls is None:
+        return [f"{build} has no CMake file API reply: configure it with tests/CMakeLists.txt's query"], 0
     wrong = []
     checked = 0
     for folder in sorted(path for path in (root / "packages").iterdir() if path.is_dir()):
         package = folder.name
-        libraries = linked(root, package)
-        if libraries is None:
+        if package not in dlls:
             continue
+        linked, fetched, own = dlls[package]
         needed = list(EVERY_DLL)
-        for library in libraries:
-            if library in SYSTEM:
-                continue
-            if library not in NOTICES:
+        for library in linked:
+            notices = known(LINKED, library)
+            if notices is None:
                 wrong.append(f"{package}'s DLL links {library}, whose notices this doesn't know: add them, "
-                             "and it to NOTICES")
+                             "and it to LINKED")
                 continue
-            needed += NOTICES[library]
-        for source, notice in EMBEDDED.get(package, []):
-            if not (root / source).is_file():
-                wrong.append(f"{package} embeds {source}, which isn't there: take it out of EMBEDDED")
-            needed.append(notice)
+            needed += notices
+        for name in fetched:
+            notices = known(FOLDERS, name)
+            if notices is None:
+                wrong.append(f"{package}'s DLL is compiled from _deps/{name}-src, whose notices this doesn't "
+                             "know: add them, and it to FOLDERS")
+                continue
+            needed += notices
+        for name in sorted(included(own)):
+            needed += INCLUDED[name]
         readme = (folder / "README.md").read_text(encoding="utf-8")
+        # A line one space in, after a list, is the last item's, as Markdown renders it.
+        for number, line in enumerate(readme.splitlines(), 1):
+            if re.match(r" \S", line):
+                wrong.append(f"{package}'s README.md:{number} starts one space in, so it renders inside the "
+                             "list item above: start it with no space, after a blank line")
         for notice in sorted(set(needed)):
             if not (folder / "notices" / notice).is_file():
                 wrong.append(f"{package} has no notices/{notice}")
@@ -101,18 +178,19 @@ def problems(root):
         kept = sorted((folder / "notices").iterdir()) if (folder / "notices").is_dir() else []
         for path in kept:
             if path.name not in needed:
-                wrong.append(f"{package}'s notices/{path.name} is for nothing its DLL links")
+                wrong.append(f"{package}'s notices/{path.name} is for nothing in its DLL")
         checked += 1
     return wrong, checked
 
 
 def main():
-    if len(sys.argv) > 2:
+    if len(sys.argv) not in (2, 3):
         print(__doc__)
         return 2
+    build = pathlib.Path(sys.argv[1]).resolve()
     here = pathlib.Path(__file__).resolve().parent.parent
-    root = pathlib.Path(sys.argv[1]).resolve() if len(sys.argv) == 2 else here
-    wrong, checked = problems(root)
+    root = pathlib.Path(sys.argv[2]).resolve() if len(sys.argv) == 3 else here
+    wrong, checked = problems(build, root)
     for line in wrong:
         print(line)
     if wrong or checked == 0:

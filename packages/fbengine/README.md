@@ -49,12 +49,14 @@ Its sound is `fbengine_audio`, its physics `fbengine_physics`, its UI `fbengine_
 - SheenBidi is Apache-2.0 (notices/sheenbidi.txt);
 - stb is MIT or public domain (notices/stb.txt);
 - KTX-Software's reader is Apache-2.0 (notices/ktx.txt), with Basis Universal's transcoder
-  (notices/basisu.txt) and zstd, BSD-3-Clause (notices/zstd.txt);
+  (notices/basisu.txt), the ASTC encoder, Apache-2.0 (notices/astc-encoder.txt), and
+  zstd, BSD-3-Clause (notices/zstd.txt);
 - fastgltf is MIT (notices/fastgltf.txt), with simdjson, Apache-2.0 or MIT (notices/simdjson.txt);
 - volk is MIT (notices/volk.txt), Vulkan-Headers Apache-2.0 or MIT (notices/vulkan-headers.txt),
   and the Vulkan Memory Allocator MIT (notices/vma.txt);
 - on Windows, MinGW-w64's winpthreads is MIT and BSD-style (notices/winpthreads.txt);
 - Font.BuiltIn's font is a subset of Noto Sans, under the SIL Open Font License 1.1
   (notices/noto-sans.txt).
- Portions of this software are copyright © 2026 The FreeType Project
+
+Portions of this software are copyright © 2026 The FreeType Project
 (www.freetype.org). All rights reserved.

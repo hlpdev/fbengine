@@ -42,5 +42,6 @@ one play of a `Sound`; once it ends or is stopped, its methods do nothing, so a 
 ask about one whose sound ended long ago.
 
 It's released with fbengine, at the same version, and needs fb 1.2.3 or later. Apache-2.0; in its
-DLL, miniaudio is MIT-0 or public domain (notices/miniaudio.txt), and on Windows MinGW-w64's
-winpthreads is MIT and BSD-style (notices/winpthreads.txt).
+DLL, miniaudio is MIT-0 or public domain (notices/miniaudio.txt), with stb_vorbis, MIT or public
+domain (notices/stb_vorbis.txt), and verblib, MIT-0 or public domain (notices/verblib.txt); and on
+Windows MinGW-w64's winpthreads is MIT and BSD-style (notices/winpthreads.txt).
