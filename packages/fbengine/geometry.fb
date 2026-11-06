@@ -329,7 +329,9 @@ Public Final Class Geometry
 
     /// Sets the box, in its own space, its meshes are culled by when drawn instead of its bounds,
     /// as a skinned mesh's, whose vertices move out of them, wants, or its bounds again for Null.
-    /// InView and Bounds keep its bounds; copies keep it. A backward box panics.
+    /// An Instances of it culls each instance by it, placed as that instance is, and goes by it
+    /// for how far off an instance is for its levels of detail. InView and Bounds keep its bounds;
+    /// copies keep it. A backward box panics.
     @MainThread @PanicsAtCaller
     Public Method SetCullBox(box: AABB?)
         Local geometry = Live("SetCullBox")

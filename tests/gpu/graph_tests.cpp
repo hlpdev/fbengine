@@ -878,3 +878,22 @@ TEST_CASE("a write comes in turn with what the frame does with the texture", "[g
     CHECK(fbe::gpu::last_recorded().passes == std::vector<std::string_view>{ "drawn" });
     stop_gpu();
 }
+
+// A level's write is in turn too: after a clear that came before, as a pass of its own, leaving the
+// other levels as the clear had them.
+TEST_CASE("a level's write comes in turn with what the frame does with the texture", "[gpu]") {
+    begin_test();
+    const std::uint64_t texture = fbe_texture_create(2, 2, FBE_TEXTURE_RGBA8_LINEAR, true);
+    REQUIRE(texture != 0);
+    require(fbe_texture_clear(texture, 1.0F, 0.0F, 0.0F, 1.0F));
+    const std::vector<std::uint8_t> blue{ 0, 0, 255, 255 };
+    require(fbe_texture_write_level(texture, 1, 1, 1, blue.data(), 4));
+    CHECK(fbe::texture::read(texture, 1) == blue);
+    CHECK(fbe::gpu::last_recorded().passes ==
+          std::vector<std::string_view>{ "clear", "write a level" });
+    const std::vector<std::uint8_t> red{
+        255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255,
+    };
+    CHECK(fbe::texture::read(texture, 0) == red);
+    stop_gpu();
+}

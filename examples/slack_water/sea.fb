@@ -1,65 +1,105 @@
-// The sea: a sheet at the tide's height. Its normals move, by frames of waves that loop and tile. Its
-// color, how much it hides, and its foam go by how deep it is over the ground, in a map over the
-// island, worked out again as the sea moves and the foam rolls in. Smooth, so what it mostly shows is
-// the sky, by the Environment. It can take two scrolled normals and its depth in a shader, once a
-// material can have one of its own.
+// The sea: a sheet at the tide's height, drawn by a shader of its own, assets/water.slang. Its normals
+// are two tiles of waves scrolled across each other; its color, how much it hides, and its foam go by
+// how deep it is over the ground, which it reads from a map of the ground's heights made once. Smooth,
+// so what it mostly shows is the sky, by the Environment.
 
 Import std.core
+Import std.image.hdr
 Import std.math
 Import fbengine
 Import "./ground"
+Import "./res" As Res
 Import "./sky"
 
 // How far the sheet goes each way from the middle, past any fog.
 Const SHEET: Float = 3000.0
-// How many metres a tile of waves is, its texels, how many frames it loops in, and how many a second.
-Const TILE: Float = 48.0
+// The tile of waves: its texels, and how many meters across each of the two scrolled is, which way it
+// goes, and how fast.
 Const WAVES_SIDE: Int = 256
-Const WAVES_FRAMES: Int = 32
-Const WAVES_RATE: Float = 12.0
-// How far the waves drift, in tiles a second, so what's far never quite repeats.
-Const DRIFT: Float = 0.006
-// The texels of the map over the island, and how many times a second it's worked out.
-Const SHORE_SIDE: Int = 384
-Const SHORE_RATE: Float = 8.0
-// How deep it's all the deep's from, how far up the ground's ever under it, and each band of depth.
-Const SHALLOWS: Float = 2.6
-Const HIGHEST: Float = 1.8
-Const BAND: Float = 0.1
+Const TILE: Float = 48.0
+Const OTHER_TILE: Float = 19.0
+Const SPEED: Float = 0.9
+Const OTHER_SPEED: Float = 0.55
+// Which way each goes in the world.
+Const WAY: Vec2 = Vec2(0.92, 0.39)
+Const OTHER_WAY: Vec2 = Vec2(-0.45, 0.89)
+// The map of the ground under it: its texels, and how far below 0 the lowest it holds is, as a half
+// float of a texture holds nothing below 0.
+Const GROUND_SIDE: Int = 512
+Const GROUND_BELOW: Float = 10.0
 // How much a bright sky shows in it: a low roughness, and how much the normals are of what's in them.
 Const ROUGHNESS: Float = 0.2
 Const NORMALS: Float = 1.0
-// How many metres across the patches the wind makes on it are, what roughens the sheet's far parts.
+// How many meters across the patches the wind makes on it are, what roughens the sheet's far parts.
 Const PATCHES: Float = 900.0
+// Its colors, as they're stored: the deep's, the shallows', and the foam's.
+Const DEEP: Color = Color(0.1, 0.3, 0.38)
+Const SHALLOW: Color = Color(0.22, 0.52, 0.52)
+Const FOAM: Color = Color(0.95, 0.97, 0.95)
+// How fast the lines of foam roll in, a second; how fast its froth drifts, in its noise's cells a
+// second, coarse and fine, and its streaks; and how many cells that noise goes before it repeats, as
+// water.slang's period.
+Const LINES_ROLL: Float64 = 0.22
+Public Const FROTH_DRIFT: Float64 = 0.07
+Public Const FINE_FROTH_DRIFT: Float64 = 0.13
+Public Const STREAKS_DRIFT: Float64 = 0.05
+Public Const FROTH_PERIOD: Float64 = 1024.0
 
 // A sine's values, by a whole turn in this many steps, a power of 2.
 Const TURN: Int = 1024
 
 /// How many steps of a sine a wave's made of: across and along a tile, by whole waves so it tiles;
-/// how steep it is; how many times it goes round in a loop of the frames, whole so it loops; and where
-/// it starts.
+/// how steep it is; and where it starts.
 Struct Wave
     Field across: Int
     Field along: Int
     Field steep: Float
-    Field rounds: Int
     Field start: Int
 End Struct
 
 // Many, none long, so what's seen from far off has little to repeat by, and the steepness is in the
-// short ones, as water's is; all ways, mostly with the wind; each as fast as its length says.
+// short ones, as water's is; all ways, mostly with the wind.
 Function Waves(): Wave[]
-    Return [Wave(9, 2, 0.02, 2, 0), Wave(7, -6, 0.018, 1, 311), Wave(6, 11, 0.018, 2, 97),
-            Wave(13, 4, 0.025, 2, 640), Wave(11, -9, 0.022, 2, 203), Wave(17, 3, 0.028, 2, 871),
-            Wave(8, -15, 0.02, 2, 450), Wave(21, 8, 0.03, 3, 12), Wave(25, -6, 0.03, 3, 733),
-            Wave(19, 17, 0.024, 3, 529), Wave(31, 7, 0.032, 3, 158), Wave(35, -13, 0.03, 3, 902),
-            Wave(41, 11, 0.028, 4, 366), Wave(47, -18, 0.024, 4, 684), Wave(37, 29, 0.022, 4, 75),
-            Wave(57, 6, 0.02, 4, 590), Wave(63, -23, 0.016, 5, 417), Wave(71, 19, 0.012, 5, 266)]
+    Return [Wave(9, 2, 0.02, 0), Wave(7, -6, 0.018, 311), Wave(6, 11, 0.018, 97),
+            Wave(13, 4, 0.025, 640), Wave(11, -9, 0.022, 203), Wave(17, 3, 0.028, 871),
+            Wave(8, -15, 0.02, 450), Wave(21, 8, 0.03, 12), Wave(25, -6, 0.03, 733),
+            Wave(19, 17, 0.024, 529), Wave(31, 7, 0.032, 158), Wave(35, -13, 0.03, 902),
+            Wave(41, 11, 0.028, 366), Wave(47, -18, 0.024, 684), Wave(37, 29, 0.022, 75),
+            Wave(57, 6, 0.02, 590), Wave(63, -23, 0.016, 417), Wave(71, 19, 0.012, 266)]
 End Function
 
-/// A frame of the waves' normal map, row by row: a tile's top and bottom, and left and right, are
-/// neighbors, and the frame after the last is the first.
-Public Function WaveFrame(frame: Int): UInt8[]
+/// A normal's texel, its red, green, and blue, for a surface that slopes by these across and along:
+/// rounded, so a flat one's 128, 128, 255.
+Public Function NormalTexel(slopeX: Float, slopeY: Float): (UInt8, UInt8, UInt8)
+    Local size = 1.0 / Sqrt(slopeX * slopeX + slopeY * slopeY + 1.0)
+    Return (Round((-slopeX * size * 0.5 + 0.5) * 255.0) As UInt8,
+            Round((-slopeY * size * 0.5 + 0.5) * 255.0) As UInt8,
+            Round((size * 0.5 + 0.5) * 255.0) As UInt8)
+End Function
+
+/// Where each tile of waves is sampled from `clock` seconds in, in tiles, from 0 to 1: what's at a
+/// place is what was its speed's distance back along its way, the second's in its turned frame, as
+/// water.slang turns it; each worked out in 64 bits and wrapped to its tile, so neither jumps however
+/// long it's been.
+Public Function WaveOffsets(clock: Float64): (Vec2, Vec2)
+    Local wrapped = Function(meters: Float64, tile: Float): Float
+        Local tiles = meters / (tile As Float64)
+        Return (tiles - Floor(tiles)) As Float
+    End Function
+    Local back = -clock * (SPEED As Float64)
+    Local otherBack = -clock * (OTHER_SPEED As Float64)
+    // The second's way, turned as its place is: x 0.8 - z 0.6, x 0.6 + z 0.8.
+    Local turnedX = (OTHER_WAY.x * 0.8 - OTHER_WAY.y * 0.6) As Float64
+    Local turnedZ = (OTHER_WAY.x * 0.6 + OTHER_WAY.y * 0.8) As Float64
+    Return (Vec2(wrapped(back * (WAY.x As Float64), TILE),
+                 wrapped(back * (WAY.y As Float64), TILE)),
+            Vec2(wrapped(otherBack * turnedX, OTHER_TILE),
+                 wrapped(otherBack * turnedZ, OTHER_TILE)))
+End Function
+
+/// The waves' tile of normals, row by row, with no alpha: its top and bottom, and left and right, are
+/// neighbors.
+Public Function WaveTile(): UInt8[]
     Local cosine: Float[] = []
     For step = 0 Until TURN
         cosine.Add(Cos((step As Float) / (TURN As Float) * 6.2831853))
@@ -73,49 +113,37 @@ Public Function WaveFrame(frame: Int): UInt8[]
             Local slopeX: Float = 0.0
             Local slopeY: Float = 0.0
             For wave In waves
-                Local step = (wave.across * x + wave.along * y) * perTexel + wave.start +
-                             wave.rounds * frame * TURN / WAVES_FRAMES
+                Local step = (wave.across * x + wave.along * y) * perTexel + wave.start
                 Local value = cosine[step & (TURN - 1)]
                 Local long = Sqrt(((wave.across * wave.across + wave.along * wave.along) As Float))
                 slopeX += wave.steep * (wave.across As Float) / long * value
                 slopeY += wave.steep * (wave.along As Float) / long * value
             End For
-            Local size = 1.0 / Sqrt(slopeX * slopeX + slopeY * slopeY + 1.0)
-            bytes.Add(((-slopeX * size * 0.5 + 0.5) * 255.0) As UInt8)
-            bytes.Add(((-slopeY * size * 0.5 + 0.5) * 255.0) As UInt8)
-            bytes.Add(((size * 0.5 + 0.5) * 255.0) As UInt8)
-            bytes.Add(255)
+            Local r, g, b = NormalTexel(slopeX, slopeY)
+            bytes.Add(r)
+            bytes.Add(g)
+            bytes.Add(b)
+            bytes.Add(0)
         End For
     End For
     Return bytes
 End Function
 
-/// What the map over the island has at a place `depth` metres deep, `time` seconds on, whose foam
-/// breaks up by `broken`, from 0 to 1: its red, green, and blue, as they're stored, and how much it
-/// hides of what's under.
-Public Function ShoreAt(depth: Float, time: Float, broken: Float): (Float, Float, Float, Float)
-    If depth <= 0.0 Then Return (0.22, 0.52, 0.52, 0.0)
-    Local deep = Smooth(0.0, SHALLOWS, depth)
-    Local r = 0.22 + (0.1 - 0.22) * deep
-    Local g = 0.52 + (0.3 - 0.52) * deep
-    Local b = 0.52 + (0.38 - 0.52) * deep
-    Local hides = Smooth(0.0, 0.05, depth) * (0.45 + 0.55 * Smooth(0.0, 1.4, depth))
-    // At the very edge, and in lines rolling in, which fade as they're out.
-    Local edge = 1.0 - Smooth(0.0, 0.16, depth)
-    Local rolled = depth / 0.7 + time * 0.22
-    Local through = rolled - Floor(rolled)
-    Local line = (Smooth(0.7, 0.92, through) - Smooth(0.92, 1.0, through)) *
-                 (1.0 - Smooth(0.2, 1.1, depth))
-    Local foam = Smooth(broken - 0.14, broken + 0.14, Clamp(edge + line, 0.0, 1.0))
-    Return (r + (0.95 - r) * foam, g + (0.97 - g) * foam, b + (0.95 - b) * foam,
-            hides + (0.95 - hides) * foam)
+// A color as it's stored, in linear light, as a shader's given it.
+Function Linear(stored: Color): Vec3
+    Local decode = Function(value: Float): Float
+        Return value <= 0.04045 ? value / 12.92 : Exp(Log((value + 0.055) / 1.055) * 2.4)
+    End Function
+    Return Vec3(decode(stored.r), decode(stored.g), decode(stored.b))
 End Function
 
-// Patches of wind on the water, as what multiplies its roughness, in green: mostly calm, some rough.
+// Patches of wind on the water, as what multiplies its roughness, in green: mostly calm, some rough;
+// and the most it does, from 0 to 1.
 @MainThread
-Function WindPatches(): Texture Throws GraphicsError
+Function WindPatches(): (Texture, Float) Throws GraphicsError
     Local side: Int32 = 256
     Local bytes: UInt8[] = []
+    Local most: Int = 0
     For y = 0 Until side
         For x = 0 Until side
             // Noise that tiles, by mixing its ends with what's beyond them.
@@ -124,14 +152,16 @@ Function WindPatches(): Texture Throws GraphicsError
             Local here = TiledNoise(along, down)
             Local rough = 0.3 + 0.7 * Smooth(0.42, 0.62, here)
             bytes.Add(255)
-            bytes.Add((rough * 255.0) As UInt8)
+            Local level = Round(rough * 255.0) As Int
+            most = Max(most, level)
+            bytes.Add(level As UInt8)
             bytes.Add(0)
             bytes.Add(255)
         End For
     End For
     Local patches = Try Texture(side, side, TextureFormat.RGBA8_LINEAR, True)
     patches.WritePixels(0, 0, side, side, bytes)
-    Return patches
+    Return (patches, (most As Float) / 255.0)
 End Function
 
 // Noise of a few octaves over a square whose opposite edges meet.
@@ -165,128 +195,86 @@ Function LatticeAt(x: Int, y: Int, octave: Int): Float
                      (y As Float) + (octave As Float) * 61.0)
 End Function
 
+// The map of the ground under the sea, in half floats, so what's between its texels is: the ground's
+// height in red, GROUND_BELOW over it, and no alpha, over the terrain's square.
+@MainThread
+Function GroundMap(): Texture Throws GraphicsError
+    Local values: Float32[] = []
+    For y = 0 Until GROUND_SIDE
+        For x = 0 Until GROUND_SIDE
+            Local placeX = ((x As Float) + 0.5) / (GROUND_SIDE As Float) * (SIDE As Float) -
+                           (SIDE As Float) * 0.5
+            Local placeZ = ((y As Float) + 0.5) / (GROUND_SIDE As Float) * (SIDE As Float) -
+                           (SIDE As Float) * 0.5
+            values.Add(Max(GroundHeight(placeX, placeZ) + GROUND_BELOW, 0.0) As Float32)
+            values.Add(0.0)
+            values.Add(0.0)
+            values.Add(0.0)
+        End For
+    End For
+    Local map = Try Texture.FromHdr(HdrImage.FromFloats(GROUND_SIDE, GROUND_SIDE, values), False)
+    map.SetWrap(TextureWrap.CLAMP, TextureWrap.CLAMP)
+    Return map
+End Function
+
 /// The sheet of sea and what it's drawn with.
 Public Final Class Sea
     Field sheet: Mesh
     Field water: Material
-    Field frames: Texture[]
-    Field shore: Texture
-    Field grounds: Float[]
-    Field broken: Float[]
-    Field bands: Int[][]
-    Field bytes: UInt8[]
-    Field drawnAt: Float = 0.0
-    Field frame: Int = -1
-    Field worked: Int64 = -1
-    Field shownFor: Float = 0.0
+    Field mostPatched: Float = 0.0
+    Field tile: Texture
+    Field patches: Texture
+    Field kept: Float = 1.0
+    Field otherKept: Float = 1.0
+    Field clock: Float64 = 0.0
 
-    New(sheet: Mesh, water: Material, frames: Texture[], shore: Texture, grounds: Float[],
-        broken: Float[], bands: Int[][], bytes: UInt8[])
+    New(sheet: Mesh, water: Material, mostPatched: Float, tile: Texture, patches: Texture)
         Self.sheet = sheet
         Self.water = water
-        Self.frames = frames
-        Self.shore = shore
-        Self.grounds = grounds
-        Self.broken = broken
-        Self.bands = bands
-        Self.bytes = bytes
-        WorkOut(0.0, 0.0, 0.0, True)
+        Self.mostPatched = mostPatched
+        Self.tile = tile
+        Self.patches = patches
         Update(0.0)
     End New
 
     /// Makes it; what it's made of's kept in `held`.
     @MainThread
-    Public Static Method Make(held: Texture[]): Sea Throws GraphicsError
-        Local frames: Texture[] = []
-        For at = 0 Until WAVES_FRAMES
-            Local made = Try Texture(WAVES_SIDE As Int32, WAVES_SIDE As Int32,
-                                     TextureFormat.RGBA8_LINEAR, True)
-            made.WritePixels(0, 0, WAVES_SIDE As Int32, WAVES_SIDE As Int32, WaveFrame(at))
-            held.Add(made)
-            frames.Add(made)
-        End For
-        Local shore = Try Texture(SHORE_SIDE As Int32, SHORE_SIDE As Int32, TextureFormat.RGBA8,
-                                  False)
-        shore.SetWrap(TextureWrap.CLAMP, TextureWrap.CLAMP)
-        shore.SetAlpha(True)
-        held.Add(shore)
-        // What's under each texel, and what its foam breaks up by, and those of each band of how high
-        // the ground is, of what's ever near the sea's edge.
-        Local grounds: Float[] = []
-        Local broken: Float[] = []
-        Local bands: Int[][] = []
-        Local bandCount = ((HIGHEST + SHALLOWS) / BAND) As Int + 1
-        For at = 0 Until bandCount
-            bands.Add([])
-        End For
-        Local bytes: UInt8[] = []
-        For y = 0 Until SHORE_SIDE
-            For x = 0 Until SHORE_SIDE
-                Local placeX = ((x As Float) + 0.5) / (SHORE_SIDE As Float) * (SIDE As Float) -
-                               (SIDE As Float) * 0.5
-                Local placeZ = ((y As Float) + 0.5) / (SHORE_SIDE As Float) * (SIDE As Float) -
-                               (SIDE As Float) * 0.5
-                Local height = GroundHeight(placeX, placeZ)
-                grounds.Add(height)
-                broken.Add(0.3 + 0.28 * SoftNoise(placeX * 0.35, placeZ * 0.35) +
-                           0.3 * SoftNoise(placeX * 1.3 + 40.0, placeZ * 1.3))
-                Local band = BandOf(height)
-                If band >= 0 && band < bandCount Then bands[band].Add(y * SHORE_SIDE + x)
-                For part = 0 Until 4
-                    bytes.Add(0)
-                End For
-            End For
-        End For
-        Local sheet = Mesh(Geometry.Plane(1))
-        sheet.SetScale(Vec3(SHEET, 1.0, SHEET))
-        // Smooth, so it's the sky it shows.
-        Local water = Material(Color(1.0, 1.0, 1.0))
+    Public Static Method Make(held: Texture[]): Sea Throws GraphicsError, IOError
+        Local tile = Try Texture(WAVES_SIDE As Int32, WAVES_SIDE As Int32,
+                                 TextureFormat.RGBA8_LINEAR,
+                                 True)
+        tile.WritePixels(0, 0, WAVES_SIDE As Int32, WAVES_SIDE As Int32, WaveTile())
+        held.Add(tile)
+        Local ground = Try GroundMap()
+        held.Add(ground)
+        Local patches, mostPatched = Try WindPatches()
+        held.Add(patches)
+
+        Local deep = Linear(DEEP)
+        Local water = Material(Color(deep.x, deep.y, deep.z))
         water.SetMetalRough(0.0, ROUGHNESS)
         water.SetNormalScale(NORMALS)
         water.SetBlend(Blend.ALPHA)
-        water.SetTexture(0, shore)
-        Local patches = Try WindPatches()
-        held.Add(patches)
+        // Neither colors it: each is laid over by an alpha of none, and water.slang reads them.
+        water.SetTexture(0, ground)
+        water.SetLayer(0, LayerBlend.ALPHA)
+        water.SetTexture(1, tile)
+        water.SetLayer(1, LayerBlend.ALPHA)
         water.SetMap(MaterialMap.METAL_ROUGH, patches)
         Local patchScale = PATCHES / (SHEET * 2.0)
         water.SetMapUv(MaterialMap.METAL_ROUGH, UvTurn(Vec2(patchScale, patchScale), 0.0,
                                                        Vec2(0.0, 0.0)))
-        Local across = (SIDE As Float) / (SHEET * 2.0)
-        // A layer's UVs are divided by its scale, and its offset taken off that.
-        Local toMiddle = 0.5 / across - 0.5
-        water.SetLayerUv(0, UvTurn(Vec2(across, across), 0.0, Vec2(toMiddle, toMiddle)))
+        water.SetShader(Try Assets.Load<Shader>(Res.Water))
+        water.SetParameter(3, Vec4(deep.x, deep.y, deep.z, 0.0))
+        Local shallow = Linear(SHALLOW)
+        water.SetParameter(4, Vec4(shallow.x, shallow.y, shallow.z, 0.0))
+        Local foam = Linear(FOAM)
+        water.SetParameter(5, Vec4(foam.x, foam.y, foam.z, GROUND_BELOW))
+
+        Local sheet = Mesh(Geometry.Plane(1))
+        sheet.SetScale(Vec3(SHEET, 1.0, SHEET))
         sheet.SetMaterial(water)
-        Return Sea(sheet, water, frames, shore, grounds, broken, bands, bytes)
-    End Method
-
-    // Which band a height's in; one outside them is off their ends.
-    Static Method BandOf(height: Float): Int => Floor((height + SHALLOWS) / BAND) As Int
-
-    // Works out the map where it could have changed with the sea at `height`, having been at `was`.
-    @MainThread
-    Method WorkOut(height: Float, was: Float, time: Float, all: Bool)
-        If all
-            For at = 0 Until grounds.Count
-                WorkOutTexel(at, height, time)
-            End For
-        Else
-            Local lowest = Max(BandOf(Min(height, was) - SHALLOWS) - 1, 0)
-            Local highest = Min(BandOf(Max(height, was)) + 1, bands.Count - 1)
-            For band = lowest To highest
-                For at In bands[band]
-                    WorkOutTexel(at, height, time)
-                End For
-            End For
-        End If
-        shore.WritePixels(0, 0, SHORE_SIDE As Int32, SHORE_SIDE As Int32, bytes)
-    End Method
-
-    Method WorkOutTexel(at: Int, height: Float, time: Float)
-        Local r, g, b, hides = ShoreAt(height - grounds[at], time, broken[at])
-        bytes[at * 4] = (r * 255.0) As UInt8
-        bytes[at * 4 + 1] = (g * 255.0) As UInt8
-        bytes[at * 4 + 2] = (b * 255.0) As UInt8
-        bytes[at * 4 + 3] = (hides * 255.0) As UInt8
+        Return Sea(sheet, water, mostPatched, tile, patches)
     End Method
 
     /// Sets it as it is `clock` seconds into the slack water.
@@ -294,37 +282,72 @@ Public Final Class Sea
     Public Method Update(clock: Float64)
         Local height = SeaHeight(clock)
         sheet.SetPosition(Vec3(0.0, height, 0.0))
-        Local at = (Floor(clock * (WAVES_RATE As Float64)) As Int64 %
-                    (WAVES_FRAMES As Int64)) As Int
-        If at != frame
-            frame = at
-            water.SetMap(MaterialMap.NORMAL, frames[at])
-            Local scale = TILE / (SHEET * 2.0)
-            Local drifted = (clock As Float) * DRIFT
-            water.SetMapUv(MaterialMap.NORMAL, UvTurn(Vec2(scale, scale), 0.0,
-                                                      Vec2(drifted, drifted * 0.4)))
-        End If
-        Local step = Floor(clock * (SHORE_RATE As Float64)) As Int64
-        If step != worked
-            worked = step
-            WorkOut(height, drawnAt, (step As Float) / SHORE_RATE, False)
-            drawnAt = height
-        End If
+        // Each of what drifts, worked out in 64 bits and wrapped to how often it repeats, so a
+        // float's steps stay small and nothing jumps.
+        Local wrapped = Function(rate: Float64,
+                                 period: Float64): Float => ((clock * rate) % period) As Float
+        water.SetParameter(0, Vec4(height, wrapped(LINES_ROLL, 1.0), (SIDE As Float) * 0.5, SHEET))
+        water.SetParameter(6,
+                           Vec4(wrapped(FROTH_DRIFT, FROTH_PERIOD),
+                                wrapped(FINE_FROTH_DRIFT, FROTH_PERIOD),
+                                wrapped(STREAKS_DRIFT, FROTH_PERIOD), 0.0))
+        Self.clock = clock
+        Local one, other = WaveOffsets(clock)
+        water.SetParameter(1, Vec4(TILE, one.x, one.y, kept))
+        water.SetParameter(2, Vec4(OTHER_TILE, other.x, other.y, otherKept))
     End Method
 
     /// Stills it, a mirror, to see what's in it, or sets it going again.
     @MainThread
     Public Method SetStill(still: Bool)
-        water.SetNormalScale(still ? 0.0 : NORMALS)
+        Local deep = Linear(DEEP)
+        water.SetParameter(3, Vec4(deep.x, deep.y, deep.z, still ? 1.0 : 0.0))
         water.SetMetalRough(0.0, still ? 0.02 : ROUGHNESS)
+    End Method
+
+    /// How rough it's drawn at most: its roughness, times the most its patches of wind make it.
+    @MainThread Public Method MostRough(): Float => water.Roughness() * mostPatched
+
+    /// Sets how rough it is, to see a rougher one's said to be.
+    @MainThread
+    Public Method SetRoughness(roughness: Float)
+        water.SetMetalRough(0.0, roughness)
+    End Method
+
+    /// How rough it's drawn at first.
+    @MainThread Public Method Roughness(): Float => ROUGHNESS
+
+    /// Keeps each tile of waves' slopes, or not, to see each alone.
+    @MainThread
+    Public Method SetTilesKept(kept: Bool, otherKept: Bool)
+        Self.kept = kept ? 1.0 : 0.0
+        Self.otherKept = otherKept ? 1.0 : 0.0
+        Update(clock)
+    End Method
+
+    /// Draws its waves from `tile` in place of its own, or its own again for Null, to see what it
+    /// makes of a tile.
+    @MainThread
+    Public Method SetWaveTile(tile: Texture?)
+        water.SetTexture(1, tile ?? Self.tile)
+    End Method
+
+    /// Takes the patches of wind off its roughness, or puts them back.
+    @MainThread
+    Public Method SetPatched(on: Bool)
+        water.SetMap(MaterialMap.METAL_ROUGH, on ? patches : Null)
     End Method
 
     /// How high it's drawn.
     @MainThread Public Method DrawnAt(): Float => sheet.Position().y
 
-    /// Which frame of its waves it's showing.
-    @MainThread Public Method Frame(): Int => frame
-
     /// What it's drawn with.
     @MainThread Public Method Shown(): Material => water
+
+    /// Draws it with `material` in place of its own, or its own again for Null, to see what another
+    /// makes of it.
+    @MainThread
+    Public Method SetDrawnWith(material: Material?)
+        sheet.SetMaterial(material ?? water)
+    End Method
 End Class

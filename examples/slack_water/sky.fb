@@ -15,8 +15,9 @@ Public Const SKY_LIGHT: Float = 1.2
 
 Const SKY_WIDTH: Int = 1024
 Const SKY_HEIGHT: Int = 512
-// How far off the sun's drawn, inside any camera's far plane however far it walks, and how wide.
-Const SUN_OFF: Float = 3600.0
+/// How far off the sun's drawn from the camera, inside its far plane.
+Public Const SUN_OFF: Float = 3600.0
+// How wide it's drawn.
 Const SUN_SIZE: Float = 260.0
 // How bright the sun's middle is, far past what bloom starts from.
 Const SUN_GLOW: Color = Color(40.0, 34.0, 26.0)
@@ -120,7 +121,9 @@ Function SunLook(): Texture Throws GraphicsError
             Local across = ((x As Float) + 0.5) / (side As Float) * 2.0 - 1.0
             Local down = ((y As Float) + 0.5) / (side As Float) * 2.0 - 1.0
             Local off = Sqrt(across * across + down * down)
-            Local glow = (1.0 - Smooth(0.1, 0.16, off)) + 0.1 * (1.0 - off) * (1.0 - off)
+            // Its glow goes to nothing at its square's edges, which mustn't show.
+            Local out = Max(1.0 - off, 0.0)
+            Local glow = (1.0 - Smooth(0.1, 0.16, off)) + 0.1 * out * out
             Local level = (Clamp(glow, 0.0, 1.0) * 255.0) As UInt8
             bytes.Add(level)
             bytes.Add(level)
@@ -136,6 +139,7 @@ End Function
 /// The sun as it's seen, which follows its light.
 Public Final Class SunShown
     Field shown: Sprite
+    Field way: Vec3
 
     New(shown: Sprite)
         Self.shown = shown
@@ -157,11 +161,16 @@ Public Final Class SunShown
         Return SunShown(shown)
     End Method
 
-    /// Puts it where it is `clock` seconds in.
+    /// Turns it to where it is `clock` seconds in.
     @MainThread
     Public Method Update(clock: Float64)
-        Local way = WayToSun(clock)
-        shown.SetPosition(Vec3(way.x * SUN_OFF, way.y * SUN_OFF, way.z * SUN_OFF))
+        way = WayToSun(clock)
+    End Method
+
+    /// Puts it its way from `eye`, as far off as it's drawn.
+    @MainThread
+    Public Method From(eye: Vec3)
+        shown.SetPosition(eye + way * SUN_OFF)
     End Method
 
     /// Where it's drawn.
