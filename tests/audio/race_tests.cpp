@@ -6,52 +6,23 @@
 // ThreadSanitizer checks that no two threads touch a thing unguarded.
 
 #include "fbengine_audio.h"
+#include "stability.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
-#include <iterator>
-#include <string>
+#include <stop_token>
 #include <thread>
 #include <vector>
 
+using fbe::tests::random_t;
+
 namespace {
-
-std::vector<std::uint8_t> read(const std::filesystem::path& path) {
-    std::ifstream file(path, std::ios::binary);
-    return { std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>() };
-}
-
-// xorshift64, from a seed.
-class random_t {
-public:
-    explicit random_t(std::uint64_t seed) : m_state(seed) {}
-
-    std::uint64_t next() {
-        m_state ^= m_state << 13U;
-        m_state ^= m_state >> 7U;
-        m_state ^= m_state << 17U;
-        return m_state;
-    }
-
-    // From 0 to `count`, not counting it.
-    std::size_t below(std::size_t count) {
-        return count == 0 ? 0 : static_cast<std::size_t>(next() % count);
-    }
-
-    // From 0 to 1.
-    float unit() {
-        return static_cast<float>(next() % 10001) / 10000.0F;
-    }
-
-private:
-    std::uint64_t m_state;
-};
 
 /// One of `handles`, at random, or 0 for none.
 std::uint64_t any(const std::vector<std::uint64_t>& handles, random_t& random) {
@@ -75,11 +46,11 @@ std::uint64_t taken(std::vector<std::uint64_t>& handles, random_t& random) {
 void hammered(std::uint64_t seed, int calls, bool device_events) {
     const std::filesystem::path corpus(FBE_AUDIO_TEST_CORPUS);
     const std::vector<std::vector<std::uint8_t>> files{
-        read(corpus / "wav_s16_stereo_44100.wav"),
-        read(corpus / "wav_ima_adpcm_stereo_22050.wav"),
-        read(corpus / "flac_s16_stereo_44100_level0.flac"),
-        read(corpus / "ogg_vorbis_stereo_44100_q6.ogg"),
-        read(corpus / "ogg_vorbis_51_48000.ogg"),
+        fbe::tests::read(corpus / "wav_s16_stereo_44100.wav"),
+        fbe::tests::read(corpus / "wav_ima_adpcm_stereo_22050.wav"),
+        fbe::tests::read(corpus / "flac_s16_stereo_44100_level0.flac"),
+        fbe::tests::read(corpus / "ogg_vorbis_stereo_44100_q6.ogg"),
+        fbe::tests::read(corpus / "ogg_vorbis_51_48000.ogg"),
     };
     random_t random(seed);
     std::vector<std::uint64_t> sounds;
@@ -206,15 +177,15 @@ void hammered(std::uint64_t seed, int calls, bool device_events) {
 
 } // namespace
 
-TEST_CASE("the game's calls while another thread mixes leave every sample finite") {
+TEST_CASE("the game's calls while another thread mixes leave every sample finite", "[stability]") {
     REQUIRE(fbe_audio_start(2, 48000, 2, nullptr, 0.0));
-    std::atomic<bool> done = false;
     std::atomic<bool> finite = true;
     std::atomic<std::int64_t> mixes = 0;
-    std::thread mixing([&] {
+    // A jthread, which a REQUIRE's failure stops and joins on its way out.
+    std::jthread mixing([&](const std::stop_token& stop) {
         std::vector<float> samples(2048);
         random_t sizes(7);
-        while (!done.load()) {
+        while (!stop.stop_requested()) {
             const auto frames = static_cast<std::int32_t>(1 + sizes.below(1024));
             fbe_audio_mix(samples.data(), frames);
             for (std::size_t i = 0; i < static_cast<std::size_t>(frames) * 2; ++i) {
@@ -226,7 +197,7 @@ TEST_CASE("the game's calls while another thread mixes leave every sample finite
         }
     });
     hammered(0x9E3779B97F4A7C15ULL, 20000, false);
-    done = true;
+    mixing.request_stop();
     mixing.join();
     CHECK(finite.load());
     CHECK(mixes.load() > 0);
@@ -238,12 +209,28 @@ TEST_CASE("the game's calls while another thread mixes leave every sample finite
 }
 
 // On the null backend, whose own thread mixes at a device's pace, with the device unplugged,
-// plugged in, changed, and stalled among the game's calls.
-TEST_CASE("the game's calls while a device's thread mixes, and the device is lost and changed") {
+// plugged in, changed, and stalled among the game's calls; and once it's plugged back in, flips
+// make it again, and it mixes.
+TEST_CASE("the game's calls while a device's thread mixes, and the device is lost and changed",
+          "[stability]") {
     REQUIRE(fbe_audio_start(1, 48000, 2, nullptr, 0.002));
+    const std::int64_t started = fbe_audio_frames();
     hammered(0xD1B54A32D192ED03ULL, 20000, true);
-    fbe_audio_recover();
+    CHECK(fbe_audio_frames() > started);
+    REQUIRE(fbe_audio_simulate(FBE_AUDIO_SIMULATE_PLUG_IN));
+    // A flip every 10 ms, until the device is back and has mixed since: a stall the game's calls
+    // left is lost after a quarter of a second.
+    const std::int64_t plugged = fbe_audio_frames();
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < until &&
+           (fbe_audio_lost() || fbe_audio_frames() <= plugged)) {
+        fbe_audio_recover();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
     CHECK(fbe_audio_started());
+    CHECK(fbe_audio_frames() > plugged);
+    fbe_audio_recover();
+    CHECK(!fbe_audio_lost());
     fbe_audio_stop();
     CHECK(fbe_channel_count() == 0);
 }

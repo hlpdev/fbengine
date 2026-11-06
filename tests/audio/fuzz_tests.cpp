@@ -1,11 +1,12 @@
 // The decoders against what a game's files can be: each seed of tests/audio/corpus (corpus/make.sh
-// makes them) and the package's broken files, cut short at every length to 4 KB and at a
-// stride after, and with bytes changed, put in, taken out, and repeated, from a fixed seed, so a
-// failure is the same each run. Each is loaded whole and streamed, and each that loads plays to
-// its end in the mix: a sound or an error, never a crash, a hang, or a read outside its bytes,
-// which a build with a sanitizer checks.
+// makes them) and the package's broken files, cut short at every length to 4 KB and at a stride
+// after, and with bytes changed, put in, taken out, and repeated, half of them in a header, from a
+// fixed seed, so a failure is the same each run. Each is loaded whole and streamed, and each that
+// loads plays to its end in the mix, sought and looped on the way: a sound or an error, never a
+// crash, a hang, or a read outside its bytes, which a build with a sanitizer checks.
 
 #include "fbengine_audio.h"
+#include "stability.hpp"
 
 #include <algorithm>
 #include <array>
@@ -15,29 +16,27 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <iterator>
+#include <initializer_list>
 #include <string>
 #include <string_view>
 #include <vector>
+
+using fbe::tests::random_t;
+using fbe::tests::seed_t;
 
 namespace {
 
 constexpr std::int32_t rate = 48000;
 constexpr std::int32_t period = 1024;
 
-std::vector<std::uint8_t> read(const std::filesystem::path& path) {
-    std::ifstream file(path, std::ios::binary);
-    return { std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>() };
-}
-
-/// The corpus's seeds that end in `ending`, and what fuzzing found in them, in corpus/found, by
-/// name, so their order is the same everywhere.
-std::vector<std::filesystem::path> seeds(std::string_view ending) {
+/// The corpus's seeds that end in one of `endings`, and what fuzzing found in them, in
+/// corpus/found, by name, so their order is the same everywhere.
+std::vector<std::filesystem::path> seeds(std::initializer_list<std::string_view> endings) {
     std::vector<std::filesystem::path> found;
     const std::filesystem::path corpus(FBE_AUDIO_TEST_CORPUS);
     for (const std::filesystem::path& folder : { corpus, corpus / "found" }) {
         for (const auto& entry : std::filesystem::directory_iterator(folder)) {
-            if (entry.path().extension() == ending) {
+            if (std::ranges::find(endings, entry.path().extension().string()) != endings.end()) {
                 found.push_back(entry.path());
             }
         }
@@ -46,72 +45,18 @@ std::vector<std::filesystem::path> seeds(std::string_view ending) {
     return found;
 }
 
-// xorshift64, from a seed.
-class random_t {
-public:
-    explicit random_t(std::uint64_t seed) : m_state(seed) {}
-
-    std::uint64_t next() {
-        m_state ^= m_state << 13U;
-        m_state ^= m_state >> 7U;
-        m_state ^= m_state << 17U;
-        return m_state;
+/// Mixes `periods` periods.
+void mix(std::int64_t periods) {
+    std::vector<float> samples(static_cast<std::size_t>(period) * 2);
+    for (std::int64_t i = 0; i < periods; ++i) {
+        REQUIRE(fbe_audio_mix(samples.data(), period));
     }
-
-    // From 0 to `count`, not counting it.
-    std::size_t below(std::size_t count) {
-        return count == 0 ? 0 : static_cast<std::size_t>(next() % count);
-    }
-
-private:
-    std::uint64_t m_state;
-};
-
-/// What a decoder checks a value against, more often than a random byte is.
-constexpr std::array<std::uint8_t, 8> edges{ 0x00, 0x01, 0x7F, 0x80, 0xFE, 0xFF, 0x10, 0x40 };
-
-/// `bytes`, with one to four changes of `random`'s: a byte set, a byte set to an edge, bytes put
-/// in, taken out, repeated after themselves, or zeroed.
-std::vector<std::uint8_t> changed(std::vector<std::uint8_t> bytes, random_t& random) {
-    const std::size_t changes = 1 + random.below(4);
-    for (std::size_t c = 0; c < changes && !bytes.empty(); ++c) {
-        const std::size_t at = random.below(bytes.size());
-        const std::size_t length = std::min<std::size_t>(1 + random.below(32), bytes.size() - at);
-        const auto from = bytes.begin() + static_cast<std::ptrdiff_t>(at);
-        switch (random.below(6)) {
-        case 0:
-            bytes[at] = static_cast<std::uint8_t>(random.next());
-            break;
-        case 1:
-            bytes[at] = edges.at(random.below(edges.size()));
-            break;
-        case 2: {
-            std::vector<std::uint8_t> put(length);
-            for (std::uint8_t& byte : put) {
-                byte = static_cast<std::uint8_t>(random.next());
-            }
-            bytes.insert(from, put.begin(), put.end());
-            break;
-        }
-        case 3:
-            bytes.erase(from, from + static_cast<std::ptrdiff_t>(length));
-            break;
-        case 4: {
-            const std::vector<std::uint8_t> again(from, from + static_cast<std::ptrdiff_t>(length));
-            bytes.insert(from + static_cast<std::ptrdiff_t>(length), again.begin(), again.end());
-            break;
-        }
-        default:
-            std::fill(from, from + static_cast<std::ptrdiff_t>(length), std::uint8_t{ 0 });
-            break;
-        }
-    }
-    return bytes;
 }
 
-/// Plays `sound` once to its end in the mix, which it must reach in its frames at the mix's rate
-/// and a few periods more.
-void played(std::uint64_t sound) {
+/// Plays `sound` once to its end in the mix, sought three times at random and looped a while on
+/// the way, which from its last change of place it must reach in its frames at the mix's rate and
+/// a few periods more.
+void played(std::uint64_t sound, random_t& random) {
     const std::int64_t frames = fbe_sound_frames(sound);
     const std::int32_t own_rate = fbe_sound_sample_rate(sound);
     REQUIRE(frames > 0);
@@ -119,27 +64,35 @@ void played(std::uint64_t sound) {
     REQUIRE(own_rate <= 384000);
     const std::uint64_t channel = fbe_sound_play(sound, 1.0F, 0.0F, 1.0F, false, false, 0.0, 0, 0);
     REQUIRE(channel != 0);
+    const double seconds = static_cast<double>(frames) / own_rate;
+    for (int seek = 0; seek < 3; ++seek) {
+        mix(static_cast<std::int64_t>(random.below(3)));
+        fbe_channel_seek(channel, seconds * random.unit());
+    }
+    fbe_channel_set_loop(channel, true);
+    mix(1 + static_cast<std::int64_t>(random.below(3)));
+    fbe_channel_set_loop(channel, false);
     const std::int64_t heard = (frames * rate / own_rate) + 1;
     const std::int64_t most = (heard / period) + 8;
-    std::vector<float> samples(static_cast<std::size_t>(period) * 2);
     std::int64_t mixed = 0;
     while (fbe_channel_playing(channel) && mixed < most) {
-        REQUIRE(fbe_audio_mix(samples.data(), period));
+        mix(1);
         ++mixed;
     }
     CHECK(!fbe_channel_playing(channel));
     fbe_channel_stop(channel);
 }
 
-/// Loads and streams `bytes`, as `what` says it was made, and plays what loads. With
+/// Loads and streams `bytes`, as `what` says they were made, and plays what loads. With
 /// FBE_FUZZ_LAST set to a file's path, the bytes are written there first, so a sanitizer's stop
 /// leaves what stopped it.
-void tried(const std::vector<std::uint8_t>& bytes, const std::string& what) {
+void tried(const std::vector<std::uint8_t>& bytes, const std::string& what, random_t& random) {
     INFO(what);
     // NOLINTNEXTLINE(clang-diagnostic-deprecated-declarations): only read here.
     if (const char* last = std::getenv("FBE_FUZZ_LAST")) {
         std::ofstream file(last, std::ios::binary);
-        file.write(reinterpret_cast<const char*>(bytes.data()), // NOLINT: ofstream takes chars.
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): ofstream takes chars.
+        file.write(reinterpret_cast<const char*>(bytes.data()),
                    static_cast<std::streamsize>(bytes.size()));
     }
     const auto size = static_cast<std::int64_t>(bytes.size());
@@ -151,7 +104,7 @@ void tried(const std::vector<std::uint8_t>& bytes, const std::string& what) {
             CHECK(!std::string_view(fbe_audio_error()).empty());
             continue;
         }
-        played(sound);
+        played(sound, random);
         fbe_sound_free(sound);
     }
 }
@@ -159,25 +112,28 @@ void tried(const std::vector<std::uint8_t>& bytes, const std::string& what) {
 /// Every seed of `files`, cut short at each length to 4096 and at 96 more after, and changed 1000
 /// ways, all from `seed`.
 void fuzzed(const std::vector<std::filesystem::path>& files, std::uint64_t seed) {
+    REQUIRE(!files.empty());
     REQUIRE(fbe_audio_start(2, rate, 2, nullptr, 0.0));
     random_t random(seed);
     for (const std::filesystem::path& path : files) {
-        const std::vector<std::uint8_t> original = read(path);
-        REQUIRE(!original.empty());
+        const seed_t original(fbe::tests::read(path));
+        const std::vector<std::uint8_t>& bytes = original.bytes;
+        REQUIRE(!bytes.empty());
         const std::string name = path.filename().string();
-        tried(original, name);
-        const std::size_t near = std::min<std::size_t>(original.size(), 4096);
+        tried(bytes, name, random);
+        const std::size_t near = std::min<std::size_t>(bytes.size(), 4096);
         for (std::size_t length = 0; length < near; ++length) {
-            tried({ original.begin(), original.begin() + static_cast<std::ptrdiff_t>(length) },
-                  name + " cut to " + std::to_string(length));
+            tried({ bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(length) },
+                  name + " cut to " + std::to_string(length), random);
         }
-        const std::size_t stride = std::max<std::size_t>(1, (original.size() - near) / 96);
-        for (std::size_t length = near; length < original.size(); length += stride) {
-            tried({ original.begin(), original.begin() + static_cast<std::ptrdiff_t>(length) },
-                  name + " cut to " + std::to_string(length));
+        const std::size_t stride = std::max<std::size_t>(1, (bytes.size() - near) / 96);
+        for (std::size_t length = near; length < bytes.size(); length += stride) {
+            tried({ bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(length) },
+                  name + " cut to " + std::to_string(length), random);
         }
         for (int i = 0; i < 1000; ++i) {
-            tried(changed(original, random), name + " changed, " + std::to_string(i));
+            tried(fbe::tests::changed(original, random), name + " changed, " + std::to_string(i),
+                  random);
         }
     }
     CHECK(fbe_channel_count() == 0);
@@ -186,20 +142,59 @@ void fuzzed(const std::vector<std::filesystem::path>& files, std::uint64_t seed)
 
 } // namespace
 
-TEST_CASE("every WAV of the corpus, cut short and changed, is a sound or an error") {
-    fuzzed(seeds(".wav"), 0x9E3779B97F4A7C15ULL);
+// What's fuzzed reaches each decoder's parser only from a seed that's a sound to start with.
+TEST_CASE("every seed of the corpus is a sound, but Opus, which miniaudio doesn't read") {
+    REQUIRE(fbe_audio_start(2, rate, 2, nullptr, 0.0));
+    const std::vector<std::filesystem::path> files =
+        seeds({ ".wav", ".w64", ".aiff", ".flac", ".ogg" });
+    CHECK(files.size() >= 23);
+    for (const std::filesystem::path& path : files) {
+        const std::string name = path.filename().string();
+        if (path.parent_path().filename() == "found") {
+            continue;
+        }
+        INFO(name);
+        const std::vector<std::uint8_t> bytes = fbe::tests::read(path);
+        const std::uint64_t sound =
+            fbe_sound_load(bytes.data(), static_cast<std::int64_t>(bytes.size()));
+        if (name.contains("opus")) {
+            CHECK(sound == 0);
+            continue;
+        }
+        if (sound == 0) {
+            FAIL(fbe_audio_error());
+        }
+        // A tenth of a second at the seed's own rate, and an ADPCM block's or a Vorbis packet's
+        // more.
+        const double seconds =
+            static_cast<double>(fbe_sound_frames(sound)) / fbe_sound_sample_rate(sound);
+        CHECK(seconds >= 0.099);
+        CHECK(seconds < 0.15);
+        fbe_sound_free(sound);
+    }
+    fbe_audio_stop();
 }
 
-TEST_CASE("every FLAC of the corpus, cut short and changed, is a sound or an error") {
-    fuzzed(seeds(".flac"), 0xD1B54A32D192ED03ULL);
+TEST_CASE("every WAV, W64, RF64, and AIFF of the corpus, cut short and changed, is a sound or an "
+          "error",
+          "[stability]") {
+    fuzzed(seeds({ ".wav", ".w64", ".aiff" }), 0x9E3779B97F4A7C15ULL);
 }
 
-TEST_CASE("every Ogg of the corpus, cut short and changed, is a sound or an error") {
-    fuzzed(seeds(".ogg"), 0x8CB92BA72F3D8DD7ULL);
+TEST_CASE("every FLAC of the corpus, cut short and changed, is a sound or an error",
+          "[stability]") {
+    fuzzed(seeds({ ".flac" }), 0xD1B54A32D192ED03ULL);
+}
+
+TEST_CASE("every Ogg of the corpus, Vorbis and FLAC, cut short and changed, is a sound or an "
+          "error",
+          "[stability]") {
+    fuzzed(seeds({ ".ogg" }), 0x8CB92BA72F3D8DD7ULL);
 }
 
 // The files the package's tests keep for what once broke a decoder, cut short and changed too.
-TEST_CASE("the package's broken files, cut short and changed, are sounds or errors") {
+TEST_CASE("the package's broken files, cut short and changed, are sounds or errors",
+          "[stability]") {
     std::vector<std::filesystem::path> files;
     constexpr std::array<std::string_view, 8> names{
         "corrupt.ogg", "forged.flac", "forged.ogg", "forged.wav",

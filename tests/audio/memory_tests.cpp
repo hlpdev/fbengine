@@ -2,71 +2,23 @@
 // over and over, as a game's retries would, add nothing.
 
 #include "fbengine_audio.h"
+#include "stability.hpp"
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
-#include <iterator>
 #include <string>
 #include <vector>
 
-#ifdef _WIN32
-// psapi.h needs windows.h's types first.
-// clang-format off
-#include <windows.h>
-#include <psapi.h>
-// clang-format on
-#elifdef __APPLE__
-#include <malloc/malloc.h>
-#else
-#include <unistd.h>
-#endif
+using fbe::tests::allocated;
+using fbe::tests::sanitized;
 
 namespace {
 
 /// The bytes of the test data file `name`, or none.
 std::vector<std::uint8_t> read(const std::string& name) {
-    std::ifstream file(std::string(FBE_AUDIO_TEST_DATA) + "/" + name, std::ios::binary);
-    return { std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>() };
-}
-
-/// Whether a sanitizer's allocator is built in, which keeps what's freed mapped a while, so the
-/// process's size says nothing of a leak: LeakSanitizer says that there.
-#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
-constexpr bool sanitized = true;
-#elifdef __has_feature
-#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
-constexpr bool sanitized = true;
-#else
-constexpr bool sanitized = false;
-#endif
-#else
-constexpr bool sanitized = false;
-#endif
-
-/// What the process has allocated: its committed memory on Windows, its malloc zones' bytes in use
-/// on macOS, and its virtual size on Linux, where a large malloc maps its own. Each counts a block
-/// that's allocated and never touched.
-std::uint64_t allocated() {
-#ifdef _WIN32
-    PROCESS_MEMORY_COUNTERS_EX counters{};
-    counters.cb = sizeof(counters);
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): psapi's way to the _EX fields.
-    GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters),
-                         sizeof(counters));
-    return counters.PrivateUsage;
-#elifdef __APPLE__
-    malloc_statistics_t statistics{};
-    malloc_zone_statistics(nullptr, &statistics);
-    return statistics.size_in_use;
-#else
-    std::ifstream statm("/proc/self/statm");
-    std::uint64_t pages = 0;
-    statm >> pages;
-    return pages * static_cast<std::uint64_t>(sysconf(_SC_PAGESIZE));
-#endif
+    return fbe::tests::read(std::filesystem::path(FBE_AUDIO_TEST_DATA) / name);
 }
 
 } // namespace
@@ -106,9 +58,9 @@ std::vector<std::vector<std::uint8_t>> corpus_sounds() {
     }
     std::ranges::sort(paths);
     std::vector<std::vector<std::uint8_t>> sounds;
+    sounds.reserve(paths.size());
     for (const std::filesystem::path& path : paths) {
-        std::ifstream file(path, std::ios::binary);
-        sounds.emplace_back(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+        sounds.push_back(fbe::tests::read(path));
     }
     return sounds;
 }
@@ -160,8 +112,10 @@ void round_of(const std::vector<std::vector<std::uint8_t>>& sounds, int round) {
 } // namespace
 
 // A soak: thousands of sounds loaded, streamed, played, and freed, with buses and emitters, on no
-// device, leave the memory as it was once the first rounds have warmed it.
-TEST_CASE("thousands of sounds played and freed leave the memory as it was") {
+// device, leave the memory as it was once the first rounds have warmed it: what malloc holds after
+// each round is never more than 16 KB over what it held before them, so even a leak of a round's
+// least, an emitter, fails.
+TEST_CASE("thousands of sounds played and freed leave the memory as it was", "[stability]") {
     const std::vector<std::vector<std::uint8_t>> sounds = corpus_sounds();
     REQUIRE(sounds.size() >= 18);
     REQUIRE(fbe_audio_start(2, 48000, 2, nullptr, 0.0));
@@ -169,14 +123,14 @@ TEST_CASE("thousands of sounds played and freed leave the memory as it was") {
         round_of(sounds, round);
     }
     const std::uint64_t before = allocated();
+    std::uint64_t most = before;
     for (int round = 20; round < 200; ++round) {
         round_of(sounds, round);
+        most = std::max(most, allocated());
     }
-    const std::uint64_t after = allocated();
-    INFO("before " << before << ", after " << after);
-    // 180 rounds of 19 sounds each, 3420, and their channels, buses, and emitters.
+    INFO("before " << before << ", most after a round " << most);
     if (!sanitized) {
-        CHECK(after < before + (std::uint64_t{ 8 } << 20U));
+        CHECK(most <= before + (std::uint64_t{ 16 } << 10U));
     }
     CHECK(fbe_channel_count() == 0);
     fbe_audio_stop();

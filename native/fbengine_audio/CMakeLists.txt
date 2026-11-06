@@ -31,9 +31,8 @@ FetchContent_MakeAvailable(miniaudio)
 # - Each decoder's start makes the CRC table again, in place, while the mix's thread reads it for a
 #   stream it seeks: a data race (ThreadSanitizer), in stb_vorbis itself, v1.22 as nothings/stb and
 #   miniaudio 0.11.26's extras have it, whose start_decoder calls crc32_init (line 992) at line
-#   3707, "to avoid multithread race conditions". The copy makes it only in
-#   fbengine_vorbis_crc32_init, which fbengine_audio calls once, before its first decoder
-#   (sound/sound.cpp's ready_decoders).
+#   3707, "to avoid multithread race conditions". The copy's table is const, its values worked out
+#   here as crc32_init does, so nothing makes it and no decoder can start without it.
 # Each patch's text has to be there, once, or configuring fails.
 file(READ "${miniaudio_SOURCE_DIR}/extras/stb_vorbis.c" fbengine_stb_vorbis)
 set(fbengine_stb_vorbis_patches
@@ -59,23 +58,50 @@ set(fbengine_stb_vorbis_patches
     "   int i,j\;\n\n   if (!p->alloc.alloc_buffer) {\n      free(p->fbe_temp_lengths)\;\n      free(p->fbe_temp_values)\;\n   }\n   setup_free(p, p->vendor)\;\n"
     "   x += get8_packet(f) << 8\;\n   x += get8_packet(f) << 16\;\n"
     "   x += (uint32) get8_packet(f) << 8\;\n   x += (uint32) get8_packet(f) << 16\;\n"
-    "static void crc32_init(void)\n{"
-    "void fbengine_vorbis_crc32_init(void)\n{"
     "   crc32_init()\; // always init it, to avoid multithread race conditions\n"
-    "   // fbengine_audio makes the CRC table once, before its first decoder.\n")
+    "   // The CRC table is const, worked out by fbengine_audio's CMakeLists.txt.\n")
+# Replaces `from` in stb_vorbis.c's text with `to`, where it's there once, or fails.
+function(fbengine_patch_stb_vorbis from to)
+  string(FIND "${fbengine_stb_vorbis}" "${from}" first)
+  string(FIND "${fbengine_stb_vorbis}" "${from}" last REVERSE)
+  if(first EQUAL -1 OR NOT first EQUAL last)
+    message(FATAL_ERROR "stb_vorbis.c doesn't have, once, what a patch expects: ${from}")
+  endif()
+  string(REPLACE "${from}" "${to}" patched "${fbengine_stb_vorbis}")
+  set(fbengine_stb_vorbis "${patched}" PARENT_SCOPE)
+endfunction()
 list(LENGTH fbengine_stb_vorbis_patches fbengine_patch_count)
 math(EXPR fbengine_patch_last "${fbengine_patch_count} - 1")
 foreach(fbengine_patch RANGE 0 ${fbengine_patch_last} 2)
   math(EXPR fbengine_patched "${fbengine_patch} + 1")
   list(GET fbengine_stb_vorbis_patches ${fbengine_patch} fbengine_from)
   list(GET fbengine_stb_vorbis_patches ${fbengine_patched} fbengine_to)
-  string(FIND "${fbengine_stb_vorbis}" "${fbengine_from}" fbengine_first)
-  string(FIND "${fbengine_stb_vorbis}" "${fbengine_from}" fbengine_last REVERSE)
-  if(fbengine_first EQUAL -1 OR NOT fbengine_first EQUAL fbengine_last)
-    message(FATAL_ERROR "stb_vorbis.c doesn't have, once, what a patch expects: ${fbengine_from}")
-  endif()
-  string(REPLACE "${fbengine_from}" "${fbengine_to}" fbengine_stb_vorbis "${fbengine_stb_vorbis}")
+  fbengine_patch_stb_vorbis("${fbengine_from}" "${fbengine_to}")
 endforeach()
+# The CRC table, worked out as crc32_init does: each byte shifted through the Ogg spec's
+# polynomial, 0x04C11DB7, a bit at a time, kept to 32 bits.
+set(fbengine_crc_table "")
+foreach(fbengine_byte RANGE 0 255)
+  math(EXPR fbengine_crc "${fbengine_byte} << 24")
+  foreach(fbengine_bit RANGE 1 8)
+    math(EXPR fbengine_crc
+         "((${fbengine_crc} << 1) & 0xFFFFFFFF) ^ (((${fbengine_crc} >> 31) & 1) * 0x04C11DB7)")
+  endforeach()
+  math(EXPR fbengine_crc "${fbengine_crc}" OUTPUT_FORMAT HEXADECIMAL)
+  string(APPEND fbengine_crc_table "   ${fbengine_crc}U,\n")
+endforeach()
+fbengine_patch_stb_vorbis([=[static uint32 crc_table[256];
+static void crc32_init(void)
+{
+   int i,j;
+   uint32 s;
+   for(i=0; i < 256; i++) {
+      for (s=(uint32) i << 24, j=0; j < 8; ++j)
+         s = (s << 1) ^ (s >= (1U<<31) ? CRC32_POLY : 0);
+      crc_table[i] = s;
+   }
+}
+]=] "static const uint32 crc_table[256] = {\n${fbengine_crc_table}};\n")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/stb_vorbis.c.in" "${fbengine_stb_vorbis}")
 configure_file("${CMAKE_CURRENT_BINARY_DIR}/stb_vorbis.c.in" "${CMAKE_CURRENT_BINARY_DIR}/stb_vorbis.c"
                COPYONLY)

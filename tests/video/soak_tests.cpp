@@ -1,72 +1,27 @@
 // A soak: each test video opened, played to its end, sought, looped, its frame and sound taken,
-// and freed, a thousand times over, leaves nothing open and the memory as it was once the first
-// rounds have warmed it.
+// and freed, a thousand times over, leaves nothing open, and what malloc holds after each round
+// never more than 16 KB over what it held once the first rounds had warmed it.
 
 #include "fbengine_video.h"
+#include "stability.hpp"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
-#include <fstream>
-#include <iterator>
+#include <filesystem>
 #include <string>
 #include <vector>
 
-#ifdef _WIN32
-// psapi.h needs windows.h's types first.
-// clang-format off
-#include <windows.h>
-#include <psapi.h>
-// clang-format on
-#elifdef __APPLE__
-#include <malloc/malloc.h>
-#else
-#include <unistd.h>
-#endif
+using fbe::tests::allocated;
+using fbe::tests::sanitized;
 
 namespace {
 
 std::vector<std::uint8_t> read(const std::string& name) {
-    std::ifstream file(std::string(FBE_VIDEO_MEDIA) + "/" + name, std::ios::binary);
-    return { std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>() };
+    return fbe::tests::read(std::filesystem::path(FBE_VIDEO_MEDIA) / name);
 }
-
-/// What the process has allocated, as tests/audio/memory_tests.cpp counts it: its committed memory
-/// on Windows, its malloc zones' bytes in use on macOS, and its virtual size on Linux.
-std::uint64_t allocated() {
-#ifdef _WIN32
-    PROCESS_MEMORY_COUNTERS_EX counters{};
-    counters.cb = sizeof(counters);
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): psapi's way to the _EX fields.
-    GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters),
-                         sizeof(counters));
-    return counters.PrivateUsage;
-#elifdef __APPLE__
-    malloc_statistics_t statistics{};
-    malloc_zone_statistics(nullptr, &statistics);
-    return statistics.size_in_use;
-#else
-    std::ifstream statm("/proc/self/statm");
-    std::uint64_t pages = 0;
-    statm >> pages;
-    return pages * static_cast<std::uint64_t>(sysconf(_SC_PAGESIZE));
-#endif
-}
-
-/// Whether a sanitizer's allocator is built in, which keeps what's freed mapped a while, so the
-/// process's size says nothing of a leak: LeakSanitizer says that there.
-#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
-constexpr bool sanitized = true;
-#elifdef __has_feature
-#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
-constexpr bool sanitized = true;
-#else
-constexpr bool sanitized = false;
-#endif
-#else
-constexpr bool sanitized = false;
-#endif
 
 /// Opens `bytes`, plays it to its end, seeks, loops past its end, takes its frame and sound, and
 /// frees it.
@@ -97,7 +52,8 @@ void played(const std::vector<std::uint8_t>& bytes) {
 
 } // namespace
 
-TEST_CASE("a thousand videos played and freed leave nothing open, and the memory as it was") {
+TEST_CASE("a thousand videos played and freed leave nothing open, and the memory as it was",
+          "[stability]") {
     const std::array<std::vector<std::uint8_t>, 5> videos{
         read("colors.mpg"), read("countb.mpg"),    read("ntsc.mpg"),
         read("late.mpg"),   read("longsound.mpg"),
@@ -109,13 +65,14 @@ TEST_CASE("a thousand videos played and freed leave nothing open, and the memory
         played(videos[static_cast<std::size_t>(round) % videos.size()]);
     }
     const std::uint64_t before = allocated();
+    std::uint64_t most = before;
     for (int round = 20; round < 1000; ++round) {
         played(videos[static_cast<std::size_t>(round) % videos.size()]);
+        most = std::max(most, allocated());
     }
-    const std::uint64_t after = allocated();
-    INFO("before " << before << ", after " << after);
+    INFO("before " << before << ", most after a round " << most);
     if (!sanitized) {
-        CHECK(after < before + (std::uint64_t{ 8 } << 20U));
+        CHECK(most <= before + (std::uint64_t{ 16 } << 10U));
     }
     CHECK(fbe_video_count() == 0);
 }
