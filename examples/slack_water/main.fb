@@ -640,6 +640,41 @@ Function CheckLandmarks(folder: Path, island: Island, camera: Camera) Throws Gra
         If Abs(bottom - GroundHeight(at.x, at.z)) > 0.03 Then lying = False
     End For
     Checks("the parts lie on the ground", lying)
+    // What a body can move: each barrel and crate on a pivot of its own with its meshes under it, of
+    // its size; each log a mesh of its own, where it was placed; and the boat, which once driven stays
+    // where it's put, whatever the sea does.
+    Local props = island.Props()
+    Local ownPivots = props.Count == 5
+    For prop In props
+        If prop.0.ChildCount() == 0 || prop.0.Parent() != island.Works() Then ownPivots = False
+        If prop.1 == 0 && (prop.2.x != BARREL_RADIUS || prop.2.y != BARREL_HIGH) Then ownPivots = False
+    End For
+    Checks("the barrels and crates are each their own", ownPivots)
+    Local logs = marks.Logs()
+    Local logsPlaced = True
+    Local logSpots: (Vec2, Int, Float, Float)[] = []
+    For spot In ShoreSpots()
+        If spot.1 == 0 Then logSpots.Add(spot)
+    End For
+    If logs.Count != logSpots.Count Then logsPlaced = False
+    For at = 0 Until Min(logs.Count, logSpots.Count)
+        Local placed = Placed(logSpots[at])
+        Local log = logs[at]
+        Local away = log.0.Position(Space.WORLD) - placed.0
+        If Dot(away, away) > 0.0001 || Abs(log.1 - 2.0 * placed.2.x) > 0.0001 Then logsPlaced = False
+    End For
+    Checks("each log's its own, {logs.Count} of them, where it was placed",
+           logs.Count > 0 && logsPlaced)
+    Local rowboat = marks.Boat()
+    marks.DriveBoat(True)
+    rowboat.SetPosition(Vec3(1.0, 2.0, 3.0))
+    island.Update(TIDE_IN_AT)
+    marks.Animate(0.5)
+    Local stayed = rowboat.Position(Space.WORLD) == Vec3(1.0, 2.0, 3.0)
+    marks.DriveBoat(False)
+    island.Update(0.0)
+    Checks("a driven boat goes where it's driven", stayed &&
+           rowboat.Position(Space.WORLD) != Vec3(1.0, 2.0, 3.0))
     Local yardView = Views()[1]
     camera.SetPosition(yardView.1)
     camera.PointAt(yardView.2)

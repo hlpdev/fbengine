@@ -75,11 +75,15 @@ Public Final Class Landmarks
     Field boat: Pivot
     Field litter: Pivot
     Field litterCount: Int
+    Field logs: (Mesh, Float, Float)[]
+    Field bollard: Vec3
+    Field driven = False
     Field motion: Motion
     Field clock: Float64 = 0.0
 
     New(lighthouse: Pivot, beam: Light, lens: Material, jetty: Pivot, boat: Pivot, litter: Pivot,
-        litterCount: Int)
+        litterCount: Int, logs: (Mesh, Float, Float)[])
+        Self.logs = logs
         Self.lighthouse = lighthouse
         Self.beam = beam
         Self.lens = lens
@@ -96,8 +100,9 @@ Public Final Class Landmarks
                               stone: Material): Landmarks
         Local lighthouse, beam, lens = Lighthouse(iron, stone)
         Local jetty, boat = Jetty(wood, boards, iron)
-        Local made = Landmarks(lighthouse, beam, lens, jetty, boat, Litter(wood, stone),
-                               ShoreSpots().Count)
+        Local litter, logs = Litter(wood, stone)
+        Local made = Landmarks(lighthouse, beam, lens, jetty, boat, litter, ShoreSpots().Count,
+                               logs)
         made.Shown()
         Return made
     End Method
@@ -137,6 +142,8 @@ Public Final Class Landmarks
         beam.SetPosition(Vec3(-Sin(turned) * BEAM_OUT, LENS, -Cos(turned) * BEAM_OUT))
         Local glow = LENS_GLOW * (0.05 + 0.95 * lit)
         lens.SetEmissive(Color(glow, glow * 0.85, glow * 0.55))
+        // Once a body drives it, the boat's where that has it.
+        If driven Then Return
         Local spot = JettyEnd()
         boat.SetPosition(Vec3(spot.x - 1.0, BoatHeight(clock, motion.Swell), spot.y + 2.4))
         boat.SetRotation(0.04 * (Sin(motion.Swell * 1.1) As Float), 0.3, 0.0)
@@ -158,6 +165,28 @@ Public Final Class Landmarks
 
     /// How bright the lamp's beam is now.
     @MainThread Public Method Beam(): Float => beam.Intensity()
+
+    /// The boat's root, its origin at its middle, its keel KEEL under it.
+    @MainThread Public Method Boat(): Pivot => boat
+
+    /// Whether something else moves the boat, as a body does: then its swell and the sea's height
+    /// don't.
+    @MainThread
+    Public Method DriveBoat(on: Bool)
+        driven = on
+        Shown()
+    End Method
+
+    /// The top of the jetty's bollard, in the world, which the boat's tied to.
+    @MainThread
+    Public Method BollardTop(): Vec3 => jetty.Position(Space.WORLD) + Vec3(0.3, DECK + 0.5, 0.9)
+
+    /// Where the boat's rope ties on, in its own frame: its bow's gunwale, at +z.
+    @MainThread Public Method RopeOnBoat(): Vec3 => Vec3(0.0, 0.54 - KEEL, 0.86 * 2.2 - 0.05)
+
+    /// Each log of driftwood, a mesh of its own, so it can be moved: its length, along its own x, and
+    /// its radius, in the world. Its origin's its axis's middle, 0.11 of its scale over its underside.
+    @MainThread Public Method Logs(): (Mesh, Float, Float)[] => logs
 
     /// How many things lie along the shores.
     @MainThread Public Method LitterCount(): Int => litterCount
@@ -489,10 +518,17 @@ Public Function Underside(spot: (Vec2, Int, Float, Float)): Vec3[]
     Return touching
 End Function
 
-// What lies along the shores, at ShoreSpots: driftwood, weathered grey-brown with its grain, coils of
-// rope, and rocks, a mesh of each, each fitted to the ground.
+/// A rope's length, of radius 0.012, along y from 0 to 1, to stretch between two places.
 @MainThread
-Function Litter(wood: Material, stone: Material): Pivot
+Public Function RopeLine(): Geometry
+    Return Turned([Vec2(0.0, 0.0), Vec2(0.012, 0.0), Vec2(0.012, 1.0), Vec2(0.0, 1.0)], 6)
+End Function
+
+// What lies along the shores, at ShoreSpots: driftwood, weathered grey-brown with its grain, each log a
+// mesh of its own, so it can be moved; coils of rope, and rocks, a mesh of each; each fitted to the
+// ground. Gives the pivot, and each log, its length, and its radius.
+@MainThread
+Function Litter(wood: Material, stone: Material): (Pivot, (Mesh, Float, Float)[])
     Local litter = Pivot()
     Local rope = Material(Color(0.55, 0.46, 0.32))
     rope.SetMetalRough(0.0, 0.9)
@@ -501,11 +537,17 @@ Function Litter(wood: Material, stone: Material): Pivot
     weathered.SetTexture(0, Null)
     weathered.SetColor(Color(0.24, 0.21, 0.17))
     Local parts = Gathered()
+    Local logs: (Mesh, Float, Float)[] = []
     For spot In ShoreSpots()
         Local place = Placed(spot)
         Select spot.1
             Case 0
-                parts.PutAt(weathered, Log(), place.0, place.1, place.2)
+                Local log = Mesh(Log(), litter)
+                log.SetMaterial(weathered)
+                log.SetPosition(place.0)
+                log.SetRotation(place.1)
+                log.SetScale(place.2)
+                logs.Add((log, 2.0 * place.2.x, 0.15 * place.2.y))
             Case 1
                 parts.PutAt(rope, Turned([Vec2(0.12, 0.0), Vec2(0.32, 0.0), Vec2(0.34, 0.06),
                                           Vec2(0.32, 0.12), Vec2(0.12, 0.12), Vec2(0.1, 0.06),
@@ -516,5 +558,5 @@ Function Litter(wood: Material, stone: Material): Pivot
         End Select
     End For
     parts.Meshes(litter)
-    Return litter
+    Return (litter, logs)
 End Function

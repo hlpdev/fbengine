@@ -287,20 +287,36 @@ Function WheelGeometry(): Geometry
     Return wheel
 End Function
 
-// A barrel's staves, bellied, and its iron hoops, as two meshes on `parent` at (`x`, `z`) on its floor.
+/// How big a barrel is: its radius at its belly, and its height, its pivot at its bottom's middle.
+Public Const BARREL_RADIUS: Float = 0.37
+Public Const BARREL_HIGH: Float = 0.9
+
+// A barrel's staves, bellied, and its iron hoops, on a pivot of its own at (`x`, `z`) on the mill's
+// floor, at its bottom's middle.
 @MainThread
-Function Barrel(parent: Entity, wood: Material, iron: Material, x: Float, z: Float)
-    Local staves = Mesh(Turned([Vec2(0.0, 0.0), Vec2(0.3, 0.0), Vec2(0.35, 0.22), Vec2(0.37, 0.45),
-                                Vec2(0.35, 0.68), Vec2(0.3, 0.9), Vec2(0.0, 0.9)], 14), parent)
+Function Barrel(parent: Entity, wood: Material, iron: Material, x: Float, z: Float): Pivot
+    Local barrel = Pivot(parent)
+    barrel.SetPosition(Vec3(x, FLOOR - 0.1, z))
+    Local staves = Mesh(Turned([Vec2(0.0, 0.0), Vec2(0.3, 0.0), Vec2(0.35, 0.22),
+                                Vec2(BARREL_RADIUS, 0.45), Vec2(0.35, 0.68), Vec2(0.3, BARREL_HIGH),
+                                Vec2(0.0, BARREL_HIGH)], 14), barrel)
     staves.SetMaterial(wood)
-    staves.SetPosition(Vec3(x, FLOOR - 0.1, z))
-    Local hoops = Turned([Vec2(0.335, 0.12), Vec2(0.36, 0.12), Vec2(0.36, 0.18), Vec2(0.335, 0.18)],
-                         14)
-    hoops.Add(Turned([Vec2(0.335, 0.72), Vec2(0.36, 0.72), Vec2(0.36, 0.78), Vec2(0.335, 0.78)],
-                     14))
-    Local bands = Mesh(hoops, parent)
+    Local hoops = Turned([Vec2(0.335, 0.12), Vec2(0.36, 0.12), Vec2(0.36, 0.18), Vec2(0.335, 0.18),
+                          Vec2(0.335, 0.12)], 14)
+    hoops.Add(Turned([Vec2(0.335, 0.72), Vec2(0.36, 0.72), Vec2(0.36, 0.78), Vec2(0.335, 0.78),
+                      Vec2(0.335, 0.72)], 14))
+    Local bands = Mesh(hoops, barrel)
     bands.SetMaterial(iron)
-    bands.SetPosition(Vec3(x, FLOOR - 0.1, z))
+    Return barrel
+End Function
+
+// A crate of `boards`, `half` across, on a pivot of its own at its middle, (`x`, `y`, `z`) from `parent`.
+@MainThread
+Function Crate(parent: Entity, boards: Material, x: Float, y: Float, z: Float, half: Vec3): Pivot
+    Local crate = Pivot(parent)
+    crate.SetPosition(Vec3(x, y, z))
+    Block(crate, boards, 0.0, 0.0, 0.0, half, 0.04)
+    Return crate
 End Function
 
 // The mill: a stone house on a plinth, its corners of bigger stones, a door framed in wood in its south
@@ -308,7 +324,9 @@ End Function
 // ridge; barrels and crates by its west wall, and a millstone and bench inside. Gives its pivot, its
 // wheel, its lamp, and its lantern.
 @MainThread
-Function BuildMill(held: Texture[]): (Pivot, Mesh, Mesh, Light) Throws IOError, GraphicsError
+Function BuildMill(held: Texture[]): (Pivot, Mesh, Mesh, Light,
+                                      (Entity, Int, Vec3)[]) Throws IOError,
+                                                                    GraphicsError
     Local wood = Try Wood(held)
     Local boards = Try Surfaced(held, Res.WoodAlbedo, Res.WoodNormal, Res.WoodRough, 0.0,
                                 Color(0.62, 0.55, 0.5), 1.0)
@@ -373,11 +391,16 @@ Function BuildMill(held: Texture[]): (Pivot, Mesh, Mesh, Light) Throws IOError, 
         Block(mill, wood, x, 0.28, -4.25, Vec3(0.06, 0.25, 0.25), 0.02)
     End For
     // Between the wheel and the door, outside: barrels, and crates stacked.
-    Barrel(mill, wood, iron, 6.95, 4.0)
-    Barrel(mill, wood, iron, 7.7, 4.45)
-    Barrel(mill, wood, iron, 6.95, 4.8)
-    Block(mill, boards, 8.65, FLOOR + 0.3, 4.3, Vec3(0.4, 0.4, 0.4), 0.04)
-    Block(mill, boards, 8.6, FLOOR + 0.98, 4.35, Vec3(0.3, 0.28, 0.3), 0.04)
+    Local props: (Entity, Int, Vec3)[] = []
+    Local barrel = Vec3(BARREL_RADIUS, BARREL_HIGH, BARREL_RADIUS)
+    For at In [Vec2(6.95, 4.0), Vec2(7.7, 4.45), Vec2(6.95, 4.8)]
+        props.Add((Barrel(mill, wood, iron, at.x, at.y) As Entity, 0, barrel))
+    End For
+    For crate In [(Vec3(8.65, FLOOR + 0.3, 4.3), Vec3(0.4, 0.4, 0.4)),
+                  (Vec3(8.6, FLOOR + 0.98, 4.35), Vec3(0.3, 0.28, 0.3))]
+        props.Add((Crate(mill, boards, crate.0.x, crate.0.y, crate.0.z, crate.1) As Entity, 1,
+                   crate.1))
+    End For
     // The wheel, on its axle, by the east wall.
     Local wheel = Mesh(WheelGeometry(), mill)
     wheel.SetMaterial(wood)
@@ -412,7 +435,7 @@ Function BuildMill(held: Texture[]): (Pivot, Mesh, Mesh, Light) Throws IOError, 
     lamp.SetMaterial(brass)
     lamp.SetPosition(Vec3(0.0, top + 0.48, 0.0))
     lamp.SetScale(Vec3(0.36, 0.36, 0.36))
-    Return (mill, wheel, lamp, lantern)
+    Return (mill, wheel, lamp, lantern, props)
 End Function
 
 // The parts, each lying where it does, by its number: the gear, the paddle, and the belt.
@@ -453,12 +476,14 @@ Public Final Class Island
     Field pipHead: Entity
     Field pipMesh: Mesh
     Field landmarks: Landmarks
+    Field props: (Entity, Int, Vec3)[]
 
     New(scene: World, ground: Terrain, sea: Sea, sunShown: SunShown, model: Model, pip: Entity,
         held: Texture[],
         mill: Pivot, wheel: Mesh, lamp: Mesh, parts: Mesh[], sun: Light, around: Environment,
-        lantern: Light, landmarks: Landmarks)
+        lantern: Light, landmarks: Landmarks, props: (Entity, Int, Vec3)[])
         Self.scene = scene
+        Self.props = props
         Self.landmarks = landmarks
         Self.ground = ground
         Self.sea = sea
@@ -519,7 +544,7 @@ Public Final Class Island
         Local sea = Try Sea.Make(held)
         Local sunShown = Try SunShown.Make(held)
 
-        Local mill, wheel, lamp, lantern = Try BuildMill(held)
+        Local mill, wheel, lamp, lantern, props = Try BuildMill(held)
         Local parts = Try BuildParts(held)
         Local landmarks = Landmarks.Make(Try Wood(held),
                                          Try Surfaced(held, Res.WoodAlbedo, Res.WoodNormal,
@@ -538,7 +563,7 @@ Public Final Class Island
         pip.Player().Play(model.Clips()[0])
         Return Island(scene, ground, sea, sunShown, model, pip, held, mill, wheel, lamp, parts, sun,
                       around,
-                      lantern, landmarks)
+                      lantern, landmarks, props)
     End Method
 
     /// The World it's in.
@@ -630,6 +655,11 @@ Public Final Class Island
         camera.ResetHistory()
         scene.Render()
     End Method
+
+    /// The barrels and crates by the mill, each on a pivot of its own: what it is, 0 a barrel and 1 a
+    /// crate; and its size: a barrel's radius, height, and radius, its pivot at its bottom's middle, or a
+    /// crate's half sizes, its pivot at its middle.
+    @MainThread Public Method Props(): (Entity, Int, Vec3)[] => props
 
     /// The lighthouse, the jetty, the boat, and what's along the shores.
     @MainThread Public Method Marks(): Landmarks => landmarks
