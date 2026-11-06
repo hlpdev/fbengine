@@ -7,6 +7,11 @@
 float3 bend(Surface surface)
 {
     const float4 to = surface.parameter(5);
+    // With a w of 2, toward +x where what it's given faces the camera, and -x where it doesn't.
+    if (to.w == 2.0)
+    {
+        return surface.normal.z > 0.0 ? to.xyz : float3(-to.x, to.y, to.z);
+    }
     return to.w != 0.0 ? to.xyz : float3(0.0, 0.0, 1.0);
 }
 

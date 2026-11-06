@@ -10872,6 +10872,79 @@ TEST_CASE("a shader of its own bends a normal as a normal map would", "[gpu][sce
     fbe_material_release(material);
 }
 
+// Through a surface's own tangents, as a map goes, where it has them: here up the wall, not along
+// its UVs, so a frame from its UVs would bend it the wrong way. Every pixel, edges and all.
+TEST_CASE("a shader of its own bends through a surface's own tangents, as a map does",
+          "[gpu][scene]") {
+    const scene_t scene;
+    sun_from_right(scene.world);
+    const std::uint64_t material = by_game_shader(5.0F);
+    require(fbe_material_set_metal_rough(material, 0.0F, 0.4F));
+    const std::uint64_t mesh = wall(scene.world, -4.0F, 1.5F, material);
+    const std::uint64_t geometry = fbe_mesh_geometry(mesh);
+    REQUIRE(geometry != 0);
+    const std::uint64_t mapped = fbe_material_create();
+    require(fbe_material_set_metal_rough(mapped, 0.0F, 0.4F));
+    const std::uint64_t normals = fbe_texture_create(1, 1, FBE_TEXTURE_RGBA8_LINEAR, false);
+    REQUIRE(normals != 0);
+    require(fbe_material_set_map(mapped, FBE_MAP_NORMAL, normals, 0));
+    // Its bitangent either way round, as a mirrored mesh's is.
+    for (const float handed : { 1.0F, -1.0F }) {
+        const fbe_vertex_tangent_t tangent{ .x = 0.0F, .y = 1.0F, .z = 0.0F, .w = handed };
+        const std::array<fbe_vertex_tangent_t, 4> up{ tangent, tangent, tangent, tangent };
+        require(fbe_surface_set_tangents(geometry, 0, up.data(), 4));
+        for (const auto& [x, y, red, green] :
+             { std::tuple{ 0.6F, 0.0F, 204, 128 }, std::tuple{ 0.0F, 0.6F, 128, 204 } }) {
+            INFO(handed << ": " << x << ", " << y);
+            require(fbe_mesh_set_material(mesh, material));
+            require(fbe_material_set_parameter(material, 5, x, y, 0.8F, 1.0F));
+            const fbe::golden::frame_t bent = scene.drawn();
+            const std::array<std::uint8_t, 4> texel{ static_cast<std::uint8_t>(red),
+                                                     static_cast<std::uint8_t>(green), 230, 255 };
+            require(fbe_texture_write(normals, 0, 0, 1, 1, texel.data(), 4));
+            require(fbe_mesh_set_material(mesh, mapped));
+            const fbe::golden::frame_t by_map = scene.drawn();
+            CHECK(fbe::golden::compare(by_map, bent, 3).pixels == 0);
+        }
+    }
+    const fbe_vertex_tangent_t upward{ .x = 0.0F, .y = 1.0F, .z = 0.0F, .w = 1.0F };
+    const std::array<fbe_vertex_tangent_t, 4> up{ upward, upward, upward, upward };
+    require(fbe_surface_set_tangents(geometry, 0, up.data(), 4));
+    // And they're turned from the frame its UVs make, or this says nothing.
+    require(fbe_mesh_set_material(mesh, material));
+    require(fbe_material_set_parameter(material, 5, 0.6F, 0.0F, 0.8F, 1.0F));
+    const fbe::golden::frame_t through_tangents = scene.drawn();
+    require(fbe_surface_set_tangents(geometry, 0, nullptr, 0));
+    CHECK(fbe::golden::compare(through_tangents, scene.drawn(), 3).pixels > 100);
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_geometry_release(geometry);
+    fbe_texture_release(normals);
+    fbe_material_release(mapped);
+    fbe_material_release(material);
+}
+
+// On a two-sided material's back, what bend's given faces the camera, as shade's does.
+TEST_CASE("a shader of its own bends a two-sided back as its front", "[gpu][scene]") {
+    const scene_t scene;
+    sun_from_right(scene.world);
+    const std::uint64_t material = by_game_shader(5.0F);
+    require(fbe_material_set_metal_rough(material, 0.0F, 0.4F));
+    require(fbe_material_set_two_sided(material, true));
+    // Turned round, so its back's toward the camera, and the sun.
+    const std::uint64_t mesh = wall(scene.world, -4.0F, 10.0F, material);
+    require(fbe_entity_set_rotation(mesh, 0.0F, 1.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+    require(fbe_material_set_parameter(material, 5, 0.6F, 0.0F, 0.8F, 1.0F));
+    const rgba_t toward = middle(scene.drawn());
+    require(fbe_material_set_parameter(material, 5, -0.6F, 0.0F, 0.8F, 1.0F));
+    const rgba_t away = middle(scene.drawn());
+    require(fbe_material_set_parameter(material, 5, 0.6F, 0.0F, 0.8F, 2.0F));
+    const rgba_t by_facing = middle(scene.drawn());
+    INFO(int{ toward[0] } << " " << int{ away[0] } << " " << int{ by_facing[0] });
+    CHECK(!near(toward, { away[0], away[1], away[2] }, 6));
+    CHECK(near(by_facing, { toward[0], toward[1], toward[2] }, 1));
+    fbe_material_release(material);
+}
+
 TEST_CASE("a shader of its own draws an Instances, each moved in its own space", "[gpu][scene]") {
     const scene_t scene;
     const std::uint64_t material = by_game_shader();

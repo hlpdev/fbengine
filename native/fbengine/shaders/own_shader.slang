@@ -23,7 +23,8 @@
 //
 // which gives a PBR material's normal, -1 to 1 and +Z out, in tangent space as a normal map holds
 // it, in place of its map's: through the tangents a map would go by, or those its first UVs make if
-// it has none, and its normal scale. What it's given has the surface's own normal, and no color.
+// it has none, and its normal scale. What it's given has the surface's own normal, facing the
+// camera on a two-sided material's back as `shade`'s does, and no color.
 // The lights, the environment, and `surface.color` take what it gives; `surface.normal` in `shade`
 // is the surface's own, and the shadow and the prepass's normals are too.
 //

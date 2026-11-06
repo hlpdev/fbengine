@@ -982,15 +982,18 @@ float3 pixelShaded(Camera* camera, Material material, Corner corner, float3 base
     }
     const bool mapped = (material.maps & (1 << mapNormal)) != 0;
 #ifdef FBE_BENDS_NORMALS
-    // A shader's own normal, in place of a map's, in the frame its first UVs make if it has none.
+    // A shader's own normal, in place of a map's, in the frame a map's would be: its surface's own
+    // tangents, through the map's UVs if it has one, or else the frame its UVs make.
     if (hasNormal)
     {
         const Layer map = material.mapLayers[mapNormal];
-        const float4 tangent = !mapped ? tangentFromDerivatives(normal, place, corner.uv0)
-                               : corner.tangent.w != 0.0 && map.bump.x == 0.0
-                                   ? tangentThrough(map, normal, corner.tangent)
-                                   : tangentFromDerivatives(normal, place, mapUv(map, corner));
-        const Surface bending = { place, normal, corner.uv0, corner.uv1, corner.color,
+        const bool ownTangents = corner.tangent.w != 0.0 && (!mapped || map.bump.x == 0.0);
+        const float4 tangent =
+            ownTangents ? (mapped ? tangentThrough(map, normal, corner.tangent)
+                                  : float4(corner.tangent.xyz, corner.tangent.w < 0.0 ? -1.0 : 1.0))
+                        : tangentFromDerivatives(normal, place, mapped ? mapUv(map, corner) : corner.uv0);
+        // Facing the camera, as `shade`'s is, on a two-sided material's back.
+        const Surface bending = { place, twoSided != 0 && !front ? -normal : normal, corner.uv0, corner.uv1, corner.color,
                                   float4(0.0, 0.0, 0.0, 0.0), corner.position.xy,
                                   camera.draws[corner.draw].material };
         const float3 bent = bend(bending);
