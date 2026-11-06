@@ -3,7 +3,8 @@
 // creaks at the mill, the wheel at the wheel, the flood's splash on the road, the mill's parts fitted,
 // its sluice, and its works once the wheel turns; and your own steps, on sand, rock, turf, the road,
 // the mill's boards, or the shallows, as its Cues say. What's in the mill rings in its room, your steps
-// too while you're in it, and is muffled from outside, as the outside is from in.
+// too while you're in it, and is muffled from outside, as the outside is from in. And a music bed, the
+// calm theme turning to the storm's as the weather and tide come, under the cues, quieter inside.
 
 Import std.core
 Import std.math
@@ -42,6 +43,15 @@ Public Final Class Soundscape
     Field surf: Sound
     Field wheel: Sound
     Field works: Sound
+    Field calm: Sound
+    Field storm: Sound
+    Field calmPlays: Channel
+    Field stormPlays: Channel
+    // The music's own, which it's turned down on under the cues, and quieter inside.
+    Field music: Bus
+    Field ducking: Ducking
+    Field cued: Bool = False
+    Field musicSet: Float = 1.0
     Field windPlays: Channel
     Field seaPlays: Channel
     Field surfPlays: Channel
@@ -73,8 +83,7 @@ Public Final Class Soundscape
     Field indoors: Float = 0.0
 
     New(sounds: Sound[], wind: Sound, sea: Sound, surf: Sound, wheel: Sound, works: Sound,
-        game: Game,
-        island: Island)
+        calm: Sound, storm: Sound, game: Game, island: Island)
         Self.sounds = sounds
         Self.wind = wind
         Self.sea = sea
@@ -83,6 +92,20 @@ Public Final Class Soundscape
         Self.wheel = wheel
         Self.works = works
         works.SetLoop(True)
+        Self.calm = calm
+        Self.storm = storm
+        ducking = Ducking()
+        music = Bus()
+        calm.SetBus(music)
+        storm.SetBus(music)
+        calm.SetLoop(True)
+        storm.SetLoop(True)
+        // Together, from the start, so the crossfade's of one bed in time.
+        Local levels = MusicLevels(0.0, False)
+        calm.SetVolume(levels.0)
+        storm.SetVolume(levels.1)
+        calmPlays = calm.Play()
+        stormPlays = storm.Play()
         cues = Cues()
         played = []
         For number = 0 Until CUES
@@ -158,7 +181,8 @@ Public Final Class Soundscape
                         Try Assets.Load<Sound>(Res.Fit), Try Assets.Load<Sound>(Res.Sluice)]
         Return Soundscape(sounds, Try Assets.Load<Sound>(Res.Wind), Try Assets.Load<Sound>(Res.Sea),
                           Try Assets.Load<Sound>(Res.Surf), Try Assets.Load<Sound>(Res.Wheel),
-                          Try Assets.Load<Sound>(Res.Works), game, island)
+                          Try Assets.Load<Sound>(Res.Works), Try Assets.Load<Sound>(Res.Calm),
+                          Try Assets.Load<Sound>(Res.Storm), game, island)
     End Method
 
     /// How many times `cue` has played.
@@ -281,7 +305,7 @@ Public Final Class Soundscape
     Public Method Surroundings(clock: Float64, inside: Bool, seconds: Float)
         // Their levels move as the low-pass does, so going through the door doesn't click.
         Local goal = inside ? 1.0 : 0.0
-        Local most = seconds * 5.0
+        Local most = seconds * 2.5
         indoors += Clamp(goal - indoors, -most, most)
         Local windAt = WindLevel(clock, False) +
                        (WindLevel(clock, True) - WindLevel(clock, False)) * indoors
@@ -293,6 +317,13 @@ Public Final Class Soundscape
         seaPlays.SetVolume(seaAt * beds * windSea)
         surfPlays.SetVolume(surfAt * beds * surfBed)
         windPlays.SetPitch(WindPitch(clock))
+        // The music: crossfaded by the weather and tide, ducked under what's been cued, and quieter
+        // inside, as far through the door as the beds are.
+        Local levels = MusicLevels(clock, False)
+        calmPlays.SetVolume(levels.0 * musicSet)
+        stormPlays.SetVolume(levels.1 * musicSet)
+        music.SetVolume(ducking.Step(seconds, cued) * (1.0 + (MUSIC_INSIDE - 1.0) * indoors))
+        cued = False
         cutoff = CutoffToward(cutoff, OutsideCutoff(inside), seconds)
         outside.SetLowPass(cutoff)
         // The mill's room, the other way round: open from inside, muffled from out.
@@ -312,6 +343,23 @@ Public Final Class Soundscape
         Return mill.ReverbHeard()
     End Method
 
+    /// The calm theme's level and the storm's, now, and the music's ducking and inside's together.
+    @MainThread Public Method MusicNow(): (Float, Float) => (calmPlays.Volume(),
+                                                             stormPlays.Volume())
+
+    @MainThread Public Method MusicBusNow(): Float => music.Volume()
+
+    /// Whether the two themes are streamed, and playing.
+    @MainThread
+    Public Method MusicPlaying(): Bool
+        Return calm.Streamed() && storm.Streamed() && calmPlays.Playing() && stormPlays.Playing()
+    End Method
+
+    /// Sets the music by itself, 0 for none, as SetBeds does the beds, from the next Surroundings.
+    @MainThread Public Method SetMusic(level: Float)
+        musicSet = level
+    End Method
+
     /// The low-pass on what's in the mill, now.
     @MainThread Public Method MillNow(): Float => mill.LowPass()
 
@@ -320,6 +368,8 @@ Public Final Class Soundscape
     @MainThread
     Public Method Play(cue: Cue, here: Vec2)
         played[cue As Int] += 1
+        // The music's ducked under anything but your steps.
+        If !IsStep(cue) Then cued = True
         Local sound = sounds[cue As Int]
         Select cue
             Case Cue.GULL
@@ -344,6 +394,8 @@ Public Final Class Soundscape
         windPlays.Stop()
         seaPlays.Stop()
         surfPlays.Stop()
+        calmPlays.Stop()
+        stormPlays.Stop()
         Local plays = wheelPlays
         If plays != Null Then plays.Stop()
         Local running = worksPlays
@@ -358,6 +410,9 @@ Public Final Class Soundscape
         wind.Free()
         sea.Free()
         surf.Free()
+        calm.Free()
+        storm.Free()
+        music.Free()
         wheel.Free()
         works.Free()
         outside.Free()

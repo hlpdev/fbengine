@@ -20,7 +20,8 @@ End Function
 
 // Every sound the tools make.
 Function AllSounds(): Float[][]
-    Return [Wind(), Sea(), Surf(), Gull(), Creak(), Wheel(), Works(), Step(5), Step(6), Step(7),
+    Return [Wind(), Sea(), Surf(), Calm(), Storm(), Gull(), Creak(), Wheel(), Works(), Step(5),
+            Step(6), Step(7),
             FloorStep(9), FloorStep(10), Wade(11), Wade(12), SandStep(13), SandStep(14),
             TurfStep(15), TurfStep(16), Splash(), Fit(), Sluice()]
 End Function
@@ -53,7 +54,7 @@ End Function
 
 @Test
 Function WhatLoopsDoesntClick()
-    For sound In [Wind(), Sea(), Surf(), Wheel(), Works()]
+    For sound In [Wind(), Sea(), Surf(), Wheel(), Works(), Calm(), Storm()]
         Expect(Abs(sound[sound.Count - 1] - sound[0]) <= LargestStep(sound))
         Local mean = 0.0
         For sample In sound
@@ -69,6 +70,22 @@ Function NothingClips()
         For sample In sound
             Expect(Abs(sample) < 1.0)
         End For
+    End For
+End Function
+
+// The music's loops meet their starts as if they went on: their last sample's step to their first is
+// no larger than the steps inside them, and is a sixteen-second loop's.
+@Test
+Function TheMusicLoopsWhereItStarted()
+    For theme In [Calm(), Storm()]
+        Expect(theme.Count == 16 * 22050)
+        Local largest = 0.0
+        For at = 1 Until theme.Count
+            largest = Max(largest, Abs(theme[at] - theme[at - 1]))
+        End For
+        Expect(Abs(theme[0] - theme[theme.Count - 1]) <= largest)
+        // And it's the same a loop on: its first second's the next loop's first second.
+        Expect(Abs(theme[0] - theme[theme.Count - 1]) < 0.05)
     End For
 End Function
 

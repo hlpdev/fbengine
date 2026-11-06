@@ -999,6 +999,12 @@ End Function
 // that's not silent, and doesn't clip.
 Function Heard(scape: Soundscape, flow: Flow, loudest: Float)
     Checks("the wind, sea, and surf are streamed, and playing", scape.AroundYou())
+    Checks("the music's streamed, and playing", scape.MusicPlaying())
+    // By the end the storm's in: its theme, and none of the calm's.
+    Local levels = MusicLevels(flow.Clock(), False)
+    Checks("the music's at its levels by the weather and tide",
+           IsClose(scape.MusicNow().0, levels.0, 0.0001) &&
+           IsClose(scape.MusicNow().1, levels.1, 0.0001))
     // The storm's in by the end: the wind's whistling, at its pitch.
     Checks("the wind's pitched by the storm",
            IsClose(scape.WindPitchNow(), WindPitch(flow.Clock()), 0.001) &&
@@ -1072,6 +1078,66 @@ Function Listened() Throws GraphicsError, IOError, AudioError
     scape.SetBeds(0.0)
     Audio.Mix(rate)
     Audio.Mix(rate)
+    // The music by itself: ducked under a gull and back, and turning to the storm's theme with no click.
+    scape.SetMusic(1.0)
+    Listener.SetPosition(Vec3(door.x, 5.0, door.y))
+    // Long enough after the gulls above to have come back from under them.
+    For step = 1 To 150
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Checks("the music's whole at slack water", IsClose(scape.MusicBusNow(), 1.0, 0.0001))
+    scape.Play(Cue.GULL, door)
+    For step = 1 To 30
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Checks("the music ducks under a gull", IsClose(scape.MusicBusNow(), 0.5, 0.0001))
+    For step = 1 To 150
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Checks("and comes back after", IsClose(scape.MusicBusNow(), 1.0, 0.0001))
+    // The weather and tide from slack water to the tide in, over a whole loop, 16 seconds, against a
+    // whole loop of each theme held still: no step through the crossfade larger than the two still
+    // themes' added, which a crossfade of the two can come to.
+    Local stillStep = 0.0
+    For step = 1 To 960
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        stillStep = Max(stillStep, LargestStep(Audio.Mix(735)))
+    End For
+    Local turningStep = 0.0
+    For step = 1 To 960
+        scape.Surroundings(TIDE_IN_AT * (step As Float64) / 960.0, False, 1.0 / 60.0)
+        turningStep = Max(turningStep, LargestStep(Audio.Mix(735)))
+    End For
+    Local stormStep = 0.0
+    For step = 1 To 960
+        scape.Surroundings(TIDE_IN_AT, False, 1.0 / 60.0)
+        stormStep = Max(stormStep, LargestStep(Audio.Mix(735)))
+    End For
+    Print("the music's largest step, calm {stillStep}, storm {stormStep}, turning {turningStep}")
+    Checks("the music turns to the storm's with no click",
+           !Clicks(turningStep, stillStep + stormStep))
+    Checks("the storm's theme is all of it, once the tide's in",
+           scape.MusicNow().0 < 0.0001 &&
+           IsClose(scape.MusicNow().1, MusicLevels(TIDE_IN_AT, False).1, 0.0001))
+    // Quieter inside.
+    For step = 1 To 60
+        scape.Surroundings(TIDE_IN_AT, True, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Checks("the music's quieter inside", IsClose(scape.MusicBusNow(), 0.7, 0.0001))
+    For step = 1 To 60
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    scape.SetMusic(0.0)
+    For step = 1 To 6
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Audio.Mix(rate)
     Checks("with the beds at nothing, it's silent", PeakOf(Audio.Mix(1024)) < 0.0005)
     // The mill's room: what's in it is on its bus, whose ring's heard; your steps ring there, after
     // they've ended, and not outside; and it's muffled from out, as the outside is from in.
@@ -1144,7 +1210,7 @@ Function Listened() Throws GraphicsError, IOError, AudioError
     For second = 1 To 3
         Audio.Mix(rate)
     End For
-    Checks("only the wind, sea, and surf play on", Audio.Playing() == 3)
+    Checks("only the beds and the music play on", Audio.Playing() == 5)
     // The wheel's where it's drawn, and heard outside.
     Local wheel = scape.WheelAt()
     Local drawn = island.WheelAt()
@@ -1190,9 +1256,9 @@ Function Listened() Throws GraphicsError, IOError, AudioError
         scape.Surroundings(0.0, False, 1.0 / 60.0)
         Audio.Mix(735)
     End For
-    // Over as long as its waves take.
+    // Over 8 seconds, long enough that the beds' own largest step is found, as a shorter while can miss it.
     Local largestBefore = 0.0
-    For step = 1 To 240
+    For step = 1 To 480
         scape.Surroundings(0.0, False, 1.0 / 60.0)
         largestBefore = Max(largestBefore, LargestStep(Audio.Mix(735)))
     End For

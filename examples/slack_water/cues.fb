@@ -64,6 +64,15 @@ Const AMBIENCE: Float = 0.2
 Const WHEEL: Float = 0.15
 // The mill's works, running, heard from inside, where they are.
 Const WORKS: Float = 0.1
+// The music: how loud either theme is, at most, and what's left of it inside the mill.
+Const MUSIC: Float = 0.08
+Public Const MUSIC_INSIDE: Float = 0.7
+// Under a cue, the music's at DUCK, reached over DUCK_DOWN seconds, held DUCK_HOLD after the last cue,
+// and back over DUCK_UP, each in a line, so there's no click.
+Const DUCK: Float = 0.5
+Const DUCK_DOWN: Float = 0.15
+Const DUCK_HOLD: Float = 1.0
+Const DUCK_UP: Float = 0.8
 // How far a gust takes the wind over its level, in the storm at its height, and how much higher the
 // wind's pitched then.
 Const GUSTS: Float = 0.3
@@ -74,7 +83,7 @@ Const ROAR_SECONDS: Float64 = 20.0
 // wind's and sea's own are around 200 Hz, and how long it takes between.
 Const OPEN_CUTOFF: Float = 18000.0
 Const MUFFLED_CUTOFF: Float = 350.0
-Const CUTOFF_SECONDS: Float = 0.3
+Const CUTOFF_SECONDS: Float = 0.5
 
 /// How loud a cue plays.
 Public Function CueLevel(cue: Cue): Float
@@ -167,6 +176,43 @@ End Function
 
 /// How loud the wheel is, turning at `speed`.
 Public Function WheelLevel(speed: Float): Float => (0.3 + 0.7 * speed) * WHEEL
+
+/// How far the music's gone from the calm theme to the storm's, `clock` seconds in, from 0 to 1: with
+/// the storm, and more as the surf roars from the flood.
+Public Function Tension(clock: Float64): Float => Clamp(StormAt(clock) + 0.3 * Roar(clock), 0.0,
+                                                        1.0)
+
+/// How loud the calm theme and the storm's are, `clock` seconds in, heard from `inside` the mill or
+/// not: crossfaded by Tension at equal power, so together they're as loud all through; and quieter
+/// inside.
+Public Function MusicLevels(clock: Float64, inside: Bool): (Float, Float)
+    Local turn = Tension(clock) * 1.5707964
+    Local level = MUSIC * (inside ? MUSIC_INSIDE : 1.0)
+    // Never under 0, as a float's right angle leaves its cosine a hair below it, and a volume can't be.
+    Return (level * Max(Cos(turn As Float64) As Float, 0.0),
+            level * Max(Sin(turn As Float64) As Float, 0.0))
+End Function
+
+/// What the music's turned down to under the cues: DUCK under one, held a while after, then back to
+/// 1, each change in a line, at most `seconds` / DUCK_DOWN of the way down, or / DUCK_UP up, a step.
+Public Final Class Ducking
+    Field level: Float = 1.0
+    Field held: Float = 0.0
+
+    /// Where it's at, `seconds` on, `cued` or not in them.
+    Public Method Step(seconds: Float, cued: Bool): Float
+        If cued Then held = DUCK_HOLD
+        Local target = held > 0.0 ? DUCK : 1.0
+        held = Max(held - seconds, 0.0)
+        Local down = seconds / DUCK_DOWN * (1.0 - DUCK)
+        Local up = seconds / DUCK_UP * (1.0 - DUCK)
+        level += Clamp(target - level, -down, up)
+        Return level
+    End Method
+
+    /// Where it's at.
+    Public Method Level(): Float => level
+End Class
 
 /// How loud the mill's works are, driven by the wheel turning at `speed`: nothing until it turns.
 Public Function WorksLevel(speed: Float): Float => speed > 0.0 ? (0.4 + 0.6 * speed) * WORKS : 0.0

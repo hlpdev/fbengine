@@ -251,6 +251,109 @@ Public Function FloorStep(seed: UInt32): Float[]
     Return Ended(Leveled(made, 0.7))
 End Function
 
+// The music's loops: 16 seconds, four bars of four at 60 beats a minute.
+Const BARS: Float = 16.0
+
+// A note's frequency in hertz, `semitones` from A4's 440, rounded so a whole number of its cycles fits
+// in a loop, so it meets its start: by under a 32nd of a hertz, which no ear hears.
+Function Note(semitones: Float): Float
+    Local hertz = 440.0 * (Exp((semitones / 12.0 * 0.6931472) As Float64) As Float)
+    Return Round(hertz * BARS) / BARS
+End Function
+
+// `amount` of a tone at `hertz` added to `into`, a loop, from `start` seconds for `seconds`, swelling
+// in and out over `swell`, and wrapping round its end onto its start.
+Function Pad(into: Float[], hertz: Float, start: Float, seconds: Float, swell: Float, amount: Float)
+    Local count = Samples(seconds)
+    Local first = Samples(start)
+    For at = 0 Until count
+        Local t = (at As Float) / (RATE As Float)
+        Local edge = Min(Min(t / swell, (seconds - t) / swell), 1.0)
+        Local shape = Sine(edge * TAU / 4.0)
+        Local time = ((first + at) As Float) / (RATE As Float)
+        // Two voices a little apart, for a chorus, each a whole number of cycles in the loop.
+        Local voice = Sine(time * TAU * hertz) + 0.5 * Sine(time * TAU * (hertz + 1.0 / BARS))
+        Local index = ((first + at) % into.Count + into.Count) % into.Count
+        into[index] = into[index] + voice * shape * amount
+    End For
+End Function
+
+// A note plucked at `start` seconds, `hertz`, dying away over `decay`, wrapping round the loop's end.
+Function Pluck(into: Float[], hertz: Float, start: Float, decay: Float, amount: Float)
+    Local first = Samples(start)
+    For at = 0 Until Samples(decay * 5.0)
+        Local t = (at As Float) / (RATE As Float)
+        Local time = ((first + at) As Float) / (RATE As Float)
+        Local tone = Sine(time * TAU * hertz) + 0.3 * Sine(time * TAU * hertz * 2.0)
+        Local index = ((first + at) % into.Count + into.Count) % into.Count
+        into[index] = into[index] + tone * Min(t / 0.004, 1.0) * Decay(-t / decay) * amount
+    End For
+End Function
+
+// The calm theme, for slack water: a slow pad in D dorian, Dm9, Bbmaj7, Fmaj7, and Cadd9, a bar each,
+// each swelling into the next, with a few plucked notes over it, sparse, as the water's still. A loop
+// of 16 seconds whose end meets its start, as every tone in it is a whole number of cycles and every
+// note wraps round.
+Public Function Calm(): Float[]
+    Local made: Float[] = []
+    For at = 0 Until Samples(BARS)
+        made.Add(0.0)
+    End For
+    // Semitones from A4: D3 is -19.
+    Local chords = [[-19.0, -16.0, -12.0, -9.0, -5.0], [-23.0, -19.0, -16.0, -12.0],
+                    [-28.0, -24.0, -21.0, -17.0], [-21.0, -17.0, -14.0, -7.0]]
+    For bar = 0 Until 4
+        For note In chords[bar]
+            // Each chord over its bar and a second more, so it's under the next's swell.
+            Pad(made, Note(note), (bar As Float) * 4.0 - 0.5, 5.0, 1.5, 0.12)
+        End For
+    End For
+    // D5, F5, G5, A5, C6: the pentatonic of D minor, at fixed beats, sparse.
+    Local melody = [(1.0, 5.0), (2.5, 8.0), (5.0, 12.0), (7.0, 10.0), (9.5, 3.0), (11.0, 5.0),
+                    (13.0, 15.0), (14.5, 12.0)]
+    For each In melody
+        Pluck(made, Note(each.1), each.0, 0.45, 0.35)
+    End For
+    Return Leveled(made, 0.6)
+End Function
+
+// The storm's theme, for when it comes and the flood: a low D's drone, pulsing in eighth notes, its
+// fifth, a minor second over it that rubs, and a drum's hit at each bar, louder each bar in four. A
+// loop of 16 seconds, as Calm is.
+Public Function Storm(): Float[]
+    Local made: Float[] = []
+    For at = 0 Until Samples(BARS)
+        made.Add(0.0)
+    End For
+    Local d2 = Note(-31.0)
+    Local a2 = Note(-24.0)
+    Local eb3 = Note(-18.0)
+    For at = 0 Until made.Count
+        Local time = (at As Float) / (RATE As Float)
+        // Eighth notes at 60 a minute: twice a second, each swelling and falling.
+        Local pulse = 0.55 + 0.45 * Sine(time * TAU * 2.0 - TAU / 4.0)
+        Local drone = Sine(time * TAU * d2) + 0.5 * Sine(time * TAU * d2 * 2.0) +
+                      0.33 * Sine(time * TAU * d2 * 3.0)
+        Local fifth = 0.5 * Sine(time * TAU * a2)
+        // The minor second, coming and going over each bar.
+        Local rub = 0.3 * Sine(time * TAU * eb3) * (0.5 + 0.5 * Sine(time * TAU / 4.0))
+        made[at] = drone * pulse * 0.5 + fifth * 0.4 + rub
+    End For
+    For bar = 0 Until 4
+        // A drum's hit: a low tone falling in pitch, dying away, wrapping round.
+        Local first = Samples((bar As Float) * 4.0)
+        Local phase = 0.0
+        For at = 0 Until Samples(1.2)
+            Local t = (at As Float) / (RATE As Float)
+            phase += (55.0 + 40.0 * Decay(-t * 12.0)) * TAU / (RATE As Float)
+            Local index = (first + at) % made.Count
+            made[index] = made[index] + Sine(phase) * Decay(-t * 3.5) * Min(t / 0.003, 1.0) *
+                          (0.6 + 0.15 * (bar As Float))
+        End For
+    End For
+    Return Leveled(made, 0.6)
+End Function
+
 // A part fitted: iron struck on iron, a few partials that aren't harmonics, ringing down, and a
 // ratchet's clicks as it's seated.
 Public Function Fit(): Float[]
@@ -390,4 +493,8 @@ Public Function WriteSounds(folder: Path) Throws IOError
     Try WriteWav(folder / "fit.wav", Fit())
     Try WriteWav(folder / "sluice.wav", Sluice())
     Try WriteWav(folder / "works.wav", Works())
+    Try WriteWav(folder / "calm.wav", Calm())
+    Try File.WriteText(folder / "calm.wav.toml", "streamed = true\n")
+    Try WriteWav(folder / "storm.wav", Storm())
+    Try File.WriteText(folder / "storm.wav.toml", "streamed = true\n")
 End Function
