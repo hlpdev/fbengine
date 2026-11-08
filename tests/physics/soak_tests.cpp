@@ -1,48 +1,43 @@
 // fbengine_physics soaked: thousands of shapes, bodies, characters, joints, and worlds made,
-// stepped, and freed, over and over, as a long game's would be, leave none of them behind, and what
-// malloc holds grows, once the first rounds have warmed it, by next to nothing a round.
+// stepped, and freed, over and over, as a long game's would be, leave none of them behind: once the
+// first rounds have warmed it, the count of live allocations, its C++'s and Jolt's, is exactly what
+// it was after every round. What malloc holds is said, not held to anything, as other threads, a
+// driver's among them, and malloc's own caches move it.
 
 #include "fbengine_physics.h"
+#include "physics/live.hpp"
 #include "stability.hpp"
 
-#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <vector>
 
 using fbe::tests::allocated;
-using fbe::tests::sanitized;
+using fbe::tests::live_allocations;
 
 namespace {
 
-/// The most what malloc holds grows a round, over a soak's second half, in bytes.
-constexpr double most_slope = 64.0;
-
-/// The least-squares slope of the second half of `held`, what malloc held after each round, in
-/// bytes a round.
-double late_slope(const std::vector<std::uint64_t>& held) {
-    const std::size_t from = held.size() / 2;
-    const auto count = static_cast<double>(held.size() - from);
-    double mean_x = 0.0;
-    double mean_y = 0.0;
-    for (std::size_t i = from; i < held.size(); ++i) {
-        mean_x += static_cast<double>(i);
-        mean_y += static_cast<double>(held[i]);
-    }
-    mean_x /= count;
-    mean_y /= count;
-    double across = 0.0;
-    double spread = 0.0;
-    for (std::size_t i = from; i < held.size(); ++i) {
-        const double x = static_cast<double>(i) - mean_x;
-        across += x * (static_cast<double>(held[i]) - mean_y);
-        spread += x * x;
-    }
-    return spread > 0.0 ? across / spread : 0.0;
-}
-
 constexpr fbe_body_quat_t unturned{ .x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F };
+
+/// How many more allocations are live after each of `rounds` of `round` than before them, once
+/// `warm` of them have warmed what starts with the first.
+std::vector<std::int64_t> left_by(const std::function<void(int)>& round, int warm, int rounds) {
+    for (int i = 0; i < warm; ++i) {
+        round(i);
+    }
+    const std::int64_t before = live_allocations();
+    std::vector<std::int64_t> left;
+    left.reserve(static_cast<std::size_t>(rounds));
+    const std::int64_t reserved = live_allocations() - before;
+    for (int i = 0; i < rounds; ++i) {
+        round(warm + i);
+        left.push_back(live_allocations() - before - reserved);
+    }
+    return left;
+}
 
 // A world of 1000 bodies of their own shapes, on a floor, falling on each other, 200 joints
 // between them, and 50 characters walking among them, stepped a while, saved and restored, then
@@ -137,46 +132,32 @@ void soak(bool piece_by_piece) {
 
 TEST_CASE("thousands of bodies, characters, joints, and worlds made and freed leave nothing",
           "[stability]") {
+    // Jolt, and its threads, start with the first world.
+    REQUIRE(fbe_physics_free(fbe_physics_new(1)));
+    fbe::tests::count_jolt();
     const std::int32_t shapes = fbe_shape_count();
     const std::int32_t worlds = fbe_physics_worlds();
-    // Jolt on the thread that asks alone, as malloc's caches for each thread (glibc's tcache,
-    // macOS's magazines) fill as its threads work, slowly, at their threads' pace; the caller's
-    // own fill in the warming rounds.
-    const std::int32_t threads = fbe_physics_threads();
-    REQUIRE(fbe_physics_set_threads(0));
-    for (int i = 0; i < 60; ++i) {
-        soak(i % 2 == 0);
-    }
-    std::vector<std::uint64_t> held;
-    for (int i = 0; i < 40; ++i) {
-        soak(i % 2 == 0);
-        held.push_back(allocated());
-    }
-    REQUIRE(fbe_physics_set_threads(threads));
+    const std::uint64_t start = allocated();
+    const std::vector<std::int64_t> left = left_by([](int i) { soak(i % 2 == 0); }, 4, 40);
     CHECK(fbe_shape_count() == shapes);
     CHECK(fbe_physics_worlds() == worlds);
-    // A round of about 1000 shapes, 1050 bodies, 200 joints, and 50 characters, and a world for
-    // them, holds about 2 MB: what malloc holds grows by no more than 64 bytes a round over the
-    // second half, as a cache that fills flattens and a leak keeps on, as about 18 KB a world did
-    // on MinGW. A sanitizer's allocator counts its own way, and LeakSanitizer and leak_tests'
-    // count of every allocation see a leak there.
-    const double slope = late_slope(held);
-    INFO("the second half's slope, " << slope << " bytes a round");
-    if (!sanitized) {
-        CHECK(slope <= most_slope);
+    WARN("what malloc holds moved by "
+         << (static_cast<double>(allocated()) - static_cast<double>(start))
+         << " bytes over the rounds");
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        INFO("after round " << i);
+        CHECK(left[i] == 0);
     }
 }
 
-// The slope's own check: a leak of 256 bytes a round is seen, and a fill that flattens isn't.
-TEST_CASE("the soak's slope sees a leak a round, and not a fill that flattens") {
-    std::vector<std::uint64_t> leaking;
-    std::vector<std::uint64_t> filling;
-    for (std::uint64_t round = 0; round < 40; ++round) {
-        leaking.push_back(std::uint64_t{ 19000000 } + (256 * round));
-        // Half of what's left to fill each round, as caches fill: 20 KB in all.
-        filling.push_back(std::uint64_t{ 19020480 } -
-                          (std::uint64_t{ 20480 } >> std::min<std::uint64_t>(round, 63)));
+// The count's own check: a round that leaves one allocation behind leaves one more each round.
+TEST_CASE("the soak's count sees one allocation left a round") {
+    std::vector<std::unique_ptr<int>> kept;
+    kept.reserve(64);
+    const std::vector<std::int64_t> left =
+        left_by([&kept](int) { kept.push_back(std::make_unique<int>(0)); }, 4, 20);
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        INFO("after round " << i);
+        CHECK(left[i] == static_cast<std::int64_t>(i) + 1);
     }
-    CHECK(late_slope(leaking) > most_slope);
-    CHECK(late_slope(filling) <= most_slope);
 }

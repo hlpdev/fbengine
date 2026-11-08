@@ -1665,8 +1665,7 @@ catch_discover_tests(fbengine_physics_tests TEST_PREFIX "physics."
 
 # fbengine_physics' steps, through its DLL, which the tests find where CMake built it.
 add_executable(fbengine_physics_step_tests physics/step_tests.cpp physics/determinism_tests.cpp
-               physics/casts_tests.cpp physics/state_fuzz_tests.cpp physics/input_fuzz_tests.cpp
-               physics/soak_tests.cpp stability.cpp)
+               physics/casts_tests.cpp physics/state_fuzz_tests.cpp physics/input_fuzz_tests.cpp)
 target_link_libraries(fbengine_physics_step_tests PRIVATE fbengine_physics_native
                       Catch2::Catch2WithMain)
 target_include_directories(fbengine_physics_step_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -1679,9 +1678,10 @@ catch_discover_tests(fbengine_physics_step_tests TEST_PREFIX "physics." ADD_TAGS
 file(GLOB fbengine_physics_sources CONFIGURE_DEPENDS
      "${PROJECT_SOURCE_DIR}/native/fbengine_physics/*/*.cpp")
 add_executable(fbengine_physics_internal_tests physics/contacts_tests.cpp
-               ${fbengine_physics_sources} physics/float_mode_tests.cpp physics/leak_tests.cpp)
+               ${fbengine_physics_sources} physics/float_mode_tests.cpp physics/leak_tests.cpp
+               physics/soak_tests.cpp stability.cpp)
 target_include_directories(fbengine_physics_internal_tests PRIVATE
-                           "${PROJECT_SOURCE_DIR}/native/fbengine_physics")
+                           "${PROJECT_SOURCE_DIR}/native/fbengine_physics" "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(fbengine_physics_internal_tests PRIVATE FBE_PHYSICS_BUILDING
                            FBE_VERSION="${PROJECT_VERSION}")
 target_link_libraries(fbengine_physics_internal_tests PRIVATE Jolt Catch2::Catch2WithMain)

@@ -4,6 +4,7 @@
 // was, to the allocation.
 
 #include "fbengine_physics.h"
+#include "physics/live.hpp"
 #include "physics/physics.hpp"
 
 #include <atomic>
@@ -64,8 +65,9 @@ void counted_aligned_free(void* block) {
     jolt_aligned_free(block);
 }
 
-// Counts Jolt's allocations from now, passing each on to what Jolt had.
-void count_jolt() {
+} // namespace
+
+void fbe::tests::count_jolt() {
     if (jolt_allocate != nullptr) {
         return;
     }
@@ -80,6 +82,12 @@ void count_jolt() {
     JPH::AlignedAllocate = counted_aligned_allocate;
     JPH::AlignedFree = counted_aligned_free;
 }
+
+std::int64_t fbe::tests::live_allocations() {
+    return live;
+}
+
+namespace {
 
 constexpr fbe_body_quat_t unturned{ .x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F };
 
@@ -188,7 +196,7 @@ TEST_CASE("worlds of bodies, characters, and joints made and freed leave no allo
           "[stability]") {
     // Jolt, its threads, and its types start with the first world.
     REQUIRE(fbe_physics_free(fbe_physics_new(1)));
-    count_jolt();
+    fbe::tests::count_jolt();
     for (int i = 0; i < 4; ++i) {
         REQUIRE(round(i % 2 == 0));
     }
