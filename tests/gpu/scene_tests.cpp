@@ -12200,7 +12200,10 @@ TEST_CASE("a pass on a camera in stored values has what's stored, as it is", "[g
         const std::size_t row = std::size_t{ frame_size / 2 } * frame_size;
         return int{ pixels.at((row + (frame_size / 2)) * 4) };
     };
-    CHECK(std::abs(byte() - 73) <= 1);
+    // In light, the bytes go to light and back twice, and MoltenVK's rounding in them gives 75
+    // where lavapipe gives 73; in stored values, with no light between, both give what's stored,
+    // to 1.
+    CHECK(std::abs(byte() - 73) <= 2);
     require(fbe_camera_set_stored_values(scene.camera, true));
     CHECK(std::abs(byte() - 50) <= 1);
     // With one between them, in a picture of its own.
