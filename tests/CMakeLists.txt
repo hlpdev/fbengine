@@ -1555,9 +1555,7 @@ if(FBENGINE_FB_TESTS)
                    -- "${PROJECT_SOURCE_DIR}/tests/models")
   set_tests_properties(examples.dedicated_server PROPERTIES TIMEOUT 120
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;VK_DRIVER_FILES=${PROJECT_BINARY_DIR}/no-such-driver.json"
-                       PASS_REGULAR_EXPRESSION "a texture refused: the GPU is disabled?
-served, the GPU never started?
-$")
+                       PASS_REGULAR_EXPRESSION "a texture refused: the GPU is disabled\r?\nserved, the GPU never started\r?\n$")
   add_test(NAME examples.falling_boxes
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/falling_boxes")
   set_tests_properties(examples.falling_boxes PROPERTIES PASS_REGULAR_EXPRESSION

@@ -27,9 +27,9 @@
 #include <unistd.h>
 #endif
 
-#if defined(__SANITIZE_ADDRESS__)
+#ifdef __SANITIZE_ADDRESS__
 #define FBENGINE_UNDER_ASAN
-#elif defined(__has_feature)
+#elifdef __has_feature
 #if __has_feature(address_sanitizer)
 #define FBENGINE_UNDER_ASAN
 #endif
@@ -453,7 +453,9 @@ TEST_CASE("thousands of frames of making, moving, playing, picking, and freeing 
             CHECK(fbe_camera_entity_in_view(camera, 640.0F, 480.0F, live[random() % live.size()]) >=
                   0);
             CHECK(fbe_camera_entity_in_view(camera, 640.0F, 480.0F, freed) == -1);
-            CHECK(fbe_camera_entity_in_view(freed, 640.0F, 480.0F, camera) == -1);
+            const std::uint64_t freed_camera = freed;
+            const std::uint64_t seen = camera;
+            CHECK(fbe_camera_entity_in_view(freed_camera, 640.0F, 480.0F, seen) == -1);
         }
         test_world_t::drain();
         CHECK(fbe_world_entity_count(world.handle) == static_cast<std::int32_t>(live.size()));
@@ -479,7 +481,7 @@ TEST_CASE("thousands of frames of making, moving, playing, picking, and freeing 
     CHECK(second < first + (std::int64_t{ 256 } * 1024));
     std::size_t rises = 0;
     for (std::size_t i = 1; i < held.size(); ++i) {
-        rises += held[i] > held[i - 1] ? 1 : 0;
+        rises += held[i] > held[i - 1] ? std::size_t{ 1 } : std::size_t{ 0 };
     }
     CHECK(rises < held.size() - 1);
 #endif

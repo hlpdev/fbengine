@@ -590,10 +590,11 @@ FBE_API bool fbe_entity_set_poses(const uint64_t* entities, const fbe_pose_t* po
         }
         // Its place first, which its own turn doesn't change, so one refused leaves both.
         const fbe_pose_t& pose = poses[i];
-        if (!fbe::scene::finite_or_fail({ pose.position.x, pose.position.y, pose.position.z,
-                                          pose.rotation.x, pose.rotation.y, pose.rotation.z,
-                                          pose.rotation.w },
-                                        "a pose") ||
+        const std::initializer_list<float> numbers{
+            pose.position.x, pose.position.y, pose.position.z, pose.rotation.x,
+            pose.rotation.y, pose.rotation.z, pose.rotation.w,
+        };
+        if (!fbe::scene::finite_or_fail(numbers, "a pose") ||
             !fbe::scene::set_position_in(slot, fbe::scene::to_vec(pose.position), space)) {
             finite = false;
             continue;
