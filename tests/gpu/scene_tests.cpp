@@ -24,6 +24,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
+#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -35,6 +36,7 @@
 #include <memory>
 #include <numbers>
 #include <random>
+#include <SDL3/SDL.h>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -107,6 +109,16 @@ struct scene_t {
 };
 
 using rgba_t = std::array<std::uint8_t, 4>;
+
+/// The count `variable` asks for, as a longer run does, or `otherwise`.
+int asked_for(const char* variable, int otherwise) {
+    const char* asked = SDL_getenv(variable);
+    int count = otherwise;
+    if (asked != nullptr) {
+        std::from_chars(asked, asked + std::strlen(asked), count);
+    }
+    return count;
+}
 
 /// A part of a test, by its name, and what it does in a scene of its own.
 template <typename Scene>
@@ -5940,11 +5952,11 @@ TEST_CASE("the light a shader's told of is linear, whatever its material's shadi
 // and the end cut. Each is checked, and made where it's taken, reading nothing past what it has,
 // which ASan checks where it runs. FBE_FUZZ_ROUNDS asks for more than CI's 2000.
 TEST_CASE("a game's shader's mutants are checked without reading past them", "[gpu][scene]") {
-    const char* asked = std::getenv("FBE_FUZZ_ROUNDS");
-    const int rounds = asked != nullptr ? std::atoi(asked) : 2000;
+    const int rounds = asked_for("FBE_FUZZ_ROUNDS", 2000);
     const std::span<const std::uint32_t> seed = fbe::test_shaders::game_shader.code;
     REQUIRE(seed.size() > 5);
-    std::mt19937 random(20261106);
+    // Seeds that repeat, so what a run finds is found again.
+    std::mt19937 random(20261106); // NOLINT(bugprone-random-generator-seed)
     const auto at = [&](std::size_t size) {
         return std::uniform_int_distribution<std::size_t>(0, size - 1)(random);
     };
@@ -12069,8 +12081,7 @@ TEST_CASE("as many shaders as a pipeline's key numbers are kept at once", "[gpu]
 }
 
 TEST_CASE("frames of making and freeing leave the GPU holding what it did", "[gpu][scene]") {
-    const char* asked = std::getenv("FBE_SOAK_FRAMES");
-    const int frames = asked != nullptr ? std::atoi(asked) : 600;
+    const int frames = asked_for("FBE_SOAK_FRAMES", 600);
     REQUIRE(frames >= 100);
     const scene_t scene;
     const std::vector<std::uint8_t> pixels(std::size_t{ 16 } * 16 * 4, 200);

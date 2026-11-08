@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <charconv>
 #include <climits>
 #include <cstdint>
 #include <cstdlib>
@@ -485,8 +486,12 @@ TEST_CASE("a KTX2's levels inflate to no more than its texels could be", "[asset
         // A level's uncompressedByteLength: as a wrapped sum's, a terabyte, and one byte past an
         // image of 4 by 4 of 16 bytes a texel, mips and all, with the other level's 16.
         const std::uint64_t first = 80 + 16;
-        for (const std::uint64_t length : { ~std::uint64_t{ 0 } - 34, std::uint64_t{ 1 } << 40U,
-                                            std::uint64_t{ (16 * 16 * 2) - 16 + 1 } }) {
+        const std::array<std::uint64_t, 3> lengths{
+            ~std::uint64_t{ 0 } - 34,
+            std::uint64_t{ 1 } << 40U,
+            std::uint64_t{ (16 * 16 * 2) - 16 + 1 },
+        };
+        for (const std::uint64_t length : lengths) {
             INFO(length);
             bytes_t inflating = ktx;
             put_u64(inflating, first, length);
@@ -536,7 +541,7 @@ TEST_CASE("a KTX2's data format descriptor's blocks fill it as they say", "[asse
     // Its total size, its block's size, and 4 samples, of 16 bytes each.
     REQUIRE(u32_of(ktx, dfd) == u32_of(ktx, 52));
     REQUIRE(ktx.at(dfd + 10) == 88);
-    for (const std::uint8_t size : { 72, 0, 90, 92 }) {
+    for (const std::uint8_t size : std::array<std::uint8_t, 4>{ 72, 0, 90, 92 }) {
         INFO(int{ size });
         bytes_t block = ktx;
         block.at(dfd + 10) = size;
@@ -615,6 +620,17 @@ TEST_CASE("a BMP decodes, whatever it's called, and a DDS is refused, saying so"
 
 namespace {
 
+/// The count `variable` asks for, as a longer run does, or `otherwise`.
+int asked_for(const char* variable, int otherwise) {
+    // MSVC calls it unsafe, which a variable read once by a test thread isn't.
+    const char* asked = std::getenv(variable); // NOLINT(clang-diagnostic-deprecated-declarations)
+    int count = otherwise;
+    if (asked != nullptr) {
+        std::from_chars(asked, asked + std::strlen(asked), count);
+    }
+    return count;
+}
+
 /// A copy of `seed` mutated by `random`: bits flipped, bytes set, a word of 32 bits set to a size
 /// that's nearly too big or none, a stretch copied over another, or the end cut.
 bytes_t mutated(const bytes_t& seed, std::mt19937& random) {
@@ -632,10 +648,9 @@ bytes_t mutated(const bytes_t& seed, std::mt19937& random) {
             bytes[at(bytes.size())] = static_cast<std::uint8_t>(at(256));
             break;
         case 2: {
-            constexpr std::array<std::uint32_t, 8> edges{
-                0, 1, 2, 0x7FFF, 0xFFFF, 0x7FFFFFFF, 0x80000000, 0xFFFFFFFF,
-            };
-            const std::uint32_t value = edges.at(at(edges.size()));
+            constexpr std::array<std::uint32_t, 5> small{ 0, 1, 2, 0x7FFF, 0xFFFF };
+            constexpr std::array<std::uint32_t, 3> big{ 0x7FFFFFFF, 0x80000000, 0xFFFFFFFF };
+            const std::uint32_t value = at(2) == 0 ? small.at(at(5)) : big.at(at(3));
             const std::size_t where = at(bytes.size());
             for (std::size_t byte = 0; byte < 4 && where + byte < bytes.size(); ++byte) {
                 bytes[where + byte] = static_cast<std::uint8_t>(value >> (8 * byte));
@@ -687,8 +702,7 @@ void whole(const assets::image_t& image) {
 // image that's what it says, and nothing reads or writes past what it has, which ASan checks where
 // it runs. FBE_FUZZ_ROUNDS asks for more than the 400 a seed CI runs.
 TEST_CASE("an image's mutants are refused or decode whole", "[assets][stability]") {
-    const char* asked = std::getenv("FBE_FUZZ_ROUNDS");
-    const int rounds = asked != nullptr ? std::atoi(asked) : 400;
+    const int rounds = asked_for("FBE_FUZZ_ROUNDS", 400);
     bytes_t bmp(58, 0);
     bmp[0] = 'B';
     bmp[1] = 'M';
@@ -721,7 +735,8 @@ TEST_CASE("an image's mutants are refused or decode whole", "[assets][stability]
         { "Zstd KTX2", ktx2(8, 8, 2, 1, 1, false, pattern, zstd) },
         { "UASTC KTX2", ktx2(8, 8, 1, 1, 1, false, pattern, basis) },
     };
-    std::mt19937 random(20261106);
+    // Seeds that repeat, so what a run finds is found again.
+    std::mt19937 random(20261106); // NOLINT(bugprone-random-generator-seed)
     for (const auto& [kind, seed] : seeds) {
         CAPTURE(kind);
         // The seed itself decodes.

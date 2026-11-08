@@ -52,7 +52,8 @@ struct fake_t {
     int misused = 0;
 };
 
-fake_t fake;
+// A test's, made as the program starts, where a failure is the test program's own.
+fake_t fake; // NOLINT(bugprone-throwing-static-initialization)
 
 /// The driver's own calls, as the GPU loaded them, put back after each test.
 struct real_t {
@@ -120,8 +121,10 @@ VKAPI_ATTR VkResult VKAPI_CALL capabilities(VkPhysicalDevice /*physical*/, VkSur
 VKAPI_ATTR VkResult VKAPI_CALL formats(VkPhysicalDevice /*physical*/, VkSurfaceKHR /*surface*/,
                                        std::uint32_t* count, VkSurfaceFormatKHR* listed) {
     if (listed != nullptr && *count >= 1) {
-        listed[0] = { .format = VK_FORMAT_B8G8R8A8_SRGB,
-                      .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR };
+        listed[0] = {
+            .format = VK_FORMAT_B8G8R8A8_SRGB,
+            .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
+        };
     }
     *count = 1;
     return VK_SUCCESS;
@@ -161,9 +164,11 @@ VKAPI_ATTR VkResult VKAPI_CALL create(VkDevice /*device*/, const VkSwapchainCrea
             .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
             .imageType = VK_IMAGE_TYPE_2D,
             .format = info->imageFormat,
-            .extent = { .width = info->imageExtent.width,
-                        .height = info->imageExtent.height,
-                        .depth = 1 },
+            .extent = {
+                .width = info->imageExtent.width,
+                .height = info->imageExtent.height,
+                .depth = 1,
+            },
             .mipLevels = 1,
             .arrayLayers = 1,
             .samples = VK_SAMPLE_COUNT_1_BIT,
