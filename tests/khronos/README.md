@@ -16,12 +16,16 @@ gives, to the pixel, so it's the driver, and it's mipmaps: 25.2.8's `vkCmdBlitIm
 8-bit linear format half a 255th brighter than the mean of what's under it, 2 by level 4, where 26.2.4's is
 within 0.01, and both make sRGB's the same. What differs is what normal and metal-rough maps do from far off.
 
-| Frame | Pixels more than 2 away, x64, arm64 | Most away | Let differ |
+Measured on the frames as they are since 472aebb turned the sky, by run 42144577128, which let none
+differ. On arm64, a texture's sampling differs more besides, as AlphaBlendModeTest's marble shows,
+though not its panels, which blend and cut out, so each has its own limit.
+
+| Frame | Pixels more than 2 away, x64, arm64 | Most away, x64, arm64 | Let differ, x64, arm64 |
 | --- | --- | --- | --- |
-| AlphaBlendModeTest | 0.63%, 1.39% | 20 | 1.5% |
-| NormalTangentMirrorTest | 0.15%, 0.44% | 96 | 0.5% |
-| NormalTangentTest | 0.056%, 0.061% | 85 | 0.1% |
-| TextureTransformMultiTest | 0.004%, 0.071% | 24 | 0.1% |
+| AlphaBlendModeTest | 0.45%, 1.91% | 13, 7 | 0.6%, 2.5% |
+| NormalTangentMirrorTest | 0.13%, 0.47% | 76, 99 | 0.2%, 0.6% |
+| NormalTangentTest | 0.053%, 0.056% | 84, 73 | 0.1%, 0.1% |
+| TextureTransformMultiTest | 0.0023%, 0.081% | 3, 28 | 0.01%, 0.15% |
 
 ## What the checks can say
 
@@ -70,6 +74,15 @@ Colors are in 255ths.
 | EmissiveStrengthTest, in a sun's light | how many pixels a shadow darkens by 8, and lights by 2, against none | at least 200; none | 2852; 0 |
 | | how many bloom lights by 3, against none | at least 200 | 116496 |
 | | Neutral against no tonemap, at its brightest cube | at least 3 | 18 |
+| | with a shadow and bloom at once, its golden image, `khronos_Effects.png` | as golden images are | |
+
+E6's shadows and post effects are held to golden images of our own, not to Khronos's references,
+which have neither: EmissiveStrengthTest in a sun's light, with a shadow and bloom at once and
+Neutral's tonemap, and the checks above of each against none. Where Khronos's skinned and morphing
+models are, see `tests/models/`: RiggedSimple, SimpleMorph, and Fox, among others, posed at fixed
+times by their files' clips, against where glTF's specification puts each frame, worked out by
+`tests/models/reference.py`, and golden images of the rest. Khronos publishes no frames of them at
+fixed times, only a screenshot each.
 
 What it measures is from lavapipe, and some margins are thin. Once CI has run them, each platform's
 measures go here and the limits come from them.

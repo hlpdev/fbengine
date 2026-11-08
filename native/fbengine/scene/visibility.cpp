@@ -117,7 +117,7 @@ FBE_API bool fbe_entity_bounds(uint64_t entity, fbe_aabb_t* bounds) try {
         min = world_min;
         max = world_max;
     } else if (s.entities.kind[slot] == FBE_ENTITY_INSTANCES &&
-               fbe::scene::instances_bounds(
+               fbe::scene::instances_own_bounds(
                    fbe::scene::scene().instances[s.entities.component[slot]], local_box_min,
                    local_box_max)) {
         fbe::scene::world_box(slot, local_box_min, local_box_max, min, max);

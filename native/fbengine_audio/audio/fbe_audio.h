@@ -65,7 +65,8 @@ FBE_AUDIO_API bool fbe_audio_started(void);
 FBE_AUDIO_API int32_t fbe_audio_list_outputs(int32_t device);
 // The name of output `index` of those fbe_audio_list_outputs listed last, "" for another index.
 FBE_AUDIO_API const char* fbe_audio_output_name(int32_t index);
-// The seconds the device mixes at a time, 0 when it's stopped or there's no device.
+// The seconds the device mixes at a time: on MANUAL, the period it was started with; 0 when it's
+// stopped or its device is lost.
 FBE_AUDIO_API double fbe_audio_period(void);
 // What fbe_audio_start was given for its device, -1 when it's stopped.
 FBE_AUDIO_API int32_t fbe_audio_device(void);

@@ -1,6 +1,6 @@
 // What comes of a camera's HDR image: passes of the frame's graph, each a full-screen triangle: its
-// bloom, down a chain of smaller targets and back up, then its light through its exposure, tonemap,
-// color grade, and gamma into its target.
+// bloom, down a chain of smaller targets and back up, from what its samples resolve to, then its
+// light through its exposure, tonemap, color grade, and gamma into its target, a sample at a time.
 
 #include "engine_shaders.hpp"
 #include "fbengine.h"
@@ -64,7 +64,8 @@ struct tonemap_data_t {
     std::uint32_t bloom = 0;
     std::uint32_t bloom_sampler = 0;
     float bloom_intensity = 0.0F;
-    std::array<float, 2> spare{};
+    std::uint32_t samples = 1;
+    std::uint32_t samples_image = 0;
     std::array<float, 4> slope{};
     std::array<float, 4> offset{};
     std::array<float, 4> power{};
@@ -283,6 +284,11 @@ bool add_post_passes(const scene::camera_t& camera, gpu::resource_t image, gpu::
                         static_cast<float>(scissor.extent.height), },
     };
     std::vector<std::pair<gpu::resource_t, gpu::use_t>> uses{ { image, gpu::use_t::SAMPLED } };
+    // Its image's samples, whatever its target draws, which needn't be as many.
+    const std::uint32_t image_samples = gpu::resource_samples(image);
+    if (image_samples > 1) {
+        uses.emplace_back(image, gpu::use_t::SAMPLES_READ);
+    }
     if (bloom != gpu::no_resource) {
         uses.emplace_back(bloom, gpu::use_t::SAMPLED);
     }
@@ -294,9 +300,16 @@ bool add_post_passes(const scene::camera_t& camera, gpu::resource_t image, gpu::
         }, },
         .uses = std::move(uses),
         .record =
-            [data, image, bloom, pipeline, scissor](VkCommandBuffer commands) {
+            [data, image, bloom, pipeline, scissor, image_samples](VkCommandBuffer commands) {
                 tonemap_data_t push = data;
                 push.image = gpu::resource_index(image);
+                // Those it can't read one by one, it reads what they resolve to.
+                const std::uint32_t slot =
+                    image_samples > 1 ? gpu::resource_samples_index(image) : gpu::no_samples_slot;
+                if (slot != gpu::no_samples_slot) {
+                    push.samples = image_samples;
+                    push.samples_image = slot;
+                }
                 push.bloom = bloom != gpu::no_resource ? gpu::resource_index(bloom) : 0;
                 vkCmdSetScissor(commands, 0, 1, &scissor);
                 record_triangle(commands, pipeline, push);

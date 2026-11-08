@@ -182,6 +182,8 @@ struct geometry_t {
     std::string scene_id;
     vec3_t cull_min;
     vec3_t cull_max;
+    /// Goes up when its cull box is set or cleared, so Instances' clusters know to take it.
+    std::uint64_t cull_version = 0;
     /// Goes up when its triangles come or go, as against only moving, which a tree can be
     /// refitted for rather than built again.
     std::uint64_t shape_version = 0;
@@ -351,6 +353,7 @@ struct instances_t {
     std::vector<instance_cluster_t> clusters;
     std::uint32_t clusters_geometry = none;
     std::uint64_t clusters_version = 0;
+    std::uint64_t clusters_cull_version = 0;
     bool clusters_stale = true;
     /// Which clusters have changed, if not all of them have.
     std::vector<std::uint32_t> stale_clusters;
@@ -626,8 +629,14 @@ void remove_instances(std::uint32_t entity);
 void copy_instances(std::uint32_t from, std::uint32_t to);
 /// Its clusters, worked out again if they're stale.
 const std::vector<instance_cluster_t>& instance_clusters(instances_t& found);
-/// The box its instances are in, in its space: false for none.
+/// The box its instances are in, in its space, by its clusters, so by its geometry's cull box if it
+/// has one, as drawing and shadows cull them: false for none.
 bool instances_bounds(instances_t& found, vec3_t& min, vec3_t& max);
+/// The box its instances are in, in its space, by its geometry's bounds whatever its cull box, as
+/// Bounds and InView give it: false for none.
+bool instances_own_bounds(instances_t& found, vec3_t& min, vec3_t& max);
+/// Whether each of an instance's matrix's numbers is finite.
+bool instance_finite(const fbe_instance_t& instance);
 /// Which of its geometry's levels of detail a cluster draws, by the size of the biggest of it where
 /// it's nearest, none for nothing.
 std::uint32_t cluster_lod(const instances_t& found, const instance_cluster_t& cluster,
@@ -763,9 +772,15 @@ void reset_transform(std::uint32_t entity);
 void mark_moved(std::uint32_t entity);
 /// Works out an entity's world transform, and its parents', if they moved.
 void update_world(std::uint32_t entity);
-/// Sets an entity's local transform so its world one is this, under its parent as it is.
-void set_world_position(std::uint32_t entity, vec3_t position);
+/// What's local under `parent`, which can be none, for a world position or scale, `kept` on an
+/// axis the parent scales to nothing.
+vec3_t local_position(std::uint32_t parent, vec3_t position, vec3_t kept);
+vec3_t local_scale(std::uint32_t parent, vec3_t scale, vec3_t kept);
+/// Sets an entity's local transform so its world one is this, under its parent as it is. A
+/// position or scale whose local one isn't finite, under a parent scaled almost to nothing, is
+/// refused, false, leaving it as it was.
+bool set_world_position(std::uint32_t entity, vec3_t position);
 void set_world_rotation(std::uint32_t entity, quat_t rotation);
-void set_world_scale(std::uint32_t entity, vec3_t scale);
+bool set_world_scale(std::uint32_t entity, vec3_t scale);
 
 } // namespace fbe::scene

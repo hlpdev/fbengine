@@ -54,6 +54,8 @@ Public Final Class Ui
     Field root: Node
     Field theme: Theme
     Field scale: Float32 = 1.0
+    // The scale it was last laid out at, so a Draw after SetScale lays it out again first.
+    Field laidScale: Float32 = 0.0
     // A game's own measuring, which comes before its fonts'.
     Field measure: (Func(String, Style): Vec2)? = Null
     // Its fonts by the names styles give them, and each at the sizes styles ask for, the 64 used
@@ -485,6 +487,10 @@ Public Final Class Ui
             fontUnits = scale
         End If
         Asked()
+        If laidScale != scale
+            Local shown = ShownArea()
+            LaidOut(Rect(0.0, 0.0, shown.Width / scale, shown.Height / scale))
+        End If
         Local paint = Painter(onto, Self, across, down, fontUnits)
         paint.Paint(root)
         paint.Paint(popups)
@@ -520,6 +526,7 @@ Public Final Class Ui
 
     // Its tree and what's over it laid out, what's opened at a point kept in `bounds`.
     @MainThread Method LaidOut(bounds: Rect)
+        laidScale = scale
         root.Layout(bounds)
         For each In open
             Local at = each.at

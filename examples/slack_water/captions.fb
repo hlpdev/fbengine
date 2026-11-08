@@ -1,0 +1,167 @@
+// What's heard, said in words, for a player who can't hear it: each sound that means something, by
+// its cue, as it starts, and the wind rising and the surf crashing, by the weather; three at a time
+// at most, the newest below, each fading after a while, on a panel in the HUD's style.
+
+Import std.collections
+Import std.core
+Import std.math
+Import fbengine
+Import "./cues"
+Import "./ground"
+Import "./hud"
+
+// How long a caption's shown, the last part of it fading, and how many are at once, all of one frame
+// shown however many there are.
+Public Const CAPTION_SECONDS: Float = 3.5
+Const FADE_SECONDS: Float = 0.8
+Public Const MOST_CAPTIONS: Int = 3
+// How far the wind's swells rise, in a storm of at least so much, to be the wind rising.
+Const RISING_SWELL: Float = 0.6
+Const RISING_STORM: Float = 0.25
+
+/// What a cue's caption says, or "" for one too often to say, as each step is.
+Public Function CaptionOf(cue: Cue): String
+    Select cue
+        Case Cue.GULL
+            Return "[a gull cries]"
+        Case Cue.CREAK
+            Return "[the mill creaks]"
+        Case Cue.SPLASH
+            Return "[the sea breaks over the road]"
+        Case Cue.FIT
+            Return "[a part clanks into place]"
+        Case Cue.SLUICE
+            Return "[the sluice groans open]"
+        Case Cue.PIP_HELLO
+            Return "[Pip chirps]"
+        Case Cue.PIP_TAKES
+            Return "[Pip chirps, taking it]"
+        Case Cue.PIP_GIVES
+            Return "[Pip chirps, giving it back]"
+        Case Cue.PIP_WORRIES
+            Return "[Pip whimpers]"
+        Case Cue.PIP_GLAD
+            Return "[Pip trills]"
+        Case Cue.PIP_SAD
+            Return "[Pip droops]"
+        Default
+            Return ""
+    End Select
+End Function
+
+/// The cues that have captions, the list audio's lane and this share.
+Public Function CaptionedCues(): Cue[]
+    Return [Cue.GULL, Cue.CREAK, Cue.SPLASH, Cue.FIT, Cue.SLUICE, Cue.PIP_HELLO, Cue.PIP_TAKES,
+            Cue.PIP_GIVES, Cue.PIP_WORRIES, Cue.PIP_GLAD, Cue.PIP_SAD]
+End Function
+
+// `units` as whole pixels.
+Function Px(units: Float): Int32 => units As Int32
+
+/// What's said, newest last, each with how long it's been shown, and the frame it was said in.
+Public Final Class Captions
+    Field said: String[] = []
+    Field ages: Float[] = []
+    Field frames: Int[] = []
+    Field frame: Int = 0
+    Field counts: Map<Int, Int>
+    Field swelling: Bool = False
+    Field roared: Bool = False
+    Field font: Font
+    Field scale: Float = 1.0
+
+    @MainThread
+    Public New()
+        counts = {}
+        font = Font.BuiltIn(20.0)
+    End New
+
+    /// Sets how large it's drawn, 1 as it's made.
+    @MainThread
+    Public Method SetScale(by: Float)
+        scale = by
+        font = Font.BuiltIn(20.0 * by)
+    End Method
+
+    /// Forgets what's said, as a new game does, `played` saying how many times each cue's played so far.
+    Public Method Reset(played: Func(Cue): Int)
+        said = []
+        ages = []
+        frames = []
+        counts = {}
+        For cue In CaptionedCues()
+            counts[cue As Int] = played(cue)
+        End For
+        swelling = False
+        roared = False
+    End Method
+
+    /// Moves it on `seconds`: what's fading goes, and what's started since is said, by `played`,
+    /// how many times each cue's played, and the weather at `clock`.
+    Public Method Update(played: Func(Cue): Int, clock: Float64, seconds: Float)
+        frame += 1
+        For at = ages.Count - 1 To 0 Step -1
+            ages[at] += seconds
+            If ages[at] >= CAPTION_SECONDS
+                ages.RemoveAt(at)
+                said.RemoveAt(at)
+                frames.RemoveAt(at)
+            End If
+        End For
+        // The weather first, so what a sound says is newest, and kept, when more come at once.
+        Local rising = StormAt(clock) >= RISING_STORM && Swells(clock) >= RISING_SWELL
+        If rising && !swelling Then Say("[the wind rises]")
+        swelling = rising
+        If Roar(clock) > 0.0 && !roared
+            roared = True
+            Say("[surf crashes]")
+        End If
+        For cue In CaptionedCues()
+            Local now = played(cue)
+            If now > (counts.Get(cue As Int) ?? 0) Then Say(CaptionOf(cue))
+            counts[cue As Int] = now
+        End For
+    End Method
+
+    /// Says `text`, the oldest going past the most there are, but none said this frame.
+    Public Method Say(text: String)
+        said.Add(text)
+        ages.Add(0.0)
+        frames.Add(frame)
+        While said.Count > MOST_CAPTIONS && frames[0] < frame
+            said.RemoveAt(0)
+            ages.RemoveAt(0)
+            frames.RemoveAt(0)
+        End While
+    End Method
+
+    /// What's said, oldest first.
+    Public Method Shown(): String[] => said.Clone()
+
+    /// How visible the caption at `at` is, from 1 to 0 as it fades.
+    Public Method Shade(at: Int): Float
+        Local left = CAPTION_SECONDS - ages[at]
+        Return Clamp(left / FADE_SECONDS, 0.0, 1.0)
+    End Method
+
+    /// Draws them, at the bottom in the middle, above where a prompt goes.
+    @MainThread
+    Public Method Draw()
+        If said.Count == 0 Then Return
+        Local canvas = Screen.Canvas()
+        Local line = Px(font.LineHeight() + 8.0 * scale)
+        Local y = Screen.Height() - Px(90.0 * scale) - line * said.Count
+        For at = 0 Until said.Count
+            Local text = said[at]
+            Local shade = Shade(at)
+            Local wide = Px(font.Width(text) + 28.0 * scale)
+            Local x = (Screen.Width() - wide) / 2
+            canvas.SetColor(Color32(SEA_DARK.r, SEA_DARK.g, SEA_DARK.b,
+                                    ((SEA_DARK.a As Float) * shade) As UInt8))
+            canvas.DrawRect(x, y, wide, line - 4, True)
+            canvas.SetColor(Color32(PAPER.r, PAPER.g, PAPER.b, (255.0 * shade) As UInt8))
+            canvas.DrawText(font, text, x + Px(14.0 * scale), y + Px(2.0 * scale))
+            y += line
+        End For
+    End Method
+End Class

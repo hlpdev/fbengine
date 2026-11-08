@@ -13,6 +13,7 @@
 #include "gpu_testing.hpp"
 #include "render/drawing.hpp"
 #include "render/render.hpp"
+#include "scene/scene.hpp"
 #include "shader/shader.hpp"
 #include "test_shaders.hpp"
 #include "texture/texture.hpp"
@@ -23,14 +24,21 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
+#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <exception>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <numbers>
+#include <random>
+#include <SDL3/SDL.h>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -51,12 +59,18 @@ struct scene_t {
     std::uint64_t target =
         fbe_texture_create_target(frame_size, frame_size, FBE_TEXTURE_RGBA8, 1, true);
     std::uint64_t camera = fbe_entity_create(world, 0, FBE_ENTITY_CAMERA);
+    /// Whether the GPU stops as it goes: unless a test of many scenes in turn keeps it, for the
+    /// next to draw with the pipelines this one made, which lavapipe takes seconds over.
+    bool stops_gpu = true;
 
     scene_t() {
         require(target != 0);
         require(fbe_camera_set_target(camera, target));
         // Nothing but what a test lights.
         require(fbe_world_set_ambient(world, 0.0F, 0.0F, 0.0F));
+    }
+    explicit scene_t(bool stops) : scene_t() {
+        stops_gpu = stops;
     }
     scene_t(const scene_t&) = delete;
     scene_t& operator=(const scene_t&) = delete;
@@ -68,7 +82,10 @@ struct scene_t {
         std::array<std::uint64_t, 64> some{};
         while (fbe_entity_freed(some.data(), some.size()) != 0) {}
         fbe_texture_release(target);
-        stop_gpu();
+        // As a failure leaves it too, so what's after starts as it would.
+        if (stops_gpu || std::uncaught_exceptions() > 0) {
+            stop_gpu();
+        }
     }
 
     /// What's been drawn into the target since it was last cleared, once its camera's drawn.
@@ -92,6 +109,36 @@ struct scene_t {
 };
 
 using rgba_t = std::array<std::uint8_t, 4>;
+
+/// The count `variable` asks for, as a longer run does, or `otherwise`.
+int asked_for(const char* variable, int otherwise) {
+    const char* asked = SDL_getenv(variable);
+    int count = otherwise;
+    if (asked != nullptr) {
+        std::from_chars(asked, asked + std::strlen(asked), count);
+    }
+    return count;
+}
+
+/// A part of a test, by its name, and what it does in a scene of its own.
+template <typename Scene>
+using part_t = std::pair<std::string_view, std::function<void(const Scene&)>>;
+
+/// Each part in a scene of its own, made by Scene(whether it stops the GPU), in turn, on one GPU:
+/// lavapipe takes seconds to make a game shader's pipelines as it first draws with them, so that's
+/// once, not once a part, as sections would, each starting the GPU again.
+template <typename Scene>
+void on_one_gpu(const std::vector<part_t<Scene>>& parts) {
+    for (std::size_t at = 0; at < parts.size(); ++at) {
+        INFO(parts[at].first);
+        {
+            const Scene scene(at + 1 == parts.size());
+            parts[at].second(scene);
+        }
+        // Kept for the next part, and stopped after the last.
+        CHECK(fbe_gpu_started() == (at + 1 < parts.size()));
+    }
+}
 
 rgba_t pixel(const fbe::golden::frame_t& frame, std::uint32_t x, std::uint32_t y) {
     const std::size_t at = ((std::size_t{ y } * frame.width) + x) * 4;
@@ -653,7 +700,7 @@ TEST_CASE("a VERTEX material's highlight is at its vertices, as its shininess sa
     fbe_material_release(material);
 }
 
-TEST_CASE("a layer's UVs turn and scale as Blitz's did", "[gpu][scene]") {
+TEST_CASE("a layer's UVs turn and scale with its angle and scale", "[gpu][scene]") {
     const scene_t scene;
     const std::uint64_t material = unlit(1.0F, 1.0F, 1.0F);
     // Across: red then green. Down: red then blue.
@@ -5724,72 +5771,91 @@ TEST_CASE("two materials with one shader read their own parameters", "[gpu][scen
     CHECK(fbe_gpu_validation_errors() == 0);
 }
 
+namespace {
+
+/// A scene with a material of the game's shader, for a test whose parts are on one GPU.
+struct shader_scene_t : scene_t {
+    std::uint64_t material = by_game_shader();
+
+    explicit shader_scene_t(bool stops) : scene_t(stops) {}
+    shader_scene_t(const shader_scene_t&) = delete;
+    shader_scene_t& operator=(const shader_scene_t&) = delete;
+    shader_scene_t(shader_scene_t&&) = delete;
+    shader_scene_t& operator=(shader_scene_t&&) = delete;
+
+    ~shader_scene_t() {
+        CHECK(fbe_gpu_validation_errors() == 0);
+        fbe_material_release(material);
+    }
+};
+
+} // namespace
+
 TEST_CASE("a shader moves a vertex after its morph and its skin", "[gpu][scene]") {
-    const scene_t scene;
-    const std::uint64_t material = by_game_shader();
-    SECTION("drawn, skinned") {
+    std::vector<part_t<shader_scene_t>> parts;
+    parts.emplace_back("drawn, skinned", [](const shader_scene_t& scene) {
         require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
         // A joint to the left, turned: moved right after it, it's in the middle.
-        const skinned_wall_t skinned = skinned_wall(scene.world, material, -3.0F, 0.5F);
+        const skinned_wall_t skinned = skinned_wall(scene.world, scene.material, -3.0F, 0.5F);
         all_on(skinned.geometry, 0, 1.0F);
         require(fbe_entity_set_position(skinned.still, -1.0F, 0.0F, -3.0F, FBE_SPACE_WORLD));
         quarter_turned(skinned.still);
         room_to_move(skinned.geometry);
         CHECK(near(middle(scene.drawn()), { 0, 0, 255 }));
-        require(fbe_material_set_parameter(material, 1, 1.0F, 0.0F, 0.0F, 0.0F));
+        require(fbe_material_set_parameter(scene.material, 1, 1.0F, 0.0F, 0.0F, 0.0F));
         CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
         fbe_skin_release(skinned.skin);
-    }
-    SECTION("drawn, morphed") {
+    });
+    parts.emplace_back("drawn, morphed", [](const shader_scene_t& scene) {
         require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
-        const std::uint64_t mesh = wall(scene.world, -3.0F, 0.5F, material);
+        const std::uint64_t mesh = wall(scene.world, -3.0F, 0.5F, scene.material);
         require(fbe_entity_set_position(mesh, 0.0F, 60.0F, -3.0F, FBE_SPACE_WORLD));
         add_lift(fbe_mesh_geometry(mesh), -30.0F);
         room_to_move(fbe_mesh_geometry(mesh));
         const std::array<float, 1> one{ 1.0F };
         require(fbe_morph_set_weights(mesh, one.data(), 1));
         CHECK(near(middle(scene.drawn()), { 0, 0, 255 }));
-        require(fbe_material_set_parameter(material, 1, 0.0F, -30.0F, 0.0F, 0.0F));
+        require(fbe_material_set_parameter(scene.material, 1, 0.0F, -30.0F, 0.0F, 0.0F));
         CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
-    }
-    SECTION("casting, skinned") {
+    });
+    parts.emplace_back("casting, skinned", [](const shader_scene_t& scene) {
         const std::uint64_t paint = fbe_material_create();
         wall(scene.world, -10.0F, 30.0F, paint);
         sun_from_right(scene.world);
-        const skinned_wall_t skinned = skinned_wall(scene.world, material, -5.0F, 0.5F);
+        const skinned_wall_t skinned = skinned_wall(scene.world, scene.material, -5.0F, 0.5F);
         all_on(skinned.geometry, 0, 1.0F);
         require(fbe_entity_set_position(skinned.still, 3.0F, 0.0F, -5.0F, FBE_SPACE_WORLD));
         quarter_turned(skinned.still);
         room_to_move(skinned.geometry);
         CHECK(middle(scene.drawn())[0] != 0);
-        require(fbe_material_set_parameter(material, 1, 2.0F, 0.0F, 0.0F, 0.0F));
+        require(fbe_material_set_parameter(scene.material, 1, 2.0F, 0.0F, 0.0F, 0.0F));
         CHECK(middle(scene.drawn())[0] == 0);
         fbe_skin_release(skinned.skin);
         fbe_material_release(paint);
-    }
-    SECTION("casting, morphed") {
+    });
+    parts.emplace_back("casting, morphed", [](const shader_scene_t& scene) {
         const std::uint64_t paint = fbe_material_create();
         wall(scene.world, -10.0F, 30.0F, paint);
         sun_from_right(scene.world);
-        const std::uint64_t mesh = wall(scene.world, -5.0F, 3.0F, material);
+        const std::uint64_t mesh = wall(scene.world, -5.0F, 3.0F, scene.material);
         require(fbe_entity_set_position(mesh, 5.0F, 60.0F, -5.0F, FBE_SPACE_WORLD));
         add_lift(fbe_mesh_geometry(mesh), -30.0F);
         room_to_move(fbe_mesh_geometry(mesh));
         const std::array<float, 1> one{ 1.0F };
         require(fbe_morph_set_weights(mesh, one.data(), 1));
         CHECK(middle(scene.drawn())[0] != 0);
-        require(fbe_material_set_parameter(material, 1, 0.0F, -30.0F, 0.0F, 0.0F));
+        require(fbe_material_set_parameter(scene.material, 1, 0.0F, -30.0F, 0.0F, 0.0F));
         CHECK(middle(scene.drawn())[0] == 0);
         fbe_material_release(paint);
-    }
-    SECTION("a terrain, drawn and casting") {
+    });
+    parts.emplace_back("a terrain, drawn and casting", [](const shader_scene_t& scene) {
         const std::uint64_t paint = fbe_material_create();
         wall(scene.world, -10.0F, 30.0F, paint);
         sun_from_right(scene.world);
         // A slab stood on end, as a terrain that casts is above, on the sun's way till it's moved.
         const std::uint64_t terrain = fbe_entity_create(scene.world, 0, FBE_ENTITY_TERRAIN);
         require(fbe_terrain_set_size(terrain, 32));
-        require(fbe_terrain_set_material(terrain, material));
+        require(fbe_terrain_set_material(terrain, scene.material));
         require(fbe_entity_set_scale(terrain, 0.25F, 1.0F, 0.25F, FBE_SPACE_WORLD));
         const float half = std::numbers::pi_v<float> * 0.25F;
         require(fbe_entity_set_rotation(terrain, std::sin(half), 0.0F, 0.0F, std::cos(half),
@@ -5797,12 +5863,11 @@ TEST_CASE("a shader moves a vertex after its morph and its skin", "[gpu][scene]"
         require(fbe_entity_set_position(terrain, 1.0F, 4.0F, -5.0F, FBE_SPACE_WORLD));
         CHECK(middle(scene.drawn())[0] == 0);
         // In its own space, whose x is the world's: off the sun's way.
-        require(fbe_material_set_parameter(material, 1, 16.0F, 0.0F, 0.0F, 0.0F));
+        require(fbe_material_set_parameter(scene.material, 1, 16.0F, 0.0F, 0.0F, 0.0F));
         CHECK(middle(scene.drawn())[0] != 0);
         fbe_material_release(paint);
-    }
-    CHECK(fbe_gpu_validation_errors() == 0);
-    fbe_material_release(material);
+    });
+    on_one_gpu(parts);
 }
 
 TEST_CASE("a two-sided material's back has its shader's normal facing the camera", "[gpu][scene]") {
@@ -5883,6 +5948,157 @@ TEST_CASE("the light a shader's told of is linear, whatever its material's shadi
     fbe_material_release(material);
 }
 
+// A game's shader's SPIR-V mutated: words flipped, set, their counts set to none or past the end,
+// and the end cut. Each is checked, and made where it's taken, reading nothing past what it has,
+// which ASan checks where it runs. FBE_FUZZ_ROUNDS asks for more than CI's 2000.
+namespace {
+
+/// SPIRV-Tools' validator off while it lives, as FBE_SPIRV_VALIDATION=0 has it.
+struct unvalidated_t {
+    unvalidated_t() {
+        fbe::tests::set_variable("FBE_SPIRV_VALIDATION", "0");
+    }
+    unvalidated_t(const unvalidated_t&) = delete;
+    unvalidated_t& operator=(const unvalidated_t&) = delete;
+    unvalidated_t(unvalidated_t&&) = delete;
+    unvalidated_t& operator=(unvalidated_t&&) = delete;
+    ~unvalidated_t() {
+        fbe::tests::set_variable("FBE_SPIRV_VALIDATION", "1");
+    }
+};
+
+} // namespace
+
+// The checks before the validator, which it takes a Debug build a quarter of a second to run on
+// each: so they're tried on their own here, as many times as there are rounds.
+TEST_CASE("a game's shader's mutants are checked without reading past them",
+          "[gpu][scene][stability]") {
+    const unvalidated_t unvalidated;
+    const int rounds = asked_for("FBE_FUZZ_ROUNDS", 2000);
+    const std::span<const std::uint32_t> seed = fbe::test_shaders::game_shader.code;
+    REQUIRE(seed.size() > 5);
+    // Seeds that repeat, so what a run finds is found again.
+    std::mt19937 random(20261106); // NOLINT(bugprone-random-generator-seed)
+    const auto at = [&](std::size_t size) {
+        return std::uniform_int_distribution<std::size_t>(0, size - 1)(random);
+    };
+    int taken = 0;
+    for (int round = 0; round < rounds; ++round) {
+        CAPTURE(round);
+        std::vector<std::uint32_t> words(seed.begin(), seed.end());
+        const int changes = std::uniform_int_distribution<int>(1, 3)(random);
+        for (int change = 0; change < changes && words.size() > 5; ++change) {
+            // Past the header's five words, which say it's SPIR-V.
+            const std::size_t where = 5 + at(words.size() - 5);
+            switch (at(5)) {
+            case 0:
+                words[where] ^= 1U << at(32);
+                break;
+            case 1:
+                words[where] = static_cast<std::uint32_t>(random());
+                break;
+            case 2:
+                // An instruction's count: none, or more words than there are.
+                words[where] = (words[where] & 0xFFFFU) | (at(2) == 0 ? 0U : 0xFFFFU << 16U);
+                break;
+            case 3:
+                words[where] = std::array<std::uint32_t, 4>{ 0, 1, 2, 0xFFFFFFFF }.at(at(4));
+                break;
+            default:
+                words.resize(where);
+                break;
+            }
+        }
+        const std::vector<std::uint8_t> bytes = cooked_shader(words);
+        if (fbe_shader_check(bytes.data(), static_cast<std::int64_t>(bytes.size()))) {
+            ++taken;
+        }
+    }
+    // Some are taken, and some refused, or it's not the check that's tried.
+    CAPTURE(taken);
+    CHECK(taken > 0);
+    CHECK(taken < rounds);
+}
+
+// Mutants SPIRV-Tools' validator takes are drawn, as a game would draw them: some are refused,
+// saying what the validator says, and what's taken draws, with no validation errors. The first
+// three taken are drawn, as each makes pipelines, seconds each on lavapipe.
+TEST_CASE("a game's shader's mutants the validator takes are drawn", "[gpu][scene][stability]") {
+    const scene_t scene;
+    const int rounds = asked_for("FBE_FUZZ_VALIDATED_ROUNDS", 40);
+    const std::span<const std::uint32_t> seed = fbe::test_shaders::game_shader.code;
+    // Seeds that repeat, so what a run finds is found again.
+    std::mt19937 random(20261108); // NOLINT(bugprone-random-generator-seed)
+    const auto at = [&](std::size_t size) {
+        return std::uniform_int_distribution<std::size_t>(0, size - 1)(random);
+    };
+    // Where its constants' values are, OpConstant's last word, which changed is still valid SPIR-V,
+    // if not the shader it was.
+    constexpr std::uint32_t op_constant = 43;
+    std::vector<std::size_t> values;
+    for (std::size_t word = 5; word < seed.size();) {
+        const std::uint32_t count = seed[word] >> 16U;
+        if ((seed[word] & 0xFFFFU) == op_constant && count == 4) {
+            values.push_back(word + 3);
+        }
+        word += std::max(count, 1U);
+    }
+    REQUIRE(!values.empty());
+    int refused_by_validator = 0;
+    int drawn = 0;
+    for (int round = 0; round < rounds; ++round) {
+        CAPTURE(round);
+        std::vector<std::uint32_t> words(seed.begin(), seed.end());
+        // A bit flipped past the header, which the validator mostly refuses, or in a constant's
+        // value, which it mostly takes.
+        const std::size_t where =
+            round % 2 == 0 ? 5 + at(words.size() - 5) : values.at(at(values.size()));
+        words[where] ^= 1U << at(32);
+        const std::vector<std::uint8_t> bytes = cooked_shader(words);
+        const std::uint64_t shader =
+            fbe_shader_create(bytes.data(), static_cast<std::int64_t>(bytes.size()), "a mutant");
+        if (shader == 0) {
+            refused_by_validator +=
+                std::string_view(fbe_error()).contains("SPIRV-Tools' validator says") ? 1 : 0;
+            continue;
+        }
+        if (drawn < 3) {
+            const std::uint64_t material = fbe_material_create();
+            require(fbe_material_set_shader(material, shader));
+            const std::uint64_t mesh = cube(scene.world, 0.0F, 0.0F, -6.0F, material);
+            static_cast<void>(scene.drawn());
+            require(fbe_entity_free(mesh));
+            fbe_material_release(material);
+            ++drawn;
+        }
+        require(fbe_shader_release(shader));
+    }
+    CAPTURE(refused_by_validator, drawn);
+    CHECK(refused_by_validator > 0);
+    CHECK(drawn > 0);
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+// A pak's shader whose bytes are broken past what the checks before the validator see, its SPIR-V's
+// bound on its ids less than its ids, is refused as it's made, saying what the validator says,
+// before any driver's handed it.
+TEST_CASE("a pak's shader that isn't valid SPIR-V is refused with the validator's message",
+          "[gpu][scene]") {
+    std::vector<std::uint32_t> words(fbe::test_shaders::game_shader.code.begin(),
+                                     fbe::test_shaders::game_shader.code.end());
+    words[3] = 2;
+    const std::vector<std::uint8_t> bytes = cooked_shader(words);
+    CHECK(fbe_shader_create(bytes.data(), static_cast<std::int64_t>(bytes.size()),
+                            "res://broken.slang") == 0);
+    const std::string_view why = fbe_error();
+    CAPTURE(why);
+    CHECK(why.starts_with("the shader isn't valid SPIR-V, as SPIRV-Tools' validator says: "));
+    CHECK(why.size() > std::string_view("the shader isn't valid SPIR-V, as SPIRV-Tools' "
+                                        "validator says: ")
+                           .size());
+    CHECK(!fbe_shader_check(bytes.data(), static_cast<std::int64_t>(bytes.size())));
+}
+
 TEST_CASE("a shader no pipeline can be made of draws as the scene's own, and isn't tried again",
           "[gpu][scene]") {
     const scene_t scene;
@@ -5890,7 +6106,8 @@ TEST_CASE("a shader no pipeline can be made of draws as the scene's own, and isn
     // Bytes of its own, so it's a code of its own, by its name.
     std::vector<std::uint32_t> words(fbe::test_shaders::game_shader.code.begin(),
                                      fbe::test_shaders::game_shader.code.end());
-    words.push_back(1U << 16U);
+    // Its generator's word, which nothing reads.
+    words[2] = 0xFB01;
     const std::vector<std::uint8_t> bytes = cooked_shader(words);
     const std::uint64_t shader = fbe_shader_create(
         bytes.data(), static_cast<std::int64_t>(bytes.size()), "res://refused.slang");
@@ -7804,6 +8021,20 @@ TEST_CASE("an Instances' clusters draw the level their size in the view has", "[
         require(fbe_entity_set_position(made, 0.0F, 0.0F, -390.0F, FBE_SPACE_WORLD));
         CHECK(geometries().empty());
     }
+    SECTION("by its cull box, if it has one, as what's moved by its shader is that big") {
+        group_at(all, -90.0F);
+        require(fbe_instances_set(made, all.data(), 128));
+        CHECK(geometries() == std::vector{ coarse });
+        // Four times its bounds each way: as big in the view as its own level asks, at 90.
+        const fbe_aabb_t bigger{
+            .min = { .x = -4.0F, .y = -4.0F, .z = -4.0F },
+            .max = { .x = 4.0F, .y = 4.0F, .z = 4.0F },
+        };
+        require(fbe_geometry_set_cull_box(fine, &bigger));
+        CHECK(geometries() == std::vector{ fine });
+        require(fbe_geometry_clear_cull_box(fine));
+        CHECK(geometries() == std::vector{ coarse });
+    }
     SECTION("each cluster its own") {
         group_at(all, -10.0F);
         group_at(all, -100.0F);
@@ -8215,6 +8446,406 @@ TEST_CASE("an HDR camera's edge is its coverage of a tonemap's color", "[gpu][sc
     require(fbe_camera_set_target(scene.camera, scene.target));
     fbe_texture_release(target);
     fbe_material_release(material);
+}
+
+namespace {
+
+/// A little turned wall with a light of 100, whose tonemap's near 1, in an HDR camera that clears
+/// to alpha 1, where what's in a pixel is all surface however little of it's the wall's.
+void bright_wall(const scene_t& scene, float clear_alpha = 1.0F) {
+    const std::uint64_t material = fbe_material_create();
+    require(fbe_material_set_emissive(material, 100.0F, 100.0F, 100.0F));
+    const std::uint64_t mesh = wall(scene.world, -3.0F, 0.5F, material);
+    require(fbe_entity_set_rotation(mesh, 0.0F, 0.0F, 0.2F, 0.98F, FBE_SPACE_WORLD));
+    fbe_material_release(material);
+    require(fbe_camera_set_clear(scene.camera, true, true));
+    // Over no alpha, an edge's alpha is what of its samples it covers; and what it tonemaps is
+    // its color under its alpha, which is the wall's, whatever reads it.
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, clear_alpha));
+    require(fbe_camera_set_hdr(scene.camera, true));
+    require(fbe_camera_set_tonemap(scene.camera, FBE_TONEMAP_REINHARD));
+}
+
+/// How many pixels of a wall's edge are one, two, and three of four samples of it, each its part of
+/// the tonemap's color; and how many are none of those.
+/// How many pixels of an edge are each part of `samples` of it, but none or all; how many are
+/// between those; and how many of the parts have an alpha that isn't their part's.
+struct samples_edge_t {
+    std::vector<int> parts;
+    int others = 0;
+    int alpha_off = 0;
+};
+
+/// What's in a frame of `side` pixels of an edge of `samples` over what's `behind` of a tonemap's
+/// color, of what's `whole` of it; and, over what has no alpha, its alpha, which is the samples
+/// it covers.
+samples_edge_t edge_in(const fbe::golden::frame_t& frame, std::uint32_t side, float behind,
+                       float whole, std::uint32_t samples = 4, bool alpha_is_coverage = false) {
+    samples_edge_t edge;
+    edge.parts.assign(samples - 1, 0);
+    const auto many = static_cast<float>(samples);
+    for (std::uint32_t y = 0; y < side; ++y) {
+        for (std::uint32_t x = 0; x < side; ++x) {
+            const float part = (linear_of(pixel(frame, x, y)[0]) - behind) / (whole - behind);
+            if (part <= 0.02F || part >= 0.98F) {
+                continue;
+            }
+            const float nearest = std::round(part * many);
+            if (std::abs(part - (nearest / many)) < 0.03F && nearest >= 1.0F &&
+                nearest <= many - 1.0F) {
+                ++edge.parts.at(static_cast<std::size_t>(nearest) - 1);
+                const float alpha = std::round(nearest / many * 255.0F);
+                if (alpha_is_coverage &&
+                    std::abs(static_cast<float>(pixel(frame, x, y)[3]) - alpha) > 3.0F) {
+                    ++edge.alpha_off;
+                }
+            } else {
+                ++edge.others;
+            }
+        }
+    }
+    return edge;
+}
+
+/// The edge in a new target of `samples` and `side` pixels, over what's behind it that's `behind`
+/// of a tonemap's color; its alpha's checked if `alpha_is_coverage`, where what's behind has none.
+samples_edge_t edge_of(const scene_t& scene, std::uint32_t side, float behind = 0.0F,
+                       std::uint32_t samples = 4, bool alpha_is_coverage = false) {
+    const std::uint64_t target =
+        fbe_texture_create_target(static_cast<std::int32_t>(side), static_cast<std::int32_t>(side),
+                                  FBE_TEXTURE_RGBA8, static_cast<std::int32_t>(samples), true);
+    require(target != 0);
+    require(fbe_camera_set_target(scene.camera, target));
+    require(fbe_render_world(scene.world, 1.0F));
+    const fbe::golden::frame_t frame = scene_t::read(target);
+    fbe_frame_flip(false);
+    require(fbe_camera_set_target(scene.camera, scene.target));
+    fbe_texture_release(target);
+    return edge_in(frame, side, behind, through(FBE_TONEMAP_REINHARD, 100.0F), samples,
+                   alpha_is_coverage);
+}
+
+void reads_its_samples(const samples_edge_t& edge) {
+    CAPTURE(edge.parts, edge.others, edge.alpha_off);
+    CHECK(edge.others == 0);
+    CHECK(std::ranges::all_of(edge.parts, [](int many) { return many > 0; }));
+    CHECK(edge.alpha_off == 0);
+}
+
+/// What their average's tonemap is: a quarter of the wall's light is nearly all of its color, which
+/// is no part of it a sample has.
+void reads_their_average(const samples_edge_t& edge) {
+    CAPTURE(edge.parts, edge.others);
+    CHECK(edge.others > 0);
+    CHECK(std::ranges::all_of(edge.parts, [](int many) { return many == 0; }));
+}
+
+/// A pass of the shape shader's, of a light of 100 over no light at all, into an image of
+/// `samples`.
+fbe::gpu::resource_t bright_image(std::uint32_t side, std::uint32_t samples) {
+    const fbe::gpu::transient_t made{
+        .width = side,
+        .height = side,
+        .format = FBE_TEXTURE_RGBA16F,
+        .samples = samples,
+        .reads_samples = samples > 1,
+    };
+    require(fbe::gpu::reserve_transient(made));
+    const fbe::gpu::resource_t image = fbe::gpu::transient_resource(made);
+    const auto drawn_as = static_cast<VkSampleCountFlagBits>(samples);
+    require(fbe::gpu::add_pass({
+        .name = "bright",
+        .colors = { {
+            .target = image,
+            .clear = true,
+            .rgba = { 0.0F, 0.0F, 0.0F, 1.0F },
+        }, },
+        .record =
+            [drawn_as](VkCommandBuffer commands) {
+                VkPipeline pipeline = fbe::gpu::pipeline({
+                    .shader = &fbe::test_shaders::shape,
+                    .color = VK_FORMAT_R16G16B16A16_SFLOAT,
+                    .samples = drawn_as,
+                });
+                require(pipeline != VK_NULL_HANDLE);
+                vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                const struct {
+                    std::array<float, 4> color;
+                    std::array<float, 2> offset;
+                    float size;
+                    float depth;
+                } constants{
+                    .color = { 100.0F, 100.0F, 100.0F, 1.0F },
+                    .offset = {},
+                    .size = 0.8F,
+                    .depth = 0.5F,
+                };
+                vkCmdPushConstants(commands, fbe::gpu::pipeline_layout(),
+                                   fbe::gpu::flag<VkShaderStageFlags>(VK_SHADER_STAGE_ALL), 0,
+                                   sizeof(constants), &constants);
+                vkCmdDraw(commands, 3, 1, 0, 0);
+            },
+    }));
+    return image;
+}
+
+} // namespace
+
+namespace {
+
+/// What's behind an edge: a wall of `dim` light, none if 0, and the clear's alpha.
+struct behind_t {
+    float dim = 0.0F;
+    float alpha = 1.0F;
+};
+
+/// That a bright edge of `samples` is the average of each sample's tonemap, over black, over a
+/// dim wall, and over no alpha, where its alpha's what of it each covers.
+void bright_edge_at(std::uint32_t samples) {
+    const behind_t behind =
+        GENERATE(behind_t{}, behind_t{ .dim = 0.5F }, behind_t{ .alpha = 0.0F });
+    const float dim = behind.dim;
+    CAPTURE(dim, behind.alpha, samples);
+    const scene_t scene;
+    bright_wall(scene, behind.alpha);
+    if (dim > 0.0F) {
+        const std::uint64_t dim_material = fbe_material_create();
+        require(fbe_material_set_emissive(dim_material, dim, dim, dim));
+        wall(scene.world, -6.0F, 20.0F, dim_material);
+        fbe_material_release(dim_material);
+    }
+    const float under = through(FBE_TONEMAP_REINHARD, dim);
+    const samples_edge_t edge = edge_of(scene, 32, under, samples, behind.alpha == 0.0F);
+    reads_its_samples(edge);
+    // Its image again, from how the last frame left it.
+    const samples_edge_t again = edge_of(scene, 32, under, samples, behind.alpha == 0.0F);
+    CHECK(again.parts == edge.parts);
+    CHECK(again.others == 0);
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+} // namespace
+
+// F6: a tonemap of what's resolved undoes multisampling on a bright edge: a quarter of a light of
+// 100 is 25, nearly all of what a tonemap makes of 100. Every GPU draws and reads 4 samples.
+TEST_CASE("a bright edge is the average of each sample's tonemap", "[gpu][scene]") {
+    bright_edge_at(4);
+}
+
+// Of a test of its own, so a GPU without 2, as lavapipe is, skips it, and MoltenVK's log says it
+// ran.
+TEST_CASE("a bright edge of 2 samples is their average's tonemap too", "[gpu][scene]") {
+    bool has_two = false;
+    {
+        const scene_t scene;
+        const VkPhysicalDeviceLimits& limits = fbe::gpu::device()->properties.limits;
+        has_two = (limits.framebufferColorSampleCounts & limits.sampledImageColorSampleCounts &
+                   static_cast<VkSampleCountFlags>(VK_SAMPLE_COUNT_2_BIT)) != 0;
+    }
+    if (!has_two) {
+        SKIP("this GPU doesn't draw and read 2 samples");
+    }
+    bright_edge_at(2);
+}
+
+// What's all of a pixel has no edge: each of its samples has the bloom a single sample would, on
+// the wall, off it where there's a surface to it, and off it where there's none.
+TEST_CASE("bloom's on every sample of a multisampled camera", "[gpu][scene]") {
+    const float clear_alpha = GENERATE(1.0F, 0.0F);
+    CAPTURE(clear_alpha);
+    const scene_t scene;
+    const std::uint64_t material = fbe_material_create();
+    require(fbe_material_set_emissive(material, 20.0F, 20.0F, 20.0F));
+    wall(scene.world, -3.0F, 0.5F, material);
+    fbe_material_release(material);
+    require(fbe_camera_set_clear(scene.camera, true, true));
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, clear_alpha));
+    require(fbe_camera_set_hdr(scene.camera, true));
+    require(fbe_camera_set_tonemap(scene.camera, FBE_TONEMAP_REINHARD));
+    require(fbe_camera_set_bloom(scene.camera, 1.0F, 1.0F));
+    const auto drawn_at = [&scene](std::int32_t samples) {
+        const std::uint64_t target =
+            fbe_texture_create_target(frame_size, frame_size, FBE_TEXTURE_RGBA8, samples, true);
+        require(target != 0);
+        require(fbe_camera_set_target(scene.camera, target));
+        require(fbe_render_world(scene.world, 1.0F));
+        fbe::golden::frame_t frame = scene_t::read(target);
+        fbe_frame_flip(false);
+        require(fbe_camera_set_target(scene.camera, scene.target));
+        fbe_texture_release(target);
+        return frame;
+    };
+    const fbe::golden::frame_t one = drawn_at(1);
+    const fbe::golden::frame_t four = drawn_at(4);
+    const std::uint32_t mid = frame_size / 2;
+    const std::uint32_t off = frame_size / 8;
+    const rgba_t glowing = pixel(one, off, mid);
+    CAPTURE(glowing[0], pixel(four, off, mid)[0]);
+    CHECK(glowing[0] > 40);
+    // Near, not the same: what bloom starts from is what they resolve to, whose edges are part
+    // covered where one sample's are all or nothing.
+    CHECK(near(pixel(four, off, mid), { glowing[0], glowing[1], glowing[2] }, 6));
+    const rgba_t on_it = pixel(one, mid, mid);
+    CHECK(near(pixel(four, mid, mid), { on_it[0], on_it[1], on_it[2] }, 3));
+    CHECK(pixel(four, off, mid)[3] == pixel(one, off, mid)[3]);
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+// As what's drawn after it, as a camera's passes, can have it draw into what has no samples.
+TEST_CASE("a tonemap reads the samples its image has, whatever its target draws", "[gpu][scene]") {
+    const scene_t scene;
+    constexpr std::uint32_t side = 32;
+    fbe::scene::camera_t camera;
+    camera.tonemap = FBE_TONEMAP_REINHARD;
+    const VkRect2D all{ .offset = {}, .extent = { .width = side, .height = side } };
+    const float whole = through(FBE_TONEMAP_REINHARD, 100.0F);
+    // A target of none, an image of 4.
+    const std::uint64_t flat = fbe_texture_create_target(side, side, FBE_TEXTURE_RGBA8, 1, false);
+    require(flat != 0);
+    require(fbe::render::add_post_passes(camera, bright_image(side, 4),
+                                         fbe::gpu::texture_resource(flat), all.extent,
+                                         VK_FORMAT_R8G8B8A8_SRGB, VK_SAMPLE_COUNT_1_BIT, all));
+    reads_its_samples(edge_in(scene_t::read(flat), side, 0.0F, whole));
+    // A target of 4, an image of none.
+    const std::uint64_t four = fbe_texture_create_target(side, side, FBE_TEXTURE_RGBA8, 4, false);
+    require(four != 0);
+    require(fbe::render::add_post_passes(camera, bright_image(side, 1),
+                                         fbe::gpu::texture_resource(four), all.extent,
+                                         VK_FORMAT_R8G8B8A8_SRGB, VK_SAMPLE_COUNT_4_BIT, all));
+    const fbe::golden::frame_t aliased = scene_t::read(four);
+    CHECK(linear_of(pixel(aliased, side / 2, side / 2)[0]) == Catch::Approx(whole).margin(0.01F));
+    CHECK(edge_in(aliased, side, 0.0F, whole).others == 0);
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_texture_release(flat);
+    fbe_texture_release(four);
+}
+
+// Their layout, which a software GPU draws the same in any of, and validation can't see through a
+// bindless set: what reads samples has them moved for it, and what can't read them leaves them.
+TEST_CASE("a tonemap's samples are moved for it, where it reads them", "[gpu][scene]") {
+    const scene_t scene;
+    fbe::scene::camera_t camera;
+    camera.tonemap = FBE_TONEMAP_REINHARD;
+    const auto barriers_at = [&camera](std::uint32_t side) {
+        const std::uint64_t flat =
+            fbe_texture_create_target(static_cast<std::int32_t>(side),
+                                      static_cast<std::int32_t>(side), FBE_TEXTURE_RGBA8, 1, false);
+        require(flat != 0);
+        const VkRect2D all{ .offset = {}, .extent = { .width = side, .height = side } };
+        require(fbe::render::add_post_passes(camera, bright_image(side, 4),
+                                             fbe::gpu::texture_resource(flat), all.extent,
+                                             VK_FORMAT_R8G8B8A8_SRGB, VK_SAMPLE_COUNT_1_BIT, all));
+        require(fbe::gpu::finish_frame());
+        const auto barriers = fbe::gpu::last_recorded().barriers;
+        fbe_texture_release(flat);
+        return barriers;
+    };
+    const auto read = barriers_at(32);
+    fbe::gpu::inject(fbe::gpu::fault_t::NO_READ_SAMPLES);
+    const auto unread = barriers_at(33);
+    CHECK(read == unread + 1);
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+// F6's review: only what reads its samples takes a slot for them, as there are only so many.
+TEST_CASE("a camera that doesn't read its image's samples takes no slot for them", "[gpu][scene]") {
+    const scene_t scene;
+    bright_wall(scene);
+    const std::uint32_t free = fbe::gpu::free_samples_slot_count();
+    const auto slots_drawn = [&scene] {
+        const std::uint64_t target = fbe_texture_create_target(32, 32, FBE_TEXTURE_RGBA8, 4, true);
+        require(target != 0);
+        require(fbe_camera_set_target(scene.camera, target));
+        require(fbe_render_world(scene.world, 1.0F));
+        fbe_frame_flip(false);
+        const std::uint32_t taken = fbe::gpu::free_samples_slot_count();
+        require(fbe_camera_set_target(scene.camera, scene.target));
+        fbe_texture_release(target);
+        return taken;
+    };
+    // Temporal antialiasing reads what they resolve to. First, as an image that read them would be
+    // the one the HDR camera's tonemap had, kept for its next frame, slot and all.
+    require(fbe_camera_set_temporal_aa(scene.camera, true));
+    CHECK(slots_drawn() == free);
+    // An HDR camera's tonemap reads them.
+    require(fbe_camera_set_temporal_aa(scene.camera, false));
+    CHECK(slots_drawn() == free - 1);
+    // FXAA, without HDR, reads what's tonemapped, taking none more than the HDR camera's.
+    require(fbe_camera_set_hdr(scene.camera, false));
+    require(fbe_camera_set_fxaa(scene.camera, true));
+    CHECK(slots_drawn() == free - 1);
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+// F6's review: a free slot points at a multisampled image that's there, so a shader that read one
+// would read that, not what was freed.
+TEST_CASE("a free slot for samples points at a placeholder, not what was freed", "[gpu][scene]") {
+    const scene_t scene;
+    auto* const placeholder = fbe::gpu::free_samples_view();
+    REQUIRE(placeholder != VK_NULL_HANDLE);
+    const auto pointing_elsewhere = [placeholder] {
+        int elsewhere = 0;
+        for (std::uint32_t slot = 0; slot < fbe::gpu::samples_slots; ++slot) {
+            elsewhere += fbe::gpu::samples_slot_view(slot) != placeholder ? 1 : 0;
+        }
+        return elsewhere;
+    };
+    CHECK(pointing_elsewhere() == 0);
+    bright_wall(scene);
+    reads_its_samples(edge_of(scene, 32));
+    CHECK(pointing_elsewhere() == 1);
+    // Once the camera's image isn't asked for, frames on, it goes, and its slot points at the
+    // placeholder.
+    for (int frames = 0; frames < 10; ++frames) {
+        require(fbe_render_world(scene.world, 1.0F));
+        fbe_frame_flip(false);
+    }
+    CHECK(fbe::gpu::free_samples_slot_count() == fbe::gpu::samples_slots);
+    CHECK(pointing_elsewhere() == 0);
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+TEST_CASE("what can't read a camera's samples reads what they resolve to", "[gpu][scene]") {
+    const scene_t scene;
+    bright_wall(scene);
+    fbe::gpu::inject(fbe::gpu::fault_t::NO_READ_SAMPLES);
+    reads_their_average(edge_of(scene, 32));
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+TEST_CASE("a camera past the set's samples reads what they resolve to, until there's room",
+          "[gpu][scene]") {
+    // A GPU started again has as many as the first had.
+    { const scene_t before; }
+    const scene_t scene;
+    bright_wall(scene);
+    // A game's own targets take none of them.
+    std::vector<std::uint64_t> own;
+    for (std::uint32_t at = 0; at < fbe::gpu::samples_slots; ++at) {
+        own.push_back(fbe_texture_create_target(8, 8, FBE_TEXTURE_RGBA8, 4, false));
+        require(own.back() != 0);
+    }
+    reads_its_samples(edge_of(scene, 32));
+    for (const std::uint64_t target : own) {
+        fbe_texture_release(target);
+    }
+    for (std::uint32_t at = 0; at < fbe::gpu::samples_slots; ++at) {
+        require(fbe::gpu::reserve_transient({
+            .width = 8 + at,
+            .height = 8,
+            .format = FBE_TEXTURE_RGBA16F,
+            .samples = 4,
+            .reads_samples = true,
+        }));
+    }
+    reads_their_average(edge_of(scene, 33));
+    CHECK(fbe_gpu_validation_errors() == 0);
+    // Those nothing's asked for go, and what comes after has their room.
+    for (int frames = 0; frames < 10; ++frames) {
+        fbe_frame_flip(false);
+    }
+    reads_its_samples(edge_of(scene, 32));
+    CHECK(fbe_gpu_validation_errors() == 0);
 }
 
 // F2: what multiplies what's behind it has nothing behind it in the image, so it draws nothing.
@@ -10835,6 +11466,212 @@ void check_both_ways(const scene_t& scene, std::array<std::uint8_t, 3> linear,
 
 } // namespace
 
+// What a shader bends a PBR material's normal to is what a normal map of that normal would give: as
+// lit by the sun, toward it and away, and in what the shader's given as the material's color.
+TEST_CASE("a shader of its own bends a normal as a normal map would", "[gpu][scene]") {
+    const scene_t scene;
+    sun_from_right(scene.world);
+    const std::uint64_t material = by_game_shader(5.0F);
+    require(fbe_material_set_metal_rough(material, 0.0F, 0.4F));
+    const std::uint64_t mesh = wall(scene.world, -4.0F, 10.0F, material);
+    const auto bent_to = [&](float x, float y, float z) {
+        require(fbe_material_set_parameter(material, 5, x, y, z, 1.0F));
+        return middle(scene.drawn());
+    };
+    const rgba_t straight = middle(scene.drawn());
+    CHECK(near(bent_to(0.0F, 0.0F, 1.0F), { straight[0], straight[1], straight[2] }, 1));
+    const rgba_t toward = bent_to(0.6F, 0.0F, 0.8F);
+    const rgba_t away = bent_to(-0.6F, 0.0F, 0.8F);
+    INFO(int{ straight[0] } << " " << int{ toward[0] } << " " << int{ away[0] });
+    CHECK(toward[0] > straight[0] + 10);
+    CHECK(away[0] + 10 < straight[0]);
+
+    // The same normal from a map, with no shader of its own.
+    const std::uint64_t mapped = fbe_material_create();
+    require(fbe_material_set_metal_rough(mapped, 0.0F, 0.4F));
+    const std::uint64_t normals = fbe_texture_create(1, 1, FBE_TEXTURE_RGBA8_LINEAR, false);
+    REQUIRE(normals != 0);
+    const std::array<std::uint8_t, 4> texel{ 204, 128, 230, 255 };
+    require(fbe_texture_write(normals, 0, 0, 1, 1, texel.data(), 4));
+    require(fbe_material_set_map(mapped, FBE_MAP_NORMAL, normals, 0));
+    require(fbe_mesh_set_material(mesh, mapped));
+    const rgba_t by_map = middle(scene.drawn());
+    CHECK(near(by_map, { toward[0], toward[1], toward[2] }, 3));
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_texture_release(normals);
+    fbe_material_release(mapped);
+    fbe_material_release(material);
+}
+
+// Through a surface's own tangents, as a map goes, where it has them: here up the wall, not along
+// its UVs, so a frame from its UVs would bend it the wrong way. Every pixel, edges and all.
+TEST_CASE("a shader of its own bends through a surface's own tangents, as a map does",
+          "[gpu][scene]") {
+    const scene_t scene;
+    sun_from_right(scene.world);
+    const std::uint64_t material = by_game_shader(5.0F);
+    require(fbe_material_set_metal_rough(material, 0.0F, 0.4F));
+    const std::uint64_t mesh = wall(scene.world, -4.0F, 1.5F, material);
+    const std::uint64_t geometry = fbe_mesh_geometry(mesh);
+    REQUIRE(geometry != 0);
+    const std::uint64_t mapped = fbe_material_create();
+    require(fbe_material_set_metal_rough(mapped, 0.0F, 0.4F));
+    const std::uint64_t normals = fbe_texture_create(1, 1, FBE_TEXTURE_RGBA8_LINEAR, false);
+    REQUIRE(normals != 0);
+    require(fbe_material_set_map(mapped, FBE_MAP_NORMAL, normals, 0));
+    // Its bitangent either way round, as a mirrored mesh's is.
+    for (const float handed : { 1.0F, -1.0F }) {
+        const fbe_vertex_tangent_t tangent{ .x = 0.0F, .y = 1.0F, .z = 0.0F, .w = handed };
+        const std::array<fbe_vertex_tangent_t, 4> up{ tangent, tangent, tangent, tangent };
+        require(fbe_surface_set_tangents(geometry, 0, up.data(), 4));
+        for (const auto& [x, y, red, green] :
+             { std::tuple{ 0.6F, 0.0F, 204, 128 }, std::tuple{ 0.0F, 0.6F, 128, 204 } }) {
+            INFO(handed << ": " << x << ", " << y);
+            require(fbe_mesh_set_material(mesh, material));
+            require(fbe_material_set_parameter(material, 5, x, y, 0.8F, 1.0F));
+            const fbe::golden::frame_t bent = scene.drawn();
+            const std::array<std::uint8_t, 4> texel{
+                static_cast<std::uint8_t>(red),
+                static_cast<std::uint8_t>(green),
+                230,
+                255,
+            };
+            require(fbe_texture_write(normals, 0, 0, 1, 1, texel.data(), 4));
+            require(fbe_mesh_set_material(mesh, mapped));
+            const fbe::golden::frame_t by_map = scene.drawn();
+            CHECK(fbe::golden::compare(by_map, bent, 3).pixels == 0);
+        }
+    }
+    const fbe_vertex_tangent_t upward{ .x = 0.0F, .y = 1.0F, .z = 0.0F, .w = 1.0F };
+    const std::array<fbe_vertex_tangent_t, 4> up{ upward, upward, upward, upward };
+    require(fbe_surface_set_tangents(geometry, 0, up.data(), 4));
+    // And they're turned from the frame its UVs make, or this says nothing.
+    require(fbe_mesh_set_material(mesh, material));
+    require(fbe_material_set_parameter(material, 5, 0.6F, 0.0F, 0.8F, 1.0F));
+    const fbe::golden::frame_t through_tangents = scene.drawn();
+    require(fbe_surface_set_tangents(geometry, 0, nullptr, 0));
+    CHECK(fbe::golden::compare(through_tangents, scene.drawn(), 3).pixels > 100);
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_geometry_release(geometry);
+    fbe_texture_release(normals);
+    fbe_material_release(mapped);
+    fbe_material_release(material);
+}
+
+// On a two-sided material's back, what bend's given faces the camera, as shade's does.
+TEST_CASE("a shader of its own bends a two-sided back as its front", "[gpu][scene]") {
+    const scene_t scene;
+    sun_from_right(scene.world);
+    const std::uint64_t material = by_game_shader(5.0F);
+    require(fbe_material_set_metal_rough(material, 0.0F, 0.4F));
+    require(fbe_material_set_two_sided(material, true));
+    // Turned round, so its back's toward the camera, and the sun.
+    const std::uint64_t mesh = wall(scene.world, -4.0F, 10.0F, material);
+    require(fbe_entity_set_rotation(mesh, 0.0F, 1.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+    require(fbe_material_set_parameter(material, 5, 0.6F, 0.0F, 0.8F, 1.0F));
+    const rgba_t toward = middle(scene.drawn());
+    require(fbe_material_set_parameter(material, 5, -0.6F, 0.0F, 0.8F, 1.0F));
+    const rgba_t away = middle(scene.drawn());
+    require(fbe_material_set_parameter(material, 5, 0.6F, 0.0F, 0.8F, 2.0F));
+    const rgba_t by_facing = middle(scene.drawn());
+    INFO(int{ toward[0] } << " " << int{ away[0] } << " " << int{ by_facing[0] });
+    CHECK(!near(toward, { away[0], away[1], away[2] }, 6));
+    CHECK(near(by_facing, { toward[0], toward[1], toward[2] }, 1));
+    fbe_material_release(material);
+}
+
+// Each instance's place reaches its shader's move, so two of one geometry move apart by where they
+// are: here up by how far across each is, so the right one's up and the left one's down.
+TEST_CASE("a shader of its own moves each instance by where it is", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t material = by_game_shader();
+    require(fbe_material_set_shading(material, FBE_SHADING_UNLIT));
+    cubes_at(scene.world, material,
+             { instance_at(-3.0F, 0.0F, -10.0F), instance_at(3.0F, 0.0F, -10.0F) });
+    const auto red_at = [&](const fbe::golden::frame_t& frame, float x, float y) {
+        return pixel_of(frame, pixel_at(scene.camera, x, y, -9.0F))[0] > 200;
+    };
+    const fbe::golden::frame_t level = scene.drawn();
+    CHECK(red_at(level, -3.0F, 0.0F));
+    CHECK(red_at(level, 3.0F, 0.0F));
+    require(fbe_material_set_parameter(material, 4, 0.5F, 0.0F, 0.0F, 0.0F));
+    const fbe::golden::frame_t moved = scene.drawn();
+    CHECK(red_at(moved, 3.0F, 1.5F));
+    CHECK(!red_at(moved, 3.0F, -1.2F));
+    CHECK(red_at(moved, -3.0F, -1.5F));
+    CHECK(!red_at(moved, -3.0F, 1.2F));
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_material_release(material);
+}
+
+TEST_CASE("a shader of its own moves each instance by where it is in its Instances, not the world",
+          "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t material = by_game_shader();
+    require(fbe_material_set_shading(material, FBE_SHADING_UNLIT));
+    require(fbe_material_set_parameter(material, 4, 0.5F, 0.0F, 0.0F, 0.0F));
+    const std::uint64_t made =
+        cubes_at(scene.world, material,
+                 { instance_at(-3.0F, 0.0F, -10.0F), instance_at(3.0F, 0.0F, -10.0F) });
+    const fbe::golden::frame_t where = scene.drawn();
+    // Its Instances 10 along, and the camera with them: each instance where it is in them is as
+    // it was, so nothing it draws changes.
+    require(fbe_entity_set_position(made, 10.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+    require(fbe_entity_set_position(scene.camera, 10.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+    CHECK(fbe::golden::compare(where, scene.drawn(), 1).pixels == 0);
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_material_release(material);
+}
+
+TEST_CASE("an Instances is culled by its geometry's cull box, as what its shader moves leaves "
+          "its bounds",
+          "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t material = by_game_shader();
+    require(fbe_material_set_shading(material, FBE_SHADING_UNLIT));
+    // Past the view's left edge, until its shader moves it 30 to the middle.
+    require(fbe_material_set_parameter(material, 1, 30.0F, 0.0F, 0.0F, 0.0F));
+    const std::uint64_t made =
+        cubes_at(scene.world, material, { instance_at(-30.0F, 0.0F, -10.0F) });
+    const std::uint64_t geometry = fbe_instances_geometry(made);
+    const fbe_aabb_t moved{
+        .min = { .x = -1.0F, .y = -1.0F, .z = -1.0F },
+        .max = { .x = 31.0F, .y = 1.0F, .z = 1.0F },
+    };
+    SECTION("by its bounds, it's culled, until a box is set after it's drawn") {
+        CHECK(near(middle(scene.drawn()), { 0, 0, 255 }));
+        // Its clusters, worked out as it was drawn, are worked out again by the box.
+        require(fbe_geometry_set_cull_box(geometry, &moved));
+        CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
+    }
+    SECTION("its Bounds and InView are by its geometry's bounds, not the box") {
+        room_to_move(geometry);
+        CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
+        fbe_aabb_t own{};
+        require(fbe_geometry_bounds(geometry, &own));
+        fbe_aabb_t bounds{};
+        require(fbe_entity_bounds(made, &bounds));
+        CHECK(bounds.min.x == own.min.x - 30.0F);
+        CHECK(bounds.max.x == own.max.x - 30.0F);
+        CHECK(bounds.min.y == own.min.y);
+        CHECK(bounds.max.z == own.max.z - 10.0F);
+        const auto size = static_cast<float>(frame_size);
+        CHECK(fbe_camera_entity_in_view(scene.camera, size, size, made) == 0);
+    }
+    SECTION("by a box that takes its move, it's drawn") {
+        require(fbe_geometry_set_cull_box(geometry, &moved));
+        CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
+        // And by its bounds again once it's cleared.
+        require(fbe_geometry_clear_cull_box(geometry));
+        CHECK(near(middle(scene.drawn()), { 0, 0, 255 }));
+    }
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_material_release(material);
+}
+
 TEST_CASE("a shader of its own draws an Instances, each moved in its own space", "[gpu][scene]") {
     const scene_t scene;
     const std::uint64_t material = by_game_shader();
@@ -10879,18 +11716,87 @@ TEST_CASE("a shader of its own draws an Instances, each moved in its own space",
         CHECK(middle(scene.drawn())[0] != 0);
         fbe_material_release(paint);
     }
+    SECTION("casting, moved by where it is in its Instances") {
+        const std::uint64_t paint = fbe_material_create();
+        wall(scene.world, -10.0F, 30.0F, paint);
+        sun_from_right(scene.world);
+        // 10 along its Instances, which are 5 back, it's off the sun's way to the wall's middle,
+        // until its shader moves it up by 0.3 of that.
+        const std::uint64_t made =
+            cubes_at(scene.world, material, { instance_at(10.0F, -3.0F, -5.0F) });
+        require(fbe_entity_set_position(made, -5.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+        CHECK(middle(scene.drawn())[0] != 0);
+        require(fbe_material_set_parameter(material, 4, 0.3F, 0.0F, 0.0F, 0.0F));
+        CHECK(middle(scene.drawn())[0] == 0);
+        fbe_material_release(paint);
+    }
     CHECK(fbe_gpu_validation_errors() == 0);
     fbe_material_release(material);
 }
 
+namespace {
+
+/// A scene for what a shader of its own's prepass has: a wall behind, lit by a quarter of white and
+/// occluded within 3, and two materials of the shader, one to move what it draws and one to draw
+/// what's placed where that's moved to.
+struct prepass_scene_t : scene_t {
+    std::uint64_t paint = fbe_material_create();
+    std::uint64_t back = wall(world, -10.0F, 30.0F, paint);
+    std::uint64_t moved = by_game_shader();
+    std::uint64_t placed = by_game_shader();
+
+    explicit prepass_scene_t(bool stops) : scene_t(stops) {
+        require(fbe_world_set_ambient(world, 0.25F, 0.25F, 0.25F));
+        require(fbe_camera_set_ambient_occlusion_radius(camera, 3.0F));
+        require(fbe_camera_set_ambient_occlusion(camera, 1.0F));
+    }
+    prepass_scene_t(const prepass_scene_t&) = delete;
+    prepass_scene_t& operator=(const prepass_scene_t&) = delete;
+    prepass_scene_t(prepass_scene_t&&) = delete;
+    prepass_scene_t& operator=(prepass_scene_t&&) = delete;
+
+    ~prepass_scene_t() {
+        CHECK(fbe_gpu_validation_errors() == 0);
+        fbe_material_release(placed);
+        fbe_material_release(moved);
+    }
+};
+
+} // namespace
+
+TEST_CASE("a scene that keeps the GPU started leaves the next the pipelines it made",
+          "[gpu][scene]") {
+    std::int32_t made = 0;
+    {
+        const scene_t first(false);
+        const std::uint64_t material = by_game_shader();
+        cube(first.world, 0.0F, 0.0F, -9.0F, material);
+        static_cast<void>(first.drawn());
+        made = fbe_gpu_pipelines();
+        CHECK(made > 0);
+        fbe_material_release(material);
+    }
+    CHECK(fbe_gpu_started());
+    {
+        const scene_t second;
+        const std::uint64_t material = by_game_shader();
+        cube(second.world, 0.0F, 0.0F, -9.0F, material);
+        static_cast<void>(second.drawn());
+        CHECK(fbe_gpu_pipelines() == made);
+        fbe_material_release(material);
+    }
+    CHECK_FALSE(fbe_gpu_started());
+    // One that fails stops it, kept or not.
+    try {
+        const scene_t kept(false);
+        throw std::runtime_error("a part failed");
+    } catch (const std::runtime_error&) {
+        CHECK_FALSE(fbe_gpu_started());
+    }
+}
+
 TEST_CASE("a shader of its own reaches the prepass: what it moves, and what it cuts",
           "[gpu][scene]") {
-    const scene_t scene;
-    const std::uint64_t paint = fbe_material_create();
-    const std::uint64_t back = wall(scene.world, -10.0F, 30.0F, paint);
-    require(fbe_world_set_ambient(scene.world, 0.25F, 0.25F, 0.25F));
-    require(fbe_camera_set_ambient_occlusion_radius(scene.camera, 3.0F));
-    require(fbe_camera_set_ambient_occlusion(scene.camera, 1.0F));
     // Beside what's in front of the wall, as its occlusion darkens it.
     const auto darkened = [](const fbe::golden::frame_t& frame) {
         return pixel(frame, 64 + 16, 64)[0] < srgb(0.25F) - 8;
@@ -10898,223 +11804,489 @@ TEST_CASE("a shader of its own reaches the prepass: what it moves, and what it c
     const auto same = [](const fbe::golden::frame_t& one, const fbe::golden::frame_t& other) {
         return fbe::golden::compare(one, other, 1).pixels == 0;
     };
-    const std::uint64_t moved = by_game_shader();
-    const std::uint64_t placed = by_game_shader();
-    SECTION("a mesh it moves is where it's moved to") {
-        const std::uint64_t by_place = cube(scene.world, 0.0F, 0.0F, -9.0F, placed);
+    std::vector<part_t<prepass_scene_t>> parts;
+    parts.emplace_back("a mesh it moves is where it's moved to", [&](const prepass_scene_t& scene) {
+        const std::uint64_t by_place = cube(scene.world, 0.0F, 0.0F, -9.0F, scene.placed);
         const fbe::golden::frame_t reference = scene.drawn();
         REQUIRE(darkened(reference));
         require(fbe_entity_free(by_place));
-        require(fbe_material_set_parameter(moved, 1, 0.0F, 5.0F, 0.0F, 0.0F));
-        cube(scene.world, 0.0F, -5.0F, -9.0F, moved);
+        require(fbe_material_set_parameter(scene.moved, 1, 0.0F, 5.0F, 0.0F, 0.0F));
+        cube(scene.world, 0.0F, -5.0F, -9.0F, scene.moved);
         CHECK(same(reference, scene.drawn()));
-    }
-    SECTION("an instance it moves, in its own space, is too") {
-        const std::uint64_t by_place = cube(scene.world, 0.0F, 0.0F, -9.0F, placed);
-        const fbe::golden::frame_t reference = scene.drawn();
-        REQUIRE(darkened(reference));
-        require(fbe_entity_free(by_place));
-        require(fbe_material_set_parameter(moved, 1, 3.0F, 0.0F, 0.0F, 0.0F));
-        cubes_at(scene.world, moved, { turned_instance_at(0.0F, -3.0F, -9.0F) });
-        CHECK(same(reference, scene.drawn()));
-    }
-    SECTION("it's given a morph's normal, as when it's drawn") {
-        const std::uint64_t by_place = wall(scene.world, -9.0F, 1.0F, placed);
-        require(fbe_entity_set_position(by_place, 2.0F, 0.0F, -9.0F, FBE_SPACE_WORLD));
-        const fbe::golden::frame_t reference = scene.drawn();
-        require(fbe_entity_free(by_place));
-        require(fbe_material_set_parameter(moved, 3, 2.0F, 0.0F, 0.0F, 0.0F));
-        const std::uint64_t quad = wall(scene.world, -9.0F, 1.0F, moved);
-        // No move of its own, and its normals +X, from +Z.
-        const std::array<float, 12> still{};
-        const std::array<float, 12> to_x{ 1, 0, -1, 1, 0, -1, 1, 0, -1, 1, 0, -1 };
-        require(fbe_morph_add_target(fbe_mesh_geometry(quad), 0, still.data(), to_x.data(), 4) ==
-                0);
-        const std::array<float, 1> one{ 1.0F };
-        require(fbe_morph_set_weights(quad, one.data(), 1));
-        CHECK(same(reference, scene.drawn()));
-    }
-    SECTION("it's given a skin's normal, as when it's drawn") {
-        // A joint turned an eighth around up, which has its normal at 45 degrees from +Z to +X.
-        const float half_turn = std::numbers::pi_v<float> / 8.0F;
-        const auto turned = [&](std::uint64_t material, float along) {
-            const skinned_wall_t made = skinned_wall(scene.world, material, -9.0F, 1.0F);
-            all_on(made.geometry, 1, 1.0F);
-            require(
-                fbe_entity_set_position(made.moving, along, 0.0F, -9.0F + along, FBE_SPACE_WORLD));
-            require(fbe_entity_set_rotation(made.moving, 0.0F, std::sin(half_turn), 0.0F,
-                                            std::cos(half_turn), FBE_SPACE_WORLD));
-            return made;
-        };
-        const float along = 2.0F * std::numbers::sqrt2_v<float> / 2.0F;
-        const skinned_wall_t by_place = turned(placed, along);
-        const fbe::golden::frame_t reference = scene.drawn();
-        require(fbe_entity_free(by_place.mesh));
-        fbe_skin_release(by_place.skin);
-        require(fbe_material_set_parameter(moved, 3, 2.0F, 0.0F, 0.0F, 0.0F));
-        const skinned_wall_t made = turned(moved, 0.0F);
-        CHECK(same(reference, scene.drawn()));
-        fbe_skin_release(made.skin);
-    }
-    SECTION("what it cuts by what it returns isn't there") {
-        const fbe::golden::frame_t nothing = scene.drawn();
-        require(fbe_material_set_alpha_cutoff(moved, 0.5F));
-        require(fbe_material_set_parameter(moved, 2, 1.0F, 0.0F, 0.0F, 0.0F));
-        const std::uint64_t by_shader = cube(scene.world, 0.0F, 0.0F, -9.0F, moved);
-        CHECK(same(nothing, scene.drawn()));
-        // An instance's the same.
-        require(fbe_entity_free(by_shader));
-        cubes_at(scene.world, moved, { instance_at(0.0F, 0.0F, -9.0F) });
-        CHECK(same(nothing, scene.drawn()));
-    }
-    SECTION("what its material's alpha would cut and it keeps is there") {
-        const std::uint64_t by_place = cube(scene.world, 0.0F, 0.0F, -9.0F, placed);
-        const fbe::golden::frame_t reference = scene.drawn();
-        REQUIRE(darkened(reference));
-        require(fbe_entity_free(by_place));
-        require(fbe_material_set_alpha_cutoff(moved, 0.5F));
-        require(fbe_material_set_color(moved, 1.0F, 1.0F, 1.0F, 0.0F));
-        cube(scene.world, 0.0F, 0.0F, -9.0F, moved);
-        CHECK(same(reference, scene.drawn()));
-    }
-    SECTION("it cuts by what it's drawn with: where, facing what, of what vertex, lit how") {
-        // What's left of a quad cut at x 0.
-        const std::uint64_t half = wall(scene.world, -9.0F, 1.0F, placed);
-        require(fbe_entity_set_position(half, -0.5F, 0.0F, -9.0F, FBE_SPACE_WORLD));
-        require(fbe_entity_set_scale(half, 0.5F, 1.0F, 1.0F, FBE_SPACE_WORLD));
-        const fbe::golden::frame_t reference = scene.drawn();
-        require(fbe_entity_free(half));
-        require(fbe_material_set_alpha_cutoff(moved, 0.5F));
-        require(fbe_material_set_parameter(moved, 0, 6.0F, 0.0F, 0.0F, 0.0F));
-        const std::uint64_t whole_quad = wall(scene.world, -9.0F, 1.0F, moved);
-        CHECK(same(reference, scene.drawn()));
-        require(fbe_entity_free(whole_quad));
-        // Lit by the ambient light alone, 0.25 of white, over its 0.2; without any, it's cut.
-        const std::uint64_t by_place = wall(scene.world, -9.0F, 1.0F, placed);
-        const fbe::golden::frame_t whole_reference = scene.drawn();
-        require(fbe_entity_free(by_place));
-        require(fbe_material_set_shading(moved, FBE_SHADING_VERTEX));
-        require(fbe_material_set_parameter(moved, 0, 7.0F, 0.0F, 0.0F, 0.0F));
-        const std::uint64_t lit_quad = wall(scene.world, -9.0F, 1.0F, moved);
-        CHECK(same(whole_reference, scene.drawn()));
-        require(fbe_world_set_ambient(scene.world, 0.0F, 0.0F, 0.0F));
-        const fbe::golden::frame_t unlit_frame = scene.drawn();
-        require(fbe_entity_free(lit_quad));
-        CHECK(same(unlit_frame, scene.drawn()));
-    }
-    SECTION("what it lights, cut in its prepass, reads no occlusion that isn't there yet") {
-        require(fbe_material_set_alpha_cutoff(moved, 0.5F));
-        require(fbe_material_set_parameter(moved, 0, 4.0F, 0.0F, 0.0F, 0.0F));
-        cube(scene.world, 0.0F, 0.0F, -9.0F, moved);
-        CHECK(darkened(scene.drawn()));
-    }
-    SECTION(
-        "what it cuts by its color, in its prepass, isn't by the occlusion of the frame before") {
-        // The wall, 0.25 by its ambient light, cut where its occlusion takes it under 0.2, which is
-        // only known after its prepass: what that's cut by is its color with none, the same each
-        // frame, so its occlusion is too.
-        require(fbe_material_set_alpha_cutoff(moved, 0.5F));
-        require(fbe_material_set_parameter(moved, 0, 7.0F, 0.0F, 0.0F, 0.0F));
-        require(fbe_mesh_set_material(back, moved));
-        cube(scene.world, 0.0F, 0.0F, -9.0F, placed);
-        const fbe::golden::frame_t first = scene.drawn();
-        const fbe::golden::frame_t second = scene.drawn();
-        const fbe::golden::frame_t third = scene.drawn();
-        CHECK(pixel(third, 64 + 16, 64) != pixel(third, 4, 4));
-        CHECK(same(first, second));
-        CHECK(same(second, third));
-    }
-    SECTION("its motion's from where it's moved to, then and now") {
-        require(fbe_entity_set_position(scene.camera, 0.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
-        require(fbe_camera_set_ambient_occlusion(scene.camera, 0.0F));
-        require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
-        require(fbe_camera_set_hdr(scene.camera, true));
-        require(fbe_camera_set_temporal_aa(scene.camera, true));
-        const std::uint64_t white = by_game_shader(5.0F);
-        require(fbe_material_set_shading(white, FBE_SHADING_UNLIT));
-        // Moved 3 across, by its shader, in its space, scaled by 3; two whole pixels a frame.
-        require(fbe_material_set_parameter(white, 1, 1.0F, 0.0F, 0.0F, 0.0F));
-        const std::uint64_t made =
-            cubes_at(scene.world, white, { instance_at(0.0F, 0.0F, 0.0F, 3.0F) });
-        const float across = std::tan(std::numbers::pi_v<float> / 6.0F) * 7.0F / 64.0F;
-        fbe::golden::frame_t last;
-        for (int frame = 0; frame <= 24; ++frame) {
-            const float pixels = static_cast<float>(frame - 24) * 2.0F;
-            require(fbe_entity_set_position(made, (0.5F + pixels) * across, 0.0F, -10.0F,
-                                            FBE_SPACE_WORLD));
-            last = scene.drawn();
-        }
-        const float value = static_cast<float>(pixel(last, 64, 64)[0]) / 255.0F;
-        CAPTURE(value);
-        CHECK(value > 0.4F);
-        CHECK(value < 0.9F);
-        fbe_material_release(white);
-    }
-    SECTION("a mesh's, or a skinned one's, motion is that of what's placed where it's moved to") {
-        // Each above the middle by what's placed there, below it by what its shader moves, going
-        // across together two pixels a frame, so a row of each ends the same only if what the frame
-        // before had of each is from the same place.
-        require(fbe_entity_set_position(scene.camera, 0.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
-        require(fbe_camera_set_ambient_occlusion(scene.camera, 0.0F));
-        require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
-        require(fbe_camera_set_hdr(scene.camera, true));
-        require(fbe_camera_set_temporal_aa(scene.camera, true));
-        const float tangent = std::tan(std::numbers::pi_v<float> / 6.0F);
-        const auto alike = [&](float depth, auto&& move_to) {
-            const float across = tangent * depth / 64.0F;
+    });
+    parts.emplace_back(
+        "an instance it moves, in its own space, is too", [&](const prepass_scene_t& scene) {
+            const std::uint64_t by_place = cube(scene.world, 0.0F, 0.0F, -9.0F, scene.placed);
+            const fbe::golden::frame_t reference = scene.drawn();
+            REQUIRE(darkened(reference));
+            require(fbe_entity_free(by_place));
+            require(fbe_material_set_parameter(scene.moved, 1, 3.0F, 0.0F, 0.0F, 0.0F));
+            cubes_at(scene.world, scene.moved, { turned_instance_at(0.0F, -3.0F, -9.0F) });
+            CHECK(same(reference, scene.drawn()));
+        });
+    parts.emplace_back(
+        "an instance it moves by where it is in its Instances is too",
+        [&](const prepass_scene_t& scene) {
+            const std::uint64_t by_place = cube(scene.world, 0.0F, 0.0F, -9.0F, scene.placed);
+            const fbe::golden::frame_t reference = scene.drawn();
+            REQUIRE(darkened(reference));
+            require(fbe_entity_free(by_place));
+            // 6 along its Instances, which are 6 back, so 3 below; moved up by half of 6.
+            require(fbe_material_set_parameter(scene.moved, 4, 0.5F, 0.0F, 0.0F, 0.0F));
+            const std::uint64_t made =
+                cubes_at(scene.world, scene.moved, { instance_at(6.0F, -3.0F, -9.0F) });
+            require(fbe_entity_set_position(made, -6.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+            CHECK(same(reference, scene.drawn()));
+        });
+    parts.emplace_back(
+        "it's given a morph's normal, as when it's drawn", [&](const prepass_scene_t& scene) {
+            const std::uint64_t by_place = wall(scene.world, -9.0F, 1.0F, scene.placed);
+            require(fbe_entity_set_position(by_place, 2.0F, 0.0F, -9.0F, FBE_SPACE_WORLD));
+            const fbe::golden::frame_t reference = scene.drawn();
+            require(fbe_entity_free(by_place));
+            require(fbe_material_set_parameter(scene.moved, 3, 2.0F, 0.0F, 0.0F, 0.0F));
+            const std::uint64_t quad = wall(scene.world, -9.0F, 1.0F, scene.moved);
+            // No move of its own, and its normals +X, from +Z.
+            const std::array<float, 12> still{};
+            const std::array<float, 12> to_x{ 1, 0, -1, 1, 0, -1, 1, 0, -1, 1, 0, -1 };
+            require(fbe_morph_add_target(fbe_mesh_geometry(quad), 0, still.data(), to_x.data(),
+                                         4) == 0);
+            const std::array<float, 1> one{ 1.0F };
+            require(fbe_morph_set_weights(quad, one.data(), 1));
+            CHECK(same(reference, scene.drawn()));
+        });
+    parts.emplace_back(
+        "it's given a skin's normal, as when it's drawn", [&](const prepass_scene_t& scene) {
+            // A joint turned an eighth around up, which has its normal at 45 degrees from +Z to +X.
+            const float half_turn = std::numbers::pi_v<float> / 8.0F;
+            const auto turned = [&](std::uint64_t material, float along) {
+                const skinned_wall_t made = skinned_wall(scene.world, material, -9.0F, 1.0F);
+                all_on(made.geometry, 1, 1.0F);
+                require(fbe_entity_set_position(made.moving, along, 0.0F, -9.0F + along,
+                                                FBE_SPACE_WORLD));
+                require(fbe_entity_set_rotation(made.moving, 0.0F, std::sin(half_turn), 0.0F,
+                                                std::cos(half_turn), FBE_SPACE_WORLD));
+                return made;
+            };
+            const float along = 2.0F * std::numbers::sqrt2_v<float> / 2.0F;
+            const skinned_wall_t by_place = turned(scene.placed, along);
+            const fbe::golden::frame_t reference = scene.drawn();
+            require(fbe_entity_free(by_place.mesh));
+            fbe_skin_release(by_place.skin);
+            require(fbe_material_set_parameter(scene.moved, 3, 2.0F, 0.0F, 0.0F, 0.0F));
+            const skinned_wall_t made = turned(scene.moved, 0.0F);
+            CHECK(same(reference, scene.drawn()));
+            fbe_skin_release(made.skin);
+        });
+    parts.emplace_back(
+        "what it cuts by what it returns isn't there", [&](const prepass_scene_t& scene) {
+            const fbe::golden::frame_t nothing = scene.drawn();
+            require(fbe_material_set_alpha_cutoff(scene.moved, 0.5F));
+            require(fbe_material_set_parameter(scene.moved, 2, 1.0F, 0.0F, 0.0F, 0.0F));
+            const std::uint64_t by_shader = cube(scene.world, 0.0F, 0.0F, -9.0F, scene.moved);
+            CHECK(same(nothing, scene.drawn()));
+            // An instance's the same.
+            require(fbe_entity_free(by_shader));
+            cubes_at(scene.world, scene.moved, { instance_at(0.0F, 0.0F, -9.0F) });
+            CHECK(same(nothing, scene.drawn()));
+        });
+    parts.emplace_back("what its material's alpha would cut and it keeps is there",
+                       [&](const prepass_scene_t& scene) {
+                           const std::uint64_t by_place =
+                               cube(scene.world, 0.0F, 0.0F, -9.0F, scene.placed);
+                           const fbe::golden::frame_t reference = scene.drawn();
+                           REQUIRE(darkened(reference));
+                           require(fbe_entity_free(by_place));
+                           require(fbe_material_set_alpha_cutoff(scene.moved, 0.5F));
+                           require(fbe_material_set_color(scene.moved, 1.0F, 1.0F, 1.0F, 0.0F));
+                           cube(scene.world, 0.0F, 0.0F, -9.0F, scene.moved);
+                           CHECK(same(reference, scene.drawn()));
+                       });
+    parts.emplace_back(
+        "it cuts by what it's drawn with: where, facing what, of what vertex, lit how",
+        [&](const prepass_scene_t& scene) {
+            // What's left of a quad cut at x 0.
+            const std::uint64_t half = wall(scene.world, -9.0F, 1.0F, scene.placed);
+            require(fbe_entity_set_position(half, -0.5F, 0.0F, -9.0F, FBE_SPACE_WORLD));
+            require(fbe_entity_set_scale(half, 0.5F, 1.0F, 1.0F, FBE_SPACE_WORLD));
+            const fbe::golden::frame_t reference = scene.drawn();
+            require(fbe_entity_free(half));
+            require(fbe_material_set_alpha_cutoff(scene.moved, 0.5F));
+            require(fbe_material_set_parameter(scene.moved, 0, 6.0F, 0.0F, 0.0F, 0.0F));
+            const std::uint64_t whole_quad = wall(scene.world, -9.0F, 1.0F, scene.moved);
+            CHECK(same(reference, scene.drawn()));
+            require(fbe_entity_free(whole_quad));
+            // Lit by the ambient light alone, 0.25 of white, over its 0.2; without any, it's cut.
+            const std::uint64_t by_place = wall(scene.world, -9.0F, 1.0F, scene.placed);
+            const fbe::golden::frame_t whole_reference = scene.drawn();
+            require(fbe_entity_free(by_place));
+            require(fbe_material_set_shading(scene.moved, FBE_SHADING_VERTEX));
+            require(fbe_material_set_parameter(scene.moved, 0, 7.0F, 0.0F, 0.0F, 0.0F));
+            const std::uint64_t lit_quad = wall(scene.world, -9.0F, 1.0F, scene.moved);
+            CHECK(same(whole_reference, scene.drawn()));
+            require(fbe_world_set_ambient(scene.world, 0.0F, 0.0F, 0.0F));
+            const fbe::golden::frame_t unlit_frame = scene.drawn();
+            require(fbe_entity_free(lit_quad));
+            CHECK(same(unlit_frame, scene.drawn()));
+        });
+    parts.emplace_back(
+        "what it lights, cut in its prepass, reads no occlusion that isn't there yet",
+        [&](const prepass_scene_t& scene) {
+            require(fbe_material_set_alpha_cutoff(scene.moved, 0.5F));
+            require(fbe_material_set_parameter(scene.moved, 0, 4.0F, 0.0F, 0.0F, 0.0F));
+            cube(scene.world, 0.0F, 0.0F, -9.0F, scene.moved);
+            CHECK(darkened(scene.drawn()));
+        });
+    parts.emplace_back(
+        "what it cuts by its color, in its prepass, isn't by the occlusion of the frame before",
+        [&](const prepass_scene_t& scene) {
+            // The wall, 0.25 by its ambient light, cut where its occlusion takes it under 0.2,
+            // which is only known after its prepass: what that's cut by is its color with none, the
+            // same each frame, so its occlusion is too.
+            require(fbe_material_set_alpha_cutoff(scene.moved, 0.5F));
+            require(fbe_material_set_parameter(scene.moved, 0, 7.0F, 0.0F, 0.0F, 0.0F));
+            require(fbe_mesh_set_material(scene.back, scene.moved));
+            cube(scene.world, 0.0F, 0.0F, -9.0F, scene.placed);
+            const fbe::golden::frame_t first = scene.drawn();
+            const fbe::golden::frame_t second = scene.drawn();
+            const fbe::golden::frame_t third = scene.drawn();
+            CHECK(pixel(third, 64 + 16, 64) != pixel(third, 4, 4));
+            CHECK(same(first, second));
+            CHECK(same(second, third));
+        });
+    parts.emplace_back(
+        "its motion's from where it's moved to, then and now", [&](const prepass_scene_t& scene) {
+            require(fbe_entity_set_position(scene.camera, 0.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+            require(fbe_camera_set_ambient_occlusion(scene.camera, 0.0F));
+            require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+            require(fbe_camera_set_hdr(scene.camera, true));
+            require(fbe_camera_set_temporal_aa(scene.camera, true));
+            const std::uint64_t white = by_game_shader(5.0F);
+            require(fbe_material_set_shading(white, FBE_SHADING_UNLIT));
+            // Moved 3 across, by its shader, in its space, scaled by 3; two whole pixels a frame.
+            require(fbe_material_set_parameter(white, 1, 1.0F, 0.0F, 0.0F, 0.0F));
+            const std::uint64_t made =
+                cubes_at(scene.world, white, { instance_at(0.0F, 0.0F, 0.0F, 3.0F) });
+            const float across = std::tan(std::numbers::pi_v<float> / 6.0F) * 7.0F / 64.0F;
             fbe::golden::frame_t last;
             for (int frame = 0; frame <= 24; ++frame) {
-                move_to((0.5F + (static_cast<float>(frame - 24) * 2.0F)) * across);
+                const float pixels = static_cast<float>(frame - 24) * 2.0F;
+                require(fbe_entity_set_position(made, (0.5F + pixels) * across, 0.0F, -10.0F,
+                                                FBE_SPACE_WORLD));
                 last = scene.drawn();
             }
-            // Each one's middle row, a mirror of the other about the view's middle.
-            const auto row = static_cast<std::uint32_t>(64.0F - (2.0F / (depth * tangent) * 64.0F));
-            int differing = 0;
-            for (std::uint32_t x = 0; x < frame_size; ++x) {
-                for (std::size_t k = 0; k < 3; ++k) {
-                    if (std::abs(pixel(last, x, row)[k] - pixel(last, x, frame_size - 1 - row)[k]) >
-                        2) {
-                        ++differing;
-                    }
+            const float value = static_cast<float>(pixel(last, 64, 64)[0]) / 255.0F;
+            CAPTURE(value);
+            CHECK(value > 0.4F);
+            CHECK(value < 0.9F);
+            fbe_material_release(white);
+        });
+    // Each above the middle by what's placed there, below it by what its shader moves, going across
+    // together two pixels a frame, so a row of each ends the same only if what the frame before had
+    // of each is from the same place.
+    const float tangent = std::tan(std::numbers::pi_v<float> / 6.0F);
+    const auto alike = [&](const scene_t& scene, float depth, auto&& move_to) {
+        require(fbe_entity_set_position(scene.camera, 0.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+        require(fbe_camera_set_ambient_occlusion(scene.camera, 0.0F));
+        require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+        require(fbe_camera_set_hdr(scene.camera, true));
+        require(fbe_camera_set_temporal_aa(scene.camera, true));
+        const float across = tangent * depth / 64.0F;
+        fbe::golden::frame_t last;
+        for (int frame = 0; frame <= 24; ++frame) {
+            move_to((0.5F + (static_cast<float>(frame - 24) * 2.0F)) * across);
+            last = scene.drawn();
+        }
+        // Each one's middle row, a mirror of the other about the view's middle.
+        const auto row = static_cast<std::uint32_t>(64.0F - (2.0F / (depth * tangent) * 64.0F));
+        int differing = 0;
+        for (std::uint32_t x = 0; x < frame_size; ++x) {
+            for (std::size_t k = 0; k < 3; ++k) {
+                if (std::abs(pixel(last, x, row)[k] - pixel(last, x, frame_size - 1 - row)[k]) >
+                    2) {
+                    ++differing;
                 }
             }
-            return differing;
-        };
-        SECTION("a mesh") {
-            require(fbe_material_set_parameter(moved, 1, 3.0F, 0.0F, 0.0F, 0.0F));
-            const std::uint64_t there = cube(scene.world, 0.0F, 2.0F, -10.0F, placed);
-            const std::uint64_t from = cube(scene.world, 0.0F, -2.0F, -10.0F, moved);
-            CHECK(alike(10.0F, [&](float x) {
+        }
+        return differing;
+    };
+    parts.emplace_back(
+        "a mesh's motion is that of what's placed where it's moved to",
+        [&](const prepass_scene_t& scene) {
+            require(fbe_material_set_parameter(scene.moved, 1, 3.0F, 0.0F, 0.0F, 0.0F));
+            const std::uint64_t there = cube(scene.world, 0.0F, 2.0F, -10.0F, scene.placed);
+            const std::uint64_t from = cube(scene.world, 0.0F, -2.0F, -10.0F, scene.moved);
+            CHECK(alike(scene, 10.0F, [&](float x) {
                       require(
                           fbe_entity_set_position(there, x + 3.0F, 2.0F, -10.0F, FBE_SPACE_WORLD));
                       require(fbe_entity_set_position(from, x, -2.0F, -10.0F, FBE_SPACE_WORLD));
                   }) == 0);
-        }
-        SECTION("a skinned mesh, along a normal its joint turns") {
+        });
+    parts.emplace_back(
+        "a skinned mesh's, along a normal its joint turns, is too",
+        [&](const prepass_scene_t& scene) {
             // Turned 30 degrees about up, so 3 along its normal is 1.5 across and 2.6 nearer.
             const float half_turn = std::numbers::pi_v<float> / 12.0F;
             const float away = 3.0F * std::sin(2.0F * half_turn);
             const float toward = 3.0F * std::cos(2.0F * half_turn);
-            require(fbe_material_set_parameter(moved, 3, 3.0F, 0.0F, 0.0F, 0.0F));
-            const skinned_wall_t skinned = skinned_wall(scene.world, moved, -10.0F, 1.0F);
+            require(fbe_material_set_parameter(scene.moved, 3, 3.0F, 0.0F, 0.0F, 0.0F));
+            const skinned_wall_t skinned = skinned_wall(scene.world, scene.moved, -10.0F, 1.0F);
             all_on(skinned.geometry, 0, 1.0F);
             require(fbe_entity_set_rotation(skinned.still, 0.0F, std::sin(half_turn), 0.0F,
                                             std::cos(half_turn), FBE_SPACE_WORLD));
-            const std::uint64_t there = wall(scene.world, -10.0F, 1.0F, placed);
+            const std::uint64_t there = wall(scene.world, -10.0F, 1.0F, scene.placed);
             require(fbe_entity_set_rotation(there, 0.0F, std::sin(half_turn), 0.0F,
                                             std::cos(half_turn), FBE_SPACE_WORLD));
-            CHECK(alike(10.0F - toward, [&](float x) {
+            CHECK(alike(scene, 10.0F - toward, [&](float x) {
                       require(fbe_entity_set_position(there, x + away, 2.0F, -10.0F + toward,
                                                       FBE_SPACE_WORLD));
                       require(fbe_entity_set_position(skinned.still, x, -2.0F, -10.0F,
                                                       FBE_SPACE_WORLD));
                   }) == 0);
             fbe_skin_release(skinned.skin);
+        });
+    on_one_gpu(parts);
+}
+
+namespace {
+
+/// What the GPU holds that a frame's making and freeing could leave: VMA's allocations, the
+/// pipelines, and the set's free slots. Not fbe_gpu_memory_usage, which is the driver's, and
+/// lavapipe's is the machine's.
+struct held_t {
+    fbe::gpu::allocations_t allocations;
+    std::int32_t pipelines = 0;
+    std::uint32_t free_samples = 0;
+    bool operator==(const held_t&) const = default;
+};
+
+held_t held() {
+    return {
+        .allocations = fbe::gpu::allocations(),
+        .pipelines = fbe_gpu_pipelines(),
+        .free_samples = fbe::gpu::free_samples_slot_count(),
+    };
+}
+
+} // namespace
+
+// Each frame makes and frees a texture with mipmaps, a material of it and one of a game's shader,
+// a mesh of each, and a camera drawing them into a target of its own, of 1 or 4 samples, in HDR or
+// not, besides the scene's: once the first frames have made the pipelines and pools there are,
+// what the GPU holds is the same, frame after frame, and nothing's left once it stops. CI runs 600
+// frames, and FBE_SOAK_FRAMES asks for more.
+namespace {
+
+/// The game's shader but for the generator's word of its header, which SPIR-V's own tools say and
+/// nothing reads, so it's new code for each `generation`.
+std::vector<std::uint8_t> generation_of(std::uint32_t generation) {
+    const std::span<const std::uint32_t> seed = fbe::test_shaders::game_shader.code;
+    std::vector<std::uint32_t> words(seed.begin(), seed.end());
+    words[2] = generation;
+    return cooked_shader(words);
+}
+
+std::uint64_t shader_of_generation(std::uint32_t generation) {
+    const std::vector<std::uint8_t> bytes = generation_of(generation);
+    return fbe_shader_create(bytes.data(), static_cast<std::int64_t>(bytes.size()), "reloaded");
+}
+
+} // namespace
+
+// A game's shader cooked again, as a game's hot reload does, each time of new code, drawn with,
+// then freed or replaced: once nothing draws with an old one, its pipelines go, and its code with
+// them, so there's no more of either after many than after one.
+TEST_CASE("a game's shaders made again and freed leave no pipelines of them",
+          "[gpu][scene][stability]") {
+    const scene_t scene;
+    const auto drawn = [&](std::uint64_t material) {
+        const std::uint64_t mesh = cube(scene.world, 0.0F, 0.0F, -6.0F, material);
+        static_cast<void>(scene.drawn());
+        require(fbe_entity_free(mesh));
+        // Frames on, as what's freed waits for those in flight.
+        for (int frame = 0; frame < 4; ++frame) {
+            static_cast<void>(scene.drawn());
         }
+    };
+    SECTION("made again") {
+        const auto drawn_with = [&](std::uint32_t generation) {
+            const std::uint64_t shader = shader_of_generation(generation);
+            require(shader != 0);
+            const std::uint64_t material = fbe_material_create();
+            require(fbe_material_set_shader(material, shader));
+            require(fbe_shader_release(shader));
+            drawn(material);
+            fbe_material_release(material);
+        };
+        drawn_with(1);
+        drawn_with(1);
+        const std::int32_t one = fbe_gpu_pipelines();
+        CHECK(one > 0);
+        for (std::uint32_t generation = 2; generation < 40; ++generation) {
+            drawn_with(generation);
+        }
+        CHECK(fbe_gpu_pipelines() == one);
+    }
+    SECTION("replaced, as a reload replaces it") {
+        const std::uint64_t shader = shader_of_generation(1);
+        require(shader != 0);
+        const std::uint64_t material = fbe_material_create();
+        require(fbe_material_set_shader(material, shader));
+        drawn(material);
+        const std::int32_t one = fbe_gpu_pipelines();
+        for (std::uint32_t generation = 2; generation < 40; ++generation) {
+            const std::vector<std::uint8_t> bytes = generation_of(generation);
+            require(fbe_shader_replace(shader, bytes.data(),
+                                       static_cast<std::int64_t>(bytes.size()), "reloaded"));
+            drawn(material);
+        }
+        CHECK(fbe_gpu_pipelines() == one);
+        // Replaced by itself, it's kept.
+        const std::vector<std::uint8_t> same = generation_of(39);
+        require(fbe_shader_replace(shader, same.data(), static_cast<std::int64_t>(same.size()),
+                                   "reloaded"));
+        drawn(material);
+        CHECK(fbe_gpu_pipelines() == one);
+        fbe_material_release(material);
+        require(fbe_shader_release(shader));
     }
     CHECK(fbe_gpu_validation_errors() == 0);
-    fbe_material_release(placed);
-    fbe_material_release(moved);
+}
+
+// 2f8a4c0's review: a shader made, drawn, and freed, of the same code, frame after frame with no
+// readback to wait, and replaced by another and back: a free from an earlier release mustn't free
+// pipelines a later frame still draws with, which validation says, nor make them again each frame.
+TEST_CASE("a game's shader freed and had again, frame after frame, keeps its pipelines",
+          "[gpu][scene][stability]") {
+    const scene_t scene;
+    const std::uint64_t mesh = cube(scene.world, 0.0F, 0.0F, -6.0F);
+    const auto flip = [&scene] {
+        require(fbe_render_world(scene.world, 1.0F));
+        fbe_frame_flip(false);
+    };
+    SECTION("made and freed") {
+        std::int32_t first = 0;
+        for (int frame = 0; frame < 8; ++frame) {
+            const std::uint64_t shader = shader_of_generation(1);
+            require(shader != 0);
+            const std::uint64_t material = fbe_material_create();
+            require(fbe_material_set_shader(material, shader));
+            require(fbe_shader_release(shader));
+            require(fbe_mesh_set_material(mesh, material));
+            flip();
+            // Let go of by everything as soon as it's drawn.
+            require(fbe_mesh_set_material(mesh, 0));
+            fbe_material_release(material);
+            if (frame == 0) {
+                first = fbe_gpu_pipelines();
+            }
+            CHECK(fbe_gpu_pipelines() == first);
+        }
+    }
+    SECTION("replaced, A to B to A") {
+        const std::uint64_t shader = shader_of_generation(1);
+        require(shader != 0);
+        const std::uint64_t material = fbe_material_create();
+        require(fbe_material_set_shader(material, shader));
+        require(fbe_mesh_set_material(mesh, material));
+        const std::vector<std::uint8_t> a = generation_of(1);
+        const std::vector<std::uint8_t> b = generation_of(2);
+        for (int frame = 0; frame < 8; ++frame) {
+            const std::vector<std::uint8_t>& next = frame % 2 == 0 ? b : a;
+            require(fbe_shader_replace(shader, next.data(), static_cast<std::int64_t>(next.size()),
+                                       "reloaded"));
+            flip();
+        }
+        fbe_material_release(material);
+        require(fbe_shader_release(shader));
+    }
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+// As many different shaders at once as a pipeline's key numbers, 4095: one more is refused, and
+// once one's freed, and its frames done, there's room for another.
+TEST_CASE("as many shaders as a pipeline's key numbers are kept at once",
+          "[gpu][scene][stability]") {
+    // Validated, 4095 would take a Debug build a quarter of a second each.
+    const unvalidated_t unvalidated;
+    const scene_t scene;
+    std::vector<std::uint64_t> made;
+    for (std::uint32_t generation = 1; generation <= 4095; ++generation) {
+        const std::uint64_t shader = shader_of_generation(generation);
+        if (shader == 0) {
+            break;
+        }
+        made.push_back(shader);
+    }
+    // Some may be the test program's own, made already.
+    CHECK(made.size() > 4000);
+    CHECK(shader_of_generation(5000) == 0);
+    CHECK(std::string(fbe_error()) ==
+          "there are more different shaders than a pipeline's key can number");
+    require(fbe_shader_release(made.back()));
+    made.pop_back();
+    for (int frame = 0; frame < 4; ++frame) {
+        static_cast<void>(scene.drawn());
+    }
+    const std::uint64_t another = shader_of_generation(5000);
+    CHECK(another != 0);
+    made.push_back(another);
+    for (const std::uint64_t shader : made) {
+        require(fbe_shader_release(shader));
+    }
+}
+
+TEST_CASE("frames of making and freeing leave the GPU holding what it did",
+          "[gpu][scene][stability]") {
+    const int frames = asked_for("FBE_SOAK_FRAMES", 600);
+    REQUIRE(frames >= 100);
+    const scene_t scene;
+    const std::vector<std::uint8_t> pixels(std::size_t{ 16 } * 16 * 4, 200);
+    const auto frame = [&](int at) {
+        const std::uint64_t texture = fbe_texture_create(16, 16, FBE_TEXTURE_RGBA8, true);
+        require(texture != 0);
+        require(fbe_texture_write(texture, 0, 0, 16, 16, pixels.data(), 16 * 4));
+        const std::uint64_t painted = fbe_material_create();
+        require(fbe_material_set_texture(painted, 0, texture));
+        const std::uint64_t shaded = by_game_shader();
+        const std::uint64_t first = wall(scene.world, -5.0F, 1.0F, painted);
+        const std::uint64_t second = cube(scene.world, 1.0F, 0.0F, -6.0F, shaded);
+        const std::uint64_t target =
+            fbe_texture_create_target(32, 32, FBE_TEXTURE_RGBA8, at % 2 == 0 ? 1 : 4, true);
+        require(target != 0);
+        const std::uint64_t camera = fbe_entity_create(scene.world, 0, FBE_ENTITY_CAMERA);
+        require(fbe_camera_set_target(camera, target));
+        require(fbe_camera_set_hdr(camera, at % 3 == 0));
+        static_cast<void>(scene.drawn());
+        require(fbe_entity_free(camera));
+        require(fbe_entity_free(first));
+        require(fbe_entity_free(second));
+        fbe_material_release(painted);
+        fbe_material_release(shaded);
+        fbe_texture_release(texture);
+        fbe_texture_release(target);
+    };
+    // What the first frames make, of each kind, and what's kept while they're in flight.
+    for (int at = 0; at < 12; ++at) {
+        frame(at);
+    }
+    const held_t settled = held();
+    CAPTURE(settled.allocations.count, settled.allocations.bytes, settled.pipelines);
+    CHECK(settled.allocations.count > 0);
+    int differed = 0;
+    for (int at = 12; at < frames; ++at) {
+        frame(at);
+        // At the same place in the cycle of samples and HDR.
+        if (at % 6 == 5 && held() != settled) {
+            ++differed;
+            const held_t now = held();
+            CAPTURE(at, now.allocations.count, now.allocations.bytes, now.pipelines,
+                    now.free_samples);
+            CHECK(now == settled);
+        }
+    }
+    CHECK(differed == 0);
+    CHECK(fbe_gpu_validation_errors() == 0);
 }
 
 TEST_CASE("a camera in stored values blends with what's stored, as DirectX 7 did", "[gpu][scene]") {
@@ -11521,7 +12693,8 @@ TEST_CASE("a shader no pipeline can be made of draws as the scene's own, in stor
     // Bytes of its own, so it's a code of its own, by its name.
     std::vector<std::uint32_t> words(fbe::test_shaders::game_shader.code.begin(),
                                      fbe::test_shaders::game_shader.code.end());
-    words.push_back(2U << 16U);
+    // Its generator's word, which nothing reads.
+    words[2] = 0xFB02;
     const std::vector<std::uint8_t> bytes = cooked_shader(words);
     const std::uint64_t shader = fbe_shader_create(
         bytes.data(), static_cast<std::int64_t>(bytes.size()), "res://refused_stored.slang");

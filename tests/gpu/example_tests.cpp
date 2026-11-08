@@ -45,38 +45,71 @@ fbe::golden::frame_t saved(const std::filesystem::path& path) {
 // images are Mesa 26.2.4's, and Linux's CI has Ubuntu's 25.2.8, whose vkCmdBlitImage, what makes
 // mipmaps, rounds an 8-bit linear format's half a 255th high at each level, though sRGB's are the
 // same. So a normal or metal-rough map differs from far off, moving a floor's highlights and a
-// reflected horizon. On Linux, a frame with those can differ by the most CI measures there, past
-// linux-arm64's 1.39%, 0.44%, 0.06%, and 0.07% of its pixels, and everywhere else not at all.
+// reflected horizon, and a texture's sampling there more on arm64 than x64, as AlphaBlendModeTest's
+// marble shows, though not its panels, which blend and cut out. On Linux, a frame with those can
+// differ by the most CI measures on each, of the frames as they are since 472aebb turned the sky
+// (run 42144577128): x64's 0.45%, 0.13%, 0.053%, and 0.0023% of its pixels, and arm64's 1.91%,
+// 0.47%, 0.056%, and 0.081%; and everywhere else not at all.
 TEST_CASE("Khronos's sample models' frames match their golden images", "[.example]") {
 #ifdef __linux__
     constexpr bool older_mesa = true;
 #else
     constexpr bool older_mesa = false;
 #endif
+#ifdef __aarch64__
+    constexpr bool arm = true;
+#else
+    constexpr bool arm = false;
+#endif
     struct model_frame_t {
         std::string_view frame;
-        double share_on_older_mesa = 0.0;
+        double share_on_x64 = 0.0;
+        double share_on_arm64 = 0.0;
+    };
+    // What each lets differ here.
+    const auto share_of = [](const model_frame_t& each) {
+        if (!older_mesa) {
+            return 0.0;
+        }
+        return arm ? each.share_on_arm64 : each.share_on_x64;
     };
     REQUIRE(fbe_window_set_headless(true));
     require(fbe_gpu_start());
-    for (const auto& [frame, share_on_older_mesa] : {
-             model_frame_t{ .frame = "AlphaBlendModeTest", .share_on_older_mesa = 0.015 },
+    for (const model_frame_t& each : {
+             model_frame_t{
+                 .frame = "AlphaBlendModeTest",
+                 .share_on_x64 = 0.006,
+                 .share_on_arm64 = 0.025,
+             },
+             model_frame_t{ .frame = "Effects" },
              model_frame_t{ .frame = "EmissiveStrengthTest" },
              model_frame_t{ .frame = "MetalRoughSpheres" },
              model_frame_t{ .frame = "MetalRoughSpheresNoTextures" },
-             model_frame_t{ .frame = "NormalTangentMirrorTest", .share_on_older_mesa = 0.005 },
-             model_frame_t{ .frame = "NormalTangentTest", .share_on_older_mesa = 0.001 },
+             model_frame_t{
+                 .frame = "NormalTangentMirrorTest",
+                 .share_on_x64 = 0.002,
+                 .share_on_arm64 = 0.006,
+             },
+             model_frame_t{
+                 .frame = "NormalTangentTest",
+                 .share_on_x64 = 0.001,
+                 .share_on_arm64 = 0.001,
+             },
              model_frame_t{ .frame = "TextureLinearInterpolationTest" },
              model_frame_t{ .frame = "TextureSettingsTest" },
-             model_frame_t{ .frame = "TextureTransformMultiTest", .share_on_older_mesa = 0.001 },
+             model_frame_t{
+                 .frame = "TextureTransformMultiTest",
+                 .share_on_x64 = 0.0001,
+                 .share_on_arm64 = 0.0015,
+             },
              model_frame_t{ .frame = "TextureTransformTest" },
              model_frame_t{ .frame = "Worked" },
          }) {
-        INFO("frame " << frame);
+        INFO("frame " << each.frame);
         const std::filesystem::path path = std::filesystem::path(FBENGINE_EXAMPLE_FRAMES) /
-                                           "khronos" / std::format("frame_{}.png", frame);
-        fbe::golden::check(std::format("khronos_{}", frame), saved(path),
-                           { .channel = 2, .share = older_mesa ? share_on_older_mesa : 0.0 });
+                                           "khronos" / std::format("frame_{}.png", each.frame);
+        fbe::golden::check(std::format("khronos_{}", each.frame), saved(path),
+                           { .channel = 2, .share = share_of(each) });
     }
     stop_gpu();
 }
@@ -144,6 +177,7 @@ TEST_CASE("the sample models' frames match their golden images", "[.example]") {
              std::pair{ "RiggedSimple", 5 },
              std::pair{ "MorphPrimitivesTest", 3 },
              std::pair{ "AnimatedMorphCube", 4 },
+             std::pair{ "Fox", 7 },
          }) {
         for (int frame = 0; frame < frames; ++frame) {
             const std::string file = std::format("model_{}_{}", name, frame);

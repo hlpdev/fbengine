@@ -124,6 +124,15 @@ void stop();
 /// wasn't freed.
 std::uint32_t allocations_left();
 
+/// VMA's allocations now, and their bytes, as its statistics count them; none before the GPU
+/// starts.
+struct allocations_t {
+    std::uint32_t count = 0;
+    std::uint64_t bytes = 0;
+    bool operator==(const allocations_t&) const = default;
+};
+allocations_t allocations();
+
 /// Makes a frame a command pool of its own and its three command buffers, uploads, its own, and
 /// its first timestamp's; false,
 /// with fbe_error's why, if they can't be, and then it's left as it was.
@@ -175,12 +184,20 @@ bool submit_frame(VkSemaphore wait, VkSemaphore signal);
 /// fbe_error's why, if it couldn't.
 bool finish_frame();
 
-/// The samplers' binding in the bindless set, and the textures'. A shader reads a texture by its
-/// index in the textures' and a sampler's in the samplers', as bindless.slang does.
+/// The samplers' binding in the bindless set, multisampled images', and the textures', which is
+/// last as how many it has varies. A shader reads a texture by its index in the textures' and a
+/// sampler's in the samplers', as bindless.slang does.
 constexpr std::uint32_t sampler_binding = 0;
-constexpr std::uint32_t texture_binding = 1;
+constexpr std::uint32_t samples_binding = 1;
+constexpr std::uint32_t texture_binding = 2;
 /// How many samplers the set has: one for each filter and wrap in U and V, and room.
 constexpr std::uint32_t sampler_slots = 32;
+/// How many multisampled images the set has, the engine's own whose samples a shader reads: one for
+/// each size of an HDR camera's image at once, but for one with temporal antialiasing; what's past
+/// that reads its average.
+constexpr std::uint32_t samples_slots = 64;
+/// A multisampled image with no slot.
+constexpr std::uint32_t no_samples_slot = UINT32_MAX;
 
 /// The bindless set's layout, which every pipeline's layout has as its set 0, and the set.
 VkDescriptorSetLayout bindless_layout();
@@ -188,9 +205,30 @@ VkDescriptorSet bindless_set();
 
 /// How many textures the set holds, which is how many there can be.
 std::uint32_t texture_capacity();
+/// How many images the set's pool was made for: as many as the set has, or allocating it may fail
+/// on a GPU that, unlike lavapipe, holds a pool to its sizes.
+std::uint32_t pool_images();
 
 /// Points the set's texture `index` at `view`, sampled in SHADER_READ_ONLY_OPTIMAL.
 void write_texture(std::uint32_t index, VkImageView view);
+/// Points every one of the set's textures at `view`, as write_texture does, so an index no texture
+/// has samples it, not whatever a descriptor never written holds, which a real device faults on.
+void write_every_texture(VkImageView view);
+
+/// A slot in the set for a multisampled image, with its view, for a shader to read its samples by;
+/// no_samples_slot if they're all taken. A slot given back is for another image, once the GPU's
+/// done with what it was.
+std::uint32_t take_samples_slot(VkImageView view);
+void give_samples_slot(std::uint32_t slot);
+/// How many of the set's slots for samples are free.
+std::uint32_t free_samples_slot_count();
+/// Points every free slot for samples at `view`, and those given back from now on, a multisampled
+/// image in SHADER_READ_ONLY_OPTIMAL that's there as long as it is; VK_NULL_HANDLE, before it goes,
+/// for none.
+void point_free_samples_at(VkImageView view);
+/// What a slot for samples points at, and what a free one does: for tests.
+VkImageView samples_slot_view(std::uint32_t slot);
+VkImageView free_samples_view();
 
 /// The screen, for a window `window` pixels big: made again if the size it should be, its own or
 /// the window's, or its samples changed, its handle, or the old one's, or 0, if it can't be made.
@@ -207,6 +245,9 @@ void stop_screen();
 std::vector<std::uint8_t> read_window();
 /// Whether a window's open, which the GPU draws the screen for.
 bool window_open();
+/// For a test: what makes a shown window's surface in SDL's place, so its swapchain's made even on
+/// SDL's offscreen video, which shows none; nullptr for SDL's.
+void make_surfaces_by(VkSurfaceKHR (*make)());
 
 /// The index of the sampler for a filter and a wrap in U and V, fbe_texture.h's.
 std::uint32_t sampler_index(std::int32_t filter, std::int32_t wrap_u, std::int32_t wrap_v);
@@ -251,6 +292,10 @@ enum class fault_t : std::uint8_t {
     NO_COMPRESSED,
     /// Making a texture of a file's image, as if the device couldn't sample its format.
     NO_FILE_FORMAT,
+    /// Making a multisampled image of the engine's, as if the device couldn't read its samples.
+    NO_READ_SAMPLES,
+    /// Running work now, as a read or a buffer's upload does, as the device is lost.
+    LOST_NOW,
 };
 
 /// Makes the next `fault` happen.
@@ -269,6 +314,9 @@ bool fail_vulkan(std::string_view doing, VkResult result);
 /// Whether the GPU was lost, as a driver's crash or reset loses it: nothing runs on it from then
 /// on, and what needs it fails, saying so, until it's stopped and started again.
 bool lost();
+/// Whether the validation layer checks the GPU's synchronization too, as it does wherever it
+/// validates and can.
+bool validating_synchronization();
 /// Keeps that the GPU was lost if `result` says it was; whether it was.
 bool lose(VkResult result);
 /// Keeps for fbe_error() that the GPU was lost, and returns false.

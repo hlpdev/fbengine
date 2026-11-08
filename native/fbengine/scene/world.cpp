@@ -7,6 +7,7 @@
 #include "skin/skin.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -490,6 +491,17 @@ FBE_API bool fbe_entity_set_parent(uint64_t entity, uint64_t parent, bool keep_w
     const fbe::scene::vec3_t position = entities.world_matrix[slot].axis(3);
     const fbe::scene::quat_t rotation = entities.world_rotation[slot];
     const fbe::scene::vec3_t scale = entities.world_scale[slot];
+    if (keep_world) {
+        // Under a parent scaled almost to nothing, where it is may be past a float there.
+        const fbe::scene::vec3_t at =
+            fbe::scene::local_position(parent_slot, position, entities.position[slot]);
+        const fbe::scene::vec3_t sized =
+            fbe::scene::local_scale(parent_slot, scale, entities.scale[slot]);
+        if (!std::isfinite(at.x) || !std::isfinite(at.y) || !std::isfinite(at.z) ||
+            !std::isfinite(sized.x) || !std::isfinite(sized.y) || !std::isfinite(sized.z)) {
+            return fbe::fail("where it is in the world isn't finite under that parent");
+        }
+    }
     // Where it was at its World's capture, which drawing still tweens from.
     const bool captured = entities.captured[slot];
     const fbe::scene::mat4_t was =

@@ -37,6 +37,8 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_gpu_device(): Int32
     Function fbe_gpu_start(): Bool
     Function fbe_gpu_started(): Bool
+    Function fbe_gpu_set_disabled(disable: Bool): Bool
+    Function fbe_gpu_disabled(): Bool
     Function fbe_gpu_stops(): UInt64
     Function fbe_gpu_stop()
     Function fbe_gpu_lost(): Bool

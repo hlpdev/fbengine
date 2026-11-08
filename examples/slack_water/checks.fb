@@ -47,9 +47,8 @@ Public Function Share(image: Image, test: Func(Color32): Bool): Float
 End Function
 
 /// How much of the pixels from (`left`, `top`) up to (`right`, `bottom`) `test` holds for, from 0 to 1.
-Public Function ShareWithin(image: Image, test: Func(Color32): Bool, left: Int, top: Int,
-                            right: Int,
-                            bottom: Int): Float
+Public Function ShareWithin(image: Image, test: Func(Color32): Bool,
+                            left: Int, top: Int, right: Int, bottom: Int): Float
     Local count = 0
     For y = top Until bottom
         For x = left Until right
@@ -90,7 +89,8 @@ Public Function CostWasRead(lost: Bool, cost: Float): Bool => !lost && cost >= 0
 /// Whether `arguments` are a mode that draws with no person there, which ctest runs and a window never shows.
 Public Function DrawsWithoutAPerson(arguments: String[]): Bool
     If arguments.Count == 0 Then Return False
-    Return ["--cooked", "--walk3d", "--end", "--hear", "--feel", "--frames"].Contains(arguments[0])
+    Return ["--cooked", "--walk3d", "--end", "--hear", "--feel", "--frames", "--menus",
+            "--kept", "--captions"].Contains(arguments[0])
 End Function
 
 /// Whether such a mode may draw, with `devices` shown: not when it would pick one of several for itself.
