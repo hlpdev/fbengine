@@ -28,41 +28,101 @@ struct form_t {
 };
 
 // NOLINTBEGIN(cppcoreguidelines-owning-memory)
-const std::array<form_t, 12> forms{ {
-    { "new, delete", [] { return ::operator new(size); }, false,
-      [](void* p) { ::operator delete(p); }, plain },
-    { "new, sized delete", [] { return ::operator new(size); }, false,
-      [](void* p) { ::operator delete(p, size); }, plain },
-    { "new[], delete[]", [] { return ::operator new[](size); }, false,
-      [](void* p) { ::operator delete[](p); }, plain },
-    { "new[], sized delete[]", [] { return ::operator new[](size); }, false,
-      [](void* p) { ::operator delete[](p, size); }, plain },
-    { "nothrow new, nothrow delete", [] { return ::operator new(size, std::nothrow); }, true,
-      [](void* p) { ::operator delete(p, std::nothrow); }, plain },
-    { "nothrow new[], nothrow delete[]", [] { return ::operator new[](size, std::nothrow); }, true,
-      [](void* p) { ::operator delete[](p, std::nothrow); }, plain },
-    { "aligned new, aligned delete", [] { return ::operator new(size, alignment); }, false,
-      [](void* p) { ::operator delete(p, alignment); }, aligned },
-    { "aligned new, sized aligned delete", [] { return ::operator new(size, alignment); }, false,
-      [](void* p) { ::operator delete(p, size, alignment); }, aligned },
-    { "aligned new[], aligned delete[]", [] { return ::operator new[](size, alignment); }, false,
-      [](void* p) { ::operator delete[](p, alignment); }, aligned },
-    { "aligned new[], sized aligned delete[]", [] { return ::operator new[](size, alignment); },
-      false, [](void* p) { ::operator delete[](p, size, alignment); }, aligned },
-    { "aligned nothrow new, aligned nothrow delete",
-      [] { return ::operator new(size, alignment, std::nothrow); }, true,
-      [](void* p) { ::operator delete(p, alignment, std::nothrow); }, aligned },
-    { "aligned nothrow new[], aligned nothrow delete[]",
-      [] { return ::operator new[](size, alignment, std::nothrow); }, true,
-      [](void* p) { ::operator delete[](p, alignment, std::nothrow); }, aligned },
-} };
+constexpr std::array<form_t, 12> forms{
+    {
+        {
+            .name = "new, delete",
+            .allocate = [] { return ::operator new(size); },
+            .nothrow = false,
+            .free = [](void* p) { ::operator delete(p); },
+            .align = plain,
+        },
+        {
+            .name = "new, sized delete",
+            .allocate = [] { return ::operator new(size); },
+            .nothrow = false,
+            .free = [](void* p) { ::operator delete(p, size); },
+            .align = plain,
+        },
+        {
+            .name = "new[], delete[]",
+            .allocate = [] { return ::operator new[](size); },
+            .nothrow = false,
+            .free = [](void* p) { ::operator delete[](p); },
+            .align = plain,
+        },
+        {
+            .name = "new[], sized delete[]",
+            .allocate = [] { return ::operator new[](size); },
+            .nothrow = false,
+            .free = [](void* p) { ::operator delete[](p, size); },
+            .align = plain,
+        },
+        {
+            .name = "nothrow new, nothrow delete",
+            .allocate = [] { return ::operator new(size, std::nothrow); },
+            .nothrow = true,
+            .free = [](void* p) { ::operator delete(p, std::nothrow); },
+            .align = plain,
+        },
+        {
+            .name = "nothrow new[], nothrow delete[]",
+            .allocate = [] { return ::operator new[](size, std::nothrow); },
+            .nothrow = true,
+            .free = [](void* p) { ::operator delete[](p, std::nothrow); },
+            .align = plain,
+        },
+        {
+            .name = "aligned new, aligned delete",
+            .allocate = [] { return ::operator new(size, alignment); },
+            .nothrow = false,
+            .free = [](void* p) { ::operator delete(p, alignment); },
+            .align = aligned,
+        },
+        {
+            .name = "aligned new, sized aligned delete",
+            .allocate = [] { return ::operator new(size, alignment); },
+            .nothrow = false,
+            .free = [](void* p) { ::operator delete(p, size, alignment); },
+            .align = aligned,
+        },
+        {
+            .name = "aligned new[], aligned delete[]",
+            .allocate = [] { return ::operator new[](size, alignment); },
+            .nothrow = false,
+            .free = [](void* p) { ::operator delete[](p, alignment); },
+            .align = aligned,
+        },
+        {
+            .name = "aligned new[], sized aligned delete[]",
+            .allocate = [] { return ::operator new[](size, alignment); },
+            .nothrow = false,
+            .free = [](void* p) { ::operator delete[](p, size, alignment); },
+            .align = aligned,
+        },
+        {
+            .name = "aligned nothrow new, aligned nothrow delete",
+            .allocate = [] { return ::operator new(size, alignment, std::nothrow); },
+            .nothrow = true,
+            .free = [](void* p) { ::operator delete(p, alignment, std::nothrow); },
+            .align = aligned,
+        },
+        {
+            .name = "aligned nothrow new[], aligned nothrow delete[]",
+            .allocate = [] { return ::operator new[](size, alignment, std::nothrow); },
+            .nothrow = true,
+            .free = [](void* p) { ::operator delete[](p, alignment, std::nothrow); },
+            .align = aligned,
+        },
+    },
+};
 // NOLINTEND(cppcoreguidelines-owning-memory)
 
 /// Whether `form`'s allocation failed as its form does: null from a nothrow one, bad_alloc from
 /// the rest.
 bool failed_as_it_does(const form_t& form) {
     try {
-        void* made = form.allocate();
+        const void* made = form.allocate();
         return form.nothrow && made == nullptr;
     } catch (const std::bad_alloc&) {
         return !form.nothrow;
@@ -83,7 +143,7 @@ TEST_CASE("every form of operator new and delete is the out-of-memory tests' own
         // Counted, aligned, and freed by its own delete.
         failing = 1'000'000;
         allocated = 0;
-        void* made = form.allocate();
+        void* const made = form.allocate();
         failing = -1;
         REQUIRE(made != nullptr);
         CHECK(allocated == 1);
