@@ -492,9 +492,11 @@ FBE_API float fbe_world_environment_intensity(uint64_t world);
 FBE_API bool fbe_world_set_ambient(uint64_t world, float r, float g, float b);
 FBE_API bool fbe_world_ambient(uint64_t world, fbe_color_t* color);
 
-// Whether a camera draws into an HDR image of its target's size, of half floats, whose light past
-// white is kept, rather than into its target, false at first; and what that light comes to in its
-// target, each only for one that's HDR: first times its exposure, 0 or more, 1 at first; then
+// Whether a camera draws into an HDR image of its target's size and samples, of half floats, whose
+// light past white is kept, rather than into its target, false at first; and what that light comes
+// to in its target, a sample at a time and averaged after, or what they resolve to if the device
+// can't read them or has 64 such images already, each only for one that's HDR: first times its
+// exposure, 0 or more, 1 at first; then
 // through an FBE_TONEMAP_, NONE at first, where a target stored as bytes clamps it at white, and
 // Khronos's NEUTRAL or ACES's filmic curve are what glTF's and film's looks want; and raised to one
 // over its gamma, above 0, 1 at first, as a game's brightness setting wants. A target stored as

@@ -98,8 +98,9 @@ def arccosine(x):
 # The sample's default camera: 60 degrees up its view.
 FIELD = math.radians(60.0)
 
-# Its folder, its file, the mesh's node, then for each frame, the time to pose its first clip at, or
-# None for none, the weights to set, or None for its own, and the camera's place and where it looks.
+# Its folder, its file, the mesh's node, then for each frame, the time to pose a clip at, or None for
+# none, the weights to set, or None for its own, and which clip, its first if it isn't said; and the
+# camera's place and where it looks.
 FRAMES = [
     # Between keys off their middles, past its last key, and for RiggedSimple before its first and
     # off its keys, which 0.5, 1, and 1.5 are on.
@@ -115,22 +116,35 @@ FRAMES = [
     # Normals that its morph targets move: at rest, mostly thin, between both, and mostly a ramp.
     ("AnimatedMorphCube", "AnimatedMorphCube.glb", 0, [(t, None) for t in (0.0, 1.0, 2.1, 3.3)],
      (3, 2.5, 4), (0, 0, 0)),
+    # A character of three clips, a skin of 24 joints and no indices or normals, from its side: at
+    # rest, and twice in each of Survey, Walk, and Run, none of them on a key.
+    ("Fox", "Fox.glb", 1,
+     [(None, None), (1.1, None, 0), (2.6, None, 0), (0.3, None, 1), (0.6, None, 1), (0.3, None, 2),
+      (0.9, None, 2)],
+     (200, 45, -10), (0, 38, -10)),
 ]
 
-# main.fb's light: white, at the camera's place plus this, out to RANGE, and its ambient light.
+# main.fb's light: white, at the camera's place plus this, out to its range, and its ambient light.
 LIGHT_OFF = (3.0, 4.0, 0.0)
 # Its intensity, a folder's or else the rest's: enough that the light shows, past the ambient's,
 # on a rough metal, glTF's default, and on RiggedSimple's far plastic, and little enough that
 # MorphPrimitivesTest's red isn't clipped.
-INTENSITY = {"SimpleSkin": 150.0, "SimpleMorph": 150.0, "RiggedSimple": 400.0, "AnimatedMorphCube": 100.0}
+INTENSITY = {"SimpleSkin": 150.0, "SimpleMorph": 150.0, "RiggedSimple": 400.0, "AnimatedMorphCube": 100.0,
+             "Fox": 30000.0}
 INTENSITY_ELSE = 15.0
-RANGE = 100.0
+# How far it reaches, a folder's or else the rest's: Fox is 170 long, and its camera 200 away.
+RANGES = {"Fox": 400.0}
+RANGE_ELSE = 100.0
 AMBIENT = 0.3
 # glTF's material when a primitive has none.
 DEFAULT_MATERIAL = {"baseColorFactor": [1.0, 1.0, 1.0, 1.0], "metallicFactor": 1.0, "roughnessFactor": 1.0}
 # How many lit pixels a frame's checked at, each this many pixels or more inside its triangle.
 LIT_PIXELS = 5
 MARGIN = 0.3
+# How near a triangle's edge a pixel's middle is, in pixels, to be on it: a rasterizer puts each
+# corner on a grid of 1/256 of a pixel, lavapipe's, and the GPU's floats round where its skin puts
+# it, by about 1/1000 of a pixel of Fox's, so whether one so near is covered could go either way.
+EDGE = 1 / 128
 
 COMPONENTS = {5126: ("f", 4), 5123: ("H", 2), 5125: ("I", 4), 5121: ("B", 1)}
 WIDTHS = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT4": 16}
@@ -217,8 +231,8 @@ def linear_only(sampler):
         raise ValueError(f"{interpolation} isn't worked out here")
 
 
-def pose(doc, data, time):
-    """Each node's local parts, and its weights, as its first animation has them at `time`."""
+def pose(doc, data, time, clip=0):
+    """Each node's local parts, and its weights, as its animation `clip` has them at `time`."""
     parts = []
     for node in doc["nodes"]:
         parts.append({
@@ -230,8 +244,9 @@ def pose(doc, data, time):
         })
     if time is None or "animations" not in doc:
         return parts
-    for channel in doc["animations"][0]["channels"]:
-        sampler = doc["animations"][0]["samplers"][channel["sampler"]]
+    animation = doc["animations"][clip]
+    for channel in animation["channels"]:
+        sampler = animation["samplers"][channel["sampler"]]
         linear_only(sampler)
         times = [t[0] for t in read(doc, data, sampler["input"])]
         out = [x for value in read(doc, data, sampler["output"]) for x in value]
@@ -300,15 +315,15 @@ def material_of(doc, primitive):
     return found
 
 
-def corners(doc, data, node_index, time, weights):
+def corners(doc, data, node_index, time, weights, clip=0):
     """Every triangle corner's place in the world."""
-    return [c[0] for c in lit_corners(doc, data, node_index, time, weights)]
+    return [c[0] for c in lit_corners(doc, data, node_index, time, weights, clip)]
 
 
-def lit_corners(doc, data, node_index, time, weights):
+def lit_corners(doc, data, node_index, time, weights, clip=0):
     """Every triangle corner's place in the world, its normal there, and its primitive's material
     without its texture, which main.fb takes off to draw the frame again for its light."""
-    parts = pose(doc, data, time)
+    parts = pose(doc, data, time, clip)
     world = worlds(doc, parts)
     node = doc["nodes"][node_index]
     mesh = doc["meshes"][node["mesh"]]
@@ -322,7 +337,11 @@ def lit_corners(doc, data, node_index, time, weights):
         palette = [multiply(world[j], list(binds[i])) for i, j in enumerate(skin["joints"])]
     for primitive in mesh["primitives"]:
         positions = read(doc, data, primitive["attributes"]["POSITION"])
-        indices = [i[0] for i in read(doc, data, primitive["indices"])]
+        # With no indices, each three vertices are a triangle, as Fox's are.
+        if "indices" in primitive:
+            indices = [i[0] for i in read(doc, data, primitive["indices"])]
+        else:
+            indices = list(range(len(positions)))
         material = {k: v for k, v in material_of(doc, primitive).items() if k != "baseColorTexture"}
         # A file's normals by its vertices; flat ones by the corners, as they take them apart.
         has_normals = "NORMAL" in primitive["attributes"]
@@ -396,6 +415,36 @@ def covered(places, camera, look):
     return mask
 
 
+def on_edges(places, camera, look):
+    """The pixels, by y * SIZE + x, whose middles are within EDGE of a triangle's edge, and inside no
+    triangle by more."""
+    right, above, back = view_of(camera, look)
+    per = (SIZE / 2) / (sine(FIELD / 2) / cosine(FIELD / 2))
+    seen = []
+    for p in places:
+        d = [a - c for a, c in zip(p, camera)]
+        depth = -total(a * b for a, b in zip(d, back))
+        seen.append((SIZE / 2 + total(a * b for a, b in zip(d, right)) * per / depth,
+                     SIZE / 2 - total(a * b for a, b in zip(d, above)) * per / depth))
+    inside = {}
+    for t in range(0, len(seen), 3):
+        (ax, ay), (bx, by), (cx, cy) = seen[t:t + 3]
+        twice = (bx - ax) * (cy - ay) - (cx - ax) * (by - ay)
+        if twice == 0.0:
+            continue
+        edges = [math.sqrt((bx - cx) * (bx - cx) + (by - cy) * (by - cy)), math.sqrt((cx - ax) * (cx - ax) + (cy - ay) * (cy - ay)), math.sqrt((ax - bx) * (ax - bx) + (ay - by) * (ay - by))]
+        for y in range(max(0, math.floor(min(ay, by, cy)) - 1), min(SIZE, math.ceil(max(ay, by, cy)) + 2)):
+            py = y + 0.5
+            for x in range(max(0, math.floor(min(ax, bx, cx)) - 1), min(SIZE, math.ceil(max(ax, bx, cx)) + 2)):
+                px = x + 0.5
+                one = ((bx - px) * (cy - py) - (cx - px) * (by - py)) / twice
+                two = ((cx - px) * (ay - py) - (ax - px) * (cy - py)) / twice
+                # How far inside it is, or outside for below 0, from its nearest edge.
+                far = min(b * abs(twice) / e for b, e in zip((one, two, 1 - one - two), edges) if e > 0)
+                inside[(x, y)] = max(inside.get((x, y), far), far)
+    return sorted(y * SIZE + x for (x, y), far in inside.items() if abs(far) < EDGE)
+
+
 def view_of(camera, look):
     """The camera's right, up, and back, as main.fb's camera points."""
     back = unit([c - l for c, l in zip(camera, look)])
@@ -447,7 +496,7 @@ def brdf(material, normal, view, to_light, radiance):
     return made
 
 
-def lit(placed, camera, look, intensity):
+def lit(placed, camera, look, intensity, reach):
     """A few pixels well inside the nearest triangle there, front on, each with the color glTF's BRDF
     gives it there: x, y, red, green, blue."""
     right, above, back = view_of(camera, look)
@@ -498,7 +547,7 @@ def lit(placed, camera, look, intensity):
         material = three[0][2]
         to_light = [l - p for l, p in zip(light, place)]
         apart = math.sqrt(total(v * v for v in to_light))
-        window = min(max(1 - power(apart / RANGE, 4), 0.0), 1.0)
+        window = min(max(1 - power(apart / reach, 4), 0.0), 1.0)
         radiance = intensity * window * window / (apart * apart)
         shaded = brdf(material, normal, unit([c - p for c, p in zip(camera, place)]), unit(to_light), radiance)
         base = material["baseColorFactor"][:3]
@@ -565,39 +614,47 @@ def main():
              "", "Import std.math", "", "// A frame of a sample model, and where it should be.",
              "Package Struct Worked", "    Package Field Folder: String", "    Package Field Node: String",
              "    Package Field Index: Int", "    Package Field Time: Float", "    Package Field Weight: Float",
+             "    // Which of its clips Time is in, by its place in the file.", "    Package Field Clip: Int",
              "    Package Field Camera: Vec3", "    Package Field Look: Vec3", "    Package Field Low: Vec3",
              "    Package Field High: Vec3", "    Package Field Mean: Vec3",
              "    // Where its mask's runs start in masks.bin, and how many.", "    Package Field Runs: Int",
              "    Package Field RunCount: Int",
-             "    // Its light's intensity, and pixels it lights, each x, y, red, green, and blue, as stored.",
-             "    Package Field Intensity: Float", "    Package Field Lit: Int[]",
+             "    // Its light's intensity and range, and pixels it lights, each x, y, red, green, and blue, as",
+             "    // stored.",
+             "    Package Field Intensity: Float", "    Package Field Range: Float", "    Package Field Lit: Int[]",
+             "    // Pixels, by y * 256 + x, on an edge, which its mask leaves out.", "    Package Field Edges: Int[]",
              "End Struct", "", "// Time and Weight are below 0 for none.", "Package Function WorkedOut(): Worked[]",
              "    Local frames: Worked[] = []"]
     for folder, file, node_index, frames, camera, look in FRAMES:
         doc, data = load(HERE / folder / file)
         names = doc["nodes"][node_index].get("name", f"node_{node_index}")
-        for index, (time, weights) in enumerate(frames):
-            placed = lit_corners(doc, data, node_index, time, weights)
+        for index, frame in enumerate(frames):
+            time, weights, clip = (*frame, 0)[:3]
+            placed = lit_corners(doc, data, node_index, time, weights, clip)
             places = [c[0] for c in placed]
             intensity = INTENSITY.get(folder, INTENSITY_ELSE)
-            shown = [v for pixel in lit(placed, camera, look, intensity) for v in pixel]
+            reach = RANGES.get(folder, RANGE_ELSE)
+            shown = [v for pixel in lit(placed, camera, look, intensity, reach) for v in pixel]
             low = [min(p[k] for p in places) for k in range(3)]
             high = [max(p[k] for p in places) for k in range(3)]
             mean = [total(p[k] for p in places) / len(places) for k in range(3)]
             runs = runs_of(covered(places, camera, look))
+            edges = on_edges(places, camera, look)
             start = len(masks)
             starts.append((start, f"{folder} {index}"))
             masks += struct.pack(f"<{len(runs)}H", *[0xFFFF if r == 65536 else r for r in runs])
-            print(folder, index, time, weights, low, high, mean, len(runs), shown)
+            print(folder, index, time, weights, low, high, mean, len(runs), shown, len(edges), "on edges")
             vec = lambda v: "Vec3(" + ", ".join(number(x) for x in v) + ")"
             lines.append(
                 f'    frames.Add(Worked("{folder}", "{names}", {index}, '
                 f"{number(time) if time is not None else '-1'}, "
-                f"{number(weights[0]) if weights is not None else '-1'}, "
+                f"{number(weights[0]) if weights is not None else '-1'}, {clip}, "
                 f"{vec(camera)}, {vec(look)},")
             lines.append(f"                      {vec(low)}, {vec(high)},")
-            lines.append(f"                      {vec(mean)}, {start}, {len(runs)}, {number(intensity)},")
-            lines.append(f"                      [{', '.join(str(v) for v in shown)}] As Int[]))")
+            lines.append(f"                      {vec(mean)}, {start}, {len(runs)}, {number(intensity)}, "
+                         f"{number(reach)},")
+            lines.append(f"                      [{', '.join(str(v) for v in shown)}] As Int[],")
+            lines.append(f"                      [{', '.join(str(v) for v in edges)}] As Int[]))")
     lines += ["    Return frames", "End Function", ""]
     text = "\n".join(lines)
     if "--check" in sys.argv:

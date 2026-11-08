@@ -21,8 +21,8 @@ Public Final Class Environment
     End Method
 
     /// Bakes `source`, an image of the light all around, y up, -Z at its middle as a sky has it, and
-    /// the sky along its top, in the frame's commands, so what's drawn after it reads it: its specular light
-    /// `size` texels across, a power of 2 from 16 to 2048, each texel taking `samples` samples, 1 to
+    /// the sky along its top, in the frame's commands, so what's drawn after it reads it: its
+    /// specular light `size` texels across, a power of 2 from 16 to 2048, each texel taking `samples` samples, 1 to
     /// 4096, which take the time the GPU takes: a big bake's submitted a part at a time, which it
     /// waits for, so the GPU's never kept long. Mipmaps on `source` make few samples less noisy, and
     /// a small sun count for what it should; its light past 8192 is read as 8192. A frame that fails

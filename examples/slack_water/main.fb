@@ -39,8 +39,10 @@ Import "./island"
 Import "./map"
 Import "./prompts"
 Import "./res" As Res
+Import "./plants"
 Import "./screenmode"
 Import "./screens"
+Import "./sea"
 Import "./settings"
 Import "./sky"
 Import "./soundscape"
@@ -182,6 +184,58 @@ Function PixelOf(camera: Camera, image: Image, place: Vec3): Color32?
     Return image[x, y]
 End Function
 
+// How much of two images, from row `from` up to `to`, differs by more than 12 of
+// 765 in brightness, from 0 to 1.
+Function MovedShare(before: Image, after: Image, from: Int, to: Int): Float
+    Local count = 0
+    For y = from Until to
+        For x = 0 Until before.Width
+            If Abs(Brightness(before[x, y]) - Brightness(after[x, y])) > 12 Then count += 1
+        End For
+    End For
+    Return (count As Float) / (((to - from) * before.Width) As Float)
+End Function
+
+// How much of the sea `depth` deep along the shore's south side is white with foam, from 0 to 1, by
+// what `image` shows from `camera`, with the sea at 0: of 161 places along it, a quarter meter apart.
+Function FoamAlong(camera: Camera, image: Image, depth: Float): Float
+    Local foamed = 0
+    Local seen = 0
+    For across = -80 To 80
+        Local x = MAIN_X + (across As Float) * 0.25
+        Local z: Float = 0.0
+        While -GroundHeight(x, z) < depth && z < 100.0
+            z += 0.02
+        End While
+        Local pixel = PixelOf(camera, image, Vec3(x, 0.0, z))
+        If pixel != Null
+            seen += 1
+            If pixel.r > 185 && pixel.g > 185 && pixel.b > 185 Then foamed += 1
+        End If
+    End For
+    Return seen > 40 ? (foamed As Float) / (seen As Float) : 1.0
+End Function
+
+// The least and most bright, of 765, the sea `depth` deep along the shore's south side is, by what
+// `image` shows from `camera`, with the sea at 0.
+Function BrightnessAlong(camera: Camera, image: Image, depth: Float): (Float, Float)
+    Local least: Float = 1000.0
+    Local most: Float = 0.0
+    For across = -20 To 20
+        Local x = MAIN_X + (across As Float)
+        Local z: Float = 0.0
+        While -GroundHeight(x, z) < depth && z < 100.0
+            z += 0.05
+        End While
+        Local pixel = PixelOf(camera, image, Vec3(x, 0.0, z))
+        If pixel != Null
+            least = Min(least, Brightness(pixel) As Float)
+            most = Max(most, Brightness(pixel) As Float)
+        End If
+    End For
+    Return (least, most)
+End Function
+
 // The color of where the sea's `depth` deep along the shore's south side, from beside the main rock,
 // by what `image` shows of it from `camera`, with the sea at `height`, its channels' bytes summed
 // over how many were seen; and how many.
@@ -216,7 +270,7 @@ End Function
 
 // What the island shows now.
 Function Shown(island: Island): Image Throws GraphicsError, IOError
-    island.Scene().Render()
+    island.Render()
     Local image = Try Screen.ToImage()
     Flip(False)
     Return image
@@ -224,11 +278,516 @@ End Function
 
 // What the island shows now, saved as `name` in `folder`.
 Function SavedAs(island: Island, folder: Path, name: String): Image Throws GraphicsError, IOError
-    island.Scene().Render()
+    island.Render()
     Try Screen.Save(folder / "{name}.png")
     Local image = Try Screen.ToImage()
     Flip(False)
     Return image
+End Function
+
+// How many pixels of what the island shows, in the rows from `from` up to `to`, differ by more than
+// `by` of 765 between how it is now and once `change` has been done.
+Function ChangedBy(island: Island, change: Func(), from: Int, to: Int,
+                   by: Int): Int Throws GraphicsError,
+                                        IOError
+    Local before = Try Shown(island)
+    change()
+    Local after = Try Shown(island)
+    Local count = 0
+    For y = from Until to
+        For x = 0 Until before.Width
+            If Abs(Brightness(before[x, y]) - Brightness(after[x, y])) > by Then count += 1
+        End For
+    End For
+    Return count
+End Function
+
+// How many triangles the island's drawn with from where the camera is.
+Function TrianglesDrawn(island: Island): Int64
+    island.Render()
+    Flip(False)
+    island.Render()
+    Local drawn = Gpu.Counters().Triangles
+    Flip(False)
+    Return drawn
+End Function
+
+// Whether a place's kept clear: by the mill, on the road, what's blocked, or near a clear spot.
+Function InTheClear(at: Vec3): Bool
+    If ByTheMill(at.x, at.z) || OnRoad(at.x, at.z) || Blocked(at.x, at.z) Then Return True
+    For spot In ClearSpots()
+        If Length(Vec2(at.x, at.z) - spot) < 1.5 Then Return True
+    End For
+    Return False
+End Function
+
+// How many of an image's sky pixels are shut in by what isn't sky, out of reach of its edges'.
+Function EnclosedSky(image: Image): Int
+    Local width = image.Width
+    Local height = image.Height
+    Local reached: Bool[] = []
+    reached.Resize(width * height, False)
+    Local next: Int[] = []
+    Local reach = Function(x: Int, y: Int)
+        If x < 0 || y < 0 || x >= width || y >= height Then Return
+        Local at = y * width + x
+        If reached[at] || !IsSky(image[x, y]) Then Return
+        reached[at] = True
+        next.Add(at)
+    End Function
+    For x = 0 Until width
+        reach(x, 0)
+        reach(x, height - 1)
+    End For
+    For y = 0 Until height
+        reach(0, y)
+        reach(width - 1, y)
+    End For
+    While next.Count > 0
+        Local at = next.RemoveLast()
+        Local x = at % width
+        Local y = at / width
+        reach(x - 1, y)
+        reach(x + 1, y)
+        reach(x, y - 1)
+        reach(x, y + 1)
+    End While
+    Local shut = 0
+    For y = 0 Until height
+        For x = 0 Until width
+            If IsSky(image[x, y]) && !reached[y * width + x] Then shut += 1
+        End For
+    End For
+    Return shut
+End Function
+
+// Where plants.slang moves a point at `position` in its own space, of something at `place`, by its
+// first two parameters, as it does on the GPU.
+Function PlantMoved(position: Vec3, place: Vec3, wind: Vec4, shape: Vec4): Vec3
+    Local high = Max(shape.x, 0.001)
+    Local up = Clamp(position.y / high, 0.0, 1.0)
+    Local at = position + place
+    Local turn: Float = 6.2831853
+    Local gust = 0.55 + 0.45 * Sin(turn * 13.0 / 60.0 * wind.w + shape.y + at.x * 0.9 + at.z * 0.7)
+    Local flutter = 0.18 *
+                    Sin(turn * 45.0 / 60.0 * wind.w + shape.y * 2.3 + at.x * 2.1 + at.y * 1.7 +
+                        at.z * 2.6)
+    Local bent = shape.z * wind.z * (gust + flutter) * up * up
+    Return Vec3(position.x + wind.x * bent, position.y - 0.5 * bent * bent / high * up,
+                position.z + wind.y * bent)
+End Function
+
+// A grid of `rows` by `columns` squares from `corner`, along `down` and `across`, its normal `facing`;
+// or, `by` the plants' wind, each point where plants.slang moves it and its normal what the moved
+// points around it say it is.
+Function PlantGrid(corner: Vec3, down: Vec3, across: Vec3, facing: Vec3, rows: Int, columns: Int,
+                   by: (Vec4, Vec4)?): Geometry
+    Local made = Geometry()
+    Local surface = made.AddSurface()
+    Local at = Function(row: Float, column: Float): Vec3
+        Local still = corner + down * (row / (rows As Float)) +
+                      across * (column / (columns As Float))
+        If by == Null Then Return still
+        Return PlantMoved(still, Vec3(0.0, 0.0, 0.0), by.0, by.1)
+    End Function
+    Local first = -1
+    For row = 0 To rows
+        For column = 0 To columns
+            Local here = at(row As Float, column As Float)
+            Local normal = facing
+            If by != Null
+                Local step: Float = 0.01
+                Local downward = at((row As Float) + step, column As Float) -
+                                 at((row As Float) - step, column As Float)
+                Local sideways = at(row As Float, (column As Float) + step) -
+                                 at(row As Float, (column As Float) - step)
+                normal = Normalize(Cross(sideways, downward))
+                If Dot(normal, facing) < 0.0 Then normal = -normal
+            End If
+            Local index = surface.AddVertex(Vertex(here, normal, Vec2(0.0, 0.0), Vec2(0.0, 0.0),
+                                                   Color(1.0, 1.0, 1.0)))
+            If first < 0 Then first = index
+        End For
+    End For
+    For row = 0 Until rows
+        For column = 0 Until columns
+            Local a = first + row * (columns + 1) + column
+            Local b = a + columns + 1
+            surface.AddTriangle(a, b, b + 1)
+            surface.AddTriangle(a, b + 1, a + 1)
+        End For
+    End For
+    Return made
+End Function
+
+// What the island shows with `geometry` drawn in `material` at `at`.
+Function ShownWith(island: Island, geometry: Geometry, material: Material,
+                   at: Vec3): Image Throws GraphicsError,
+                                           IOError
+    Local drawn = Mesh(geometry)
+    drawn.SetMaterial(material)
+    drawn.SetPosition(at)
+    Local image = Try Shown(island)
+    drawn.Free()
+    Return image
+End Function
+
+// How many pixels of what the island shows differ by more than 40 of 765 between `from` seconds into
+// the slack water and `to`.
+Function ChangedOver(island: Island, from: Float64, to: Float64): Int Throws GraphicsError, IOError
+    island.Update(from)
+    Local before = Try Shown(island)
+    island.Update(to)
+    Local after = Try Shown(island)
+    Local count = 0
+    For y = 0 Until before.Height
+        For x = 0 Until before.Width
+            If Abs(Brightness(before[x, y]) - Brightness(after[x, y])) > 40 Then count += 1
+        End For
+    End For
+    Return count
+End Function
+
+// How far, in brightness of 765, what `one` shows differs from what `other` does, on average,
+// where either differs from `bare`.
+Function ShadedApart(one: Image, other: Image, bare: Image): Float
+    Local total = 0
+    Local count = 0
+    For y = 0 Until one.Height
+        For x = 0 Until one.Width
+            Local mine = Brightness(one[x, y])
+            Local theirs = Brightness(other[x, y])
+            Local none = Brightness(bare[x, y])
+            If Abs(mine - none) > 20 || Abs(theirs - none) > 20
+                total += Abs(mine - theirs)
+                count += 1
+            End If
+        End For
+    End For
+    Return count == 0 ? 1000.0 : (total As Float) / (count As Float)
+End Function
+
+// A plant's normals lean as plants.slang bends it, as the moved points around each say they do:
+// a side square to the wind, and a top, each drawn as the shader bends it against one bent here,
+// with the normals its moved points give it.
+Function CheckBentNormals(camera: Camera, island: Island) Throws GraphicsError, IOError
+    Local shader = Try Assets.Load<Shader>(Res.Plants)
+    Local wind = Vec4(1.0, 0.0, 1.0, 7.3)
+    Local shape = Vec4(2.0, 0.4, 0.8, 0.0)
+    Local looked = Function(normals: Bool, moving: Bool): Material
+        Local made = Material(Color(1.0, 1.0, 1.0))
+        made.SetShader(shader)
+        made.SetMetalRough(0.0, 1.0)
+        made.SetParameter(0, Vec4(wind.x, wind.y, moving ? wind.z : 0.0, wind.w))
+        made.SetParameter(1, shape)
+        made.SetParameter(2, Vec4(0.0, 0.0, 0.0, normals ? 1.0 : 0.0))
+        Return made
+    End Function
+    Local bending = looked(True, True)
+    Local unbent = looked(False, True)
+    Local still = looked(False, False)
+    Local middle = Vec3(MAIN_X, 60.0, 80.0)
+    island.Grown().SetShown(False)
+    Local sides = [(Vec3(0.0, 0.0, -0.6), Vec3(0.0, 2.0, 0.0), Vec3(0.0, 0.0, 1.2),
+                    Vec3(1.0, 0.0, 0.0),
+                    Vec3(4.0, 1.4, 0.3), "a side square to the wind"),
+                   (Vec3(-0.6, 1.2, -0.6), Vec3(0.0, 0.0, 1.2), Vec3(1.2, 0.0, 0.0),
+                    Vec3(0.0, 1.0, 0.0),
+                    Vec3(1.2, 4.0, 0.8), "a top")]
+    For side In sides
+        camera.SetPosition(middle + side.4)
+        camera.PointAt(middle + Vec3(0.0, 1.0, 0.0))
+        Local bare = Try Shown(island)
+        Local grid = PlantGrid(side.0, side.1, side.2, side.3, 40, 12, Null)
+        Local bent = Try ShownWith(island, grid, bending, middle)
+        Local leftAsWas = Try ShownWith(island, grid, unbent, middle)
+        Local byPoints = Try ShownWith(island, PlantGrid(side.0, side.1, side.2, side.3, 40, 12,
+                                                         (wind, shape)), still, middle)
+        Local apart = ShadedApart(bent, byPoints, bare)
+        Local asWas = ShadedApart(leftAsWas, byPoints, bare)
+        Checks("{side.5}'s normals lean as its moved points do",
+               apart < 3.0 && apart * 4.0 < asWas + 1.0)
+    End For
+    island.Grown().SetShown(True)
+End Function
+
+// What grows, saved to look at, and what it's for, by the pixels and where it is.
+Function SavePlants(folder: Path, camera: Camera, island: Island) Throws GraphicsError, IOError
+    Try CheckBentNormals(camera, island)
+    Local grown = island.Grown()
+    grown.Sway(10.0)
+    Local eye = Vec3(MAIN_X - 24.0, GroundHeight(MAIN_X - 24.0, 18.0) + 1.7, 18.0)
+    camera.SetPosition(eye)
+    camera.PointAt(Vec3(MAIN_X, GroundHeight(MAIN_X, 0.0) + 1.0, 0.0))
+    Local with = Try SavedAs(island, folder, "plants")
+    grown.SetGrassShown(False)
+    Local without = Try Shown(island)
+    Local nearWithout = Try TrianglesDrawn(island)
+    grown.SetGrassShown(True)
+    Local nearWith = Try TrianglesDrawn(island)
+    Local changed = 0
+    For y = 380 Until 720
+        For x = 0 Until with.Width
+            If Abs(Brightness(with[x, y]) - Brightness(without[x, y])) > 30 Then changed += 1
+        End For
+    End For
+    Checks("grass is drawn on the green", (changed As Float) / ((340 * with.Width) As Float) > 0.04)
+    Local tufts = grown.Tufts()
+    Checks("in thousands of tufts", tufts.Count > 2000)
+    Local levels, levelCount, nearVertices = grown.TuftLevels()
+    Print("the grass: {tufts.Count} tufts, {nearVertices} vertices near, triangles by level {levels}; " +
+          "from here {nearWith - nearWithout} triangles of it, of {nearWith}")
+    // Further off, a card's blades are as many along each row as near: at its fourth level, as much
+    // of each of the card's rows is past half alpha, and drawn, as of the first level's rows it
+    // covers.
+    Local atlasImage = GrassAtlasImage()
+    Local atlas = Try GrassAtlas()
+    Local fourth = atlas.ReadPixels(3)
+    Local fourthWidth = Max(atlasImage.Width / 8, 1)
+    Local fourthHeight = Max(atlasImage.Height / 8, 1)
+    Local rowsKept = True
+    For y = 0 Until fourthHeight
+        Local far = 0
+        For x = fourthWidth / 2 Until fourthWidth
+            If fourth[(y * fourthWidth + x) * 4 + 3] >= 128 Then far += 1
+        End For
+        Local near = 0
+        For row = y * 8 Until y * 8 + 8
+            For x = atlasImage.Width / 2 Until atlasImage.Width
+                If atlasImage[x, row].a >= 128 Then near += 1
+            End For
+        End For
+        Local farShare = (far As Float) / ((fourthWidth / 2) As Float)
+        Local nearShare = (near As Float) / ((atlasImage.Width / 2 * 8) As Float)
+        If Abs(farShare - nearShare) > 0.1 Then rowsKept = False
+    End For
+    atlas.Free()
+    Checks("further off, a card's blades are as many along each row as near", rowsKept)
+    Checks("a tuft's levels have fewer blades, then a card, then none",
+           levelCount == 4 && levels.Count == 5 && levels[0] > levels[1] && levels[1] > levels[2] &&
+           levels[2] > levels[3] && levels[3] > 0 && levels[4] == 0)
+    // From high over the island, every tuft's past its last level, so the grass draws nothing.
+    camera.SetPosition(Views()[0].1)
+    camera.PointAt(Views()[0].2)
+    grown.SetGrassShown(False)
+    Local farWithout = Try TrianglesDrawn(island)
+    grown.SetGrassShown(True)
+    Local farWith = Try TrianglesDrawn(island)
+    // As an Instances' levels go by its clusters' size, what's far off is a card a tuft, at most.
+    Checks("near, it's blades, and from far off, cards at most",
+           nearWith > nearWithout + 50000 &&
+           farWith - farWithout <= (tufts.Count * levels[3]) As Int64)
+    camera.SetPosition(eye)
+    camera.PointAt(Vec3(MAIN_X, GroundHeight(MAIN_X, 0.0) + 1.0, 0.0))
+
+    // Every tuft on the ground as it's drawn, a little into it.
+    Local grounded = True
+    For tuft In tufts
+        Local drawn = island.GroundDrawnAt(tuft.At.x, tuft.At.z)
+        If drawn == Null || Abs(tuft.At.y - drawn) > 0.031 Then grounded = False
+    End For
+    Checks("every tuft's on the ground as it's drawn", grounded)
+
+    // None of it where it's kept clear: by the mill, the road, what's blocked, the parts' spots, the
+    // door, and where the road's ends are landed on.
+    Local clear = True
+    For tuft In tufts
+        If InTheClear(tuft.At) Then clear = False
+    End For
+    For plant In grown.Trees()
+        If InTheClear(plant) Then clear = False
+    End For
+    For plant In grown.Shrubs()
+        If InTheClear(plant) Then clear = False
+    End For
+    Checks("none of it where it's kept clear", clear)
+
+    Local trees = grown.Trees()
+    Local byTheMill = trees.Count == 3
+    For tree In trees
+        If Length(Vec2(tree.x - MAIN_X, tree.z)) > 30.0 Then byTheMill = False
+    End For
+    Checks("three trees stand by the mill", byTheMill)
+    Checks("and shrubs grow about it", grown.Shrubs().Count >= 5)
+
+    // A tree, square to the wind, so what it bends goes across the view.
+    Local tree = trees[0]
+    camera.SetPosition(tree + Vec3(-3.9, 1.5, 9.2))
+    camera.PointAt(tree + Vec3(0.0, 3.6, 0.0))
+    Try SavedAs(island, folder, "tree")
+    // It sways: at one beat, the storm's wind moves it further from where it'd stand with none than
+    // the calm's does.
+    island.Update(0.0)
+    Local calm = Try ChangedBy(island, Function()
+        grown.SetWindless(True)
+    End Function, 0, 400, 40)
+    grown.SetWindless(False)
+    island.Update(TIDE_IN_AT)
+    Local stormy = Try ChangedBy(island, Function()
+        grown.SetWindless(True)
+    End Function, 0, 400, 40)
+    grown.SetWindless(False)
+    Checks("trees sway in the wind", calm > 200)
+    Checks("harder in the storm, at one beat", stormy > calm + calm / 4)
+    // Its normals lean as it bends.
+    Local leaning = Try ChangedBy(island, Function()
+        grown.SetBentNormals(False)
+    End Function, 0, 400, 6)
+    grown.SetBentNormals(True)
+    Checks("its normals follow its bend", leaning > 100)
+
+    // Its trunk bends as its leaves do: with them hidden, in the storm, its top moves, and its foot
+    // doesn't.
+    grown.SetCanopiesShown(False)
+    // A meter up its trunk, which leans a tenth of that with the wind as it's built.
+    Local foot = tree + Vec3(WIND.x * 0.1, 1.0, WIND.y * 0.1)
+    Local footBefore = PixelOf(camera, Try Shown(island), foot)
+    Local topMoved = Try ChangedBy(island, Function()
+        grown.Sway(3.0)
+    End Function, 0, 400, 40)
+    Local footAfter = PixelOf(camera, Try Shown(island), foot)
+    grown.SetCanopiesShown(True)
+    Checks("its trunk bends as its leaves do", topMoved > 40)
+    Checks("and its roots stay put",
+           footBefore != Null && footAfter != Null && footBefore.r >= footBefore.g &&
+           Abs((footBefore.r As Int) - (footAfter.r As Int)) + Abs((footBefore.g As Int) -
+                                                                   (footAfter.g As Int)) +
+           Abs((footBefore.b As Int) - (footAfter.b As Int)) < 20)
+    island.Update(0.0)
+
+    // Its canopy has holes, from below: the sky shows through within where its leaves are.
+    camera.SetPosition(tree + Vec3(0.6, 1.2, 0.4))
+    camera.PointAt(tree + Vec3(0.3, 9.0, 0.2))
+    Local under = Try SavedAs(island, folder, "under_a_tree")
+    grown.SetCanopiesShown(False)
+    Local bare = Try Shown(island)
+    grown.SetCanopiesShown(True)
+    Local leafy = 0
+    Local through = 0
+    For y = 0 Until under.Height
+        For x = 0 Until under.Width
+            Local seen = under[x, y]
+            Local sky = bare[x, y]
+            If IsSky(sky)
+                If Abs(Brightness(seen) - Brightness(sky)) > 40 Then leafy += 1 Else through += 1
+            End If
+        End For
+    End For
+    Checks("its canopy has holes the sky shows through",
+           leafy > 20000 && (through As Float) / ((leafy + through) As Float) > 0.1)
+    // Bent by the storm, its wood doesn't tear: no more sky's shut inside it than when it's still.
+    grown.SetCanopiesShown(False)
+    island.Update(TIDE_IN_AT)
+    Local woodBent = Try Shown(island)
+    grown.SetWindless(True)
+    Local woodStill = Try Shown(island)
+    grown.SetWindless(False)
+    grown.SetCanopiesShown(True)
+    island.Update(0.0)
+    Local woodMoved = 0
+    For y = 0 Until woodBent.Height
+        For x = 0 Until woodBent.Width
+            If IsSky(woodBent[x, y]) != IsSky(woodStill[x, y]) Then woodMoved += 1
+        End For
+    End For
+    Checks("bent by the storm, its wood doesn't tear",
+           woodMoved > 2000 && EnclosedSky(woodBent) <= EnclosedSky(woodStill) + 30)
+
+    // Just off the view on the side the wind comes from, in the storm, its leaves bend into it: it's
+    // drawn, as its box takes its bend. The view's square to the wind, which goes left to right across
+    // it, from far off and narrow, so its edge goes nearly straight back, and slid along it till all of
+    // the leaves' box, unbent, is past that edge. What's counted is leaves against the sky, as their
+    // shadow's cast wherever they are.
+    island.Update(TIDE_IN_AT)
+    Local wide = camera.FieldOfView()
+    camera.SetFieldOfView(0.12)
+    SlidPast(camera, tree, grown.CanopyBoxes()[0], 0.0)
+    // Its leaves alone, so nothing else that sways is counted, through a gust's whole beat: at its
+    // hardest, they bend past their box's edge into the view.
+    grown.SetShown(False)
+    grown.SetCanopyShown(0, True)
+    grown.SetWindless(True)
+    Local edgeStill = Try Shown(island)
+    grown.SetWindless(False)
+    Local entered = 0
+    For step = 0 Until 24
+        grown.Sway(0.25)
+        Local edgeShown = Try Shown(island)
+        Local here = 0
+        For y = 0 Until edgeShown.Height
+            For x = 0 Until 160
+                If IsSky(edgeStill[x, y]) && !IsSky(edgeShown[x, y]) Then here += 1
+            End For
+        End For
+        entered = Max(entered, here)
+    End For
+    // And the tallest's box, which goes past its bounds by as far as it bends at most, is drawn
+    // 1.3 meters past the edge: none of its own is, as it's still, but the view's what's counted.
+    Local tallest = trees.Count - 1
+    grown.SetCanopyShown(0, False)
+    SlidPast(camera, trees[tallest], grown.CanopyBoxes()[tallest], 1.3)
+    grown.SetCasting(False)
+    grown.SetWindless(True)
+    Local withoutIt = Try TrianglesDrawn(island)
+    grown.SetCanopyShown(tallest, True)
+    Local withIt = Try TrianglesDrawn(island)
+    grown.SetWindless(False)
+    grown.SetCasting(True)
+    grown.SetShown(True)
+    camera.SetFieldOfView(wide)
+    island.Update(0.0)
+    Checks("just off the view, a tree bent into it is drawn", entered > 30)
+    Checks("and a box past the edge by less than the most it bends is drawn", withIt > withoutIt)
+
+    // Each tree's and shrub's box goes past its leaves by as far as plants.slang bends them at most,
+    // as the beat goes round, over the top of them.
+    Local covered = True
+    For canopy In grown.Canopies()
+        Local geometry = canopy.Geometry() ?? Geometry()
+        Local bounds = geometry.Bounds()
+        Local box = geometry.CullBox() ?? bounds
+        Local past = Min(Min(box.Max.x - bounds.Max.x, bounds.Min.x - box.Min.x),
+                         Min(box.Max.z - bounds.Max.z, bounds.Min.z - box.Min.z))
+        Local shape = (canopy.Material() ?? Material(Color(1.0, 1.0, 1.0))).Parameter(1)
+        Local most: Float = 0.0
+        For corner = 0 Until 25
+            Local top = Vec3(bounds.Min.x +
+                             (bounds.Max.x - bounds.Min.x) * ((corner % 5) As Float) / 4.0,
+                             bounds.Max.y,
+                             bounds.Min.z +
+                             (bounds.Max.z - bounds.Min.z) * ((corner / 5) As Float) / 4.0)
+            For beat = 0 Until 1200
+                Local moved = PlantMoved(top, Vec3(0.0, 0.0, 0.0),
+                                         Vec4(WIND.x, WIND.y, 1.0, (beat As Float) * 0.05), shape)
+                most = Max(most, Length(Vec2(moved.x - top.x, moved.z - top.z)))
+            End For
+        End For
+        If past < most Then covered = False
+    End For
+    Checks("each tree's and shrub's box takes the most it bends", covered)
+End Function
+
+// Turns `camera` square to the wind, from far off and narrow, and slides it along that till all of
+// `box` is `beyond` meters past its left edge, looking at `tree`.
+Function SlidPast(camera: Camera, tree: Vec3, box: AABB, beyond: Float)
+    Local across = Normalize(Vec3(WIND.x, 0.0, WIND.y))
+    Local ahead = Cross(Vec3(0.0, 1.0, 0.0), across)
+    Local offEdge = 0.0
+    While offEdge < 40.0
+        Local from = tree + Vec3(0.0, 2.0, 0.0) - ahead * 100.0 + across * offEdge
+        camera.SetPosition(from)
+        camera.PointAt(from + ahead * 100.0 + Vec3(0.0, 3.0, 0.0))
+        Local past = True
+        For corner = 0 Until 8
+            Local at = Vec3((corner & 1) == 0 ? box.Min.x : box.Max.x,
+                            (corner & 2) == 0 ? box.Min.y : box.Max.y,
+                            (corner & 4) == 0 ? box.Min.z : box.Max.z) + across * beyond
+            Local seen = camera.Project(at)
+            If seen != Null && seen.x >= 0.0 Then past = False
+        End For
+        If past Then Return
+        offEdge += 0.05
+    End While
 End Function
 
 // The sea and the sky, saved to look at, and what each of them's for, by the pixels.
@@ -254,7 +813,7 @@ Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws Grap
     Local shallowBare, _ = ColorAtDepth(camera, bare, 0.0, 0.3)
     Local deepWith, _ = ColorAtDepth(camera, shore, 0.0, 2.2)
     Local deepBare, _ = ColorAtDepth(camera, bare, 0.0, 2.2)
-    Checks("the ground shows through what's shallow", Apart(shallowWith, shallowBare) > 30.0)
+    Checks("the ground shows through what's shallow", Apart(shallowWith, shallowBare) > 20.0)
     Checks("and not through what's deep", Apart(deepWith, deepBare) < 25.0)
 
     // It goes up the shore with the tide.
@@ -266,10 +825,34 @@ Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws Grap
     Checks("its foam goes up the shore with the tide", nowEdge > wasEdge + 70.0)
     island.Update(0.0)
 
-    // Its normals move, which only the sea shows.
+    // Its foam rolls in, at a depth it's at one moment and not the next.
     camera.SetPosition(Vec3(MAIN_X - 16.0, 4.5, shoreZ + 9.0))
+    Local least: Float = 1000.0
+    Local most: Float = 0.0
+    For step = 0 Until 8
+        island.Update((step As Float64) * 0.6)
+        Local rolled, _ = SeaAtDepth(camera, Try Shown(island), 0.0, 0.55)
+        least = Min(least, rolled)
+        most = Max(most, rolled)
+    End For
+    island.Update(0.0)
+    Checks("its foam rolls in", most > least + 25.0)
+
+    // At the very edge, its foam's broken up along the shore, not a band.
+    Local edgeShown = Try Shown(island)
+    Local dimmest, brightest = BrightnessAlong(camera, edgeShown, 0.06)
+    Checks("its foam's broken up along the shore", brightest > dimmest + 100.0)
+    Local covered = FoamAlong(camera, edgeShown, 0.04)
+    Checks("its edge's foam has holes in it", covered > 0.08 && covered < 0.7)
+    // A meter deep, the shallows' own green, which the deep hasn't.
+    Local shallow, _ = ColorAtDepth(camera, edgeShown, 0.0, 1.0)
+    Checks("the shallows are their own color", shallow.y - shallow.x > 45.0)
+
+    // Its normals move, out at sea, where there's no foam: and nothing but them does.
+    camera.SetPosition(Vec3(MAIN_X, 12.0, 90.0))
+    camera.PointAt(Vec3(MAIN_X, 0.0, 300.0))
     Local before = Try Shown(island)
-    island.Update(0.5)
+    island.Update(0.25)
     Local after = Try Shown(island)
     island.Update(0.0)
     Local moved = Function(from: Int, to: Int): Float
@@ -281,8 +864,93 @@ Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws Grap
         End For
         Return (count As Float) / (((to - from) * before.Width) As Float)
     End Function
-    Checks("the sea moves", moved(300, 700) > 0.2)
+    Checks("the sea's waves move", moved(420, 720) > 0.2)
+
+    // Its waves don't repeat by a tile of them, as two tiles across each other don't: seen from straight
+    // above, with no patches of wind to tell them apart, the sea a tile along isn't what it was.
+    Local waters = island.Waters()
+    waters.SetPatched(False)
+    camera.SetProjection(Projection.ORTHOGRAPHIC)
+    camera.SetOrthographicHeight(40.0)
+    camera.SetPosition(Vec3(0.0, 60.0, 400.0))
+    camera.PointAt(Vec3(0.0, 0.0, 400.001))
+    Local overhead = Try Shown(island)
+    camera.SetPosition(Vec3(48.0, 60.0, 400.0))
+    camera.PointAt(Vec3(48.0, 0.0, 400.001))
+    Local alongATile = Try Shown(island)
+    camera.SetProjection(Projection.PERSPECTIVE)
+    Local apart: Float = 0.0
+    For y = 100 Until 620
+        For x = 200 Until 1080
+            apart += Abs(Brightness(overhead[x, y]) - Brightness(alongATile[x, y])) As Float
+        End For
+    End For
+    Checks("its waves don't repeat by a tile", apart / (520.0 * 880.0) > 1.5)
+    waters.SetPatched(True)
     Checks("and the sky doesn't", moved(0, 100) < 0.01)
+    // Each tile of them, alone, out at sea.
+    camera.SetPosition(Vec3(MAIN_X, 12.0, 90.0))
+    camera.PointAt(Vec3(MAIN_X, 0.0, 300.0))
+    For first In [True, False]
+        island.Waters().SetTilesKept(first, !first)
+        Local alone = Try Shown(island)
+        island.Update(0.25)
+        Local aloneLater = Try Shown(island)
+        island.Update(0.0)
+        Checks(first ? "its first tile of waves moves" : "and its second",
+               MovedShare(alone, aloneLater, 420, 720) > 0.1)
+    End For
+    island.Waters().SetTilesKept(True, True)
+    // An hour in, they go on as they were: neither tile's place jumps.
+    Local tilesAt = Function(clock: Float64): (Vec4, Vec4)
+        island.Update(clock)
+        Return (island.Waters().Shown().Parameter(1), island.Waters().Shown().Parameter(2))
+    End Function
+    Local oneBefore, otherBefore = tilesAt(3599.99)
+    Local oneAfter, otherAfter = tilesAt(3600.01)
+    island.Update(0.0)
+    Local wrappedApart = Function(a: Float, b: Float): Float => Min(Abs(a - b), 1.0 - Abs(a - b))
+    Checks("an hour in, its waves don't jump",
+           Max(wrappedApart(oneBefore.y, oneAfter.y), wrappedApart(oneBefore.z, oneAfter.z)) <
+           0.002 &&
+           Max(wrappedApart(otherBefore.y, otherAfter.y),
+               wrappedApart(otherBefore.z, otherAfter.z)) <
+           0.002)
+
+    // Each tile's slopes are the world's: with every texel of a tile tilted along x, the second's,
+    // sampled turned, turned back, the two make what a map of their sum would.
+    Local tilted = Try Texture(4, 4, TextureFormat.RGBA8_LINEAR, False)
+    Local tiltedBytes: UInt8[] = []
+    For texel = 0 Until 16
+        tiltedBytes.AddAll([204 As UInt8, 128 As UInt8, 230 As UInt8, 0 As UInt8])
+    End For
+    tilted.WritePixels(0, 0, 4, 4, tiltedBytes)
+    island.Waters().SetWaveTile(tilted)
+    Local byTiles = Try Shown(island)
+    island.Waters().SetWaveTile(Null)
+    // (0.6, 0, 0.8), and it turned back: (0.48, -0.36, 0.8); their slopes added and their ups
+    // multiplied, as water.slang does, as a map holds it: to within what a map's bytes round off, which
+    // a glint shows.
+    Local summed = Normalize(Vec3(1.08, -0.36, 0.64))
+    Local mapped = island.Waters().Shown().Clone()
+    mapped.SetShader(Null)
+    Local summedMap = Try Texture(1, 1, TextureFormat.RGBA8_LINEAR, False)
+    summedMap.WritePixels(0, 0, 1, 1, [Round((summed.x * 0.5 + 0.5) * 255.0) As UInt8,
+                                       Round((summed.y * 0.5 + 0.5) * 255.0) As UInt8,
+                                       Round((summed.z * 0.5 + 0.5) * 255.0) As UInt8,
+                                       255 As UInt8])
+    mapped.SetMap(MaterialMap.NORMAL, summedMap)
+    island.Waters().SetDrawnWith(mapped)
+    Local byMap = Try Shown(island)
+    island.Waters().SetDrawnWith(Null)
+    Local unlike = 0
+    For y = 420 Until 720
+        For x = 0 Until byMap.Width
+            If Abs(Brightness(byMap[x, y]) - Brightness(byTiles[x, y])) > 9 Then unlike += 1
+        End For
+    End For
+    Checks("its second tile's slopes are turned back to the world's",
+           (unlike As Float) / ((300 * byMap.Width) As Float) < 0.15)
 
     // Out to sea, into the sun, which is where its light's from.
     Local way = WayToSun(0.0)
@@ -291,6 +959,17 @@ Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws Grap
     Local sky = Try SavedAs(island, folder, "sun")
     Local sunPixel = PixelOf(camera, sky, island.SunPlace())
     Checks("the sun's drawn, bright", sunPixel != Null && Brightness(sunPixel) > 720)
+    // From wherever it's seen, as far off: from 200 m along, it's still its way from there.
+    Local here = camera.Position()
+    camera.SetPosition(here + Vec3(200.0, 0.0, 0.0))
+    island.Render()
+    Local along = Try Screen.ToImage()
+    Flip(False)
+    Local seenFrom = PixelOf(camera, along, here + Vec3(200.0, 0.0, 0.0) + way * SUN_OFF)
+    Checks("and it's its way from wherever it's seen",
+           Length(island.SunPlace() - (here + Vec3(200.0, 0.0, 0.0) + way * SUN_OFF)) < 0.01 &&
+           seenFrom != Null && Brightness(seenFrom) > 720)
+    camera.SetPosition(here)
     Local light = island.SunTurned() * Vec3(0.0, 0.0, -1.0)
     Checks("where its light's from",
            Abs(light.x + way.x) < 0.001 && Abs(light.y + way.y) < 0.001 &&
@@ -315,6 +994,24 @@ Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws Grap
     island.SetSeaStill(False)
     Checks("a still sea shows the clouds over it", CloudsIn(camera, still, eye) > 40.0)
     Checks("and a moving one's as smooth", island.SeaRoughness() <= 0.25)
+    island.Waters().SetRoughness(0.5)
+    Checks("which a rougher one isn't", island.SeaRoughness() > 0.25)
+    island.Waters().SetRoughness(island.Waters().Roughness())
+
+    // Where each of what drifts in its foam wraps to its start, the foam goes on as it was: from just
+    // before to just after, no more of the shore that's shown changes than in as long where none
+    // wraps. So sea.fb's period and water.slang's can't drift apart.
+    camera.SetPosition(Vec3(MAIN_X - 16.0, 4.5, shoreZ + 9.0))
+    camera.PointAt(Vec3(MAIN_X + 2.0, 0.0, shoreZ - 1.0))
+    Local unwrapped = Try ChangedOver(island, 1799.999, 1800.001)
+    For drift In [("coarse froth", FROTH_DRIFT), ("fine froth", FINE_FROTH_DRIFT),
+                  ("streaking", STREAKS_DRIFT)]
+        Local wraps = FROTH_PERIOD / drift.1
+        Local across = Try ChangedOver(island, wraps - 0.001, wraps + 0.001)
+        Checks("where its {drift.0} wraps, at {wraps} s, its foam doesn't jump",
+               across < unwrapped * 2 + 200)
+    End For
+    island.Update(0.0)
 End Function
 
 // How much brighter, of 765, the sea `image` shows from `eye` is where its mirror goes to cloud than
@@ -369,19 +1066,20 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     For view In Views()
         camera.SetPosition(view.1)
         camera.PointAt(view.2)
-        island.Scene().Render()
+        island.Render()
         Try Screen.Save(folder / "{view.0}.png")
         images[view.0] = Try Screen.ToImage()
         saved += 1
         Flip(False)
     End For
     Try SaveSeaAndSky(folder, camera, island)
+    Try SavePlants(folder, camera, island)
     // High tide, from the island's view.
     Local first = Views()[0]
     camera.SetPosition(first.1)
     camera.PointAt(first.2)
     island.Update(TIDE_IN_AT)
-    island.Scene().Render()
+    island.Render()
     Try Screen.Save(folder / "island_high_tide.png")
     Local high = Try Screen.ToImage()
     saved += 1
@@ -439,11 +1137,11 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     Local pipView = Views()[2]
     camera.SetPosition(pipView.1)
     camera.PointAt(pipView.2)
-    island.Scene().Render()
+    island.Render()
     Local lit = Try Screen.ToImage()
     Flip(False)
     island.SetAround(False)
-    island.Scene().Render()
+    island.Render()
     Local unlit = Try Screen.ToImage()
     Flip(False)
     island.SetAround(True)
@@ -451,7 +1149,7 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
            Brightness(lit[640, 360]) > Brightness(unlit[640, 360]) + 30)
     Checks("the camera's in HDR, and tonemapped", camera.Hdr() && camera.Tonemap() == Tonemap.ACES)
     camera.SetHdr(False)
-    island.Scene().Render()
+    island.Render()
     Local flat = Try Screen.ToImage()
     Flip(False)
     camera.SetHdr(True)
@@ -461,19 +1159,19 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     camera.SetPosition(yardView.1)
     camera.PointAt(yardView.2)
     Local early = island.SunTurned()
-    island.Scene().Render()
+    island.Render()
     Local yardEarly = Try Screen.ToImage()
     Flip(False)
     // The sun alone, as the sea's height would change the picture too.
     island.TurnSun(TIDE_IN_AT)
     Checks("the sun moves by the clock", island.SunTurned() != early)
-    island.Scene().Render()
+    island.Render()
     Local yardLate = Try Screen.ToImage()
     Flip(False)
     Checks("and what's lit with it", Different(yardEarly, yardLate) > 0.1)
     // The mill's shadow, on the yard.
     island.SetSunShadows(False)
-    island.Scene().Render()
+    island.Render()
     Local unshadowed = Try Screen.ToImage()
     Flip(False)
     island.SetSunShadows(True)
@@ -482,7 +1180,7 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     Local highView = Views()[0]
     camera.SetPosition(highView.1)
     camera.PointAt(highView.2)
-    island.Scene().Render()
+    island.Render()
     Local fromFar = Try Screen.ToImage()
     Flip(False)
     Checks("the ground's repeats don't show from far off",
@@ -497,11 +1195,11 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     Local insideView = Views()[3]
     camera.SetPosition(insideView.1)
     camera.PointAt(insideView.2)
-    island.Scene().Render()
+    island.Render()
     Local byLantern = Try Screen.ToImage()
     Flip(False)
     island.SetLantern(False)
-    island.Scene().Render()
+    island.Render()
     Local noLantern = Try Screen.ToImage()
     Flip(False)
     island.SetLantern(True)
@@ -511,11 +1209,11 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     camera.PointAt(yardView.2)
     // The storm's grade: greyer, by its saturation, and darker.
     camera.SetGrade(StormGrade(0.0))
-    island.Scene().Render()
+    island.Render()
     Local clear = Try Screen.ToImage()
     Flip(False)
     camera.SetGrade(StormGrade(1.0))
-    island.Scene().Render()
+    island.Render()
     Local stormy = Try Screen.ToImage()
     Flip(False)
     Try Screen.Save(folder / "storm.png")
@@ -526,12 +1224,12 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     camera.SetPosition(pipView.1)
     camera.PointAt(pipView.2)
     camera.SetGrade(StormGrade(0.0))
-    island.Scene().Render()
+    island.Render()
     Local brassy = Try Screen.ToImage()
     Flip(False)
     Local body = island.PipBody()
     island.SetPipBody(Material(Color(0.0, 1.0, 0.0)))
-    island.Scene().Render()
+    island.Render()
     Local green = Try Screen.ToImage()
     Flip(False)
     island.SetPipBody(body)
@@ -682,12 +1380,12 @@ Function Checked(folder: Path) Throws GraphicsError, IOError
 End Function
 
 // Whether two folders' files are the same: every byte, but for PNGs, whose pixels are, as a PNG's
-// bytes are its zlib's.
+// bytes are its zlib's. A shader's kept but not made: it's written by hand, as code is.
 Function Matched(made: Path, kept: Path) Throws IOError
     Local same = True
     Local names: String[] = []
     For entry In Try Dir.Entries(kept)
-        names.Add(entry.Name())
+        If !entry.Name().EndsWith(".slang") Then names.Add(entry.Name())
     End For
     Local madeNames: String[] = []
     For entry In Try Dir.Entries(made)
@@ -1580,7 +2278,7 @@ Function SaveWalk(folder: Path) Throws GraphicsError, IOError, AudioError
     Local failure = ""
     Local save = Function(game: Game, name: String): Image?
         game.View().SetRenderTarget(Null)
-        island.Scene().Render()
+        island.Render()
         Try
             Try Screen.Save(folder / "{name}.png")
             saved += 1
@@ -1596,7 +2294,7 @@ Function SaveWalk(folder: Path) Throws GraphicsError, IOError, AudioError
     Local isSeen = Function(game: Game, image: Image?, part: Part, what: String)
         Local thing = island.PartEntity(part)
         thing.Hide()
-        island.Scene().Render()
+        island.Render()
         Try
             Local without = Try Screen.ToImage()
             Flip(False)
@@ -1646,17 +2344,17 @@ Function SaveWalk(folder: Path) Throws GraphicsError, IOError, AudioError
                 Checks("the wheel's seen", wheel != Null && (wheel.r As Int) > (wheel.b As Int) + 4)
                 Local lamp = PixelOf(game.View(), lit, island.LampAt())
                 island.LightLamp(False)
-                island.Scene().Render()
+                island.Render()
                 Try
                     Local dim = PixelOf(game.View(), Try Screen.ToImage(), island.LampAt())
                     Checks("the lamp's brighter lit than dim", lamp != Null && dim != Null &&
                            Brightness(lamp) > Brightness(dim))
                     // Its bloom: the sky just beside it's lighter with it than without.
                     island.LightLamp(True)
-                    island.Scene().Render()
+                    island.Render()
                     Local bloomed = Try Screen.ToImage()
                     game.View().SetBloom(0.0, 1.0)
-                    island.Scene().Render()
+                    island.Render()
                     Local plain = Try Screen.ToImage()
                     Looked(game.View())
                     // And the sky's past where bloom starts, far from the lamp.
@@ -1738,7 +2436,7 @@ Function FrameCost(device: Int32, frames: Int) Throws GraphicsError, IOError, Au
         If view.0 == lit.0 Then island.LightLamp(True)
         Flip(False)
         UpdateWorld(1.0 / 60.0)
-        island.Scene().Render()
+        island.Render()
         If frame > 10 Then costs.Add(Gpu.Counters().GpuMilliseconds)
     End For
     Local last = Try Screen.ToImage()
@@ -2000,7 +2698,7 @@ Function Felt() Throws GraphicsError, IOError, InputError
         into = Try WentBy(game, controls, Key.W)
     End For
     Checks("the wall stops you", Abs(into.y) < 0.01)
-    island.Scene().Render()
+    island.Render()
     Local image = Try Screen.ToImage()
     Local held = PixelOf(game.View(), image, island.PartEntity(Part.GEAR).Position(Space.WORLD))
     Checks("what's in your hand is seen against a wall", held != Null && IsWarm(held))
@@ -2255,6 +2953,12 @@ Function EndAndAgain(session: Session, said: String, wheelAtFirst: Quat) Throws 
     Local island = session.island
     Local flow = session.game.Story()
     Checks("nothing's shown just after it ends", !session.ending.Showing())
+    // The wind's beat goes on in real seconds after the end, as it did before it.
+    Local beat = island.Grown().Phase()
+    Try Stepped(session, 10)
+    Local went = island.Grown().Phase() - beat
+    Checks("after the end, the wind's beat goes on in real seconds",
+           Abs((went < 0.0 ? went + (BEAT As Float64) : went) - 1.0) < 0.05)
     Try Stepped(session, 35)
     Checks("it's shown after a while", session.ending.Showing())
     Checks("it says how it ended: {said}", session.ending.Says() == said)
@@ -2339,7 +3043,7 @@ Function EndShown(folder: Path) Throws GraphicsError, IOError, AudioError, Input
     Try Stepped(session, 35)
     Checks("dark says so", session.ending.Says() ==
            "The lamp stays dark\nThe tide came in with the sluice shut.\n0 of 3 parts fitted")
-    island.Scene().Render()
+    island.Render()
     Local bare = Try Screen.ToImage()
     session.ending.Draw()
     Try Screen.Save(folder / "end_dark.png")
@@ -2452,7 +3156,7 @@ Function Played() Throws GraphicsError, IOError, InputError, AudioError
         Flip()
         Try session.Step(FrameStep(Frame.Delta()) As Float)
         If Screen.Texture() == Null Then Continue
-        island.Scene().Render()
+        island.Render()
         session.Draw()
     End While
 End Function

@@ -131,11 +131,18 @@ Public Final Class Cooker
     /// For vertices of its own, it says `#define FBE_MOVES_VERTICES` first and writes
     /// `void move(inout float3 position, inout float3 normal, MovingVertex vertex)`, for each vertex
     /// of what's drawn but particles, morphed and skinned, and of its shadow: `vertex.uv0`,
-    /// `vertex.uv1`, `vertex.color`, and `vertex.parameter(index)`. The view culls by a Geometry's
+    /// `vertex.uv1`, `vertex.color`, `vertex.parameter(index)`, and `vertex.place`, where its
+    /// instance is in its Instances' space, 0 for what isn't one. The view culls by a Geometry's
     /// bounds, not where this moves it, so one moved further wants a SetCullBox; a Terrain has none,
     /// so moving one stays near its heights, as moving an Instances stays near its instances, each
     /// moved in its own space, before its matrix. A shadow's cut out by the material's own alpha, not what
     /// `shade` returns.
+    ///
+    /// For normals of its own, a PBR material's, it says `#define FBE_BENDS_NORMALS` first and writes
+    /// `float3 bend(Surface surface)`: a normal, -1 to 1 and +Z out, in tangent space as a normal map
+    /// holds it, in place of the material's map's, through the tangents that would go by, or those
+    /// its first UVs make if it has none. The lights, the environment, and `surface.color` take it;
+    /// its `surface` has no color.
     ///
     /// It reads only those: a texture of its own, or a global that isn't `static`, which the scene's
     /// pipelines don't bind, throws one of INVALID_DATA.
@@ -244,6 +251,9 @@ Public Final Class Cooker
     Static Method Unwritten(said: String): String
         If said.Contains("undefined identifier 'shade'")
             Return "it has no `float4 shade(Surface surface)`: "
+        End If
+        If said.Contains("undefined identifier 'bend'")
+            Return "it says FBE_BENDS_NORMALS, and has no `float3 bend(Surface surface)`: "
         End If
         If said.Contains("undefined identifier 'move'")
             Return "it says FBE_MOVES_VERTICES, and has no `void move(inout float3 position, " +

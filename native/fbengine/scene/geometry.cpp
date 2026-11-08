@@ -961,6 +961,7 @@ FBE_API bool fbe_geometry_set_cull_box(uint64_t geometry, const fbe_aabb_t* box)
     found.has_cull_box = true;
     found.cull_min = { box->min.x, box->min.y, box->min.z };
     found.cull_max = { box->max.x, box->max.y, box->max.z };
+    found.cull_version = ++scene().geometry_versions;
     // Not what its source says any more.
     found.source.clear();
     return true;
@@ -972,6 +973,7 @@ FBE_API bool fbe_geometry_clear_cull_box(uint64_t geometry) {
         return false;
     }
     scene().geometries[slot].has_cull_box = false;
+    scene().geometries[slot].cull_version = ++scene().geometry_versions;
     return true;
 }
 

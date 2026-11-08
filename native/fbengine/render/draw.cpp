@@ -1080,6 +1080,9 @@ bool draw_camera(std::uint32_t slot, float tween) {
         .height = target_height,
         .format = camera.hdr ? FBE_TEXTURE_RGBA16F : picture_format,
         .samples = static_cast<std::uint32_t>(samples),
+        // Its tonemap reads them, but for temporal antialiasing's, which reads what they resolve
+        // to.
+        .reads_samples = camera.hdr && !temporal,
     };
     if (aside && !gpu::reserve_transient(image_target)) {
         return false;
