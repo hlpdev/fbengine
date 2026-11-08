@@ -1361,7 +1361,7 @@ if(UNIX)
   set_tests_properties(scene.ends_during_moves PROPERTIES
                        PASS_REGULAR_EXPRESSION "ended" TIMEOUT 300)
 endif()
-catch_discover_tests(fbengine_scene_tests TEST_PREFIX "scene."
+catch_discover_tests(fbengine_scene_tests TEST_PREFIX "scene." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}" "${PROJECT_BINARY_DIR}/native/fbengine")
 
 # The scene's panics, each a case of tests/scene/panics run on its own, which has to panic saying
@@ -2341,7 +2341,7 @@ target_link_libraries(fbengine_anim_tests PRIVATE fbengine_native Catch2::Catch2
 target_compile_definitions(fbengine_anim_tests PRIVATE
                            FBENGINE_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/models")
 fbengine_set_warnings(fbengine_anim_tests)
-catch_discover_tests(fbengine_anim_tests TEST_PREFIX "anim."
+catch_discover_tests(fbengine_anim_tests TEST_PREFIX "anim." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}" "${PROJECT_BINARY_DIR}/native/fbengine")
 
 # Animation's C API with each of a call's allocations failing in turn, with fbengine's sources, as

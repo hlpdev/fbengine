@@ -9,7 +9,9 @@
 #include <array>
 #include <bit>
 #include <catch2/catch_test_macros.hpp>
+#include <cctype>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -18,6 +20,7 @@
 #include <random>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -38,7 +41,10 @@ bytes_t read_file(const std::filesystem::path& path) {
 /// A folder of its own, mounted at res://fuzz-model, that each changed file's written into.
 class folder_t {
 public:
-    folder_t() : m_folder(std::filesystem::temp_directory_path() / "fbengine-model-fuzz") {
+    // One of its own, as ctest runs the cases at once, each a process.
+    folder_t()
+        : m_folder(std::filesystem::temp_directory_path() /
+                   ("fbengine-model-fuzz-" + std::to_string(std::random_device()()))) {
         std::filesystem::create_directories(m_folder);
         REQUIRE(fbe_vfs_mount_folder("res://fuzz-model", m_folder.string().c_str()));
     }
@@ -93,15 +99,16 @@ bool posed_in_numbers(std::uint64_t entity) {
 
 /// Loads `name` from the folder and makes all there is of it: its materials, geometries, skins,
 /// and clips, each scene spawned, and each clip played over its length and past it. What's made
-/// is made or refused with a reason; what a clip poses is in numbers.
-void exercise(std::string_view name) {
+/// is made or refused with a reason; what a clip poses is in numbers. True if it's loaded and each
+/// of its scenes spawned.
+bool exercise(std::string_view name) {
     const std::string path = "res://fuzz-model/" + std::string(name);
     const std::uint64_t load = fbe_assets_load(FBE_ASSETS_MODEL, path.c_str(), false, false);
     REQUIRE(load != 0);
     if (fbe_assets_failed(load)) {
         CHECK(!std::string_view(fbe_assets_error(load)).empty());
         fbe_assets_free(load);
-        return;
+        return false;
     }
     fbe_model_info_t info{};
     REQUIRE(fbe_assets_model(load, &info));
@@ -134,11 +141,13 @@ void exercise(std::string_view name) {
     }
     const std::uint64_t world = fbe_world_create();
     const std::uint64_t root = fbe_entity_create(world, 0, FBE_ENTITY_PIVOT);
+    bool whole = true;
     for (std::int32_t scene = -1; scene < info.scenes; ++scene) {
         const bool spawned = fbe_model_spawn(load, scene, root, geometries.data(),
                                              static_cast<std::int32_t>(geometries.size()),
                                              skins.data(), static_cast<std::int32_t>(skins.size()));
         CHECK((spawned || !std::string_view(fbe_error()).empty()));
+        whole = whole && spawned;
     }
     const std::uint64_t player = fbe_player_create(root);
     for (const std::uint64_t clip : clips) {
@@ -173,6 +182,7 @@ void exercise(std::string_view name) {
         }
     }
     fbe_assets_free(load);
+    return whole;
 }
 
 /// A binary glTF's JSON and its binary chunk, apart.
@@ -234,7 +244,7 @@ bytes_t joined(glb_t parts) {
 std::string renumbered(std::string json, std::mt19937& random, std::string_view with) {
     std::vector<std::size_t> starts;
     for (std::size_t i = 1; i < json.size(); ++i) {
-        const bool digit = json[i] >= '0' && json[i] <= '9';
+        const bool digit = std::isdigit(static_cast<unsigned char>(json[i])) != 0;
         const bool after =
             json[i - 1] == ':' || json[i - 1] == '[' || json[i - 1] == ',' || json[i - 1] == ' ';
         if (digit && after) {
@@ -255,15 +265,32 @@ std::string renumbered(std::string json, std::mt19937& random, std::string_view 
     return json;
 }
 
-/// `json` with `inserted` put just inside the first of its nodes, and the `which`th.
-std::string in_nodes(std::string json, std::string_view inserted, int which) {
-    const std::size_t nodes = json.find("\"nodes\"");
-    if (nodes == std::string::npos) {
-        return json;
+/// Where in `json` past `at` the next character that isn't a space is, or its size.
+std::size_t past_spaces(const std::string& json, std::size_t at) {
+    while (at < json.size() && std::isspace(static_cast<unsigned char>(json[at])) != 0) {
+        ++at;
     }
-    std::size_t at = json.find('{', nodes);
+    return at;
+}
+
+/// `json` with `inserted` put just inside its `which`th node, the same if it has none such. The
+/// nodes are the array of objects named "nodes", not a scene's of indices.
+std::string in_nodes(std::string json, std::string_view inserted, int which) {
+    std::size_t at = std::string::npos;
+    for (std::size_t key = json.find("\"nodes\""); key != std::string::npos;
+         key = json.find("\"nodes\"", key + 1)) {
+        const std::size_t colon = past_spaces(json, key + 7);
+        const std::size_t open =
+            colon < json.size() && json[colon] == ':' ? past_spaces(json, colon + 1) : json.size();
+        const std::size_t first =
+            open < json.size() && json[open] == '[' ? past_spaces(json, open + 1) : json.size();
+        if (first < json.size() && json[first] == '{') {
+            at = first;
+            break;
+        }
+    }
     for (int i = 0; i < which && at != std::string::npos; ++i) {
-        // The next node at the same depth: past this one's closing brace.
+        // The next node: past this one's closing brace and a comma, or none at the array's end.
         int depth = 0;
         std::size_t walk = at;
         for (; walk < json.size(); ++walk) {
@@ -276,7 +303,10 @@ std::string in_nodes(std::string json, std::string_view inserted, int which) {
                 break;
             }
         }
-        at = json.find('{', walk);
+        const std::size_t comma = past_spaces(json, walk + 1);
+        const std::size_t next =
+            comma < json.size() && json[comma] == ',' ? past_spaces(json, comma + 1) : json.size();
+        at = next < json.size() && json[next] == '{' ? next : std::string::npos;
     }
     if (at != std::string::npos) {
         json.insert(at + 1, inserted);
@@ -319,7 +349,8 @@ bytes_t as_file(const seed_t& seed, const std::string& json, const bytes_t& bin)
 
 } // namespace
 
-TEST_CASE("a whole-number accessor's bounds past what it holds are refused as the file's") {
+TEST_CASE("a whole-number accessor's bounds past what it holds are refused as the file's",
+          "[stability]") {
     const folder_t folder;
     for (const std::string_view bound : { "1e30", "-1e30", "-9.3e18", "1e400" }) {
         const std::string json = std::string(R"({"asset": {"version": "2.0"},
@@ -351,7 +382,7 @@ TEST_CASE("a whole-number accessor's bounds past what it holds are refused as th
     fbe_assets_free(load);
 }
 
-TEST_CASE("a sample model cut short anywhere is refused or made, never read past") {
+TEST_CASE("a sample model cut short anywhere is refused or made, never read past", "[stability]") {
     const folder_t folder;
     for (const seed_t& seed : seeds) {
         const bytes_t whole = seed_bytes(seed);
@@ -367,16 +398,22 @@ TEST_CASE("a sample model cut short anywhere is refused or made, never read past
     }
 }
 
-TEST_CASE("a sample model with its bytes changed is refused or made, never read past") {
+TEST_CASE("a sample model with its bytes changed is refused or made, never read past",
+          "[stability]") {
     const folder_t folder;
     std::mt19937 random = seeded(7);
     for (const seed_t& seed : seeds) {
         const bytes_t whole = seed_bytes(seed);
+        // Half the changes in the JSON, which is most of what's read, a binary glTF's first chunk.
+        const std::size_t json_at = seed.binary ? 20 : 0;
+        const std::size_t json_length = seed.binary ? word_at(whole, 12) : whole.size();
         for (int round = 0; round < 120; ++round) {
             bytes_t changed = whole;
             const int changes = 1 + static_cast<int>(random() % 8);
             for (int i = 0; i < changes; ++i) {
-                changed[random() % changed.size()] = static_cast<std::uint8_t>(random());
+                const std::size_t at = random() % 2 == 0 ? json_at + (random() % json_length)
+                                                         : random() % changed.size();
+                changed[at] = static_cast<std::uint8_t>(random());
             }
             folder.write(seed.file, changed);
             INFO(seed.file << " round " << round);
@@ -385,7 +422,8 @@ TEST_CASE("a sample model with its bytes changed is refused or made, never read 
     }
 }
 
-TEST_CASE("a sample model's numbers made huge, negative, or past a float are refused or made") {
+TEST_CASE("a sample model's numbers made huge, negative, or past a float are refused or made",
+          "[stability]") {
     const folder_t folder;
     std::mt19937 random = seeded(11);
     for (const seed_t& seed : seeds) {
@@ -405,7 +443,8 @@ TEST_CASE("a sample model's numbers made huge, negative, or past a float are ref
     }
 }
 
-TEST_CASE("a sample model whose buffer holds what isn't a number poses in numbers or is refused") {
+TEST_CASE("a sample model whose buffer holds what isn't a number poses in numbers or is refused",
+          "[stability]") {
     const folder_t folder;
     std::mt19937 random = seeded(13);
     constexpr std::array<std::uint32_t, 4> not_numbers{
@@ -433,8 +472,10 @@ TEST_CASE("a sample model whose buffer holds what isn't a number poses in number
     }
 }
 
-TEST_CASE("a sample model whose nodes are their own children, or two nodes', is refused") {
+TEST_CASE("a sample model whose nodes are their own children, or two nodes', is refused",
+          "[stability]") {
     const folder_t folder;
+    int changed = 0;
     for (const seed_t& seed : seeds) {
         const bytes_t whole = seed_bytes(seed);
         const glb_t parts =
@@ -448,9 +489,14 @@ TEST_CASE("a sample model whose nodes are their own children, or two nodes', is 
                  std::pair{ "\"children\":[-1],", 0 },
              }) {
             const std::string json = in_nodes(parts.json, inserted, which);
+            if (json == parts.json) {
+                continue; // It has no such node.
+            }
+            ++changed;
             folder.write(seed.file, as_file(seed, json, parts.bin));
             INFO(seed.file << " with " << inserted << " in node " << which);
-            exercise(seed.file);
+            CHECK_FALSE(exercise(seed.file));
         }
     }
+    CHECK(changed > 20);
 }

@@ -109,13 +109,13 @@ quat_t rotation_in(std::uint32_t entity, std::int32_t space) {
     return scene().entities.world_rotation[entity];
 }
 
-void set_position_in(std::uint32_t entity, vec3_t position, std::int32_t space) {
+bool set_position_in(std::uint32_t entity, vec3_t position, std::int32_t space) {
     if (space == FBE_SPACE_LOCAL) {
         scene().entities.position[entity] = position;
         mark_moved(entity);
-    } else {
-        set_world_position(entity, position);
+        return true;
     }
+    return set_world_position(entity, position);
 }
 
 void set_rotation_in(std::uint32_t entity, quat_t rotation, std::int32_t space) {
@@ -258,26 +258,41 @@ void update_world(std::uint32_t entity) {
     }
 }
 
-void set_world_position(std::uint32_t entity, vec3_t position) {
-    entities_t& entities = scene().entities;
-    const std::uint32_t parent = entities.parent[entity];
+vec3_t local_position(std::uint32_t parent, vec3_t position, vec3_t kept) {
     if (parent == none) {
-        entities.position[entity] = position;
-    } else {
-        update_world(parent);
-        mat4_t into;
-        if (inverse_affine(entities.world_matrix[parent], into)) {
-            entities.position[entity] = transform_point(into, position);
-        } else {
-            // On an axis a parent scales to nothing, there's nowhere to put the child, so it
-            // keeps its own place there.
-            const vec3_t offset = position - entities.world_matrix[parent].axis(3);
-            entities.position[entity] =
-                divide_or_keep(inverse(entities.world_rotation[parent]) * offset,
-                               entities.world_scale[parent], entities.position[entity]);
-        }
+        return position;
     }
+    const entities_t& entities = scene().entities;
+    update_world(parent);
+    mat4_t into;
+    if (inverse_affine(entities.world_matrix[parent], into)) {
+        return transform_point(into, position);
+    }
+    // On an axis a parent scales to nothing, there's nowhere to put the child, so it keeps its
+    // own place there.
+    const vec3_t offset = position - entities.world_matrix[parent].axis(3);
+    return divide_or_keep(inverse(entities.world_rotation[parent]) * offset,
+                          entities.world_scale[parent], kept);
+}
+
+vec3_t local_scale(std::uint32_t parent, vec3_t scale, vec3_t kept) {
+    if (parent == none) {
+        return scale;
+    }
+    update_world(parent);
+    return divide_or_keep(scale, scene().entities.world_scale[parent], kept);
+}
+
+bool set_world_position(std::uint32_t entity, vec3_t position) {
+    entities_t& entities = scene().entities;
+    const vec3_t local =
+        local_position(entities.parent[entity], position, entities.position[entity]);
+    if (!finite_or_fail({ local.x, local.y, local.z }, "where it goes under its parent")) {
+        return false;
+    }
+    entities.position[entity] = local;
     mark_moved(entity);
+    return true;
 }
 
 void set_world_rotation(std::uint32_t entity, quat_t rotation) {
@@ -286,10 +301,15 @@ void set_world_rotation(std::uint32_t entity, quat_t rotation) {
     mark_moved(entity);
 }
 
-void set_world_scale(std::uint32_t entity, vec3_t scale) {
+bool set_world_scale(std::uint32_t entity, vec3_t scale) {
     entities_t& entities = scene().entities;
-    entities.scale[entity] = divide_or_keep(scale, parent_scale(entity), entities.scale[entity]);
+    const vec3_t local = local_scale(entities.parent[entity], scale, entities.scale[entity]);
+    if (!finite_or_fail({ local.x, local.y, local.z }, "its scale under its parent")) {
+        return false;
+    }
+    entities.scale[entity] = local;
     mark_moved(entity);
+    return true;
 }
 
 } // namespace fbe::scene
@@ -308,8 +328,7 @@ FBE_API bool fbe_entity_set_position(uint64_t entity, float x, float y, float z,
     if (slot == none || !fbe::scene::finite_or_fail({ x, y, z }, "a position")) {
         return false;
     }
-    fbe::scene::set_position_in(slot, { x, y, z }, space);
-    return true;
+    return fbe::scene::set_position_in(slot, { x, y, z }, space);
 }
 
 FBE_API bool fbe_entity_position(uint64_t entity, int32_t space, fbe_vec3_t* position) {
@@ -348,10 +367,9 @@ FBE_API bool fbe_entity_set_scale(uint64_t entity, float x, float y, float z, in
     if (space == FBE_SPACE_LOCAL) {
         scene().entities.scale[slot] = { x, y, z };
         fbe::scene::mark_moved(slot);
-    } else {
-        fbe::scene::set_world_scale(slot, { x, y, z });
+        return true;
     }
-    return true;
+    return fbe::scene::set_world_scale(slot, { x, y, z });
 }
 
 FBE_API bool fbe_entity_scale(uint64_t entity, int32_t space, fbe_vec3_t* scale) {
@@ -402,7 +420,7 @@ FBE_API bool fbe_entity_translate(uint64_t entity, float x, float y, float z, in
         if (!fbe::scene::finite_or_fail({ to.x, to.y, to.z }, "where the translation goes")) {
             return false;
         }
-        fbe::scene::set_world_position(slot, to);
+        return fbe::scene::set_world_position(slot, to);
     }
     return true;
 }
@@ -570,20 +588,22 @@ FBE_API bool fbe_entity_set_poses(const uint64_t* entities, const fbe_pose_t* po
             all = false;
             continue;
         }
+        // Its place first, which its own turn doesn't change, so one refused leaves both.
         const fbe_pose_t& pose = poses[i];
-        if (!std::isfinite(pose.position.x) || !std::isfinite(pose.position.y) ||
-            !std::isfinite(pose.position.z) || !std::isfinite(pose.rotation.x) ||
-            !std::isfinite(pose.rotation.y) || !std::isfinite(pose.rotation.z) ||
-            !std::isfinite(pose.rotation.w)) {
+        if (!fbe::scene::finite_or_fail({ pose.position.x, pose.position.y, pose.position.z,
+                                          pose.rotation.x, pose.rotation.y, pose.rotation.z,
+                                          pose.rotation.w },
+                                        "a pose") ||
+            !fbe::scene::set_position_in(slot, fbe::scene::to_vec(pose.position), space)) {
             finite = false;
             continue;
         }
         fbe::scene::set_rotation_in(
             slot, { pose.rotation.x, pose.rotation.y, pose.rotation.z, pose.rotation.w }, space);
-        fbe::scene::set_position_in(slot, fbe::scene::to_vec(pose.position), space);
     }
     if (!finite) {
-        return fbe::fail("a pose in the batch isn't finite; the rest were set");
+        return fbe::fail("a pose in the batch isn't finite, or puts one where it isn't; the rest "
+                         "were set");
     }
     return all || fbe::fail("an entity in the batch was freed; the rest were set");
 }

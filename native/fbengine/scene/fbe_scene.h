@@ -293,7 +293,8 @@ FBE_API const char* fbe_entity_name(uint64_t entity);
 // Makes an entity the last child of `parent`, or puts it at the top of its World when `parent` is
 // 0, moving it and what's under it into the parent's World. Its own parent again changes nothing.
 // With `keep_world`, it stays where it is in the world and its local transform changes; without,
-// its local transform stays. False if the parent is the entity or under it.
+// its local transform stays. False if the parent is the entity or under it, or, with
+// `keep_world`, if where it is would be past a float under the parent.
 FBE_API bool fbe_entity_set_parent(uint64_t entity, uint64_t parent, bool keep_world);
 // Puts an entity at `index` among what's beside it, 0 first, which moves nothing, so its transform,
 // what's under it, and its collisions don't know. False if `index` isn't one of its siblings'.
@@ -324,7 +325,8 @@ FBE_API bool fbe_entity_showing(uint64_t entity);
 // a turned child of a parent scaled unevenly shears from. A world position goes through the
 // parent's inverse, a world rotation and scale through the parent's. A number that isn't finite,
 // NaN or infinite, is refused by each call that sets, moves, turns, points, aligns, or poses one,
-// and by a move or translation that would end at one, leaving the entity as it was.
+// by a move or translation that would end at one, and by a world position or scale whose local
+// one would be past a float, under a parent scaled almost to nothing, leaving the entity as it was.
 FBE_API bool fbe_entity_set_position(uint64_t entity, float x, float y, float z, int32_t space);
 FBE_API bool fbe_entity_position(uint64_t entity, int32_t space, fbe_vec3_t* position);
 // Rotations are made length 1.

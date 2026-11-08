@@ -5,9 +5,11 @@
 
 #include "fbengine.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <random>
@@ -23,6 +25,14 @@
 #else
 #include <fstream>
 #include <unistd.h>
+#endif
+
+#if defined(__SANITIZE_ADDRESS__)
+#define FBENGINE_UNDER_ASAN
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define FBENGINE_UNDER_ASAN
+#endif
 #endif
 
 namespace {
@@ -94,7 +104,7 @@ std::int64_t held_now() {
 
 TEST_CASE("what isn't a finite number, given as where an entity is, its turn, or its scale, is "
           "refused, and it's left as it was",
-          "[scene]") {
+          "[scene][stability]") {
     const test_world_t world;
     const std::uint64_t entity = fbe_entity_create(world.handle, 0, FBE_ENTITY_PIVOT);
     REQUIRE(fbe_entity_set_position(entity, 1.0F, 2.0F, 3.0F, FBE_SPACE_LOCAL));
@@ -142,7 +152,51 @@ TEST_CASE("what isn't a finite number, given as where an entity is, its turn, or
     CHECK((scale.x == 1.0F && scale.y == 1.0F && scale.z == 1.0F));
 }
 
-TEST_CASE("an Instances' matrices that aren't finite are refused, the others kept", "[scene]") {
+TEST_CASE("a world place or scale past a float under a parent scaled almost to nothing is "
+          "refused, and it's left as it was",
+          "[scene][stability]") {
+    const test_world_t world;
+    const std::uint64_t parent = fbe_entity_create(world.handle, 0, FBE_ENTITY_PIVOT);
+    REQUIRE(fbe_entity_set_scale(parent, 1e-30F, 1.0F, 1.0F, FBE_SPACE_LOCAL));
+    const std::uint64_t child = fbe_entity_create(world.handle, parent, FBE_ENTITY_PIVOT);
+    REQUIRE(fbe_entity_set_position(child, 1.0F, 2.0F, 3.0F, FBE_SPACE_LOCAL));
+    const auto left = [&] {
+        const fbe_vec3_t at = position_of(child);
+        fbe_vec3_t scale{};
+        fbe_entity_scale(child, FBE_SPACE_LOCAL, &scale);
+        return at.x == 1.0F && at.y == 2.0F && at.z == 3.0F && scale.x == 1.0F;
+    };
+    CHECK_FALSE(fbe_entity_set_position(child, 1e10F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+    CHECK(says("where it goes under its parent isn't finite"));
+    CHECK(left());
+    CHECK_FALSE(fbe_entity_translate(child, 1e10F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+    CHECK(left());
+    CHECK_FALSE(fbe_entity_set_scale(child, 1e10F, 1.0F, 1.0F, FBE_SPACE_WORLD));
+    CHECK(says("its scale under its parent isn't finite"));
+    CHECK(left());
+    const fbe_pose_t pose{
+        .position = { .x = 1e10F, .y = 0.0F, .z = 0.0F },
+        .rotation = { .x = 0.0F, .y = 1.0F, .z = 0.0F, .w = 0.0F },
+    };
+    CHECK_FALSE(fbe_entity_set_poses(&child, &pose, 1, FBE_SPACE_WORLD));
+    CHECK(left());
+    fbe_quat_t turned{};
+    REQUIRE(fbe_entity_rotation(child, FBE_SPACE_LOCAL, &turned));
+    CHECK(turned.w == 1.0F);
+    // Kept where it is in the world, under such a parent.
+    const std::uint64_t other = fbe_entity_create(world.handle, 0, FBE_ENTITY_PIVOT);
+    REQUIRE(fbe_entity_set_position(other, 1e10F, 0.0F, 0.0F, FBE_SPACE_LOCAL));
+    CHECK_FALSE(fbe_entity_set_parent(other, parent, true));
+    CHECK(says("isn't finite under that parent"));
+    CHECK(position_of(other).x == 1e10F);
+    CHECK(fbe_entity_parent(other) == 0);
+    // One that fits is set.
+    CHECK(fbe_entity_set_position(child, 1e-31F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+    CHECK(fbe_entity_set_parent(other, child, false));
+}
+
+TEST_CASE("an Instances' matrices that aren't finite are refused, the others kept",
+          "[scene][stability]") {
     const test_world_t world;
     const std::uint64_t made = fbe_entity_create(world.handle, 0, FBE_ENTITY_INSTANCES);
     const std::uint64_t geometry = fbe_geometry_cube();
@@ -174,7 +228,7 @@ TEST_CASE("an Instances' matrices that aren't finite are refused, the others kep
 
 TEST_CASE("entities past a float once put together are picked, collided, and bounded all the "
           "same",
-          "[scene]") {
+          "[scene][stability]") {
     const test_world_t world;
     // Finite each, but past a float in the world: far, scaled far, under what's far and scaled.
     const std::uint64_t distant = cube(world.handle);
@@ -214,7 +268,7 @@ TEST_CASE("entities past a float once put together are picked, collided, and bou
 }
 
 TEST_CASE("an entity freed while its clip plays, or under one that is, leaves the rest playing",
-          "[scene]") {
+          "[scene][stability]") {
     const test_world_t world;
     const std::uint64_t root = fbe_entity_create(world.handle, 0, FBE_ENTITY_PIVOT);
     const std::uint64_t arm = fbe_entity_create(world.handle, root, FBE_ENTITY_PIVOT);
@@ -257,7 +311,7 @@ TEST_CASE("an entity freed while its clip plays, or under one that is, leaves th
 }
 
 TEST_CASE("what a pick or a collision found, freed after, is refused, not taken for another",
-          "[scene]") {
+          "[scene][stability]") {
     const test_world_t world;
     const std::uint64_t wall = cube(world.handle);
     REQUIRE(fbe_entity_set_position(wall, 0.0F, 0.0F, -5.0F, FBE_SPACE_LOCAL));
@@ -295,7 +349,7 @@ TEST_CASE("what a pick or a collision found, freed after, is refused, not taken 
 }
 
 TEST_CASE("a parent made a child of what's under it is refused, and freeing it first frees all",
-          "[scene]") {
+          "[scene][stability]") {
     const test_world_t world;
     const std::uint64_t top = fbe_entity_create(world.handle, 0, FBE_ENTITY_PIVOT);
     const std::uint64_t middle = fbe_entity_create(world.handle, top, FBE_ENTITY_PIVOT);
@@ -317,7 +371,7 @@ TEST_CASE("a parent made a child of what's under it is refused, and freeing it f
 
 TEST_CASE("thousands of frames of making, moving, playing, picking, and freeing keep what's held "
           "the same",
-          "[scene]") {
+          "[scene][stability]") {
     const test_world_t world;
     std::mt19937 random = seeded(5);
     const std::uint64_t clip = fbe_clip_create("bob", 30.0F);
@@ -327,11 +381,12 @@ TEST_CASE("thousands of frames of making, moving, playing, picking, and freeing 
                                  up.data(), 2));
     std::vector<std::uint64_t> live;
     std::vector<std::uint64_t> players;
+    std::vector<std::uint64_t> cameras;
     constexpr std::array<std::int32_t, 5> kinds{
         FBE_ENTITY_PIVOT,  FBE_ENTITY_MESH,      FBE_ENTITY_LIGHT,
         FBE_ENTITY_CAMERA, FBE_ENTITY_INSTANCES,
     };
-    std::int64_t held_at_start = 0;
+    std::vector<std::int64_t> held;
     const auto frame = [&](int number) {
         for (int i = 0; i < 12; ++i) {
             const std::uint64_t parent =
@@ -359,16 +414,22 @@ TEST_CASE("thousands of frames of making, moving, playing, picking, and freeing 
                 fbe_player_play(player, 0, clip, FBE_PLAYER_LOOP, 1.0F);
                 players.push_back(player);
             }
+            if (kind == FBE_ENTITY_CAMERA) {
+                cameras.push_back(made);
+            }
             live.push_back(made);
         }
         // About as many freed, any of them, which frees what's under it too.
+        std::uint64_t freed = 0;
         for (int i = 0; i < 12 && !live.empty(); ++i) {
             const std::size_t at = random() % live.size();
+            freed = live[at];
             fbe_entity_free(live[at]);
             live[at] = live.back();
             live.pop_back();
         }
         std::erase_if(live, [](std::uint64_t each) { return !fbe_entity_alive(each); });
+        std::erase_if(cameras, [](std::uint64_t each) { return !fbe_entity_alive(each); });
         std::erase_if(players, [](std::uint64_t each) {
             if (fbe_entity_alive(fbe_player_entity(each))) {
                 return false;
@@ -385,19 +446,43 @@ TEST_CASE("thousands of frames of making, moving, playing, picking, and freeing 
         const fbe_vec3_t to{ .x = 30.0F, .y = 0.0F, .z = 0.0F };
         fbe_pick_t found{};
         (void)fbe_world_pick(world.handle, &from, &to, 0.25F, 0, &found);
+        // Culled by a camera: what's live, Instances among it, and what was just freed, as
+        // either the camera or what it looks at.
+        if (!cameras.empty() && !live.empty()) {
+            const std::uint64_t camera = cameras[random() % cameras.size()];
+            CHECK(fbe_camera_entity_in_view(camera, 640.0F, 480.0F, live[random() % live.size()]) >=
+                  0);
+            CHECK(fbe_camera_entity_in_view(camera, 640.0F, 480.0F, freed) == -1);
+            CHECK(fbe_camera_entity_in_view(freed, 640.0F, 480.0F, camera) == -1);
+        }
         test_world_t::drain();
-        if (number == 1000) {
-            held_at_start = held_now();
+        CHECK(fbe_world_entity_count(world.handle) == static_cast<std::int32_t>(live.size()));
+        if (number >= 1000 && number % 500 == 0) {
+            held.push_back(held_now());
         }
     };
     for (int number = 0; number < 6000; ++number) {
         frame(number);
     }
-    const std::int64_t held_at_end = held_now();
-    CAPTURE(held_at_start, held_at_end, live.size(), players.size());
-    // As many live as there were, give or take, and what's held about what it was then.
+    held.push_back(held_now());
+    CAPTURE(held, live.size(), players.size());
+    // As many live as there were, give or take, and, past the first 1000 frames' warming up, what's
+    // held no higher in the second half of the frames than the first: a leak of 100 bytes a frame
+    // is 256 KB over it, where a healthy run's samples move by tens of KB. Not that it rises at
+    // each sample either. On Windows it's what the process has committed, PrivateUsage; on Linux
+    // what's resident, RSS. Under ASan, whose memory's its own, LeakSanitizer's what counts.
     CHECK(live.size() < 400);
-    CHECK(held_at_end < held_at_start + (std::int64_t{ 8 } * 1024 * 1024));
+#ifndef FBENGINE_UNDER_ASAN
+    const auto half = held.begin() + static_cast<std::ptrdiff_t>(held.size() / 2);
+    const std::int64_t first = *std::ranges::max_element(held.begin(), half);
+    const std::int64_t second = *std::ranges::max_element(half, held.end());
+    CHECK(second < first + (std::int64_t{ 256 } * 1024));
+    std::size_t rises = 0;
+    for (std::size_t i = 1; i < held.size(); ++i) {
+        rises += held[i] > held[i - 1] ? 1 : 0;
+    }
+    CHECK(rises < held.size() - 1);
+#endif
     for (const std::uint64_t player : players) {
         fbe_player_free(player);
     }

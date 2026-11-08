@@ -1,0 +1,48 @@
+// What a game keeps of an entity once it's freed, with its parent or its World: a Weak reference
+// goes once nothing else holds it, and one held says it's freed. None of it needs a GPU.
+
+Import std.core
+Import std.test
+Import fbengine
+
+@Test
+Function AWeakEntityGoesWithItsParent()
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local parent = Pivot()
+    Local weak: Weak<Entity> = Pivot(parent)
+    Local held = Pivot(parent)
+    Expect(weak != Null)
+    parent.Free()
+    Expect(weak == Null, "a weak one goes")
+    Expect(held.Freed() && parent.Freed())
+    Expect(world.Roots().Count == 0)
+End Function
+
+@Test
+Function AWeakEntityGoesWithItsWorld()
+    Local world = World()
+    World.SetCurrent(world)
+    Local top = Pivot()
+    Local weak: Weak<Entity> = Pivot(top)
+    Local held = Pivot(top)
+    world.Free()
+    UpdateWorld(0)
+    Expect(weak == Null, "a weak one goes")
+    Expect(held.Freed() && top.Freed())
+End Function
+
+// One made again where one was freed isn't taken for it.
+@Test
+Function AnEntityMadeAfterOneFreedIsntIt()
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local first = Pivot()
+    first.SetName("first")
+    first.Free()
+    Local second = Pivot()
+    Expect(first.Freed() && !second.Freed())
+    Expect(world.Roots().Count == 1 && world.Roots()[0].Name() == "", "the one left is second")
+End Function
