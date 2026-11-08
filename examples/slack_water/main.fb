@@ -842,45 +842,6 @@ Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws Grap
     camera.SetPosition(Vec3(MAIN_X - 16.0, 4.5, shoreZ + 9.0))
     camera.PointAt(Vec3(MAIN_X + 2.0, 0.0, shoreZ - 1.0))
     Local shore = Try SavedAs(island, folder, "shore")
-    // Its foam, over a sandy shore, where it shows: the first round the main rock from the south
-    // that's sand up to high water, seen along the coast with the sun behind, so its glare's not on the
-    // deep water.
-    Local sandy = SandyShore()
-    Local outward = Vec2(Cos(sandy.2), Sin(sandy.2))
-    Local beside = Vec2(-outward.y, outward.x)
-    Local onSand = Function(up: Float, out: Float, along: Float): Vec3
-        Return Vec3(sandy.0 - beside.x * along + outward.x * out, up,
-                    sandy.1 - beside.y * along + outward.y * out)
-    End Function
-    Local sandyAt = Vec3(sandy.0 + beside.x * 2.0 - outward.x, 0.0,
-                         sandy.1 + beside.y * 2.0 - outward.y)
-    camera.SetPosition(onSand(4.5, 22.0, 12.0))
-    camera.PointAt(sandyAt)
-    Local foamy = Try SavedAs(island, folder, "shore_sand")
-    Local inland = Vec2(sandy.0 - outward.x * 40.0, sandy.1 - outward.y * 40.0)
-    Local edge, edges = SeaAtDepth(camera, foamy, 0.0, 0.05, inland, outward)
-    Local deep, deeps = SeaAtDepth(camera, foamy, 0.0, 2.2, inland, outward)
-    Checks("the sea has foam at its edge, none where it's deep, {edge} against {deep}",
-           edges > 10 && deeps > 10 && edge > deep + 40.0)
-    // It goes up the shore with the tide: where its edge was is under it, and where it's come to,
-    // the sea shows over the sand, bluer than it is dry. Its foam there's a thin line, as the shore's
-    // steeper at the top of the sand.
-    camera.SetPosition(onSand(6.0, 9.0, 16.0))
-    Local low = Try Shown(island)
-    island.Update(TIDE_IN_AT)
-    Local flooded = Try SavedAs(island, folder, "shore_sand_high")
-    Local high = SeaHeight(TIDE_IN_AT)
-    Local wasEdge, _ = ColorAtDepth(camera, low, 0.0, 0.05, inland, outward, 5.0, 0.25)
-    Local nowOver, _ = ColorAtDepth(camera, flooded, 0.0, 0.05, inland, outward, 5.0, 0.25)
-    Local nowEdge, _ = ColorAtDepth(camera, flooded, high, 0.05, inland, outward, 5.0, 0.25)
-    Local dryEdge, _ = ColorAtDepth(camera, low, high, 0.05, inland, outward, 5.0, 0.25)
-    Checks(
-        "its edge goes up the shore with the tide, {Apart(wasEdge, nowOver)} apart where it was, " +
-        "{nowEdge.z} blue where it is against {dryEdge.z} dry",
-        Apart(wasEdge, nowOver) > 100.0 && nowEdge.z > dryEdge.z + 8.0)
-    island.Update(0.0)
-    camera.SetPosition(Vec3(MAIN_X - 16.0, 4.5, shoreZ + 9.0))
-    camera.PointAt(Vec3(MAIN_X + 2.0, 0.0, shoreZ - 1.0))
 
     // It hides what's under it by how deep it is, which shows by taking that away.
     island.SetGroundHidden(True)
@@ -1079,6 +1040,42 @@ Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws Grap
         Checks("where its {drift.0} wraps, at {wraps} s, its foam doesn't jump",
                across < unwrapped * 2 + 200)
     End For
+    // Its foam, over a sandy shore, where it shows: the first round the main rock from the south
+    // that's sand up to high water, seen along the coast with the sun behind, so its glare's not on the
+    // deep water.
+    Local sandy = SandyShore()
+    Local outward = Vec2(Cos(sandy.2), Sin(sandy.2))
+    Local beside = Vec2(-outward.y, outward.x)
+    Local onSand = Function(up: Float, out: Float, along: Float): Vec3
+        Return Vec3(sandy.0 - beside.x * along + outward.x * out, up,
+                    sandy.1 - beside.y * along + outward.y * out)
+    End Function
+    Local sandyAt = Vec3(sandy.0 + beside.x * 2.0 - outward.x, 0.0,
+                         sandy.1 + beside.y * 2.0 - outward.y)
+    camera.SetPosition(onSand(4.5, 22.0, 12.0))
+    camera.PointAt(sandyAt)
+    Local foamy = Try SavedAs(island, folder, "shore_sand")
+    Local inland = Vec2(sandy.0 - outward.x * 40.0, sandy.1 - outward.y * 40.0)
+    Local edge, edges = SeaAtDepth(camera, foamy, 0.0, 0.05, inland, outward)
+    Local deep, deeps = SeaAtDepth(camera, foamy, 0.0, 2.2, inland, outward)
+    Checks("the sea has foam at its edge, none where it's deep, {edge} against {deep}",
+           edges > 10 && deeps > 10 && edge > deep + 40.0)
+    // It goes up the shore with the tide: where its edge was is under it, and where it's come to,
+    // the sea shows over the sand, bluer than it is dry. Its foam there's a thin line, as the shore's
+    // steeper at the top of the sand.
+    camera.SetPosition(onSand(6.0, 9.0, 16.0))
+    Local low = Try Shown(island)
+    island.Update(TIDE_IN_AT)
+    Local flooded = Try SavedAs(island, folder, "shore_sand_high")
+    Local high = SeaHeight(TIDE_IN_AT)
+    Local wasEdge, _ = ColorAtDepth(camera, low, 0.0, 0.05, inland, outward, 5.0, 0.25)
+    Local nowOver, _ = ColorAtDepth(camera, flooded, 0.0, 0.05, inland, outward, 5.0, 0.25)
+    Local nowEdge, _ = ColorAtDepth(camera, flooded, high, 0.05, inland, outward, 5.0, 0.25)
+    Local dryEdge, _ = ColorAtDepth(camera, low, high, 0.05, inland, outward, 5.0, 0.25)
+    Checks(
+        "its edge goes up the shore with the tide, {Apart(wasEdge, nowOver)} apart where it was, " +
+        "{nowEdge.z} blue where it is against {dryEdge.z} dry",
+        Apart(wasEdge, nowOver) > 100.0 && nowEdge.z > dryEdge.z + 8.0)
     island.Update(0.0)
 End Function
 
@@ -1840,6 +1837,9 @@ Function CheckLandmarks(folder: Path, island: Island, camera: Camera) Throws Gra
     Checks("and at high water the sea's over it, {covered} of {onShelf}",
            covered > onShelf * 9 / 10)
     Print("the ground's erosion took {ErosionSeconds()} s, of {DROPS} drops")
+    // What grows, hidden while the ground's own detail is looked at, as it covers the turf.
+    island.Grown().SetShown(False)
+    Defer island.Grown().SetShown(True)
     // The ground up close, at a person's eye, on the turf west of the mill: fine detail in its
     // foreground, which the cover map alone, its texels half a meter, smears.
     Local standX = MAIN_X - 12.0
@@ -2148,17 +2148,13 @@ Function Checked(folder: Path) Throws GraphicsError, IOError
     Checks("blinking, its eyes shut", allDown && pupilsTop <= whitesTop)
 End Function
 
-// What's kept in the assets that's written by hand, not made by the tools: the ground's shader.
-Const WRITTEN: String[] = ["ground.slang"]
-
 // Whether two folders' files are the same: every byte, but for PNGs, whose pixels are, as a PNG's
-// bytes are its zlib's; what's written by hand is only in what's kept.
+// bytes are its zlib's. A shader's kept but not made: it's written by hand, as code is.
 Function Matched(made: Path, kept: Path) Throws IOError
     Local same = True
     Local names: String[] = []
     For entry In Try Dir.Entries(kept)
-        If WRITTEN.Contains(entry.Name()) Then Continue
-        names.Add(entry.Name())
+        If !entry.Name().EndsWith(".slang") Then names.Add(entry.Name())
     End For
     Local madeNames: String[] = []
     For entry In Try Dir.Entries(made)
