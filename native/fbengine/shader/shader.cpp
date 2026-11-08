@@ -47,6 +47,13 @@ constexpr std::uint32_t op_entry_point = 15;
 constexpr std::uint32_t op_decorate = 71;
 constexpr std::uint32_t decoration_binding = 33;
 constexpr std::uint32_t decoration_set = 34;
+constexpr std::uint32_t op_type_float = 22;
+constexpr std::uint32_t op_type_image = 25;
+constexpr std::uint32_t op_type_array = 28;
+constexpr std::uint32_t op_type_runtime_array = 29;
+constexpr std::uint32_t op_type_pointer = 32;
+constexpr std::uint32_t op_variable = 59;
+constexpr std::uint32_t dim_2d = 1;
 constexpr std::uint32_t model_vertex = 0;
 constexpr std::uint32_t model_fragment = 4;
 
@@ -124,18 +131,72 @@ bool has_entry(std::span<const std::uint32_t> words, std::string_view name, std:
     return false;
 }
 
-/// Whether SPIR-V binds only what the scene's pipelines' layout has: the bindless set. A game's
-/// global that isn't static is one more, or its own texture, which no pipeline could be made with.
+/// Where the instruction that makes `id` is, of the opcode `code`, and how many words it has, each
+/// of them there; 0 for none, or if an instruction before it, or it, runs past the words.
+std::pair<std::size_t, std::uint32_t> made_by(std::span<const std::uint32_t> words,
+                                              std::uint32_t code, std::uint32_t id) {
+    // A variable says its type first, then itself; a type says itself first.
+    const std::size_t own = code == op_variable ? 2 : 1;
+    std::size_t at = 5;
+    while (at < words.size()) {
+        const std::uint32_t count = words[at] >> 16U;
+        if (count == 0 || count > words.size() - at) {
+            return { 0, 0 };
+        }
+        if ((words[at] & 0xFFFFU) == code && count > own && words[at + own] == id) {
+            return { at, count };
+        }
+        at += count;
+    }
+    return { 0, 0 };
+}
+
+/// Whether the variable `id` is the set's multisampled images: an array of 2D multisampled images
+/// of floats, to be sampled, as bindless.slang's is, which the set has at that binding, not a
+/// storage image, one of ints, some other image, or a buffer.
+bool multisampled_images(std::span<const std::uint32_t> words, std::uint32_t id) {
+    const auto [variable, variable_words] = made_by(words, op_variable, id);
+    if (variable_words < 4) {
+        return false;
+    }
+    const auto [pointer, pointer_words] = made_by(words, op_type_pointer, words[variable + 1]);
+    if (pointer_words < 4) {
+        return false;
+    }
+    std::uint32_t element = words[pointer + 3];
+    for (const std::uint32_t code : { op_type_array, op_type_runtime_array }) {
+        const auto [array, array_words] = made_by(words, code, element);
+        if (array_words >= 3) {
+            element = words[array + 2];
+            break;
+        }
+    }
+    const auto [image, image_words] = made_by(words, op_type_image, element);
+    // Its dimension, depth, arrayed, multisampled, and sampled, 1 as a sampled image is, 2 as a
+    // storage one; and what it's of.
+    return image_words >= 9 && words[image + 3] == dim_2d && words[image + 5] == 0 &&
+           words[image + 6] == 1 && words[image + 7] == 1 &&
+           made_by(words, op_type_float, words[image + 2]).second >= 3;
+}
+
+/// Whether SPIR-V binds only what the scene's pipelines' layout has: the bindless set, each binding
+/// what the set has there. A game's global that isn't static is one more, or its own texture, which
+/// no pipeline could be made with.
 bool binds_only_the_scene(std::span<const std::uint32_t> words) {
     std::size_t at = 5;
     while (at < words.size()) {
         const std::uint32_t count = words[at] >> 16U;
-        if ((words[at] & 0xFFFFU) == op_decorate && count > 3) {
+        if (count == 0) {
+            return false;
+        }
+        if ((words[at] & 0xFFFFU) == op_decorate && count > 3 && at + 3 < words.size()) {
             const std::uint32_t kind = words[at + 2];
             const std::uint32_t value = words[at + 3];
             if ((kind == decoration_set && value != 0) ||
                 (kind == decoration_binding && value != gpu::sampler_binding &&
-                 value != gpu::samples_binding && value != gpu::texture_binding)) {
+                 value != gpu::samples_binding && value != gpu::texture_binding) ||
+                (kind == decoration_binding && value == gpu::samples_binding &&
+                 !multisampled_images(words, words[at + 1]))) {
                 return false;
             }
         }

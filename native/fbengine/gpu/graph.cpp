@@ -524,7 +524,7 @@ bool give_images() {
             const std::uint64_t handle = fbe::texture::create_engine_target(
                 resource.transient.width, resource.transient.height, resource.transient.format,
                 static_cast<VkSampleCountFlagBits>(resource.transient.samples),
-                resource.transient.depth);
+                resource.transient.depth, resource.transient.reads_samples);
             if (handle == 0) {
                 resource.failed = true;
                 made_all = false;
@@ -872,7 +872,7 @@ bool reserve_transient(const transient_t& target, std::uint32_t count) {
     for (; have < count; ++have) {
         const std::uint64_t handle = fbe::texture::create_engine_target(
             target.width, target.height, target.format,
-            static_cast<VkSampleCountFlagBits>(target.samples), target.depth);
+            static_cast<VkSampleCountFlagBits>(target.samples), target.depth, target.reads_samples);
         if (handle == 0) {
             return false;
         }

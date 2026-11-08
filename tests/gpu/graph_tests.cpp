@@ -298,9 +298,41 @@ TEST_CASE("only a multisampled transient target's samples are read", "[gpu]") {
         .height = 8,
         .format = FBE_TEXTURE_RGBA16F,
         .samples = 4,
+        .reads_samples = true,
     })));
     fbe::gpu::drop_passes();
     fbe_texture_release(own);
+    stop_gpu();
+}
+
+// F6's review: one the graph makes, not one reserved before, takes a slot for its samples as it
+// says.
+TEST_CASE("a transient the graph makes takes a slot for its samples if they're read", "[gpu]") {
+    start();
+    const std::uint32_t free = fbe::gpu::free_samples_slot_count();
+    const auto drawn = [](bool reads_samples) {
+        const resource_t image = fbe::gpu::transient_resource({
+            .width = 8,
+            .height = 8,
+            .format = FBE_TEXTURE_RGBA16F,
+            .samples = 4,
+            .reads_samples = reads_samples,
+        });
+        require(image != fbe::gpu::no_resource);
+        require(fbe::gpu::add_pass(
+            { .name = "drawn", .colors = { { .target = image, .clear = true } } }));
+        // Read, as a pass nothing needs is dropped, and its target with it.
+        require(fbe::gpu::add_pass({
+            .name = "reads",
+            .uses = { { image, reads_samples ? use_t::SAMPLES_READ : use_t::SAMPLED } },
+            .record = [](VkCommandBuffer /*commands*/) {},
+        }));
+        require(fbe::gpu::finish_frame());
+    };
+    drawn(false);
+    CHECK(fbe::gpu::free_samples_slot_count() == free);
+    drawn(true);
+    CHECK(fbe::gpu::free_samples_slot_count() == free - 1);
     stop_gpu();
 }
 

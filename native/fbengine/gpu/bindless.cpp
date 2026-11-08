@@ -34,6 +34,28 @@ std::uint32_t capacity = 0;
 std::uint32_t pool_held = 0;
 std::array<VkSampler, fbe::gpu::sampler_slots> samplers{};
 std::vector<std::uint32_t> free_samples_slots;
+/// What a free slot for samples points at, and what each slot does.
+VkImageView samples_placeholder = VK_NULL_HANDLE;
+std::array<VkImageView, fbe::gpu::samples_slots> samples_views{};
+
+/// Points the set's slot for samples `slot` at `view`, in SHADER_READ_ONLY_OPTIMAL.
+void write_samples(std::uint32_t slot, VkImageView view) {
+    samples_views.at(slot) = view;
+    const VkDescriptorImageInfo image{
+        .imageView = view,
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    };
+    const VkWriteDescriptorSet write{
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = set,
+        .dstBinding = fbe::gpu::samples_binding,
+        .dstArrayElement = slot,
+        .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+        .pImageInfo = &image,
+    };
+    vkUpdateDescriptorSets(fbe::gpu::device()->device, 1, &write, 0, nullptr);
+}
 
 float lod_bias = 0.0F;
 float anisotropy = 1.0F;
@@ -284,6 +306,8 @@ void stop_bindless() {
     layout = VK_NULL_HANDLE;
     set = VK_NULL_HANDLE;
     capacity = 0;
+    samples_placeholder = VK_NULL_HANDLE;
+    samples_views.fill(VK_NULL_HANDLE);
 }
 
 VkDescriptorSetLayout bindless_layout() {
@@ -325,25 +349,38 @@ std::uint32_t take_samples_slot(VkImageView view) {
     }
     const std::uint32_t slot = free_samples_slots.back();
     free_samples_slots.pop_back();
-    const VkDescriptorImageInfo image{
-        .imageView = view,
-        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-    };
-    const VkWriteDescriptorSet write{
-        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-        .dstSet = set,
-        .dstBinding = samples_binding,
-        .dstArrayElement = slot,
-        .descriptorCount = 1,
-        .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-        .pImageInfo = &image,
-    };
-    vkUpdateDescriptorSets(device()->device, 1, &write, 0, nullptr);
+    write_samples(slot, view);
     return slot;
 }
 
 void give_samples_slot(std::uint32_t slot) {
     free_samples_slots.push_back(slot);
+    // Not what was there, which is going: a shader that read it would read nothing.
+    if (samples_placeholder != VK_NULL_HANDLE) {
+        write_samples(slot, samples_placeholder);
+    }
+}
+
+void point_free_samples_at(VkImageView view) {
+    samples_placeholder = view;
+    if (view == VK_NULL_HANDLE) {
+        return;
+    }
+    for (const std::uint32_t slot : free_samples_slots) {
+        write_samples(slot, view);
+    }
+}
+
+VkImageView samples_slot_view(std::uint32_t slot) {
+    return slot < samples_views.size() ? samples_views.at(slot) : VK_NULL_HANDLE;
+}
+
+VkImageView free_samples_view() {
+    return samples_placeholder;
+}
+
+std::uint32_t free_samples_slot_count() {
+    return static_cast<std::uint32_t>(free_samples_slots.size());
 }
 
 std::uint32_t sampler_index(std::int32_t filter, std::int32_t wrap_u, std::int32_t wrap_v) {

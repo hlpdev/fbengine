@@ -106,6 +106,26 @@ struct scene_t {
 
 using rgba_t = std::array<std::uint8_t, 4>;
 
+/// A part of a test, by its name, and what it does in a scene of its own.
+template <typename Scene>
+using part_t = std::pair<std::string_view, std::function<void(const Scene&)>>;
+
+/// Each part in a scene of its own, made by Scene(whether it stops the GPU), in turn, on one GPU:
+/// lavapipe takes seconds to make a game shader's pipelines as it first draws with them, so that's
+/// once, not once a part, as sections would, each starting the GPU again.
+template <typename Scene>
+void on_one_gpu(const std::vector<part_t<Scene>>& parts) {
+    for (std::size_t at = 0; at < parts.size(); ++at) {
+        INFO(parts[at].first);
+        {
+            const Scene scene(at + 1 == parts.size());
+            parts[at].second(scene);
+        }
+        // Kept for the next part, and stopped after the last.
+        CHECK(fbe_gpu_started() == (at + 1 < parts.size()));
+    }
+}
+
 rgba_t pixel(const fbe::golden::frame_t& frame, std::uint32_t x, std::uint32_t y) {
     const std::size_t at = ((std::size_t{ y } * frame.width) + x) * 4;
     return { frame.rgba[at], frame.rgba[at + 1], frame.rgba[at + 2], frame.rgba[at + 3] };
@@ -5737,72 +5757,91 @@ TEST_CASE("two materials with one shader read their own parameters", "[gpu][scen
     CHECK(fbe_gpu_validation_errors() == 0);
 }
 
+namespace {
+
+/// A scene with a material of the game's shader, for a test whose parts are on one GPU.
+struct shader_scene_t : scene_t {
+    std::uint64_t material = by_game_shader();
+
+    explicit shader_scene_t(bool stops) : scene_t(stops) {}
+    shader_scene_t(const shader_scene_t&) = delete;
+    shader_scene_t& operator=(const shader_scene_t&) = delete;
+    shader_scene_t(shader_scene_t&&) = delete;
+    shader_scene_t& operator=(shader_scene_t&&) = delete;
+
+    ~shader_scene_t() {
+        CHECK(fbe_gpu_validation_errors() == 0);
+        fbe_material_release(material);
+    }
+};
+
+} // namespace
+
 TEST_CASE("a shader moves a vertex after its morph and its skin", "[gpu][scene]") {
-    const scene_t scene;
-    const std::uint64_t material = by_game_shader();
-    SECTION("drawn, skinned") {
+    std::vector<part_t<shader_scene_t>> parts;
+    parts.emplace_back("drawn, skinned", [](const shader_scene_t& scene) {
         require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
         // A joint to the left, turned: moved right after it, it's in the middle.
-        const skinned_wall_t skinned = skinned_wall(scene.world, material, -3.0F, 0.5F);
+        const skinned_wall_t skinned = skinned_wall(scene.world, scene.material, -3.0F, 0.5F);
         all_on(skinned.geometry, 0, 1.0F);
         require(fbe_entity_set_position(skinned.still, -1.0F, 0.0F, -3.0F, FBE_SPACE_WORLD));
         quarter_turned(skinned.still);
         room_to_move(skinned.geometry);
         CHECK(near(middle(scene.drawn()), { 0, 0, 255 }));
-        require(fbe_material_set_parameter(material, 1, 1.0F, 0.0F, 0.0F, 0.0F));
+        require(fbe_material_set_parameter(scene.material, 1, 1.0F, 0.0F, 0.0F, 0.0F));
         CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
         fbe_skin_release(skinned.skin);
-    }
-    SECTION("drawn, morphed") {
+    });
+    parts.emplace_back("drawn, morphed", [](const shader_scene_t& scene) {
         require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
-        const std::uint64_t mesh = wall(scene.world, -3.0F, 0.5F, material);
+        const std::uint64_t mesh = wall(scene.world, -3.0F, 0.5F, scene.material);
         require(fbe_entity_set_position(mesh, 0.0F, 60.0F, -3.0F, FBE_SPACE_WORLD));
         add_lift(fbe_mesh_geometry(mesh), -30.0F);
         room_to_move(fbe_mesh_geometry(mesh));
         const std::array<float, 1> one{ 1.0F };
         require(fbe_morph_set_weights(mesh, one.data(), 1));
         CHECK(near(middle(scene.drawn()), { 0, 0, 255 }));
-        require(fbe_material_set_parameter(material, 1, 0.0F, -30.0F, 0.0F, 0.0F));
+        require(fbe_material_set_parameter(scene.material, 1, 0.0F, -30.0F, 0.0F, 0.0F));
         CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
-    }
-    SECTION("casting, skinned") {
+    });
+    parts.emplace_back("casting, skinned", [](const shader_scene_t& scene) {
         const std::uint64_t paint = fbe_material_create();
         wall(scene.world, -10.0F, 30.0F, paint);
         sun_from_right(scene.world);
-        const skinned_wall_t skinned = skinned_wall(scene.world, material, -5.0F, 0.5F);
+        const skinned_wall_t skinned = skinned_wall(scene.world, scene.material, -5.0F, 0.5F);
         all_on(skinned.geometry, 0, 1.0F);
         require(fbe_entity_set_position(skinned.still, 3.0F, 0.0F, -5.0F, FBE_SPACE_WORLD));
         quarter_turned(skinned.still);
         room_to_move(skinned.geometry);
         CHECK(middle(scene.drawn())[0] != 0);
-        require(fbe_material_set_parameter(material, 1, 2.0F, 0.0F, 0.0F, 0.0F));
+        require(fbe_material_set_parameter(scene.material, 1, 2.0F, 0.0F, 0.0F, 0.0F));
         CHECK(middle(scene.drawn())[0] == 0);
         fbe_skin_release(skinned.skin);
         fbe_material_release(paint);
-    }
-    SECTION("casting, morphed") {
+    });
+    parts.emplace_back("casting, morphed", [](const shader_scene_t& scene) {
         const std::uint64_t paint = fbe_material_create();
         wall(scene.world, -10.0F, 30.0F, paint);
         sun_from_right(scene.world);
-        const std::uint64_t mesh = wall(scene.world, -5.0F, 3.0F, material);
+        const std::uint64_t mesh = wall(scene.world, -5.0F, 3.0F, scene.material);
         require(fbe_entity_set_position(mesh, 5.0F, 60.0F, -5.0F, FBE_SPACE_WORLD));
         add_lift(fbe_mesh_geometry(mesh), -30.0F);
         room_to_move(fbe_mesh_geometry(mesh));
         const std::array<float, 1> one{ 1.0F };
         require(fbe_morph_set_weights(mesh, one.data(), 1));
         CHECK(middle(scene.drawn())[0] != 0);
-        require(fbe_material_set_parameter(material, 1, 0.0F, -30.0F, 0.0F, 0.0F));
+        require(fbe_material_set_parameter(scene.material, 1, 0.0F, -30.0F, 0.0F, 0.0F));
         CHECK(middle(scene.drawn())[0] == 0);
         fbe_material_release(paint);
-    }
-    SECTION("a terrain, drawn and casting") {
+    });
+    parts.emplace_back("a terrain, drawn and casting", [](const shader_scene_t& scene) {
         const std::uint64_t paint = fbe_material_create();
         wall(scene.world, -10.0F, 30.0F, paint);
         sun_from_right(scene.world);
         // A slab stood on end, as a terrain that casts is above, on the sun's way till it's moved.
         const std::uint64_t terrain = fbe_entity_create(scene.world, 0, FBE_ENTITY_TERRAIN);
         require(fbe_terrain_set_size(terrain, 32));
-        require(fbe_terrain_set_material(terrain, material));
+        require(fbe_terrain_set_material(terrain, scene.material));
         require(fbe_entity_set_scale(terrain, 0.25F, 1.0F, 0.25F, FBE_SPACE_WORLD));
         const float half = std::numbers::pi_v<float> * 0.25F;
         require(fbe_entity_set_rotation(terrain, std::sin(half), 0.0F, 0.0F, std::cos(half),
@@ -5810,12 +5849,11 @@ TEST_CASE("a shader moves a vertex after its morph and its skin", "[gpu][scene]"
         require(fbe_entity_set_position(terrain, 1.0F, 4.0F, -5.0F, FBE_SPACE_WORLD));
         CHECK(middle(scene.drawn())[0] == 0);
         // In its own space, whose x is the world's: off the sun's way.
-        require(fbe_material_set_parameter(material, 1, 16.0F, 0.0F, 0.0F, 0.0F));
+        require(fbe_material_set_parameter(scene.material, 1, 16.0F, 0.0F, 0.0F, 0.0F));
         CHECK(middle(scene.drawn())[0] != 0);
         fbe_material_release(paint);
-    }
-    CHECK(fbe_gpu_validation_errors() == 0);
-    fbe_material_release(material);
+    });
+    on_one_gpu(parts);
 }
 
 TEST_CASE("a two-sided material's back has its shader's normal facing the camera", "[gpu][scene]") {
@@ -8248,39 +8286,53 @@ namespace {
 
 /// A little turned wall with a light of 100, whose tonemap's near 1, in an HDR camera that clears
 /// to alpha 1, where what's in a pixel is all surface however little of it's the wall's.
-void bright_wall(const scene_t& scene) {
+void bright_wall(const scene_t& scene, float clear_alpha = 1.0F) {
     const std::uint64_t material = fbe_material_create();
     require(fbe_material_set_emissive(material, 100.0F, 100.0F, 100.0F));
     const std::uint64_t mesh = wall(scene.world, -3.0F, 0.5F, material);
     require(fbe_entity_set_rotation(mesh, 0.0F, 0.0F, 0.2F, 0.98F, FBE_SPACE_WORLD));
     fbe_material_release(material);
     require(fbe_camera_set_clear(scene.camera, true, true));
-    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    // Over no alpha, an edge's alpha is what of its samples it covers; and what it tonemaps is
+    // its color under its alpha, which is the wall's, whatever reads it.
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, clear_alpha));
     require(fbe_camera_set_hdr(scene.camera, true));
     require(fbe_camera_set_tonemap(scene.camera, FBE_TONEMAP_REINHARD));
 }
 
 /// How many pixels of a wall's edge are one, two, and three of four samples of it, each its part of
 /// the tonemap's color; and how many are none of those.
+/// How many pixels of an edge are each part of `samples` of it, but none or all; how many are
+/// between those; and how many of the parts have an alpha that isn't their part's.
 struct samples_edge_t {
-    std::array<int, 3> parts{};
+    std::vector<int> parts;
     int others = 0;
+    int alpha_off = 0;
 };
 
-/// What's in a frame of `side` pixels of an edge over what's `behind` of a tonemap's color, of
-/// what's `whole` of it.
+/// What's in a frame of `side` pixels of an edge of `samples` over what's `behind` of a tonemap's
+/// color, of what's `whole` of it; and, over what has no alpha, its alpha, which is the samples
+/// it covers.
 samples_edge_t edge_in(const fbe::golden::frame_t& frame, std::uint32_t side, float behind,
-                       float whole) {
+                       float whole, std::uint32_t samples = 4, bool alpha_is_coverage = false) {
     samples_edge_t edge;
+    edge.parts.assign(samples - 1, 0);
+    const auto many = static_cast<float>(samples);
     for (std::uint32_t y = 0; y < side; ++y) {
         for (std::uint32_t x = 0; x < side; ++x) {
             const float part = (linear_of(pixel(frame, x, y)[0]) - behind) / (whole - behind);
             if (part <= 0.02F || part >= 0.98F) {
                 continue;
             }
-            const float nearest = std::round(part * 4.0F);
-            if (std::abs(part - (nearest / 4.0F)) < 0.03F && nearest >= 1.0F && nearest <= 3.0F) {
+            const float nearest = std::round(part * many);
+            if (std::abs(part - (nearest / many)) < 0.03F && nearest >= 1.0F &&
+                nearest <= many - 1.0F) {
                 ++edge.parts.at(static_cast<std::size_t>(nearest) - 1);
+                const float alpha = std::round(nearest / many * 255.0F);
+                if (alpha_is_coverage &&
+                    std::abs(static_cast<float>(pixel(frame, x, y)[3]) - alpha) > 3.0F) {
+                    ++edge.alpha_off;
+                }
             } else {
                 ++edge.others;
             }
@@ -8289,12 +8341,13 @@ samples_edge_t edge_in(const fbe::golden::frame_t& frame, std::uint32_t side, fl
     return edge;
 }
 
-/// The edge in a new 4x target of `side` pixels, over what's behind it that's `behind` of a
-/// tonemap's color.
-samples_edge_t edge_of(const scene_t& scene, std::uint32_t side, float behind = 0.0F) {
+/// The edge in a new target of `samples` and `side` pixels, over what's behind it that's `behind`
+/// of a tonemap's color; its alpha's checked if `alpha_is_coverage`, where what's behind has none.
+samples_edge_t edge_of(const scene_t& scene, std::uint32_t side, float behind = 0.0F,
+                       std::uint32_t samples = 4, bool alpha_is_coverage = false) {
     const std::uint64_t target =
         fbe_texture_create_target(static_cast<std::int32_t>(side), static_cast<std::int32_t>(side),
-                                  FBE_TEXTURE_RGBA8, 4, true);
+                                  FBE_TEXTURE_RGBA8, static_cast<std::int32_t>(samples), true);
     require(target != 0);
     require(fbe_camera_set_target(scene.camera, target));
     require(fbe_render_world(scene.world, 1.0F));
@@ -8302,19 +8355,21 @@ samples_edge_t edge_of(const scene_t& scene, std::uint32_t side, float behind = 
     fbe_frame_flip(false);
     require(fbe_camera_set_target(scene.camera, scene.target));
     fbe_texture_release(target);
-    return edge_in(frame, side, behind, through(FBE_TONEMAP_REINHARD, 100.0F));
+    return edge_in(frame, side, behind, through(FBE_TONEMAP_REINHARD, 100.0F), samples,
+                   alpha_is_coverage);
 }
 
 void reads_its_samples(const samples_edge_t& edge) {
-    CAPTURE(edge.parts[0], edge.parts[1], edge.parts[2], edge.others);
+    CAPTURE(edge.parts, edge.others, edge.alpha_off);
     CHECK(edge.others == 0);
     CHECK(std::ranges::all_of(edge.parts, [](int many) { return many > 0; }));
+    CHECK(edge.alpha_off == 0);
 }
 
 /// What their average's tonemap is: a quarter of the wall's light is nearly all of its color, which
 /// is no part of it a sample has.
 void reads_their_average(const samples_edge_t& edge) {
-    CAPTURE(edge.parts[0], edge.parts[1], edge.parts[2], edge.others);
+    CAPTURE(edge.parts, edge.others);
     CHECK(edge.others > 0);
     CHECK(std::ranges::all_of(edge.parts, [](int many) { return many == 0; }));
 }
@@ -8327,6 +8382,7 @@ fbe::gpu::resource_t bright_image(std::uint32_t side, std::uint32_t samples) {
         .height = side,
         .format = FBE_TEXTURE_RGBA16F,
         .samples = samples,
+        .reads_samples = samples > 1,
     };
     require(fbe::gpu::reserve_transient(made));
     const fbe::gpu::resource_t image = fbe::gpu::transient_resource(made);
@@ -8369,27 +8425,61 @@ fbe::gpu::resource_t bright_image(std::uint32_t side, std::uint32_t samples) {
 
 } // namespace
 
-// F6: a tonemap of what's resolved undoes multisampling on a bright edge: a quarter of a light of
-// 100 is 25, nearly all of what a tonemap makes of 100.
-TEST_CASE("a bright edge at 4x is the average of each sample's tonemap", "[gpu][scene]") {
-    const float dim = GENERATE(0.0F, 0.5F);
-    CAPTURE(dim);
+namespace {
+
+/// What's behind an edge: a wall of `dim` light, none if 0, and the clear's alpha.
+struct behind_t {
+    float dim = 0.0F;
+    float alpha = 1.0F;
+};
+
+/// That a bright edge of `samples` is the average of each sample's tonemap, over black, over a
+/// dim wall, and over no alpha, where its alpha's what of it each covers.
+void bright_edge_at(std::uint32_t samples) {
+    const behind_t behind =
+        GENERATE(behind_t{}, behind_t{ .dim = 0.5F }, behind_t{ .alpha = 0.0F });
+    const float dim = behind.dim;
+    CAPTURE(dim, behind.alpha, samples);
     const scene_t scene;
-    bright_wall(scene);
+    bright_wall(scene, behind.alpha);
     if (dim > 0.0F) {
-        const std::uint64_t behind = fbe_material_create();
-        require(fbe_material_set_emissive(behind, dim, dim, dim));
-        wall(scene.world, -6.0F, 20.0F, behind);
-        fbe_material_release(behind);
+        const std::uint64_t dim_material = fbe_material_create();
+        require(fbe_material_set_emissive(dim_material, dim, dim, dim));
+        wall(scene.world, -6.0F, 20.0F, dim_material);
+        fbe_material_release(dim_material);
     }
     const float under = through(FBE_TONEMAP_REINHARD, dim);
-    const samples_edge_t edge = edge_of(scene, 32, under);
+    const samples_edge_t edge = edge_of(scene, 32, under, samples, behind.alpha == 0.0F);
     reads_its_samples(edge);
     // Its image again, from how the last frame left it.
-    const samples_edge_t again = edge_of(scene, 32, under);
+    const samples_edge_t again = edge_of(scene, 32, under, samples, behind.alpha == 0.0F);
     CHECK(again.parts == edge.parts);
     CHECK(again.others == 0);
     CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+} // namespace
+
+// F6: a tonemap of what's resolved undoes multisampling on a bright edge: a quarter of a light of
+// 100 is 25, nearly all of what a tonemap makes of 100. Every GPU draws and reads 4 samples.
+TEST_CASE("a bright edge is the average of each sample's tonemap", "[gpu][scene]") {
+    bright_edge_at(4);
+}
+
+// Of a test of its own, so a GPU without 2, as lavapipe is, skips it, and MoltenVK's log says it
+// ran.
+TEST_CASE("a bright edge of 2 samples is their average's tonemap too", "[gpu][scene]") {
+    bool has_two = false;
+    {
+        const scene_t scene;
+        const VkPhysicalDeviceLimits& limits = fbe::gpu::device()->properties.limits;
+        has_two = (limits.framebufferColorSampleCounts & limits.sampledImageColorSampleCounts &
+                   static_cast<VkSampleCountFlags>(VK_SAMPLE_COUNT_2_BIT)) != 0;
+    }
+    if (!has_two) {
+        SKIP("this GPU doesn't draw and read 2 samples");
+    }
+    bright_edge_at(2);
 }
 
 // What's all of a pixel has no edge: each of its samples has the bloom a single sample would, on
@@ -8491,6 +8581,64 @@ TEST_CASE("a tonemap's samples are moved for it, where it reads them", "[gpu][sc
     CHECK(fbe_gpu_validation_errors() == 0);
 }
 
+// F6's review: only what reads its samples takes a slot for them, as there are only so many.
+TEST_CASE("a camera that doesn't read its image's samples takes no slot for them", "[gpu][scene]") {
+    const scene_t scene;
+    bright_wall(scene);
+    const std::uint32_t free = fbe::gpu::free_samples_slot_count();
+    const auto slots_drawn = [&scene] {
+        const std::uint64_t target = fbe_texture_create_target(32, 32, FBE_TEXTURE_RGBA8, 4, true);
+        require(target != 0);
+        require(fbe_camera_set_target(scene.camera, target));
+        require(fbe_render_world(scene.world, 1.0F));
+        fbe_frame_flip(false);
+        const std::uint32_t taken = fbe::gpu::free_samples_slot_count();
+        require(fbe_camera_set_target(scene.camera, scene.target));
+        fbe_texture_release(target);
+        return taken;
+    };
+    // Temporal antialiasing reads what they resolve to. First, as an image that read them would be
+    // the one the HDR camera's tonemap had, kept for its next frame, slot and all.
+    require(fbe_camera_set_temporal_aa(scene.camera, true));
+    CHECK(slots_drawn() == free);
+    // An HDR camera's tonemap reads them.
+    require(fbe_camera_set_temporal_aa(scene.camera, false));
+    CHECK(slots_drawn() == free - 1);
+    // FXAA, without HDR, reads what's tonemapped, taking none more than the HDR camera's.
+    require(fbe_camera_set_hdr(scene.camera, false));
+    require(fbe_camera_set_fxaa(scene.camera, true));
+    CHECK(slots_drawn() == free - 1);
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+// F6's review: a free slot points at a multisampled image that's there, so a shader that read one
+// would read that, not what was freed.
+TEST_CASE("a free slot for samples points at a placeholder, not what was freed", "[gpu][scene]") {
+    const scene_t scene;
+    auto* const placeholder = fbe::gpu::free_samples_view();
+    REQUIRE(placeholder != VK_NULL_HANDLE);
+    const auto pointing_elsewhere = [placeholder] {
+        int elsewhere = 0;
+        for (std::uint32_t slot = 0; slot < fbe::gpu::samples_slots; ++slot) {
+            elsewhere += fbe::gpu::samples_slot_view(slot) != placeholder ? 1 : 0;
+        }
+        return elsewhere;
+    };
+    CHECK(pointing_elsewhere() == 0);
+    bright_wall(scene);
+    reads_its_samples(edge_of(scene, 32));
+    CHECK(pointing_elsewhere() == 1);
+    // Once the camera's image isn't asked for, frames on, it goes, and its slot points at the
+    // placeholder.
+    for (int frames = 0; frames < 10; ++frames) {
+        require(fbe_render_world(scene.world, 1.0F));
+        fbe_frame_flip(false);
+    }
+    CHECK(fbe::gpu::free_samples_slot_count() == fbe::gpu::samples_slots);
+    CHECK(pointing_elsewhere() == 0);
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
 TEST_CASE("what can't read a camera's samples reads what they resolve to", "[gpu][scene]") {
     const scene_t scene;
     bright_wall(scene);
@@ -8521,6 +8669,7 @@ TEST_CASE("a camera past the set's samples reads what they resolve to, until the
             .height = 8,
             .format = FBE_TEXTURE_RGBA16F,
             .samples = 4,
+            .reads_samples = true,
         }));
     }
     reads_their_average(edge_of(scene, 33));
@@ -11489,10 +11638,7 @@ TEST_CASE("a shader of its own reaches the prepass: what it moves, and what it c
     const auto same = [](const fbe::golden::frame_t& one, const fbe::golden::frame_t& other) {
         return fbe::golden::compare(one, other, 1).pixels == 0;
     };
-    // Each part in a scene of its own, in turn, on one GPU: lavapipe takes seconds to make a
-    // pipeline of the shader as it first draws with it, so that's once, not once a part, as
-    // sections would, each starting the GPU again.
-    std::vector<std::pair<std::string_view, std::function<void(const prepass_scene_t&)>>> parts;
+    std::vector<part_t<prepass_scene_t>> parts;
     parts.emplace_back("a mesh it moves is where it's moved to", [&](const prepass_scene_t& scene) {
         const std::uint64_t by_place = cube(scene.world, 0.0F, 0.0F, -9.0F, scene.placed);
         const fbe::golden::frame_t reference = scene.drawn();
@@ -11733,16 +11879,7 @@ TEST_CASE("a shader of its own reaches the prepass: what it moves, and what it c
                   }) == 0);
             fbe_skin_release(skinned.skin);
         });
-    for (std::size_t at = 0; at < parts.size(); ++at) {
-        INFO(parts[at].first);
-        const bool last = at + 1 == parts.size();
-        {
-            const prepass_scene_t scene(last);
-            parts[at].second(scene);
-        }
-        // Kept for the next part, and stopped after the last.
-        CHECK(fbe_gpu_started() == (at + 1 < parts.size()));
-    }
+    on_one_gpu(parts);
 }
 
 TEST_CASE("a camera in stored values blends with what's stored, as DirectX 7 did", "[gpu][scene]") {
