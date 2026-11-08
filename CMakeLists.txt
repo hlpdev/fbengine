@@ -34,6 +34,11 @@ if(FBENGINE_SANITIZE)
   add_compile_options(-fsanitize=${FBENGINE_SANITIZE} -fno-sanitize-recover=all
                       -fno-omit-frame-pointer)
   add_link_options(-fsanitize=${FBENGINE_SANITIZE})
+  # UndefinedBehaviorSanitizer's vptr check reads a class's RTTI, which Jolt is built without.
+  if(FBENGINE_SANITIZE MATCHES "undefined")
+    add_compile_options(-fno-sanitize=vptr)
+    add_link_options(-fno-sanitize=vptr)
+  endif()
 endif()
 
 # MSVC otherwise reads source files in the ANSI code page.
@@ -46,6 +51,7 @@ include(cmake/warnings.cmake)
 include(cmake/native.cmake)
 include(cmake/sdl.cmake)
 include(cmake/vulkan.cmake)
+include(cmake/spirv.cmake)
 include(cmake/slang.cmake)
 include(cmake/assets.cmake)
 include(cmake/text.cmake)

@@ -51,6 +51,11 @@ bool vsync = true;
 VkFormat format = VK_FORMAT_UNDEFINED;
 /// Whether the surface said the swapchain no longer matches it.
 bool stale = false;
+/// Whether the surface said it's lost, as a window's can be when its display goes: it's made again
+/// with its swapchain, which can't be made of it.
+bool surface_lost = false;
+/// For a test, what makes a surface in SDL's place.
+VkSurfaceKHR (*test_surface)() = nullptr;
 std::vector<VkImage> images;
 std::vector<VkImageView> views;
 /// Signaled when an image's frame has been drawn, which its present waits for: one an image, as
@@ -186,6 +191,7 @@ bool make_swapchain(const fbe::gpu::device_t& gpu, bool wait) {
     VkResult result =
         vkGetPhysicalDeviceSurfaceCapabilitiesKHR(gpu.physical, surface, &capabilities);
     if (result != VK_SUCCESS) {
+        surface_lost = surface_lost || result == VK_ERROR_SURFACE_LOST_KHR;
         return fbe::gpu::fail_vulkan("couldn't read the window's surface", result);
     }
     // A surface that doesn't say its size, as Wayland's don't, takes the window's.
@@ -317,16 +323,22 @@ bool make_images(const fbe::gpu::device_t& gpu, bool wait) {
     return surface != VK_NULL_HANDLE ? make_swapchain(gpu, wait) : make_headless(gpu, wait);
 }
 
-/// Whether the window is shown, as SDL's offscreen video's never are, though they're not headless.
+/// Whether the window is shown, as SDL's offscreen video's never are, though they're not headless,
+/// unless a test makes their surfaces.
 bool on_screen() {
     const char* driver = SDL_GetCurrentVideoDriver();
-    return shown && (driver == nullptr || std::string_view(driver) != "offscreen");
+    return shown && (test_surface != nullptr || driver == nullptr ||
+                     std::string_view(driver) != "offscreen");
 }
 
 /// A shown window's surface, if it hasn't one yet.
 bool create_surface(VkInstance vulkan) {
     if (drawn_window == nullptr || !on_screen() || surface != VK_NULL_HANDLE) {
         return true;
+    }
+    if (test_surface != nullptr) {
+        surface = test_surface();
+        return surface != VK_NULL_HANDLE || fbe::fail("couldn't make the window's Vulkan surface");
     }
     if (!SDL_Vulkan_CreateSurface(drawn_window, vulkan, nullptr, &surface)) {
         surface = VK_NULL_HANDLE;
@@ -363,6 +375,7 @@ void destroy_window() {
         vkDestroySurfaceKHR(fbe::gpu::instance(), surface, nullptr);
         surface = VK_NULL_HANDLE;
     }
+    surface_lost = false;
 }
 
 /// What the present shader's push constants are: the screen's index and sampler, and whether the
@@ -449,6 +462,16 @@ bool presentable(const fbe::gpu::device_t& gpu, bool wait) {
     if (drawn_window == nullptr || fbe_window_minimized()) {
         return false;
     }
+    if (surface_lost) {
+        // Its swapchain goes with it, and both are made again; until a surface is, each frame
+        // tries again.
+        destroy_window();
+        if (!make_window(gpu) && surface == VK_NULL_HANDLE) {
+            surface_lost = true;
+            return false;
+        }
+        return !images.empty();
+    }
     const VkExtent2D pixels = window_pixels();
     if (stale || wait != vsync || pixels.width != made_for.width ||
         pixels.height != made_for.height) {
@@ -509,6 +532,10 @@ void stop_window() {
     stale = false;
 }
 
+void make_surfaces_by(VkSurfaceKHR (*make)()) {
+    test_surface = make;
+}
+
 } // namespace fbe::gpu
 
 namespace fbe {
@@ -551,6 +578,7 @@ void gpu_present(bool wait) {
         if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) {
             gpu::lose(acquired);
             stale = stale || acquired == VK_ERROR_OUT_OF_DATE_KHR;
+            surface_lost = surface_lost || acquired == VK_ERROR_SURFACE_LOST_KHR;
             update_screen();
             gpu::submit_frame(VK_NULL_HANDLE, VK_NULL_HANDLE);
             return;
@@ -581,6 +609,7 @@ void gpu_present(bool wait) {
     const VkResult result = vkQueuePresentKHR(gpu.queue, &present);
     gpu::lose(result);
     stale = stale || result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR;
+    surface_lost = surface_lost || result == VK_ERROR_SURFACE_LOST_KHR;
     if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) {
         ++presented;
     }

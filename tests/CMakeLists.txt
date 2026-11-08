@@ -44,12 +44,18 @@ if(NOT fbengine_vulkan_driver STREQUAL "")
   cmake_path(NATIVE_PATH fbengine_vulkan_driver fbengine_vulkan_driver)
   set(fbengine_vulkan_environment "VK_DRIVER_FILES=${fbengine_vulkan_driver}")
 endif()
-# Every Catch2 test found at build time sees only the tests' Vulkan driver too.
+# Every Catch2 test found at build time sees only the tests' Vulkan driver too, or, for tests that
+# start no GPU, fbengine_discover_environment instead: one variable, as Catch's discovery splits a
+# list's, and a test's ENVIRONMENT is the last it's given.
 function(catch_discover_tests)
-  if(fbengine_vulkan_environment STREQUAL "")
+  set(environment "${fbengine_vulkan_environment}")
+  if(DEFINED fbengine_discover_environment)
+    set(environment "${fbengine_discover_environment}")
+  endif()
+  if(environment STREQUAL "")
     _catch_discover_tests(${ARGV})
   else()
-    _catch_discover_tests(${ARGV} PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}")
+    _catch_discover_tests(${ARGV} PROPERTIES ENVIRONMENT "${environment}")
   endif()
 endfunction()
 
@@ -71,7 +77,7 @@ add_executable(fbengine_gpu_tests gpu/vulkan_tests.cpp gpu/present_tests.cpp
                gpu/buffer_tests.cpp gpu/graph_tests.cpp gpu/canvas_tests.cpp
                gpu/environment_tests.cpp
                gpu/pixels_tests.cpp gpu/text_tests.cpp gpu/example_tests.cpp
-               gpu/scene_tests.cpp
+               gpu/scene_tests.cpp gpu/swapchain_tests.cpp
                golden/golden.cpp golden/golden_tests.cpp golden/stb.cpp)
 target_link_libraries(fbengine_gpu_tests PRIVATE volk Vulkan::Headers Catch2::Catch2WithMain
                       fbengine_internal)
@@ -1477,8 +1483,12 @@ if(UNIX)
   set_tests_properties(scene.ends_during_moves PROPERTIES
                        PASS_REGULAR_EXPRESSION "ended" TIMEOUT 300)
 endif()
+# Their game's shaders are SPIR-V made by hand, to try the checks before SPIRV-Tools' validator,
+# which isn't whole enough for it; the GPU's tests validate what Slang makes. They start no GPU.
+set(fbengine_discover_environment "FBE_SPIRV_VALIDATION=0")
 catch_discover_tests(fbengine_scene_tests TEST_PREFIX "scene." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}" "${PROJECT_BINARY_DIR}/native/fbengine")
+unset(fbengine_discover_environment)
 
 # The scene's panics, each a case of tests/scene/panics run on its own, which has to panic saying
 # what it does.
@@ -1859,7 +1869,7 @@ fbengine_set_warnings(fbengine_assets_tests)
 if(MINGW)
   target_link_options(fbengine_assets_tests PRIVATE -mcrtdll=ucrt)
 endif()
-catch_discover_tests(fbengine_assets_tests TEST_PREFIX "assets."
+catch_discover_tests(fbengine_assets_tests TEST_PREFIX "assets." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}")
 
 # What Assets' mounts panic for, each by a run of tests/assets/panics, which says it, at the line
@@ -2324,9 +2334,10 @@ catch_discover_tests(fbengine_audio_native_tests TEST_PREFIX "audio." ADD_TAGS_A
 # into the test, whose operator new fails the one it says.
 file(GLOB fbengine_audio_oom_sources CONFIGURE_DEPENDS
      "${PROJECT_SOURCE_DIR}/native/fbengine_audio/*/*.cpp")
-add_executable(fbengine_audio_oom_tests audio/oom_tests.cpp ${fbengine_audio_oom_sources})
+add_executable(fbengine_audio_oom_tests audio/oom_tests.cpp own_new.cpp
+               ${fbengine_audio_oom_sources})
 target_include_directories(fbengine_audio_oom_tests PRIVATE
-                           "${PROJECT_SOURCE_DIR}/native/fbengine_audio")
+                           "${PROJECT_SOURCE_DIR}/native/fbengine_audio" "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(fbengine_audio_oom_tests PRIVATE FBE_AUDIO_BUILDING
                            FBE_VERSION="${PROJECT_VERSION}")
 target_link_libraries(fbengine_audio_oom_tests PRIVATE fbengine_miniaudio Catch2::Catch2WithMain)
@@ -2487,16 +2498,18 @@ catch_discover_tests(fbengine_anim_tests TEST_PREFIX "anim." ADD_TAGS_AS_LABELS
 
 # Animation's C API with each of a call's allocations failing in turn, with fbengine's sources, as
 # operator new is this test's.
-add_executable(fbengine_effects_oom_tests scene/effects_oom_tests.cpp)
+add_executable(fbengine_effects_oom_tests scene/effects_oom_tests.cpp own_new.cpp)
 target_link_libraries(fbengine_effects_oom_tests PRIVATE fbengine_internal Catch2::Catch2WithMain)
+target_include_directories(fbengine_effects_oom_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 fbengine_set_warnings(fbengine_effects_oom_tests)
 catch_discover_tests(fbengine_effects_oom_tests TEST_PREFIX "scene." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}"
                      PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}")
 
-add_executable(fbengine_anim_oom_tests anim/oom_tests.cpp)
+add_executable(fbengine_anim_oom_tests anim/oom_tests.cpp own_new.cpp)
 target_link_libraries(fbengine_anim_oom_tests PRIVATE fbengine_internal Catch2::Catch2WithMain
                       ${CMAKE_DL_LIBS})
+target_include_directories(fbengine_anim_oom_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_options(fbengine_anim_oom_tests PRIVATE
                       "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/anim/own_new.map")
@@ -2511,8 +2524,14 @@ endif()
 fbengine_set_warnings(fbengine_anim_oom_tests)
 # A deadlock is a failure too, as an allocation failing inside a layer's lock was.
 catch_discover_tests(fbengine_anim_oom_tests TEST_PREFIX "anim." ADD_TAGS_AS_LABELS
-                     DL_PATHS "${fbengine_test_dll_paths}"
-                     PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}" TIMEOUT 120)
+                     DL_PATHS "${fbengine_test_dll_paths}" PROPERTIES TIMEOUT 120)
+
+# The out-of-memory tests' operator new and delete themselves, every form of them.
+add_executable(fbengine_own_new_tests own_new_tests.cpp own_new.cpp)
+target_link_libraries(fbengine_own_new_tests PRIVATE Catch2::Catch2WithMain)
+target_include_directories(fbengine_own_new_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+fbengine_set_warnings(fbengine_own_new_tests)
+catch_discover_tests(fbengine_own_new_tests TEST_PREFIX "tools.")
 
 # A program of the whole of it, as a game would write it.
 if(FBENGINE_FB_TESTS)

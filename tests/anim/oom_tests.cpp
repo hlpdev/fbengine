@@ -7,6 +7,7 @@
 #include "fbengine.h"
 #include "gpu/buffer.hpp"
 #include "gpu/vulkan.hpp"
+#include "own_new.hpp"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -26,54 +27,11 @@
 #include <dlfcn.h>
 #endif
 
-namespace {
-
-/// Which of this thread's allocations fails, -1 for none, how many there have been, and whether
-/// one failed.
-thread_local long failing = -1;
-thread_local long allocated = 0;
-thread_local bool failed = false;
-
-} // namespace
-
-// As tests/audio/oom_tests.cpp's: new[] and the nothrow forms are this test's too, and the default
-// deletes free what they give, as malloc's.
-// NOLINTBEGIN(cppcoreguidelines-no-malloc, cppcoreguidelines-owning-memory)
-// NOLINTBEGIN(misc-new-delete-overloads)
-void* operator new(std::size_t size) {
-    if (failing >= 0 && allocated++ == failing) {
-        failing = -1;
-        failed = true;
-        throw std::bad_alloc();
-    }
-    void* made = std::malloc(size != 0 ? size : 1);
-    if (made == nullptr) {
-        throw std::bad_alloc();
-    }
-    return made;
-}
-
-void* operator new[](std::size_t size) {
-    return operator new(size);
-}
-
-void* operator new(std::size_t size, const std::nothrow_t& /*nothrow*/) noexcept {
-    try {
-        return operator new(size);
-    } catch (const std::bad_alloc&) {
-        return nullptr;
-    }
-}
-
-void* operator new[](std::size_t size, const std::nothrow_t& /*nothrow*/) noexcept {
-    try {
-        return operator new(size);
-    } catch (const std::bad_alloc&) {
-        return nullptr;
-    }
-}
-// NOLINTEND(misc-new-delete-overloads)
-// NOLINTEND(cppcoreguidelines-no-malloc, cppcoreguidelines-owning-memory)
+// tests/own_new.cpp's operator new and delete, every form, count and fail this thread's
+// allocations.
+using fbe::tests::allocated;
+using fbe::tests::failed;
+using fbe::tests::failing;
 
 namespace {
 
@@ -228,6 +186,12 @@ TEST_CASE("players' calls that run out of memory say so, and leave things workin
 }
 
 TEST_CASE("shaders' calls that run out of memory say so, and leave things working") {
+    // Its SPIR-V's made by hand, which isn't whole enough for SPIRV-Tools' validator.
+#ifdef _WIN32
+    REQUIRE(_putenv_s("FBE_SPIRV_VALIDATION", "0") == 0);
+#else
+    REQUIRE(setenv("FBE_SPIRV_VALIDATION", "0", 1) == 0);
+#endif
     // SPIR-V's header, and the scene's entry points.
     std::vector<std::uint32_t> words{ 0x07230203, 0x00010500, 0, 1, 0 };
     for (const auto& [model, name] : std::array<std::pair<std::uint32_t, std::string_view>, 10>{
