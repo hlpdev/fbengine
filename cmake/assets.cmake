@@ -283,6 +283,38 @@ fbengine_replace_source(ktx "${ktx_SOURCE_DIR}" external/basisu/encoder/basisu_e
                         "${fbengine_basisu_patched}")
 target_include_directories(ktx PRIVATE "${ktx_SOURCE_DIR}/external/basisu/encoder")
 
+# basisu's transcoder, in libktx v4.4.2 (external/basisu/transcoder/basisu_transcoder.cpp:12136,
+# read_bits1_to_9_fst), reads a UASTC block's next bits as a uint16_t through a pointer at any byte,
+# which a fuzzed KTX2 reaches and UBSan stops at as a misaligned load. The patched copy reads its two
+# bytes by memcpy, and is built in libktx's reader and writer in place of the original, finding its
+# headers and tables beside it; the patch's text has to be there, once, or configuring fails.
+set(fbengine_transcoder_source
+    "${ktx_SOURCE_DIR}/external/basisu/transcoder/basisu_transcoder.cpp")
+file(READ "${fbengine_transcoder_source}" fbengine_transcoder)
+set(fbengine_transcoder_from
+    "		const uint16_t w = *(const uint16_t*)(&pBuf[bit_offset >> 3U]);
+")
+set(fbengine_transcoder_to
+    "		uint16_t w;
+		memcpy(&w, &pBuf[bit_offset >> 3U], sizeof(w));
+")
+string(FIND "${fbengine_transcoder}" "${fbengine_transcoder_from}" fbengine_first)
+string(FIND "${fbengine_transcoder}" "${fbengine_transcoder_from}" fbengine_last REVERSE)
+if(fbengine_first EQUAL -1 OR NOT fbengine_first EQUAL fbengine_last)
+  message(FATAL_ERROR "basisu_transcoder.cpp doesn't have, once, what its patch expects")
+endif()
+string(REPLACE "${fbengine_transcoder_from}" "${fbengine_transcoder_to}" fbengine_transcoder
+               "${fbengine_transcoder}")
+set(fbengine_transcoder_patched "${CMAKE_BINARY_DIR}/ktx-patched/basisu_transcoder.cpp")
+file(WRITE "${fbengine_transcoder_patched}.in" "${fbengine_transcoder}")
+configure_file("${fbengine_transcoder_patched}.in" "${fbengine_transcoder_patched}" COPYONLY)
+foreach(target IN ITEMS ktx_read ktx)
+  fbengine_replace_source(${target} "${ktx_SOURCE_DIR}"
+                          external/basisu/transcoder/basisu_transcoder.cpp
+                          "${fbengine_transcoder_patched}")
+  target_include_directories(${target} PRIVATE "${ktx_SOURCE_DIR}/external/basisu/transcoder")
+endforeach()
+
 # fbengine's DLLs are UCRT's (cmake/native.cmake), so libktx is built for UCRT too: its encoder's
 # sprintf_s is UCRT's, inlined from the headers, which msvcrt's has no export of. What links the
 # writer links UCRT, as the assets tests do.
