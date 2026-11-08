@@ -30,7 +30,7 @@ window end it. One that needs a GPU says so on a machine with none, and the test
 | 13 | P1 | Skinned animation, bones under game control | [skinned_animation_with_bones_under_game_control](skinned_animation_with_bones_under_game_control) | A figure posed at a fraction of a frame, crossfaded, then its head turned by the game after each update and its arm released for good |
 | 14 | P1 | Converting .b3d and .x to glTF | [models_as_a_converter_writes_them](models_as_a_converter_writes_them) | The receiving side of a converter: node and bone names as they were, frames by its clip's rate, a surface's material and its texture's name, and vertex colors exactly. The converter's a game's own |
 | 15 | P1 | Audio as Blitz had it | [streamed_and_positional_sound](streamed_and_positional_sound) | Ogg Vorbis and sounds made in code, channels with volume, pan, and pitch, pause and resume, 64 mixed at 44100, looping streams, crossfaded music, and sound following entities; mixed on no device, by numbers |
-| 16 | P1 | Loading textures as Blitz did | [textures_by_their_settings](textures_by_their_settings) | Color, alpha, mipmaps, and clamping by each file's sidecar; a strip's frames; PNG, JPEG, and BMP by their bytes, whatever their names; backslashed paths in any case; a sound whose name says nothing; what the cooker makes of each; a DDS refused plainly |
+| 16 | P1 | Loading textures as Blitz did | [textures_by_their_settings](textures_by_their_settings), [streamed_and_positional_sound](streamed_and_positional_sound) | Color, alpha, mipmaps, and clamping by each file's sidecar; a strip's frames; PNG, JPEG, and BMP by their bytes, whatever their names; backslashed paths in any case; a sound whose name says nothing, and Ogg Vorbis and WAV .cwm files by backslashed paths in streamed_and_positional_sound; what the cooker makes of each; a DDS refused plainly |
 | 17 | P1 | Pixel access | [pixels_of_images_and_textures](pixels_of_images_and_textures) | An image's pixels read and written one at a time on the CPU, and a texture's, a target's and a plain one's, locked and written with alpha, and whether a million are quick |
 | 18 | P1 | Graphics modes | [display_modes](display_modes) | The display's modes; windowed, fullscreen, and borderless at the desktop's size; a screen of its own size scaled in. A real display's, only under `--real-display` with FBENGINE_REAL_DISPLAY=1, as CI sets |
 | 19 | P1 | INI reading and writing | [ini_settings](ini_settings) | Settings read, each to its kind, defaults for what's missing, changed, written, and read again, through std's Ini; a file that isn't one, by its line |
@@ -63,6 +63,12 @@ fb run examples/proof/bump
 
 Add `-- --watch` for a window a person watches, and `-- --watch --frames 40` for that many frames
 with no window, as the tests walk it. `tools/show.py` opens them too.
+
+## Their files
+
+streamed_and_positional_sound's tone.ogg is the repository's own, the same file as examples/sound's
+and fbengine_audio's tests/data/tone.ogg: a quarter second of 440 Hz in stereo, made by ffmpeg with
+the command its main.fb's header gives.
 
 ## What takes a person
 

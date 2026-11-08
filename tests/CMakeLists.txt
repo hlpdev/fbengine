@@ -2266,8 +2266,8 @@ if(FBENGINE_FB_TESTS)
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/audio_panic")
   set_tests_properties(examples.audio_panic PROPERTIES TIMEOUT 60
                        PASS_REGULAR_EXPRESSION "panic: a mistake, with the audio started at [^\n]*\n.*exited with code 101")
-  # Section 6's item 15, by numbers, on no device and the null backend; --watch, for a person to
-  # hear, keeps to the null backend under --frames.
+  # Section 6's item 15, and item 16's sound files, by numbers, on no device and the null backend;
+  # --watch, for a person to hear, keeps to the null backend under --frames.
   set(fbengine_sound_proof
       "a Channel of a held 0.5: 0.5, 0.5"
       "at half its volume: 0.25, 0.25"
@@ -2292,6 +2292,10 @@ if(FBENGINE_FB_TESTS)
       "the first piece: 0.5, 0.5"
       "half way through the crossfade: 0.375, 0.375"
       "after it: 0.25, 0.25, the first playing False, the second True"
+      "an Ogg Vorbis .cwm: streamed False, 0.25 seconds, heard True"
+      "a WAV .cwm: 44100 Hz, heard 0.5, 0.5"
+      "a .cwm a sidecar streams: streamed True, 0.25 seconds, heard True"
+      "a PNG .cwm: INVALID_DATA"
       "following a car 1 ahead: 0.25, 0.25"
       "2 ahead, twice as far: 0.125, 0.125"
       "to the right: heard on the right"
