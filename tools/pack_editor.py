@@ -1,7 +1,8 @@
 """Builds fbengine_editor for a target, as a release's programs are, and packs it for the tag's GitHub
 release: the program by its OS's name, the DLLs fb build copies beside it, the README and LICENSE,
 and notices/, which has each library fb build says it bundled (its "Bundled <library> ...: <path>"
-lines) and each copied DLL's package's notices, in notices/<package>/. It refuses an archive with a
+lines) and each copied DLL's package's notices, in notices/<package>/; not the program's own
+debug symbols. It refuses an archive with a
 program that isn't its OS's, a DLL no package has, or a bundled library without its notice, and
 prints the archive's path last.
 
@@ -68,8 +69,17 @@ def pack(root, version, target, out, built):
             return None, f"two bundled libraries' notices are both {source.name}"
         shutil.copyfile(source, notices / source.name)
     packages = sorted(path for path in (root / "packages").iterdir() if (path / "native" / target).is_dir())
+    # The program's own debug symbols, macOS's .dSYM folder and Windows' .pdb, stay out of the
+    # release's archive.
+    symbols = {f"{program.name}.dSYM", f"{program.stem}.pdb"}
     for path in sorted(folder.iterdir()):
         if path in (program, notices):
+            continue
+        if path.name in symbols:
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
             continue
         owners = [package for package in packages if (package / "native" / target / path.name).is_file()]
         if not owners:
