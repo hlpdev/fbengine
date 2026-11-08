@@ -13006,6 +13006,10 @@ std::uint64_t shader_of_generation(std::uint32_t generation) {
 // them, so there's no more of either after many than after one.
 TEST_CASE("a game's shaders made again and freed leave no pipelines of them",
           "[gpu][scene][stability]") {
+    // Each generation's new code, so its pipelines are made again, seconds on lavapipe: 3, two
+    // new codes a section, show a leak of one a generation, and validating isn't what's tried.
+    constexpr std::uint32_t generations = 3;
+    const unvalidated_t unvalidated;
     const scene_t scene;
     const auto drawn = [&](std::uint64_t material) {
         const std::uint64_t mesh = cube(scene.world, 0.0F, 0.0F, -6.0F, material);
@@ -13030,7 +13034,7 @@ TEST_CASE("a game's shaders made again and freed leave no pipelines of them",
         drawn_with(1);
         const std::int32_t one = fbe_gpu_pipelines();
         CHECK(one > 0);
-        for (std::uint32_t generation = 2; generation < 40; ++generation) {
+        for (std::uint32_t generation = 2; generation < generations; ++generation) {
             drawn_with(generation);
         }
         CHECK(fbe_gpu_pipelines() == one);
@@ -13042,7 +13046,7 @@ TEST_CASE("a game's shaders made again and freed leave no pipelines of them",
         require(fbe_material_set_shader(material, shader));
         drawn(material);
         const std::int32_t one = fbe_gpu_pipelines();
-        for (std::uint32_t generation = 2; generation < 40; ++generation) {
+        for (std::uint32_t generation = 2; generation < generations; ++generation) {
             const std::vector<std::uint8_t> bytes = generation_of(generation);
             require(fbe_shader_replace(shader, bytes.data(),
                                        static_cast<std::int64_t>(bytes.size()), "reloaded"));
@@ -13050,7 +13054,7 @@ TEST_CASE("a game's shaders made again and freed leave no pipelines of them",
         }
         CHECK(fbe_gpu_pipelines() == one);
         // Replaced by itself, it's kept.
-        const std::vector<std::uint8_t> same = generation_of(39);
+        const std::vector<std::uint8_t> same = generation_of(generations - 1);
         require(fbe_shader_replace(shader, same.data(), static_cast<std::int64_t>(same.size()),
                                    "reloaded"));
         drawn(material);
