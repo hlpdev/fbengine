@@ -1170,6 +1170,10 @@ Function SaveViews(folder: Path, stillsOnly: Bool = False) Throws GraphicsError,
     Defer Assets.StopWatching()
     Local island = Try Island.Make()
     Defer island.Free()
+    // The grass hidden for every still but the plants' own, whose checks are about it: drawn, it's
+    // most of a frame's time on a GPU of software.
+    island.Grown().SetGrassShown(False)
+    lap = Lap("the island's making", lap)
     Local camera = Camera()
     Looked(camera)
     Checks("it's drawn with ambient occlusion, antialiasing over frames, and bloom",
@@ -1197,7 +1201,9 @@ Function SaveViews(folder: Path, stillsOnly: Bool = False) Throws GraphicsError,
         Try SaveSeaAndSky(folder, camera, island)
         lap = Lap("the sea and sky", lap)
     End If
+    island.Grown().SetGrassShown(True)
     Try SavePlants(folder, camera, island)
+    island.Grown().SetGrassShown(False)
     // High tide, from the island's view.
     Local first = Views()[0]
     camera.SetPosition(first.1)

@@ -653,7 +653,7 @@ if(FBENGINE_FB_TESTS)
                    -- --frames "${PROJECT_BINARY_DIR}/example-frames/slack_water")
   set_tests_properties(examples.slack_water.frames PROPERTIES RESOURCE_LOCK slack_water
                        ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
-                       SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300
+                       SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 600
                        FIXTURES_SETUP slack_water_views)
   # Its assets: what its tools make, here, and what's kept in the repository, each loaded as the game
   # loads them, and the two the same.
