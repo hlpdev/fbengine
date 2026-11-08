@@ -18,8 +18,11 @@
 #include <vector>
 
 #ifdef _WIN32
-// Without windows.h's min and max, which std::numeric_limits' are taken for.
+// Without windows.h's min and max, which std::numeric_limits' are taken for, unless a header
+// before has said so.
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 // psapi.h needs windows.h's types first.
 // clang-format off
 #include <windows.h>
