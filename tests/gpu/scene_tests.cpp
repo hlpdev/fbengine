@@ -12191,6 +12191,7 @@ TEST_CASE("a camera with no passes draws nothing it wouldn't, and one with them 
     fbe_material_release(first);
     fbe_material_release(second);
     fbe_material_release(paint);
+}
 
 // What a shader bends a PBR material's normal to is what a normal map of that normal would give: as
 // lit by the sun, toward it and away, and in what the shader's given as the material's color.
