@@ -9,8 +9,10 @@
 #include <cmath>
 #include <cstdint>
 #include <format>
+#include <initializer_list>
 #include <new>
 #include <ranges>
+#include <string_view>
 #include <vector>
 
 namespace fbe::scene {
@@ -19,6 +21,17 @@ namespace {
 
 /// Shorter vectors have no direction to point or align to.
 constexpr float shortest = 1e-6F;
+
+/// Whether each of `values` is a finite number: false, saying `what` isn't, if one's NaN or
+/// infinite, as a transform of one would spread to all under it and all it's tested against.
+bool finite_or_fail(std::initializer_list<float> values, std::string_view what) {
+    for (const float value : values) {
+        if (!std::isfinite(value)) {
+            return fail(std::format("{} isn't finite", what));
+        }
+    }
+    return true;
+}
 
 bool valid_space(std::int32_t space) {
     if (space != FBE_SPACE_LOCAL && space != FBE_SPACE_WORLD) {
@@ -96,13 +109,13 @@ quat_t rotation_in(std::uint32_t entity, std::int32_t space) {
     return scene().entities.world_rotation[entity];
 }
 
-void set_position_in(std::uint32_t entity, vec3_t position, std::int32_t space) {
+bool set_position_in(std::uint32_t entity, vec3_t position, std::int32_t space) {
     if (space == FBE_SPACE_LOCAL) {
         scene().entities.position[entity] = position;
         mark_moved(entity);
-    } else {
-        set_world_position(entity, position);
+        return true;
     }
+    return set_world_position(entity, position);
 }
 
 void set_rotation_in(std::uint32_t entity, quat_t rotation, std::int32_t space) {
@@ -245,26 +258,41 @@ void update_world(std::uint32_t entity) {
     }
 }
 
-void set_world_position(std::uint32_t entity, vec3_t position) {
-    entities_t& entities = scene().entities;
-    const std::uint32_t parent = entities.parent[entity];
+vec3_t local_position(std::uint32_t parent, vec3_t position, vec3_t kept) {
     if (parent == none) {
-        entities.position[entity] = position;
-    } else {
-        update_world(parent);
-        mat4_t into;
-        if (inverse_affine(entities.world_matrix[parent], into)) {
-            entities.position[entity] = transform_point(into, position);
-        } else {
-            // On an axis a parent scales to nothing, there's nowhere to put the child, so it
-            // keeps its own place there.
-            const vec3_t offset = position - entities.world_matrix[parent].axis(3);
-            entities.position[entity] =
-                divide_or_keep(inverse(entities.world_rotation[parent]) * offset,
-                               entities.world_scale[parent], entities.position[entity]);
-        }
+        return position;
     }
+    const entities_t& entities = scene().entities;
+    update_world(parent);
+    mat4_t into;
+    if (inverse_affine(entities.world_matrix[parent], into)) {
+        return transform_point(into, position);
+    }
+    // On an axis a parent scales to nothing, there's nowhere to put the child, so it keeps its
+    // own place there.
+    const vec3_t offset = position - entities.world_matrix[parent].axis(3);
+    return divide_or_keep(inverse(entities.world_rotation[parent]) * offset,
+                          entities.world_scale[parent], kept);
+}
+
+vec3_t local_scale(std::uint32_t parent, vec3_t scale, vec3_t kept) {
+    if (parent == none) {
+        return scale;
+    }
+    update_world(parent);
+    return divide_or_keep(scale, scene().entities.world_scale[parent], kept);
+}
+
+bool set_world_position(std::uint32_t entity, vec3_t position) {
+    entities_t& entities = scene().entities;
+    const vec3_t local =
+        local_position(entities.parent[entity], position, entities.position[entity]);
+    if (!finite_or_fail({ local.x, local.y, local.z }, "where it goes under its parent")) {
+        return false;
+    }
+    entities.position[entity] = local;
     mark_moved(entity);
+    return true;
 }
 
 void set_world_rotation(std::uint32_t entity, quat_t rotation) {
@@ -273,10 +301,15 @@ void set_world_rotation(std::uint32_t entity, quat_t rotation) {
     mark_moved(entity);
 }
 
-void set_world_scale(std::uint32_t entity, vec3_t scale) {
+bool set_world_scale(std::uint32_t entity, vec3_t scale) {
     entities_t& entities = scene().entities;
-    entities.scale[entity] = divide_or_keep(scale, parent_scale(entity), entities.scale[entity]);
+    const vec3_t local = local_scale(entities.parent[entity], scale, entities.scale[entity]);
+    if (!finite_or_fail({ local.x, local.y, local.z }, "its scale under its parent")) {
+        return false;
+    }
+    entities.scale[entity] = local;
     mark_moved(entity);
+    return true;
 }
 
 } // namespace fbe::scene
@@ -292,11 +325,10 @@ extern "C" {
 
 FBE_API bool fbe_entity_set_position(uint64_t entity, float x, float y, float z, int32_t space) {
     const std::uint32_t slot = entity_in(entity, space);
-    if (slot == none) {
+    if (slot == none || !fbe::scene::finite_or_fail({ x, y, z }, "a position")) {
         return false;
     }
-    fbe::scene::set_position_in(slot, { x, y, z }, space);
-    return true;
+    return fbe::scene::set_position_in(slot, { x, y, z }, space);
 }
 
 FBE_API bool fbe_entity_position(uint64_t entity, int32_t space, fbe_vec3_t* position) {
@@ -311,7 +343,7 @@ FBE_API bool fbe_entity_position(uint64_t entity, int32_t space, fbe_vec3_t* pos
 FBE_API bool fbe_entity_set_rotation(uint64_t entity, float x, float y, float z, float w,
                                      int32_t space) {
     const std::uint32_t slot = entity_in(entity, space);
-    if (slot == none) {
+    if (slot == none || !fbe::scene::finite_or_fail({ x, y, z, w }, "a rotation")) {
         return false;
     }
     fbe::scene::set_rotation_in(slot, { x, y, z, w }, space);
@@ -329,16 +361,15 @@ FBE_API bool fbe_entity_rotation(uint64_t entity, int32_t space, fbe_quat_t* rot
 
 FBE_API bool fbe_entity_set_scale(uint64_t entity, float x, float y, float z, int32_t space) {
     const std::uint32_t slot = entity_in(entity, space);
-    if (slot == none) {
+    if (slot == none || !fbe::scene::finite_or_fail({ x, y, z }, "a scale")) {
         return false;
     }
     if (space == FBE_SPACE_LOCAL) {
         scene().entities.scale[slot] = { x, y, z };
         fbe::scene::mark_moved(slot);
-    } else {
-        fbe::scene::set_world_scale(slot, { x, y, z });
+        return true;
     }
-    return true;
+    return fbe::scene::set_world_scale(slot, { x, y, z });
 }
 
 FBE_API bool fbe_entity_scale(uint64_t entity, int32_t space, fbe_vec3_t* scale) {
@@ -357,35 +388,46 @@ FBE_API bool fbe_entity_scale(uint64_t entity, int32_t space, fbe_vec3_t* scale)
 
 FBE_API bool fbe_entity_move(uint64_t entity, float x, float y, float z) {
     const std::uint32_t slot = entity_slot(entity);
-    if (slot == none) {
+    if (slot == none || !fbe::scene::finite_or_fail({ x, y, z }, "a move")) {
         return false;
     }
     fbe::scene::entities_t& entities = scene().entities;
-    entities.position[slot] = entities.position[slot] + entities.rotation[slot] * vec3_t(x, y, z);
+    const vec3_t to = entities.position[slot] + entities.rotation[slot] * vec3_t(x, y, z);
+    if (!fbe::scene::finite_or_fail({ to.x, to.y, to.z }, "where the move goes")) {
+        return false;
+    }
+    entities.position[slot] = to;
     fbe::scene::mark_moved(slot);
     return true;
 }
 
 FBE_API bool fbe_entity_translate(uint64_t entity, float x, float y, float z, int32_t space) {
     const std::uint32_t slot = entity_in(entity, space);
-    if (slot == none) {
+    if (slot == none || !fbe::scene::finite_or_fail({ x, y, z }, "a translation")) {
         return false;
     }
     if (space == FBE_SPACE_LOCAL) {
         fbe::scene::entities_t& entities = scene().entities;
-        entities.position[slot] = entities.position[slot] + vec3_t{ x, y, z };
+        const vec3_t to = entities.position[slot] + vec3_t{ x, y, z };
+        if (!fbe::scene::finite_or_fail({ to.x, to.y, to.z }, "where the translation goes")) {
+            return false;
+        }
+        entities.position[slot] = to;
         fbe::scene::mark_moved(slot);
     } else {
         fbe::scene::update_world(slot);
-        const vec3_t at = scene().entities.world_matrix[slot].axis(3);
-        fbe::scene::set_world_position(slot, at + vec3_t{ x, y, z });
+        const vec3_t to = scene().entities.world_matrix[slot].axis(3) + vec3_t{ x, y, z };
+        if (!fbe::scene::finite_or_fail({ to.x, to.y, to.z }, "where the translation goes")) {
+            return false;
+        }
+        return fbe::scene::set_world_position(slot, to);
     }
     return true;
 }
 
 FBE_API bool fbe_entity_turn(uint64_t entity, float x, float y, float z, float w, int32_t space) {
     const std::uint32_t slot = entity_in(entity, space);
-    if (slot == none) {
+    if (slot == none || !fbe::scene::finite_or_fail({ x, y, z, w }, "a turn")) {
         return false;
     }
     const quat_t turn = fbe::scene::normalize(quat_t{ x, y, z, w });
@@ -399,7 +441,7 @@ FBE_API bool fbe_entity_turn(uint64_t entity, float x, float y, float z, float w
 
 FBE_API bool fbe_entity_point_at(uint64_t entity, float x, float y, float z, float roll) {
     const std::uint32_t slot = entity_slot(entity);
-    if (slot == none) {
+    if (slot == none || !fbe::scene::finite_or_fail({ x, y, z, roll }, "what it points at")) {
         return false;
     }
     const vec3_t direction = vec3_t{ x, y, z } - fbe::scene::position_in(slot, FBE_SPACE_WORLD);
@@ -412,7 +454,7 @@ FBE_API bool fbe_entity_point_at(uint64_t entity, float x, float y, float z, flo
 FBE_API bool fbe_entity_align(uint64_t entity, float x, float y, float z, int32_t axis,
                               float rate) {
     const std::uint32_t slot = entity_slot(entity);
-    if (slot == none) {
+    if (slot == none || !fbe::scene::finite_or_fail({ x, y, z, rate }, "what it aligns to")) {
         return false;
     }
     vec3_t own;
@@ -539,16 +581,30 @@ FBE_API bool fbe_entity_set_poses(const uint64_t* entities, const fbe_pose_t* po
         return false;
     }
     bool all = true;
+    bool finite = true;
     for (std::int32_t i = 0; i < count; ++i) {
         const std::uint32_t slot = entity_slot(entities[i]);
         if (slot == none) {
             all = false;
             continue;
         }
+        // Its place first, which its own turn doesn't change, so one refused leaves both.
         const fbe_pose_t& pose = poses[i];
+        const std::initializer_list<float> numbers{
+            pose.position.x, pose.position.y, pose.position.z, pose.rotation.x,
+            pose.rotation.y, pose.rotation.z, pose.rotation.w,
+        };
+        if (!fbe::scene::finite_or_fail(numbers, "a pose") ||
+            !fbe::scene::set_position_in(slot, fbe::scene::to_vec(pose.position), space)) {
+            finite = false;
+            continue;
+        }
         fbe::scene::set_rotation_in(
             slot, { pose.rotation.x, pose.rotation.y, pose.rotation.z, pose.rotation.w }, space);
-        fbe::scene::set_position_in(slot, fbe::scene::to_vec(pose.position), space);
+    }
+    if (!finite) {
+        return fbe::fail("a pose in the batch isn't finite, or puts one where it isn't; the rest "
+                         "were set");
     }
     return all || fbe::fail("an entity in the batch was freed; the rest were set");
 }

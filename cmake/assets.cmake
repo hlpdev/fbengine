@@ -234,6 +234,10 @@ fbengine_patch_text("\t\tidx = nextSlash; // Path includes this slash"
 # An empty version, which it reads the first character of.
 fbengine_patch_text("\t\tif (assetInfo[\"version\"].get_string().get(version) != SUCCESS) FASTGLTF_UNLIKELY {"
                     "\t\tif (assetInfo[\"version\"].get_string().get(version) != SUCCESS || version.empty()) FASTGLTF_UNLIKELY {")
+# A whole-number accessor's bounds given as a float past an int64, which it casts to one, as C++
+# leaves undefined: NaN, infinite, or 1e30, refused as an invalid glTF.
+fbengine_patch_text("\t\t\t\t\t\t\t\tarray.set(idx++, value);\n\t\t\t\t\t\t\t} else if (array.isType<std::int64_t>()) {\n\t\t\t\t\t\t\t\tarray.set(idx++, static_cast<std::int64_t>(value));"
+                    "\t\t\t\t\t\t\t\tarray.set(idx++, value);\n\t\t\t\t\t\t\t} else if (array.isType<std::int64_t>()) {\n\t\t\t\t\t\t\t\tif (!(value >= -9223372036854775808.0 && value < 9223372036854775808.0)) FASTGLTF_UNLIKELY {\n\t\t\t\t\t\t\t\t\treturn Error::InvalidGltf;\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\tarray.set(idx++, static_cast<std::int64_t>(value));")
 file(WRITE "${fbengine_fastgltf_patched}/fastgltf.cpp.in" "${fbengine_text}")
 configure_file("${fbengine_fastgltf_patched}/fastgltf.cpp.in"
                "${fbengine_fastgltf_patched}/fastgltf.cpp" COPYONLY)

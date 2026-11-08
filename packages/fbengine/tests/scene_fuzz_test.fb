@@ -1,0 +1,242 @@
+// Scenes' text cut short, changed at random by seeds that repeat, with numbers that aren't finite or
+// are past what they're held in, paths that go nowhere, and trees deep and wide: each is read or
+// refused, as an IOError of INVALID_DATA, never a panic or a hang, and a refused one leaves nothing
+// in its World. None of it needs a GPU.
+
+Import std.collections
+Import std.core
+Import std.io
+Import std.math
+Import std.test
+Import std.text
+Import fbengine
+
+Global sceneFuzzState: Int64 = 1
+
+// Park and Miller's, from a seed of 1 or more.
+Function SceneFuzzNext(n: Int): Int
+    sceneFuzzState = sceneFuzzState * 48271 % 2147483647
+    Return (sceneFuzzState % n) As Int
+End Function
+
+Function SceneFuzzWorld(): World
+    Local world = World()
+    World.SetCurrent(world)
+    Return world
+End Function
+
+// A scene of what a file can hold of most kinds: a pivot turned and moved, a mesh of a built-in
+// under it, picked and grouped, a hidden spot light, and a mesh of a geometry's own vertices.
+Function SceneFuzzText(): String Throws IOError
+    Local world = SceneFuzzWorld()
+    Defer world.Free()
+    Local room = Pivot()
+    room.SetName("room")
+    room.SetPosition(Vec3(1, 2, 3))
+    room.SetRotation(Quat(0, 0.70710677, 0, 0.70710677))
+    Local crate = Mesh(Geometry.Cube(), room)
+    crate.SetName("crate")
+    crate.SetScale(Vec3(0.1, 2, 0.5))
+    crate.SetPickMode(PickMode.MESH)
+    crate.SetCollisionGroup(3)
+    Local lamp = Light(LightType.SPOT, room)
+    lamp.SetName("lamp")
+    lamp.SetColor(Color(1, 0.5, 0.25))
+    lamp.SetRange(7.5)
+    lamp.Hide()
+    Local made = Geometry()
+    Local surface = made.AddSurface()
+    Local up = Vec3(0, 1, 0)
+    Local a = surface.AddVertex(Vertex(Vec3(0.1, 0, 0), up, Vec2(0, 0.25), Vec2(0.5, 0.75),
+                                       Color(1, 0, 0, 0.5)))
+    Local b = surface.AddVertex(Vertex(Vec3(1, 0, 0), up, Vec2(1, 0), Vec2(0, 0), Color(0, 1, 0)))
+    Local c = surface.AddVertex(Vertex(Vec3(0, 0, 1), up, Vec2(0, 1), Vec2(0, 0), Color(0, 0, 1)))
+    surface.AddTriangle(a, c, b)
+    Local floor = Mesh(made, room)
+    floor.SetName("floor")
+    Return Try Scene.Text([room])
+End Function
+
+// Reads `text` into `world`, which is empty: True if it's read, its roots then freed; False if it's
+// refused, as INVALID_DATA, leaving nothing.
+Function SceneFuzzRead(world: World, text: String): Bool
+    Try
+        Local roots = Try Scene.FromText(text)
+        For root In roots
+            root.Free()
+        End For
+        Expect(world.Roots().Count == 0, "what was read is freed")
+        Return True
+    Catch error As IOError
+        Expect(error.Kind == IOErrorKind.INVALID_DATA, error.Message)
+        Expect(world.Roots().Count == 0, "a refused scene leaves nothing: {error.Message}")
+        Return False
+    End Try
+End Function
+
+// Cut short at any of its characters, it's read only where what's left is whole.
+@Test
+Function ASceneCutAnywhereIsReadOrRefused() Throws IOError
+    Local text = Try SceneFuzzText()
+    Local world = SceneFuzzWorld()
+    Defer world.Free()
+    Expect(SceneFuzzRead(world, text))
+    Local refused = 0
+    For at = 0 Until text.Length
+        If !SceneFuzzRead(world, text.Slice(0, at)) Then refused += 1
+    End For
+    // Most cuts leave a table, a string, or a list open.
+    Expect(refused > text.Length / 2, "{refused} of {text.Length} refused")
+End Function
+
+// What's put in, taken out, doubled, or swapped about, at random.
+Const SCENE_FUZZ_BITS = ["\"", "[", "]", "=", ",", ".", "/", "\n", "#", "-", "0", "1", "9", "e",
+                         "nan", "inf", "-inf", "+inf", "1e400", "-1e400", "99999999999999999999",
+                         "-9223372036854775809", "0x7fffffff", "true", "\\u0000", "\\", "'",
+                         "[[entity]]\n", "path = \"room\"\n", "kind = \"MESH\"\n",
+                         "kind = \"PIVOT\"\n", "geometry = \"builtin:cube\"\n", "format = 1\n",
+                         "[entity.components.x]\n", "{", "}", "  ", "\t"]
+
+Function SceneFuzzChanged(text: String): String
+    Local at = SceneFuzzNext(text.Length + 1)
+    Select SceneFuzzNext(5)
+        Case 0
+            // A character for one of the bits.
+            Local bit = SCENE_FUZZ_BITS[SceneFuzzNext(SCENE_FUZZ_BITS.Count)]
+            Local to = Min(at + 1, text.Length)
+            Return text.Slice(0, at) + bit + text.Slice(to, text.Length)
+        Case 1
+            Return text.Slice(0, at) + SCENE_FUZZ_BITS[SceneFuzzNext(SCENE_FUZZ_BITS.Count)] +
+                   text.Slice(at, text.Length)
+        Case 2
+            Local to = Min(at + 1 + SceneFuzzNext(40), text.Length)
+            Return text.Slice(0, at) + text.Slice(to, text.Length)
+        Case 3
+            Local lines = text.Split("\n")
+            Local one = SceneFuzzNext(lines.Count)
+            lines.Insert(SceneFuzzNext(lines.Count + 1), lines[one])
+            Return "\n".Join(lines)
+        Default
+            Local lines = text.Split("\n")
+            Local one = SceneFuzzNext(lines.Count)
+            Local other = SceneFuzzNext(lines.Count)
+            Local kept = lines[one]
+            lines[one] = lines[other]
+            lines[other] = kept
+            Return "\n".Join(lines)
+    End Select
+End Function
+
+@Test
+Function ASceneChangedAtRandomIsReadOrRefused() Throws IOError
+    Local text = Try SceneFuzzText()
+    Local world = SceneFuzzWorld()
+    Defer world.Free()
+    sceneFuzzState = 20261106
+    Local read = 0
+    For round = 0 Until 1500
+        Local changed = text
+        For change = 0 To SceneFuzzNext(4)
+            changed = SceneFuzzChanged(changed)
+        End For
+        If SceneFuzzRead(world, changed) Then read += 1
+    End For
+    // Some changes leave it a scene, as a doubled line of a list's numbers can't.
+    Expect(read > 0 && read < 1500, "{read} of 1500 read")
+End Function
+
+// A number that isn't finite, for any key that takes numbers, is refused by its entity, as Text
+// refuses to write one.
+@Test
+Function NumbersThatArentFiniteAreRefused()
+    Local world = SceneFuzzWorld()
+    Defer world.Free()
+    Local pivot = "format = 1\n[[entity]]\npath = \"a\"\nkind = \"PIVOT\"\n"
+    Local mesh =
+        "format = 1\n[[entity]]\npath = \"a\"\nkind = \"MESH\"\ngeometry = \"builtin:cube\"\n"
+    Local light = "format = 1\n[[entity]]\npath = \"a\"\nkind = \"LIGHT\"\n"
+    Local camera = "format = 1\n[[entity]]\npath = \"a\"\nkind = \"CAMERA\"\n"
+    For bad In ["nan", "inf", "-inf", "1e400", "-1e400"]
+        For each In [pivot + "position = [{bad}, 0.0, 0.0]\n",
+                     pivot + "position = [0.0, 0.0, {bad}]\n",
+                     pivot + "rotation = [0.0, {bad}, 0.0, 1.0]\n",
+                     pivot + "scale = [{bad}, 1.0, 1.0]\n",
+                     pivot + "radius = {bad}\n",
+                     pivot + "box = [{bad}, 1.0, 1.0]\n",
+                     pivot + "step_height = {bad}\n",
+                     pivot + "max_slope = {bad}\n",
+                     mesh + "color = [{bad}, 1.0, 1.0, 1.0]\n",
+                     light + "intensity = {bad}\n",
+                     light + "range = {bad}\n",
+                     light + "color = [1.0, {bad}, 1.0, 1.0]\n",
+                     light + "shadow_bias = {bad}\n",
+                     light + "shadow_distance = {bad}\n",
+                     camera + "field_of_view = {bad}\n",
+                     camera + "range = [0.1, {bad}]\n",
+                     camera + "fog_density = {bad}\n"]
+            Try
+                Local roots = Try Scene.FromText(each)
+                For root In roots
+                    root.Free()
+                End For
+                Expect(False, "read: {each}")
+            Catch error As IOError
+                Expect(error.Kind == IOErrorKind.INVALID_DATA, error.Message)
+                Expect(error.Message.Contains("a's"), "it names its entity: {error.Message}")
+            End Try
+            Expect(world.Roots().Count == 0, each)
+        End For
+    End For
+End Function
+
+// Paths under nothing are refused; a name can be anything, "", ".", or "..", so those are read.
+@Test
+Function PathsThatGoNowhereAreRefused()
+    Local world = SceneFuzzWorld()
+    Defer world.Free()
+    Local good = "format = 1\n[[entity]]\npath = \"a\"\nkind = \"PIVOT\"\n"
+    For path In ["", "a/", "..", "."]
+        Local text = good + "[[entity]]\npath = \"{path}\"\nkind = \"PIVOT\"\n"
+        Expect(SceneFuzzRead(world, text), "refused: {path}")
+    End For
+    For path In ["/", "/a", "a//b", "a/../b", "b/a"]
+        Local text = good + "[[entity]]\npath = \"{path}\"\nkind = \"PIVOT\"\n"
+        Expect(!SceneFuzzRead(world, text), "read: {path}")
+    End For
+End Function
+
+// A tree thousands deep, or wide, is read or refused, not a stack overflow.
+@Test
+Function ATreeDeepOrWideIsReadOrRefused()
+    Local world = SceneFuzzWorld()
+    Defer world.Free()
+    Local deep = StringBuilder()
+    deep.Append("format = 1\n")
+    Local path = "a"
+    For depth = 0 Until 3000
+        deep.Append("[[entity]]\npath = \"{path}\"\nkind = \"PIVOT\"\n")
+        path = path + "/a"
+    End For
+    Expect(SceneFuzzRead(world, deep.ToString()), "3000 deep")
+    Local wide = StringBuilder()
+    wide.Append("format = 1\n[[entity]]\npath = \"top\"\nkind = \"PIVOT\"\n")
+    For at = 0 Until 5000
+        wide.Append("[[entity]]\npath = \"top/{at}\"\nkind = \"PIVOT\"\n")
+    End For
+    Expect(SceneFuzzRead(world, wide.ToString()), "5000 wide")
+End Function
+
+// Whole numbers past what they're held in are refused, not wrapped.
+@Test
+Function WholeNumbersPastTheirsAreRefused()
+    Local world = SceneFuzzWorld()
+    Defer world.Free()
+    Local light = "format = 1\n[[entity]]\npath = \"a\"\nkind = \"LIGHT\"\n"
+    Local pivot = "format = 1\n[[entity]]\npath = \"a\"\nkind = \"PIVOT\"\n"
+    For each In [pivot + "group = 9223372036854775807\n", pivot + "group = -1\n",
+                 pivot + "group = 4294967296\n", light + "shadow_size = 9223372036854775807\n",
+                 light + "shadow_size = -5\n", light + "cascades = 2147483648\n",
+                 light + "cascades = -1\n"]
+        Expect(!SceneFuzzRead(world, each), "read: {each}")
+    End For
+End Function

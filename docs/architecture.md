@@ -135,6 +135,16 @@ good modern engine on its own. Every structural choice is checked against both.
 
 ## The renderer
 
+- **No GPU, for a dedicated server** (2026-11-08): nothing loads Vulkan until something draws, makes
+  a Texture, or shows a window, so World, entities, picks, scene files, physics, audio on MANUAL,
+  Flip with no window, and an untextured Model all run with no driver, loader, or display. A Model
+  makes its Textures as it loads, which would start the GPU, so a server calls
+  `Gpu.SetDisabled(True)` (`fbe_gpu_set_disabled`) before anything else: Vulkan's instance and
+  device are refused ("the GPU is disabled"), so a Model loads without its images (its materials
+  keep their factors, TextureOf is Null), and a Texture or a draw throws. It's explicit, not a
+  fallback when the GPU can't start, so a player's broken driver still says so, and a server on a
+  machine with a GPU never makes a device. It's refused while the GPU's started. examples/
+  dedicated_server runs so in ctest, with no Vulkan driver given.
 - **Vulkan 1.2** with dynamic rendering, synchronization2, descriptor indexing (bindless
   textures), and buffer device addresses (shaders read buffers through addresses in push
   constants), through volk and VMA; MoltenVK on macOS supports that set. Two frames in flight.
