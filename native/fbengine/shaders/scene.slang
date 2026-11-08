@@ -334,7 +334,8 @@ struct Camera
     uint shadowAtlas;
     // What's left of the LOD bias, which the samplers couldn't take, as Metal's can't.
     float lodBias;
-    // The rows of what turns its view's directions into the world's.
+    // The rows of what turns its view's directions into the world's, each with where the eye is on
+    // that axis in its w.
     float4 worldRows[3];
     Environment environment;
     uint hasEnvironment;

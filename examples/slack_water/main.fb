@@ -46,6 +46,7 @@ Import "./res" As Res
 Import "./plants"
 Import "./screenmode"
 Import "./screens"
+Import "./shapes"
 Import "./sea"
 Import "./settings"
 Import "./sky"
@@ -247,13 +248,26 @@ End Function
 // by what `image` shows of it from `camera`, with the sea at `height`, its channels' bytes summed
 // over how many were seen; and how many.
 Function ColorAtDepth(camera: Camera, image: Image, height: Float, depth: Float): (Vec3, Int)
+    Return ColorAtDepth(camera, image, height, depth, Vec2(MAIN_X, 0.0), Vec2(0.0, 1.0), 20.0, 1.0)
+End Function
+
+// The same, along the shore that's out from `from` toward `outward`, every `spacing` meters for `wide`
+// meters each side of it.
+Function ColorAtDepth(camera: Camera, image: Image, height: Float, depth: Float, from: Vec2,
+                      outward: Vec2, wide: Float, spacing: Float): (Vec3, Int)
     Local sum = Vec3(0.0, 0.0, 0.0)
     Local seen = 0
-    For across = -20 To 20
-        Local x = MAIN_X + (across As Float)
-        Local z: Float = 0.0
-        While height - GroundHeight(x, z) < depth && z < 100.0
-            z += 0.05
+    Local beside = Vec2(-outward.y, outward.x)
+    Local count = (wide * 2.0 / spacing) As Int
+    For at = 0 To count
+        Local across = (at As Float) * spacing - wide
+        Local x = from.x + beside.x * across
+        Local z = from.y + beside.y * across
+        Local out: Float = 0.0
+        While height - GroundHeight(x, z) < depth && out < 100.0
+            x += outward.x * 0.05
+            z += outward.y * 0.05
+            out += 0.05
         End While
         Local pixel = PixelOf(camera, image, Vec3(x, height, z))
         If pixel != Null
@@ -268,6 +282,36 @@ End Function
 Function SeaAtDepth(camera: Camera, image: Image, height: Float, depth: Float): (Float, Int)
     Local color, seen = ColorAtDepth(camera, image, height, depth)
     Return (color.x + color.y + color.z, seen)
+End Function
+
+// The same, along the shore out from `from` toward `outward`, 5 meters each side of it.
+Function SeaAtDepth(camera: Camera, image: Image, height: Float, depth: Float, from: Vec2,
+                    outward: Vec2): (Float, Int)
+    Local color, seen = ColorAtDepth(camera, image, height, depth, from, outward, 5.0, 0.25)
+    Return (color.x + color.y + color.z, seen)
+End Function
+
+// Where the main rock's coast is sandy, the first round it from the south that's sand from slack
+// water's edge up to high water's, and not the shelf: where its edge is at slack water, and its angle
+// round the mill.
+Function SandyShore(): (Float, Float, Float)
+    For step = 0 Until 126
+        Local angle = Pi / 2.0 + (step As Float) * 0.05
+        Local reach = CoastAt(angle)
+        Local sandy = True
+        Local inward: Float = 0.5
+        While sandy && inward < 30.0
+            Local x = MAIN_X + Cos(angle) * (reach - inward)
+            Local z = Sin(angle) * (reach - inward)
+            Local height = GroundHeight(x, z)
+            If height > SeaHeight(TIDE_IN_AT) + 0.2 Then Break
+            sandy = SandShownAt(x, z, height, 0.1) > 0.6 && ShelfAt(x, z, height) == 0.0
+            inward += 0.5
+        End While
+        If sandy && inward < 30.0 Then Return (MAIN_X + Cos(angle) * reach, Sin(angle) * reach,
+                                               angle)
+    End For
+    Return (MAIN_X, 30.0, Pi / 2.0)
 End Function
 
 // How far apart two colors are, by their channels' bytes.
@@ -493,7 +537,8 @@ Function CheckBentNormals(camera: Camera, island: Island) Throws GraphicsError, 
     Local bending = looked(True, True)
     Local unbent = looked(False, True)
     Local still = looked(False, False)
-    Local middle = Vec3(MAIN_X, 60.0, 80.0)
+    // Out over the sea, past the lighthouse's beam's reach, which turns as it's drawn.
+    Local middle = Vec3(MAIN_X, 60.0, 260.0)
     island.Grown().SetShown(False)
     Local sides = [(Vec3(0.0, 0.0, -0.6), Vec3(0.0, 2.0, 0.0), Vec3(0.0, 0.0, 1.2),
                     Vec3(1.0, 0.0, 0.0),
@@ -518,12 +563,47 @@ Function CheckBentNormals(camera: Camera, island: Island) Throws GraphicsError, 
     island.Grown().SetShown(True)
 End Function
 
+// Where a person stands to look at the mill over its turf: of places 18 to 30 meters from it, all
+// round, on land, the one with the most turf on the way, from 2 to 12 meters out toward the mill.
+Function GrassyStand(): Vec2
+    Local best = Vec2(MAIN_X - 24.0, 18.0)
+    Local most = -1.0
+    For step = 0 Until 32
+        Local angle = (step As Float) * Pi / 16.0
+        For reach In [18.0, 24.0, 30.0]
+            Local x = MAIN_X + Cos(angle) * reach
+            Local z = Sin(angle) * reach
+            If GroundHeight(x, z) < 1.0 || Blocked(x, z) Then Continue
+            Local turf = 0.0
+            For out = 2 To 12
+                Local tx = x - Cos(angle) * (out As Float)
+                Local tz = z - Sin(angle) * (out As Float)
+                Local height = GroundHeight(tx, tz)
+                Local dx = GroundHeight(tx + 1.0, tz) - GroundHeight(tx - 1.0, tz)
+                Local dz = GroundHeight(tx, tz + 1.0) - GroundHeight(tx, tz - 1.0)
+                turf += TurfAt(tx, tz, height, Sqrt(dx * dx + dz * dz) / 2.0)
+            End For
+            If turf > most
+                most = turf
+                best = Vec2(x, z)
+            End If
+        End For
+    End For
+    Return best
+End Function
+
 // What grows, saved to look at, and what it's for, by the pixels and where it is.
 Function SavePlants(folder: Path, camera: Camera, island: Island) Throws GraphicsError, IOError
+    // Its views compare frames drawn one after another, as they'd be with no antialiasing over
+    // frames, whose history would blend each into the next.
+    Local smoothed = camera.TemporalAA()
+    camera.SetTemporalAA(False)
+    Defer camera.SetTemporalAA(smoothed)
     Try CheckBentNormals(camera, island)
     Local grown = island.Grown()
     grown.Sway(10.0)
-    Local eye = Vec3(MAIN_X - 24.0, GroundHeight(MAIN_X - 24.0, 18.0) + 1.7, 18.0)
+    Local stand = GrassyStand()
+    Local eye = Vec3(stand.x, GroundHeight(stand.x, stand.y) + 1.7, stand.y)
     camera.SetPosition(eye)
     camera.PointAt(Vec3(MAIN_X, GroundHeight(MAIN_X, 0.0) + 1.0, 0.0))
     Local with = Try SavedAs(island, folder, "plants")
@@ -573,8 +653,9 @@ Function SavePlants(folder: Path, camera: Camera, island: Island) Throws Graphic
     Checks("a tuft's levels have fewer blades, then a card, then none",
            levelCount == 4 && levels.Count == 5 && levels[0] > levels[1] && levels[1] > levels[2] &&
            levels[2] > levels[3] && levels[3] > 0 && levels[4] == 0)
-    // From high over the island, every tuft's past its last level, so the grass draws nothing.
-    camera.SetPosition(Views()[0].1)
+    // From high over the island, every tuft's past its last level, so the grass draws nothing: from
+    // the island's view, twice as far off along it, as this island's grass clusters wider.
+    camera.SetPosition(Views()[0].2 + (Views()[0].1 - Views()[0].2) * 2.0)
     camera.PointAt(Views()[0].2)
     grown.SetGrassShown(False)
     Local farWithout = Try TrianglesDrawn(island)
@@ -807,10 +888,6 @@ Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws Grap
     camera.SetPosition(Vec3(MAIN_X - 16.0, 4.5, shoreZ + 9.0))
     camera.PointAt(Vec3(MAIN_X + 2.0, 0.0, shoreZ - 1.0))
     Local shore = Try SavedAs(island, folder, "shore")
-    Local edge, edges = SeaAtDepth(camera, shore, 0.0, 0.05)
-    Local deep, deeps = SeaAtDepth(camera, shore, 0.0, 2.2)
-    Checks("the sea has foam at its edge, none where it's deep",
-           edges > 10 && deeps > 10 && edge > deep + 40.0)
 
     // It hides what's under it by how deep it is, which shows by taking that away.
     island.SetGroundHidden(True)
@@ -822,15 +899,6 @@ Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws Grap
     Local deepBare, _ = ColorAtDepth(camera, bare, 0.0, 2.2)
     Checks("the ground shows through what's shallow", Apart(shallowWith, shallowBare) > 20.0)
     Checks("and not through what's deep", Apart(deepWith, deepBare) < 25.0)
-
-    // It goes up the shore with the tide.
-    camera.SetPosition(Vec3(MAIN_X - 16.0, 6.0, shoreZ + 9.0))
-    island.Update(TIDE_IN_AT)
-    Local high = Try Shown(island)
-    Local wasEdge, _ = SeaAtDepth(camera, high, SeaHeight(TIDE_IN_AT), SeaHeight(TIDE_IN_AT) + 0.05)
-    Local nowEdge, _ = SeaAtDepth(camera, high, SeaHeight(TIDE_IN_AT), 0.05)
-    Checks("its foam goes up the shore with the tide", nowEdge > wasEdge + 70.0)
-    island.Update(0.0)
 
     // Its foam rolls in, at a depth it's at one moment and not the next.
     camera.SetPosition(Vec3(MAIN_X - 16.0, 4.5, shoreZ + 9.0))
@@ -1019,6 +1087,43 @@ Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws Grap
                across < unwrapped * 2 + 200)
     End For
     island.Update(0.0)
+    // Its foam, over a sandy shore, where it shows: the first round the main rock from the south
+    // that's sand up to high water, seen along the coast with the sun behind, so its glare's not on the
+    // deep water.
+    Local sandy = SandyShore()
+    Local outward = Vec2(Cos(sandy.2), Sin(sandy.2))
+    Local beside = Vec2(-outward.y, outward.x)
+    Local onSand = Function(up: Float, out: Float, aside: Float): Vec3
+        Return Vec3(sandy.0 - beside.x * aside + outward.x * out, up,
+                    sandy.1 - beside.y * aside + outward.y * out)
+    End Function
+    Local sandyAt = Vec3(sandy.0 + beside.x * 2.0 - outward.x, 0.0,
+                         sandy.1 + beside.y * 2.0 - outward.y)
+    camera.SetPosition(onSand(4.5, 22.0, 12.0))
+    camera.PointAt(sandyAt)
+    Local foamy = Try SavedAs(island, folder, "shore_sand")
+    Local inland = Vec2(sandy.0 - outward.x * 40.0, sandy.1 - outward.y * 40.0)
+    Local edge, edges = SeaAtDepth(camera, foamy, 0.0, 0.05, inland, outward)
+    Local deep, deeps = SeaAtDepth(camera, foamy, 0.0, 2.2, inland, outward)
+    Checks("the sea has foam at its edge, none where it's deep, {edge} against {deep}",
+           edges > 10 && deeps > 10 && edge > deep + 40.0)
+    // It goes up the shore with the tide: where its edge was is under it, and where it's come to,
+    // the sea shows over the sand, bluer than it is dry. Its foam there's a thin line, as the shore's
+    // steeper at the top of the sand.
+    camera.SetPosition(onSand(6.0, 9.0, 16.0))
+    Local low = Try Shown(island)
+    island.Update(TIDE_IN_AT)
+    Local flooded = Try SavedAs(island, folder, "shore_sand_high")
+    Local high = SeaHeight(TIDE_IN_AT)
+    Local wasEdge, _ = ColorAtDepth(camera, low, 0.0, 0.05, inland, outward, 5.0, 0.25)
+    Local nowOver, _ = ColorAtDepth(camera, flooded, 0.0, 0.05, inland, outward, 5.0, 0.25)
+    Local nowEdge, _ = ColorAtDepth(camera, flooded, high, 0.05, inland, outward, 5.0, 0.25)
+    Local dryEdge, _ = ColorAtDepth(camera, low, high, 0.05, inland, outward, 5.0, 0.25)
+    Checks(
+        "its edge goes up the shore with the tide, {Apart(wasEdge, nowOver)} apart where it was, " +
+        "{nowEdge.z} blue where it is against {dryEdge.z} dry",
+        Apart(wasEdge, nowOver) > 100.0 && nowEdge.z > dryEdge.z + 8.0)
+    island.Update(0.0)
 End Function
 
 // How much brighter, of 765, the sea `image` shows from `eye` is where its mirror goes to cloud than
@@ -1074,6 +1179,10 @@ Function SaveViews(folder: Path, stillsOnly: Bool = False) Throws GraphicsError,
     Defer Assets.StopWatching()
     Local island = Try Island.Make()
     Defer island.Free()
+    // The grass hidden for every still but the plants' own, whose checks are about it: drawn, it's
+    // most of a frame's time on a GPU of software.
+    island.Grown().SetGrassShown(False)
+    lap = Lap("the island's making", lap)
     Local camera = Camera()
     Looked(camera)
     Checks("it's drawn with ambient occlusion, antialiasing over frames, and bloom",
@@ -1104,7 +1213,9 @@ Function SaveViews(folder: Path, stillsOnly: Bool = False) Throws GraphicsError,
         camera.SetTemporalAA(False)
         camera.SetFxaa(False)
         Try SaveSeaAndSky(folder, camera, island)
+        island.Grown().SetGrassShown(True)
         Try SavePlants(folder, camera, island)
+        island.Grown().SetGrassShown(False)
         Looked(camera)
         lap = Lap("the sea and sky", lap)
     End If
@@ -1326,6 +1437,212 @@ Function SeenIn(island: Island, camera: Camera, image: Image, thing: Entity,
     Return DiffersNear(camera, image, without, place)
 End Function
 
+// How much fine detail is in `image`'s bottom third, its foreground: the mean of how far each pixel's
+// brightness is from its four neighbors'.
+Function FineDetail(image: Image): Float
+    Local sum = 0.0
+    Local count = 0
+    For y = (image.Height * 2) / 3 Until image.Height - 1
+        For x = 1 Until image.Width - 1
+            Local here = Luma(image[x, y]) * 4.0
+            Local around = Luma(image[x - 1, y]) + Luma(image[x + 1, y]) + Luma(image[x, y - 1]) +
+                           Luma(image[x, y + 1])
+            sum += Abs(here - around)
+            count += 1
+        End For
+    End For
+    Return sum / (count As Float)
+End Function
+
+// What the ground's own detail is at (`x`, `y`): how much brighter `with` it is than `without`.
+Function DetailAt(with: Image, without: Image, x: Int, y: Int): Float
+    Return Luma(with[x, y]) - Luma(without[x, y])
+End Function
+
+// How much more the ground's own detail, `with` it against `without`, changes across than up and
+// down, in the `half` pixels round `at` each way: about 1 for detail that's alike every way, more for
+// what's stretched up and down, less for what's stretched across.
+Function Stretched(with: Image, without: Image, at: Vec2, half: Int): Float
+    Local across = 0.0
+    Local up = 0.0
+    For y = Max((at.y As Int) - half, 0) Until Min((at.y As Int) + half, with.Height - 1)
+        For x = Max((at.x As Int) - half, 0) Until Min((at.x As Int) + half, with.Width - 1)
+            Local here = DetailAt(with, without, x, y)
+            across += Abs(DetailAt(with, without, x + 1, y) - here)
+            up += Abs(DetailAt(with, without, x, y + 1) - here)
+        End For
+    End For
+    Return across / Max(up, 0.001)
+End Function
+
+// How far from alike every way rock's grain may be on a wall, as Abs(Log(Stretched)): mapped three
+// ways, as it is, it was 0.05 facing z and 0.01 facing x; mapped from above alone, stretched down the
+// wall, 5.4 and 15; by its height alone, banded across it, no change across at all.
+Const ROCK_ALIKE: Float = 0.4
+
+// How much the sand's detail along the shore may change from pixel to pixel a few meters off, by
+// DetailAround.
+Const SHIMMER: Float = 9.0
+
+// How alike the ground's detail round a point must stay when the eye moves 0.3 m, by DetailAlike: it
+// was 0.97, the world's, and 0.83 with the noise in the camera's view.
+Const WORLD_LOCKED: Float = 0.9
+
+// How much the ground's own detail, `with` it against `without`, changes from pixel to pixel in the
+// `half` pixels round `at` each way: the mean of how far each one's is from its four neighbors'.
+Function DetailAround(with: Image, without: Image, at: Vec2, half: Int): Float
+    Local sum = 0.0
+    Local count = 0
+    For y = (at.y As Int) - half To (at.y As Int) + half
+        For x = (at.x As Int) - half To (at.x As Int) + half
+            If x < 1 || y < 1 || x >= with.Width - 1 || y >= with.Height - 1 Then Continue
+            Local around = DetailAt(with, without, x - 1, y) + DetailAt(with, without, x + 1, y) +
+                           DetailAt(with, without, x, y - 1) + DetailAt(with, without, x, y + 1)
+            sum += Abs(DetailAt(with, without, x, y) * 4.0 - around)
+            count += 1
+        End For
+    End For
+    Return count > 0 ? sum / (count As Float) : 0.0
+End Function
+
+// How alike the ground's own detail is round `one` in the first pair of images and round `other` in
+// the second, `half` pixels each way: their correlation, 1 for the same, about 0 for unrelated.
+Function DetailAlike(with: Image, without: Image, one: Vec2, laterWith: Image, laterWithout: Image,
+                     other: Vec2, half: Int): Float
+    Local first: Float[] = []
+    Local second: Float[] = []
+    For dy = -half To half
+        For dx = -half To half
+            first.Add(DetailAt(with, without, (one.x As Int) + dx, (one.y As Int) + dy))
+            second.Add(DetailAt(laterWith, laterWithout, (other.x As Int) + dx,
+                                (other.y As Int) + dy))
+        End For
+    End For
+    Local n = first.Count As Float
+    Local meanFirst = 0.0
+    Local meanSecond = 0.0
+    For at = 0 Until first.Count
+        meanFirst += first[at] / n
+        meanSecond += second[at] / n
+    End For
+    Local both = 0.0
+    Local firstSpread = 0.0
+    Local secondSpread = 0.0
+    For at = 0 Until first.Count
+        both += (first[at] - meanFirst) * (second[at] - meanSecond)
+        firstSpread += (first[at] - meanFirst) * (first[at] - meanFirst)
+        secondSpread += (second[at] - meanSecond) * (second[at] - meanSecond)
+    End For
+    Return both / Max(Sqrt(firstSpread * secondSpread), 0.001)
+End Function
+
+// How far apart two images are: the mean of how far each pixel's brightness is, and how many of
+// their pixels are more than 2 apart.
+Function Apart(one: Image, other: Image): (Float, Int)
+    Local sum = 0.0
+    Local far = 0
+    For y = 0 Until one.Height
+        For x = 0 Until one.Width
+            Local by = Abs(Luma(one[x, y]) - Luma(other[x, y]))
+            sum += by
+            If by > 2.0 Then far += 1
+        End For
+    End For
+    Return (sum / ((one.Width * one.Height) As Float), far)
+End Function
+
+// What `island` looks like as `camera` sees it, with the ground's own shader, and without: with no
+// temporal antialiasing, whose jitter moves each frame its own way.
+Function WithAndWithout(island: Island, camera: Camera, ground: Material?,
+                        own: Shader?): (Image, Image) Throws GraphicsError
+    Local smoothed = camera.TemporalAA()
+    camera.SetTemporalAA(False)
+    island.Drawn(camera)
+    Local with = Try Screen.ToImage()
+    Flip(False)
+    ground?.SetShader(Null)
+    island.Drawn(camera)
+    Local without = Try Screen.ToImage()
+    Flip(False)
+    ground?.SetShader(own)
+    camera.SetTemporalAA(smoothed)
+    Return (with, without)
+End Function
+
+// What fine detail the ground up close has at least, of FineDetail's.
+Const GROUND_FINE_DETAIL: Float = 6.0
+
+// The ground's own shader on a square 2 meters across, colored `cover`, its face turned to `facing`,
+// before `camera`, high over the island, as each of `shown`, parameter 0's w, shows it: its face's
+// middle, 81 pixels a side, with no temporal antialiasing.
+@MainThread
+Function OnASquare(island: Island, camera: Camera, ground: Material?, cover: Color32, facing: Vec3,
+                   shown: Float[]): Image[] Throws GraphicsError
+    Local images: Image[] = []
+    If ground == Null Then Return images
+    Local image = Image(1, 1)
+    image[0, 0] = cover
+    Local covered = Try Texture.FromImage(image, False, TextureFormat.RGBA8)
+    Local material = ground.Clone()
+    material.SetTexture(0, covered)
+    Local given = ground.Parameter(0)
+    Local previous = World.Current()
+    World.SetCurrent(island.Scene())
+    Local square = Mesh(Beveled(Vec3(1.0, 1.0, 0.05), 0.01))
+    World.SetCurrent(previous)
+    square.SetMaterial(material)
+    Local place = Vec3(MAIN_X, 300.0, 0.0)
+    square.SetPosition(place)
+    square.SetRotation(Quat.FromTo(Vec3(0.0, 0.0, 1.0), facing))
+    camera.SetPosition(place + facing * 4.0)
+    camera.PointAt(place)
+    Local smoothed = camera.TemporalAA()
+    camera.SetTemporalAA(False)
+    For mode In shown
+        material.SetParameter(0, Vec4(given.x, given.y, given.z, mode))
+        island.Drawn(camera)
+        Local whole = Try Screen.ToImage()
+        Flip(False)
+        Local middle = Image(81, 81)
+        For y = 0 Until 81
+            For x = 0 Until 81
+                middle[x, y] = whole[whole.Width / 2 - 40 + x, whole.Height / 2 - 40 + y]
+            End For
+        End For
+        images.Add(middle)
+    End For
+    camera.SetTemporalAA(smoothed)
+    square.Free()
+    Return images
+End Function
+
+// How far from a half, in brightness, the sum of the ground's covers' weights shows, on a square half
+// steep, its up 0.63, colored between turf and sand: the most of any pixel.
+@MainThread
+Function WeightsShown(island: Island, camera: Camera, ground: Material?): Float Throws GraphicsError
+    Local images = Try OnASquare(island, camera, ground, Color32(128, 153, 77, 255),
+                                 Normalize(Vec3(0.0, 0.633, 0.774)), [1.0, 2.0])
+    If images.Count < 2 Then Return 1000.0
+    Local most = 0.0
+    For y = 0 Until images[0].Height
+        For x = 0 Until images[0].Width
+            most = Max(most, Abs(Luma(images[0][x, y]) - Luma(images[1][x, y])))
+        End For
+    End For
+    Return most
+End Function
+
+// How stretched rock's detail is on a wall facing `facing`, seen square on, as Stretched has it: the
+// shader showing rock's detail alone, against a half.
+@MainThread
+Function RockStretched(island: Island, camera: Camera, ground: Material?,
+                       facing: Vec3): Float Throws GraphicsError
+    Local images = Try OnASquare(island, camera, ground, Color32(110, 110, 110, 255), facing,
+                                 [3.0, 2.0])
+    If images.Count < 2 Then Return 1000.0
+    Return Stretched(images[0], images[1], Vec2(40.0, 40.0), 39)
+End Function
+
 // What the GPU takes for a frame of what `camera` sees, in milliseconds: the middle of 16, after 4 to
 // settle.
 Function FrameMilliseconds(island: Island): Float
@@ -1497,6 +1814,207 @@ Function CheckLandmarks(folder: Path, island: Island, camera: Camera) Throws Gra
     Checks("and it's seen", Try SeenIn(island, camera, shore, pieces[3].1,
                                        Vec3(nearest.x, GroundHeight(nearest.x, nearest.y) + 0.1,
                                             nearest.y)))
+    // The sand along the shore doesn't shimmer a few meters off: its detail doesn't step from one pair
+    // of pixels to the next, as a bump's slope, taken a pair at a time, does where the height bends
+    // within a pair. What changes from pixel to pixel there, on the way to the sea, was 5.4, 5.3, 4.2,
+    // and 3.5; with the bump kept however far, 33, 32, 20, and 13.
+    Local sandGround = island.GroundMaterial()
+    Local sand = Try WithAndWithout(island, camera, sandGround, sandGround?.Shader())
+    Local shimmer = 0.0
+    For at In [Vec2(0.19, 0.68), Vec2(0.31, 0.65), Vec2(0.5, 0.58), Vec2(0.7, 0.53)]
+        Local x = at.x * (sand.0.Width As Float)
+        Local y = at.y * (sand.0.Height As Float)
+        shimmer = Max(shimmer, DetailAround(sand.0, sand.1, Vec2(x, y), 40))
+    End For
+    Checks("and the sand along it doesn't shimmer, {shimmer} at most", shimmer < SHIMMER)
+    // The rock shelf, from over it: at slack water its pools hold the sea, and at high water the sea's
+    // over all of it.
+    // Over where most of its pools are, on it.
+    Local shelfAt = Vec2(SHELF_MIDDLE, 30.0)
+    Local most = -1
+    For across = -40 To 40
+        For along = 30 To 120
+            Local x = SHELF_MIDDLE + (across As Float) * 0.5
+            Local z = (along As Float) * 0.5
+            If ShelfAt(x, z, GroundHeight(x, z)) < 0.95 Then Continue
+            Local around = 0
+            For dx = -4 To 4
+                For dz = -4 To 4
+                    Local nx = x + (dx As Float)
+                    Local nz = z + (dz As Float)
+                    Local height = GroundHeight(nx, nz)
+                    If height < 0.0 && ShelfAt(nx, nz, height) > 0.95 Then around += 1
+                End For
+            End For
+            If around > most
+                most = around
+                shelfAt = Vec2(x, z)
+            End If
+        End For
+    End For
+    camera.SetPosition(Vec3(shelfAt.x + 2.0, 9.0, shelfAt.y + 7.0))
+    camera.PointAt(Vec3(shelfAt.x, 0.0, shelfAt.y))
+    island.Update(0.0)
+    island.Drawn(camera)
+    Local low = Try Screen.ToImage()
+    Try Screen.Save(folder / "shelf.png")
+    Flip(False)
+    island.Update(TIDE_IN_AT)
+    island.Drawn(camera)
+    Local high = Try Screen.ToImage()
+    Try Screen.Save(folder / "shelf_high.png")
+    Flip(False)
+    island.Update(0.0)
+    // Each point of it: how much bluer than red it's drawn at slack water, if it's a pool, and at high.
+    Local poolBlue: Int[] = []
+    Local dryBlue: Int[] = []
+    Local covered = 0
+    Local onShelf = 0
+    For across = -8 To 8
+        For along = -8 To 8
+            Local x = shelfAt.x + (across As Float) * 0.5
+            Local z = shelfAt.y + (along As Float) * 0.5
+            Local height = GroundHeight(x, z)
+            If ShelfAt(x, z, height) < 0.95 Then Continue
+            Local seen = PixelOf(camera, low, Vec3(x, Max(height, 0.0), z))
+            Local seenHigh = PixelOf(camera, high, Vec3(x, Max(height, SeaHeight(TIDE_IN_AT)), z))
+            If seen == Null || seenHigh == Null Then Continue
+            onShelf += 1
+            Local blue = (seen.b As Int) - (seen.r As Int)
+            If height < 0.0 && PoolAt(x, z) < -0.1 Then poolBlue.Add(blue)
+            If height > 0.05 Then dryBlue.Add(blue)
+            If (seenHigh.b As Int) > (seenHigh.r As Int) + 30 Then covered += 1
+        End For
+    End For
+    // The pools bluer than the dry shelf, by the sea in them, the shallows showing the rock under.
+    Local dryMean = 0
+    For blue In dryBlue
+        dryMean += blue
+    End For
+    dryMean = dryBlue.Count > 0 ? dryMean / dryBlue.Count : 0
+    Local poolMean = 0
+    For blue In poolBlue
+        poolMean += blue
+    End For
+    poolMean = poolBlue.Count > 0 ? poolMean / poolBlue.Count : -1000
+    Checks("the shelf's pools hold the sea at slack water, {poolMean} bluer than red against its " +
+           "{dryBlue.Count} dry points' {dryMean}", onShelf > 40 && poolBlue.Count > 3 &&
+           poolMean > dryMean + 10 && dryBlue.Count > onShelf / 3)
+    Checks("and at high water the sea's over it, {covered} of {onShelf}",
+           covered > onShelf * 9 / 10)
+    Print("the ground's erosion took {ErosionSeconds()} s, of {DROPS} drops")
+    // What grows, hidden while the ground's own detail is looked at, as it covers the turf.
+    island.Grown().SetShown(False)
+    Defer island.Grown().SetShown(True)
+    // The ground up close, at a person's eye, on the turf west of the mill: fine detail in its
+    // foreground, which the cover map alone, its texels half a meter, smears.
+    Local standX = MAIN_X - 12.0
+    Local standZ = 16.0
+    Local eye = Vec3(standX, GroundHeight(standX, standZ) + 1.7, standZ)
+    camera.SetPosition(eye)
+    camera.PointAt(Vec3(standX + 1.0, GroundHeight(standX + 1.0, standZ - 6.0), standZ - 6.0))
+    island.Drawn(camera)
+    Try Screen.Save(folder / "ground_close.png")
+    Flip(False)
+    Local ground = island.GroundMaterial()
+    Local own = ground?.Shader()
+    Local pair = Try WithAndWithout(island, camera, ground, own)
+    Local detailed = pair.0
+    Local smeared = pair.1
+    Local fine = FineDetail(detailed)
+    Local smear = FineDetail(smeared)
+    Checks("the ground up close has fine detail, {fine} against {smear} without",
+           fine > smear * 1.5 &&
+           fine > GROUND_FINE_DETAIL)
+    // Its detail fades as it goes away, rather than shimmering: what changes from pixel to pixel 3, 6,
+    // and 11 meters out along the ground.
+    Local ahead = Normalize(Vec2(1.0, -6.0))
+    Local energies: Float[] = []
+    For out In [3.0, 6.0, 11.0]
+        Local x = standX + ahead.x * out
+        Local z = standZ + ahead.y * out
+        Local at = camera.Project(Vec3(x, GroundHeight(x, z), z))
+        If at == Null Then Continue
+        energies.Add(DetailAround(detailed, smeared, Vec2(at.x, at.y), 12))
+    End For
+    // It was 5.9, 1.3, and 1.2; with its finest octaves kept past a pixel, 7.8, 6.3, and 27.
+    Checks("its detail fades as it goes away, {energies}",
+           energies.Count == 3 && energies[1] < energies[0] && energies[2] < energies[1])
+    // It's the world's: moved a little, the eye sees the same detail on the same ground.
+    Local fixedX = standX + ahead.x * 4.0
+    Local fixedZ = standZ + ahead.y * 4.0
+    Local fixed = Vec3(fixedX, GroundHeight(fixedX, fixedZ), fixedZ)
+    Local seenBefore = camera.Project(fixed)
+    Local nudge = Vec3(0.3, 0.05, 0.0)
+    camera.SetPosition(eye + nudge)
+    camera.PointAt(Vec3(standX + 1.0, GroundHeight(standX + 1.0, standZ - 6.0), standZ - 6.0) +
+                   nudge)
+    Local moved = Try WithAndWithout(island, camera, ground, own)
+    Local seenAfter = camera.Project(fixed)
+    Local alike = -1.0
+    If seenBefore != Null && seenAfter != Null
+        alike = DetailAlike(detailed, smeared, Vec2(seenBefore.x, seenBefore.y), moved.0, moved.1,
+                            Vec2(seenAfter.x, seenAfter.y), 10)
+    End If
+    Checks("and it's the world's, moved a little, {alike} alike", alike > WORLD_LOCKED)
+    // Far off, past where it's faded, the ground's as if it had no shader of its own.
+    camera.SetPosition(Vec3(MAIN_X, 70.0, 0.0))
+    camera.PointAt(Vec3(MAIN_X + 1.0, 0.0, 0.0))
+    Local farOff = Try WithAndWithout(island, camera, ground, own)
+    Local apart = Apart(farOff.0, farOff.1)
+    // It was the same to the bit; with no fade, 2.9 apart, and 400843 pixels by more than 2.
+    Checks("far off, the ground's as without its shader, {apart.0} apart, {apart.1} by more than 2",
+           apart.0 < 0.1 && apart.1 < 1000)
+    // Its covers' weights are each a share of the whole, on a slope half steep, colored between turf
+    // and sand: the shader showing their sum as a half each, against a half.
+    Local weights = Try WeightsShown(island, camera, ground)
+    // It was the same; their sum as it was, 8 apart.
+    Checks("its covers' weights come to the whole, {weights} from it", weights < 2.0)
+    camera.SetPosition(eye)
+    camera.PointAt(Vec3(standX + 1.0, GroundHeight(standX + 1.0, standZ - 6.0), standZ - 6.0))
+    // What the ground's own shader costs, here, where it's most of the picture: when asked.
+    If Env.Get("SLACK_WATER_COSTS") == "1"
+        Local with = FrameMilliseconds(island)
+        ground?.SetShader(Null)
+        Local without = FrameMilliseconds(island)
+        ground?.SetShader(own)
+        Print("cost of the ground's detail: {(with - without) / with * 100.0}% of {with} ms, up close")
+    End If
+    // A crag, close: fine detail on its rock, as on the ground.
+    Local crag = Vec2(0.0, 0.0)
+    Local steepest = 0.0
+    For across = -20 To 20
+        For along = -20 To 20
+            Local x = HeadlandSpot().x + (across As Float)
+            Local z = HeadlandSpot().y + (along As Float)
+            Local slope = Abs(GroundHeight(x + 0.5, z) - GroundHeight(x - 0.5, z))
+            If slope > steepest && GroundHeight(x, z) > 4.0
+                steepest = slope
+                crag = Vec2(x, z)
+            End If
+        End For
+    End For
+    Local cragHeight = GroundHeight(crag.x, crag.y)
+    Local downhill = GroundHeight(crag.x + 0.5, crag.y) > GroundHeight(crag.x - 0.5,
+                                                                       crag.y) ? -1.0 : 1.0
+    Local standing = crag.x + downhill * 5.0
+    camera.SetPosition(Vec3(standing, GroundHeight(standing, crag.y) + 1.7, crag.y + 1.0))
+    camera.PointAt(Vec3(crag.x, cragHeight + 0.5, crag.y))
+    island.Drawn(camera)
+    Try Screen.Save(folder / "crag_close.png")
+    Flip(False)
+    Local cragPair = Try WithAndWithout(island, camera, ground, own)
+    Local cliff = cragPair.0
+    Local cliffSmeared = cragPair.1
+    Checks("and a crag up close, {FineDetail(cliff)} against {FineDetail(cliffSmeared)}, {steepest} steep",
+           steepest > 1.0 && FineDetail(cliff) > FineDetail(cliffSmeared) * 1.3)
+    // Its rock's detail is alike every way on a wall, facing either way: mapped three ways, by its
+    // normal, never from above alone, which stretches it down the wall, nor by its height alone, which
+    // bands it across.
+    Local facingZ = Try RockStretched(island, camera, ground, Vec3(0.0, 0.0, 1.0))
+    Local facingX = Try RockStretched(island, camera, ground, Vec3(1.0, 0.0, 0.0))
+    Checks("and its rock's grain is alike every way on a wall, {facingZ} facing z, {facingX} x",
+           Abs(Log(facingZ)) < ROCK_ALIKE && Abs(Log(facingX)) < ROCK_ALIKE)
     // Each one's share of a frame, which takes hundreds of frames to tell: only when asked.
     If Env.Get("SLACK_WATER_COSTS") == "1" Then CostsOf(island, camera, pieces)
 End Function
@@ -3271,7 +3789,7 @@ Final Class Session
     Field low: Bool
 
     New(island: Island, last: String[], game: Game, scape: Soundscape, front: Frontend,
-        low: Bool = False)
+        low: Bool)
         Self.island = island
         Self.low = low
         Self.last = last
@@ -3287,7 +3805,7 @@ Final Class Session
     End New
 
     // One at its first moment, on `island`, with the audio started, being played, or `atTitle`, with
-    // the options kept in `file`, or the defaults for Null, drawn as a `low` GPU can, if it's one.
+    // the options kept in `file`, or the defaults for Null; drawn as a `low` GPU can, if it's one.
     @MainThread
     Static Method Make(island: Island, file: Path? = Null, atTitle: Bool = False,
                        low: Bool = False): Session Throws IOError, InputError
@@ -3298,8 +3816,7 @@ Final Class Session
         Local game = Game(island, Function(line: String)
             last[0] = line
         End Function, low)
-        Local made = Session(island, last, game, Try Soundscape.Make(game, island), front,
-                             low)
+        Local made = Session(island, last, game, Try Soundscape.Make(game, island), front, low)
         made.pointing = atTitle
         made.Applied()
         Return made

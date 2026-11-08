@@ -26,5 +26,13 @@ float4 shade(Surface surface)
     {
         return float4(1.0, 1.0, 1.0, 0.5);
     }
+    if (which == 7.0)
+    {
+        return float4(surface.world() * 0.25, 1.0);
+    }
+    if (which == 8.0)
+    {
+        return float4(surface.worldNormal() * 0.5 + float3(0.5, 0.5, 0.5), 1.0);
+    }
     return float4(surface.light(surface.normal, 0.0), 1.0);
 }

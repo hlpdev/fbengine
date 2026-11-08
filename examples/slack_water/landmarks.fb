@@ -76,6 +76,7 @@ Public Final Class Landmarks
     Field jetty: Pivot
     Field boat: Pivot
     Field litter: Pivot
+    Field boulders: Pivot
     Field litterCount: Int
     Field logs: (Mesh, Float, Float)[]
     Field bollard: Vec3
@@ -86,6 +87,7 @@ Public Final Class Landmarks
     New(lighthouse: Pivot, beam: Light, lens: Material, jetty: Pivot, boat: Pivot, litter: Pivot,
         litterCount: Int, logs: (Mesh, Float, Float)[])
         Self.logs = logs
+        boulders = Boulders(Material(Color(0.27, 0.26, 0.24)))
         Self.lighthouse = lighthouse
         Self.beam = beam
         Self.lens = lens
@@ -155,7 +157,8 @@ Public Final Class Landmarks
     @MainThread
     Public Method Pieces(): (String, Entity)[]
         Return [("lighthouse", lighthouse As Entity), ("jetty", jetty As Entity),
-                ("boat", boat As Entity), ("litter", litter As Entity)]
+                ("boat", boat As Entity), ("litter", litter As Entity),
+                ("boulders", boulders As Entity)]
     End Method
 
     /// The lens's middle, in the world.
@@ -561,4 +564,26 @@ Function Litter(wood: Material, stone: Material): (Pivot, (Mesh, Float, Float)[]
     End For
     parts.Meshes(litter)
     Return (litter, logs)
+End Function
+
+// The boulders on the slopes, at BoulderSpots: lumpy rocks, each a different one, turned and tipped,
+// four tenths in the ground; one mesh.
+@MainThread
+Function Boulders(stone: Material): Pivot
+    stone.SetMetalRough(0.0, 0.8)
+    Local boulders = Pivot()
+    Local parts = Gathered()
+    Local at = 0
+    For boulder In BoulderSpots()
+        Local place = boulder.0
+        Local reach = boulder.1
+        Local turn = Quat.FromEuler(0.15 * (Sin((at * 7) As Float64) As Float), (at As Float) * 2.3,
+                                    0.12 * (Cos((at * 5) As Float64) As Float))
+        parts.PutAt(stone, Lumpy(1.0, 300 + at),
+                    Vec3(place.x, GroundHeight(place.x, place.y) - reach * 0.4, place.y), turn,
+                    Vec3(reach, reach * 0.75, reach * 0.9))
+        at += 1
+    End For
+    parts.Meshes(boulders)
+    Return boulders
 End Function

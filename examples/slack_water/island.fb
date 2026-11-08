@@ -120,8 +120,15 @@ Function Ground(held: Texture[], heights: Float[]): Material Throws IOError, Gra
     material.SetMap(MaterialMap.METAL_ROUGH, rough)
     material.SetMapUv(MaterialMap.METAL_ROUGH, whole)
     material.SetMetalRough(0.0, 1.0)
+    // Its detail up close: each cover's own, faded out from DETAIL_NEAR to DETAIL_FAR.
+    material.SetShader(Try Assets.Load<Shader>(Res.Ground))
+    material.SetParameter(0, Vec4(SIDE As Float, DETAIL_FAR, DETAIL_FAR - DETAIL_NEAR, 0.0))
     Return material
 End Function
+
+// Where the ground's own detail starts to fade, and where it's gone, in meters from the eye.
+Const DETAIL_NEAR: Float = 12.0
+Const DETAIL_FAR: Float = 30.0
 
 /// What covers the ground of these `heights`, as two images over the whole of it: its color, and its
 /// roughness in green, as a material's map has it.
@@ -130,8 +137,9 @@ Public Function GroundCover(heights: Float[]): (Image, Image)
     Local color = Image(side, side)
     Local rough = Image(side, side)
     Local half = (SIDE As Float) / 2.0
+    // Its rows from the terrain's far edge, as a terrain's v runs against z.
     For y = 0 Until side
-        Local z = ((y As Float) + 0.5) / (COVER_PER_METER As Float)
+        Local z = (SIDE As Float) - ((y As Float) + 0.5) / (COVER_PER_METER As Float)
         For x = 0 Until side
             Local across = ((x As Float) + 0.5) / (COVER_PER_METER As Float)
             Local baked = BakedAt(heights, across, z)
