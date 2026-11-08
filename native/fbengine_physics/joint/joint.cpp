@@ -111,6 +111,17 @@ bool joined(std::uint64_t a, std::uint64_t b, joined_t& bodies) {
     return true;
 }
 
+// Whether a fixed or a slider joint's bodies, held where they are, are within most_length of each
+// other, or one is the world: one held further from the other turns it by a lever as long.
+bool near_enough(const joined_t& bodies) {
+    if (bodies.b == &JPH::Body::sFixedToWorld ||
+        within(bodies.b->GetCenterOfMassPosition() - bodies.a->GetCenterOfMassPosition(),
+               most_length)) {
+        return true;
+    }
+    return fail("a fixed or a slider joint's bodies are at most 1e5 apart, each way");
+}
+
 // The joint `settings` make between `bodies`, as `kind`, waking them. Jolt measures a joint's
 // position as its second body's from its first, so a body held to the world is its second.
 std::uint64_t made(const JPH::TwoBodyConstraintSettings& settings, const joined_t& bodies,
@@ -184,7 +195,7 @@ extern "C" {
 FBE_PHYSICS_API uint64_t fbe_joint_fixed(uint64_t a, uint64_t b) {
     const fp_mode_t fp_mode;
     joined_t bodies;
-    if (!joined(a, b, bodies)) {
+    if (!joined(a, b, bodies) || !near_enough(bodies)) {
         return 0;
     }
     JPH::FixedConstraintSettings settings;
@@ -230,7 +241,7 @@ FBE_PHYSICS_API uint64_t fbe_joint_slider(uint64_t a, uint64_t b, const fbe_join
     const fp_mode_t fp_mode;
     joined_t bodies;
     JPH::Vec3 slide;
-    if (!joined(a, b, bodies) || !axis(*along, slide)) {
+    if (!joined(a, b, bodies) || !near_enough(bodies) || !axis(*along, slide)) {
         return 0;
     }
     JPH::SliderConstraintSettings settings;
@@ -293,15 +304,15 @@ FBE_PHYSICS_API bool fbe_joint_set_limits(uint64_t joint, float low, float high)
         static_cast<JPH::HingeConstraint*>(found->constraint.GetPtr())->SetLimits(low, high);
         break;
     case FBE_JOINT_SLIDER:
-        if (!in_range(low, high, -INFINITY, INFINITY) || low > 0.0F || high < 0.0F) {
-            return fail(std::format("a slider's limits are at most 0 and at least 0, not {} and {}",
+        if (!in_range(low, high, -most_position, most_position) || low > 0.0F || high < 0.0F) {
+            return fail(std::format("a slider's limits are -1e9 to 0 and 0 to 1e9, not {} and {}",
                                     low, high));
         }
         static_cast<JPH::SliderConstraint*>(found->constraint.GetPtr())->SetLimits(low, high);
         break;
     case FBE_JOINT_DISTANCE:
-        if (!in_range(low, high, 0.0F, INFINITY)) {
-            return fail(std::format("a distance joint's limits are 0 or more, the first no more "
+        if (!in_range(low, high, 0.0F, most_position)) {
+            return fail(std::format("a distance joint's limits are 0 to 1e9, the first no more "
                                     "than the second, not {} and {}",
                                     low, high));
         }
@@ -361,10 +372,20 @@ FBE_PHYSICS_API bool fbe_joint_set_motor(uint64_t joint, int32_t mode, float tar
     if (mode < FBE_JOINT_MOTOR_OFF || mode > FBE_JOINT_MOTOR_POSITION) {
         return fail(std::format("{} isn't a motor's mode", mode));
     }
+    // A hinge's angle is -pi to pi, which Jolt brings a target to a turn at a time, so one far off
+    // hung a step; a slider's position is where a body can be; and speeds and strengths are what a
+    // body can take.
+    const bool hinge = found->kind == FBE_JOINT_HINGE;
+    const float most = mode == FBE_JOINT_MOTOR_SPEED ? most_motion
+                       : hinge                       ? JPH::JPH_PI
+                                                     : most_position;
     if (mode != FBE_JOINT_MOTOR_OFF &&
-        (!std::isfinite(target) || !std::isfinite(strength) || strength <= 0.0F)) {
-        return fail(std::format("a motor's target is finite, and its strength more than 0, not {} "
-                                "and {}",
+        (!(std::abs(target) <= most) || !(strength > 0.0F) || !(strength <= most_motion))) {
+        return fail(std::format("a motor's target is at most {} either way, and its strength more "
+                                "than 0 and at most 1e12, not {} and {}",
+                                mode == FBE_JOINT_MOTOR_SPEED ? "1e12"
+                                : hinge                       ? "pi"
+                                                              : "1e9",
                                 target, strength));
     }
     const JPH::EMotorState state = motor_state(mode);

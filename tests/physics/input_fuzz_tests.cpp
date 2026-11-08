@@ -361,6 +361,7 @@ TEST_CASE("steps, characters, and joints given the ends of a float are refused, 
             fbe_joint_set_limits(joint, -a, a);
             fbe_joint_set_spring(joint, a, a);
             fbe_joint_set_motor(joint, FBE_JOINT_MOTOR_SPEED, a, a);
+            fbe_joint_set_motor(joint, FBE_JOINT_MOTOR_POSITION, a, a);
         }
         joined.step_soundly(std::format("joints of {}", a));
     }
@@ -451,5 +452,43 @@ TEST_CASE("each limit takes what's at it and refuses what's past it", "[stabilit
     CHECK_FALSE(fbe_joint_set_spring(hinge, 0.9e-3F, 0.5F));
     CHECK(said() == "a spring's frequency is 0 or 1e-3 or more, and its damping 0 or more, not "
                     "9e-04 and 0.5");
+    // A hinge's motor to an angle -pi to pi, which Jolt brought one far off to a turn at a time,
+    // hanging the step; its speed and strength to 1e12; and a slider's to a position to 1e9.
+    CHECK(fbe_joint_set_motor(hinge, FBE_JOINT_MOTOR_POSITION, 3.14159F, 1.0F));
+    CHECK_FALSE(fbe_joint_set_motor(hinge, FBE_JOINT_MOTOR_POSITION, 1.0e9F, 1.0F));
+    CHECK(said() == "a motor's target is at most pi either way, and its strength more than 0 and "
+                    "at most 1e12, not 1e+09 and 1");
+    CHECK_FALSE(fbe_joint_set_motor(hinge, FBE_JOINT_MOTOR_POSITION, 3.2F, 1.0F));
+    CHECK(fbe_joint_set_motor(hinge, FBE_JOINT_MOTOR_SPEED, 1.0e12F, 1.0e12F));
+    CHECK_FALSE(fbe_joint_set_motor(hinge, FBE_JOINT_MOTOR_SPEED, 1.01e12F, 1.0F));
+    CHECK_FALSE(fbe_joint_set_motor(hinge, FBE_JOINT_MOTOR_SPEED, 1.0F, 1.01e12F));
+    CHECK(fbe_joint_set_motor(hinge, FBE_JOINT_MOTOR_POSITION, 1.0F, 1.0F));
+    const fbe_joint_vec3_t across{ .x = 1.0F, .y = 0.0F, .z = 0.0F };
+    const std::uint64_t slider = fbe_joint_slider(scene.bodies[4], 0, &across);
+    REQUIRE(slider != 0);
+    CHECK(fbe_joint_set_motor(slider, FBE_JOINT_MOTOR_POSITION, 1.0e9F, 1.0F));
+    CHECK_FALSE(fbe_joint_set_motor(slider, FBE_JOINT_MOTOR_POSITION, 1.01e9F, 1.0F));
+    // A slider's and a distance joint's limits, to 1e9.
+    CHECK(fbe_joint_set_limits(slider, -1.0e9F, 1.0e9F));
+    CHECK_FALSE(fbe_joint_set_limits(slider, -1.0e30F, 1.0e30F));
+    // From where a box is to a point of the world above it.
+    fbe_body_vec3_t box_at{};
+    REQUIRE(fbe_body_position(scene.bodies[3], &box_at));
+    const fbe_joint_vec3_t tied{ .x = box_at.x, .y = box_at.y, .z = box_at.z };
+    const fbe_joint_vec3_t above{ .x = box_at.x, .y = box_at.y + 5.0F, .z = box_at.z };
+    const std::uint64_t rope = fbe_joint_distance(scene.bodies[3], 0, &tied, &above);
+    REQUIRE(rope != 0);
+    CHECK(fbe_joint_set_limits(rope, 0.0F, 1.0e9F));
+    CHECK_FALSE(fbe_joint_set_limits(rope, 1.0e30F, 1.0e30F));
+    CHECK(said() == "a distance joint's limits are 0 to 1e9, the first no more than the second, "
+                    "not 1e+30 and 1e+30");
+    // A fixed or a slider joint's bodies, to 1e5 apart, as a lever is.
+    const std::uint64_t distant =
+        scene.add(scene.shapes[2], FBE_BODY_DYNAMIC, { .x = 2.0e5F, .y = 2.0F, .z = 0.0F });
+    REQUIRE(distant != 0);
+    CHECK(fbe_joint_fixed(scene.bodies[1], distant) == 0);
+    CHECK(said() == "a fixed or a slider joint's bodies are at most 1e5 apart, each way");
+    CHECK(fbe_joint_slider(scene.bodies[1], distant, &across) == 0);
+    CHECK(fbe_joint_fixed(distant, 0) != 0);
     scene.step_soundly("bodies at every limit");
 }

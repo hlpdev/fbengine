@@ -773,16 +773,6 @@ Public Final Class Island
         Render()
     End Method
 
-    /// Draws its World afresh from each of its cameras, for a check that compares what's drawn:
-    /// antialiasing over frames would blend in the frames before, smoothing away what changed.
-    @MainThread
-    Public Method RenderAfresh()
-        For seeing In scene.Cameras()
-            seeing.ResetHistory()
-        End For
-        Render()
-    End Method
-
     /// The barrels and crates by the mill, each on a pivot of its own: what it is, 0 a barrel and 1 a
     /// crate; and its size: a barrel's radius, height, and radius, its pivot at its bottom's middle, or a
     /// crate's half sizes, its pivot at its middle.

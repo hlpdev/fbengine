@@ -436,14 +436,17 @@ private:
             case JPH::EConstraintSubType::Hinge:
             case JPH::EConstraintSubType::Slider:
                 // Its motor's, how it's held turning or sliding only one way, where, its limits',
-                // then its motor's state and targets.
+                // then its motor's state, none fbe_joint_set_motor doesn't set, and its targets: a
+                // speed, and a hinge's angle, -pi to pi, which Jolt brings one to a turn at a time,
+                // so one far off hung a step, or a slider's position.
                 number(most);
                 vec2(most);
                 vec3(most);
                 number(most);
-                choice(JPH::EMotorState::PositionAndVelocity);
-                number(most_position);
-                number(most_position);
+                choice(JPH::EMotorState::Position);
+                number(most_motion);
+                number(constraint.GetSubType() == JPH::EConstraintSubType::Hinge ? JPH::JPH_PI
+                                                                                 : most_position);
                 break;
             case JPH::EConstraintSubType::Distance:
                 number(most);

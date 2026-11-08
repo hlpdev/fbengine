@@ -270,7 +270,7 @@ End Function
 
 // What the island shows now.
 Function Shown(island: Island): Image Throws GraphicsError, IOError
-    island.RenderAfresh()
+    island.Render()
     Local image = Try Screen.ToImage()
     Flip(False)
     Return image
@@ -278,7 +278,7 @@ End Function
 
 // What the island shows now, saved as `name` in `folder`.
 Function SavedAs(island: Island, folder: Path, name: String): Image Throws GraphicsError, IOError
-    island.RenderAfresh()
+    island.Render()
     Try Screen.Save(folder / "{name}.png")
     Local image = Try Screen.ToImage()
     Flip(False)
@@ -304,9 +304,9 @@ End Function
 
 // How many triangles the island's drawn with from where the camera is.
 Function TrianglesDrawn(island: Island): Int64
-    island.RenderAfresh()
+    island.Render()
     Flip(False)
-    island.RenderAfresh()
+    island.Render()
     Local drawn = Gpu.Counters().Triangles
     Flip(False)
     Return drawn
@@ -962,7 +962,7 @@ Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws Grap
     // From wherever it's seen, as far off: from 200 m along, it's still its way from there.
     Local here = camera.Position()
     camera.SetPosition(here + Vec3(200.0, 0.0, 0.0))
-    island.RenderAfresh()
+    island.Render()
     Local along = Try Screen.ToImage()
     Flip(False)
     Local seenFrom = PixelOf(camera, along, here + Vec3(200.0, 0.0, 0.0) + way * SUN_OFF)
@@ -2642,7 +2642,7 @@ Function FrameCost(device: Int32, frames: Int) Throws GraphicsError, IOError, Au
         If view.0 == lit.0 Then island.LightLamp(True)
         Flip(False)
         UpdateWorld(1.0 / 60.0)
-        island.RenderAfresh()
+        island.Render()
         If frame > 10 Then costs.Add(Gpu.Counters().GpuMilliseconds)
     End For
     Local last = Try Screen.ToImage()
@@ -2803,7 +2803,7 @@ Function Felt() Throws GraphicsError, IOError, InputError
         into = Try WentBy(game, controls, Key.W)
     End For
     Checks("the wall stops you", Abs(into.y) < 0.01)
-    island.RenderAfresh()
+    island.Render()
     Local image = Try Screen.ToImage()
     Local held = PixelOf(game.View(), image, island.PartEntity(Part.GEAR).Position(Space.WORLD))
     Checks("what's in your hand is seen against a wall", held != Null && IsWarm(held))
@@ -3020,7 +3020,7 @@ Function EndShown(folder: Path) Throws GraphicsError, IOError, AudioError, Input
     Try Stepped(session, 35)
     Checks("dark says so", session.ending.Says() ==
            "The lamp stays dark\nThe tide came in with the sluice shut.\n0 of 3 parts fitted")
-    island.RenderAfresh()
+    island.Render()
     Local bare = Try Screen.ToImage()
     session.ending.Draw()
     Try Screen.Save(folder / "end_dark.png")
@@ -3131,7 +3131,7 @@ Function Played(low: Bool) Throws GraphicsError, IOError, InputError, AudioError
         Flip()
         Try session.Step(FrameStep(Frame.Delta()) As Float)
         If Screen.Texture() == Null Then Continue
-        island.RenderAfresh()
+        island.Render()
         session.Draw()
     End While
 End Function

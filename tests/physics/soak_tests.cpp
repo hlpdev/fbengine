@@ -22,6 +22,14 @@
 #include <unistd.h>
 #endif
 
+#if defined(__SANITIZE_ADDRESS__)
+#define FBE_UNDER_ASAN
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define FBE_UNDER_ASAN
+#endif
+#endif
+
 namespace {
 
 constexpr fbe_body_quat_t unturned{ .x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F };
@@ -163,5 +171,9 @@ TEST_CASE("thousands of bodies, characters, joints, and worlds made and freed le
     // Windows, which leak_tests' count of every allocation shows isn't a leak.
     INFO("a round held " << held << " bytes");
     CHECK(held > 0);
+    // ASan keeps what's freed a while before it's used again, so bytes grow under it; its leak
+    // check, and leak_tests' count, see a leak there.
+#ifndef FBE_UNDER_ASAN
     CHECK(allocated() < before + (2 * held));
+#endif
 }

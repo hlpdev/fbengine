@@ -198,7 +198,7 @@ TEST_CASE("a state resealed, with a byte of it changed anywhere, restores soundl
     int tried = 0;
     for (std::size_t i = header_size; i < before.size(); ++i) {
         for (const std::uint8_t value :
-             std::array<std::uint8_t, 5>{ 0x00, 0x01, 0x7F, 0x80, 0xFF }) {
+             std::array<std::uint8_t, 6>{ 0x00, 0x01, 0x02, 0x7F, 0x80, 0xFF }) {
             if (before[i] == value) {
                 continue;
             }
@@ -480,4 +480,34 @@ TEST_CASE("a state resealed, of contacts out of order or twice, is refused", "[s
     CHECK(
         scene.tried(with_contacts(scene, before, {}, { { 0, 0, 3, 0 }, { 0, 0, 3, 0 } }), before));
     CHECK(scene.tried(with_contacts(scene, before, { first }, { { 0, 0, 1, 1 } }), before));
+}
+
+// Jolt brings a hinge motor's target angle to -pi to pi a turn at a time, so a state of one far
+// off hung the step after it; and fbe_joint_set_motor sets no motor of both position and velocity.
+TEST_CASE("a state resealed, of a hinge's motor to a far angle, or of a state it's never in, is "
+          "refused",
+          "[stability]") {
+    scene_t scene;
+    const std::vector<std::uint8_t> before = scene.save();
+    const auto [start, end] = contacts_in(scene, before);
+    // After the count of constraints, the fixed joint's index, whether it's on, and its rotation
+    // and point; the point joint's; then the hinge's index, whether it's on, its motor's, its
+    // rotation's, its point's, and its limits' impulses.
+    const std::size_t hinge = end + 4 + (4 + 1 + 24) + (4 + 1 + 12);
+    const std::size_t motor = hinge + 4 + 1 + 4 + 8 + 12 + 4;
+    const std::size_t angle = motor + 4 + 4;
+    std::int32_t state = 0;
+    std::memcpy(&state, before.data() + motor, sizeof(state));
+    // Its motor drives it at a speed.
+    REQUIRE(state == 1);
+    const auto with = [&](std::int32_t driven, float target) {
+        std::vector<std::uint8_t> changed = before;
+        std::memcpy(changed.data() + motor, &driven, sizeof(driven));
+        std::memcpy(changed.data() + angle, &target, sizeof(target));
+        return resealed(changed);
+    };
+    CHECK_FALSE(scene.tried(with(2, 1.0F), before));
+    CHECK(scene.tried(with(2, 1.0e9F), before));
+    CHECK(scene.tried(with(2, 3.2F), before));
+    CHECK(scene.tried(with(3, 1.0F), before));
 }
