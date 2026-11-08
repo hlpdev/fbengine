@@ -28,7 +28,7 @@ extern "C" {
 #define FBE_CLUSTERS_DEEP   24
 #define FBE_CLUSTERS        3456
 
-// The most lights an FBE_SHADING_VERTEX draw is lit by: Blitz's first eight in the tree's order.
+// The most lights an FBE_SHADING_VERTEX draw is lit by: the first eight in the tree's order.
 #define FBE_DRAW_LIGHTS 8
 
 // NOLINTBEGIN(modernize-use-using)
@@ -130,7 +130,7 @@ FBE_API int32_t fbe_render_draw_lights(uint64_t camera, float target_width, floa
 // Draws a camera into its target, `tween` of the way from its World's last capture, as a pass of
 // the frame, starting the GPU if nothing has, unless it's hidden: first it clears what it clears of
 // its viewport, then every showing mirror of its World with an inverse reflects the whole scene
-// into its viewport and depth, no clip plane, as Blitz's did, then the scene, which covers that
+// into its viewport and depth, no clip plane, then the scene, which covers that
 // unless what's on the mirror's plane lets it through. An order below 0 draws after the
 // reflections, so a sky hides them: a mirror's game leaves its sky out of what's opaque. False,
 // with fbe_error's why, for a freed camera, a tween outside 0 to 1, a GPU that can't start, or with

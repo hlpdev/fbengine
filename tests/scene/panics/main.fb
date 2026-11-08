@@ -12,6 +12,12 @@ If arguments.Count != 1 Then Panic("give the case to run")
 Local world = World()
 World.SetCurrent(world)
 Select arguments[0]
+    Case "position-not-finite"
+        Pivot().SetPosition(Vec3(0.0, Sqrt(-1.0), 0.0))
+    Case "translate-past-a-float"
+        Local far = Pivot()
+        far.SetPosition(Vec3(3.0e38, 0.0, 0.0))
+        far.Translate(Vec3(3.0e38, 0.0, 0.0))
     Case "lit-by-freed"
         Local freed = World()
         freed.Free()

@@ -202,7 +202,9 @@ std::vector<std::uint8_t> cooked(std::string_view version, const std::vector<std
     bytes.insert(bytes.end(), stamp.begin(), stamp.end());
     const std::size_t at = bytes.size();
     bytes.resize(at + (words.size() * sizeof(std::uint32_t)));
-    std::memcpy(bytes.data() + at, words.data(), words.size() * sizeof(std::uint32_t));
+    if (!words.empty()) {
+        std::memcpy(bytes.data() + at, words.data(), words.size() * sizeof(std::uint32_t));
+    }
     return bytes;
 }
 

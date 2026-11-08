@@ -101,6 +101,19 @@ Public Class Gpu
     /// Whether the GPU has started.
     @MainThread Public Static Method Started(): Bool => fbe_gpu_started()
 
+    /// Whether there's to be no GPU at all, as for a dedicated server, set before anything starts
+    /// it: then Vulkan's never loaded and no device is made, so it needs no driver, loader, or
+    /// display. What would start it, a Texture or a shown Window, throws or panics saying "the GPU
+    /// is disabled"; a Model's loaded without its images, its materials keeping their factors, and
+    /// TextureOf Null. World, entities, picks, scenes, physics, and audio on MANUAL need none. It
+    /// panics if the GPU's started; Stop it first.
+    @MainThread Public Static Method SetDisabled(disable: Bool)
+        If !fbe_gpu_set_disabled(disable) Then Panic(LastError())
+    End Method
+
+    /// Whether SetDisabled said there's to be no GPU.
+    @MainThread Public Static Method Disabled(): Bool => fbe_gpu_disabled()
+
     /// Whether the GPU was lost, as a driver's crash or reset loses it: from then on nothing
     /// draws, Flip shows nothing, and what needs the GPU throws or panics, saying so, until Stop
     /// and Start make it again; nothing made on it before is left, so a game makes its textures

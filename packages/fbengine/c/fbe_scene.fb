@@ -415,6 +415,7 @@ Public Extern "C" Lib "fbengine_native"
                                     uv_set: Int32): Bool
     Function fbe_material_layer_blend(material: UInt64, layer: Int32): Int32
     Function fbe_material_layer_uv_set(material: UInt64, layer: Int32): Int32
+    Function fbe_material_replace_textures(from: Ptr<UInt64>, to: Ptr<UInt64>, count: Int32): Bool
     Function fbe_material_set_metal_rough(material: UInt64, metallic: Float32,
                                           roughness: Float32): Bool
     Function fbe_material_metallic(material: UInt64): Float32

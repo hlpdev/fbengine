@@ -2,9 +2,9 @@
 // frame limit, keys down and hit and flushed, the mouse's place, speed, buttons, and wheel, moving
 // and hiding it, relative mode, and focus. Driven by Simulate, it prints what it read; with --watch,
 // a window that shows each as a person uses them. A game's own are its table from DirectInput's
-// numbers to these Keys, which is here as a game's would be, its binds in its settings, and how it
-// scales the mouse's relative motion to feel as the cursor's did: fbengine has only its Keys, in the
-// keyboard's places, and raw counts.
+// numbers to these Keys, which is here as a game's would be, and its binds in its settings; how it
+// scales the mouse's relative motion to feel as the cursor's did is the game's too, and isn't here:
+// fbengine has only its Keys, in the keyboard's places, and raw counts.
 
 Import std.collections
 Import std.core

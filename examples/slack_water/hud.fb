@@ -1,0 +1,129 @@
+// What's over the game as it's played: the clock and what was last said, on a panel of the sea's dark
+// with a brass edge, as the menus are, and what can be done here, with its key or button. All drawn,
+// with no image.
+
+Import std.core
+Import std.math
+Import std.text
+Import fbengine
+Import "./prompts"
+
+/// The front end's colors: the sea's dark, brass, and the paper of its text.
+Public Const SEA_DARK: Color32 = Color32(14, 26, 34, 210)
+Public Const BRASS: Color32 = Color32(198, 158, 92, 255)
+Public Const PAPER: Color32 = Color32(236, 232, 220, 255)
+Public Const FAINT: Color32 = Color32(168, 176, 178, 255)
+
+// How far in from the screen's edges it is, and how high a prompt's mark is.
+Const MARGIN: Int32 = 24
+Const MARK: Int32 = 30
+// How many pieces a hold's ring is drawn in.
+Const RING_PIECES: Int = 40
+
+/// The HUD.
+Public Final Class Hud
+    Field clockFont: Font
+    Field font: Font
+    Field scale: Float = 1.0
+
+    @MainThread
+    Public New()
+        clockFont = Font.BuiltIn(26.0)
+        font = Font.BuiltIn(20.0)
+    End New
+
+    /// Sets how large it's drawn, 1 as it's made, as a player's text size says.
+    @MainThread
+    Public Method SetScale(by: Float)
+        scale = by
+        clockFont = Font.BuiltIn(26.0 * by)
+        font = Font.BuiltIn(20.0 * by)
+    End Method
+
+    /// How large it's drawn.
+    @MainThread Public Method Scale(): Float => scale
+
+    // `units`, by its scale, in whole pixels.
+    Method Px(units: Float): Int32 => (units * scale) As Int32
+
+    /// Draws `clock`, what was last `said`, and `prompt`, a Game's, as "E: ..." or "Q: ...", by
+    /// `device`, on the screen's canvas; a prompt to hold with a ring about its mark, `held` filled.
+    @MainThread
+    Public Method Draw(clock: String, said: String, prompt: String, device: LastDevice,
+                       held: Float = 0.0)
+        Local canvas = Screen.Canvas()
+        Local width = Screen.Width()
+        Local height = Screen.Height()
+        // The clock and its line, on a panel as wide as they need.
+        Local wide = Max(clockFont.Width(clock), font.Width(said)) As Int32 + Px(32.0)
+        Local high = said != "" ? Px(84.0) : Px(52.0)
+        canvas.SetColor(SEA_DARK)
+        canvas.DrawRect(MARGIN, MARGIN, wide, high, True)
+        canvas.SetColor(BRASS)
+        canvas.DrawRect(MARGIN, MARGIN, 4, high, True)
+        canvas.SetColor(PAPER)
+        canvas.DrawText(clockFont, clock, MARGIN + Px(16.0), MARGIN + Px(10.0))
+        If said != ""
+            canvas.SetColor(FAINT)
+            canvas.DrawText(font, said, MARGIN + Px(16.0), MARGIN + Px(50.0))
+        End If
+        // What can be done, at the bottom, in the middle.
+        Local asked = PromptOf(prompt)
+        If asked == Null Then Return
+        Local prompted, text = asked
+        Local mark = Px(MARK As Float)
+        Local promptWide = Estimate(text) + mark + mark / 3
+        Local x = (width - promptWide) / 2
+        Local y = height - MARGIN - mark - 12
+        canvas.SetColor(SEA_DARK)
+        canvas.DrawRect(x - 14, y - 8, promptWide + 28, mark + 16, True)
+        DrawPrompt(canvas, font, device, prompted, text, x, y, mark, PAPER)
+        If text.StartsWith("hold ")
+            Local outer = mark / 2 + Px(7.0)
+            DrawRing(canvas, x + MarkWide(font, device, prompted, mark) / 2, y + mark / 2, outer,
+                     Px(4.0), held)
+        End If
+    End Method
+
+    // How wide `text` is in its font.
+    @MainThread Method Estimate(text: String): Int32 => font.Width(text) As Int32
+End Class
+
+/// What a Game's prompt asks for and says: "E: pick up the gear" is USE and "pick up the gear"; Null
+/// for none.
+Public Function PromptOf(prompt: String): (Prompted, String)?
+    If prompt.StartsWith("E: ") Then Return (Prompted.USE, prompt.Slice(3, prompt.Length))
+    If prompt.StartsWith("Q: ") Then Return (Prompted.HAND, prompt.Slice(3, prompt.Length))
+    Return Null
+End Function
+
+// A ring about (`x`, `y`), `outer` from it to its outside and `thick` deep: its track faint, and as much
+// of it as `filled` says, from the top, clockwise, brass.
+Function DrawRing(canvas: Canvas, x: Int32, y: Int32, outer: Int32, thick: Int32, filled: Float)
+    Local was = canvas.Color()
+    For at = 0 Until RING_PIECES
+        Local from = (at As Float) / (RING_PIECES As Float)
+        Local upTo = ((at + 1) As Float) / (RING_PIECES As Float)
+        canvas.SetColor(Color32(PAPER.r, PAPER.g, PAPER.b, 70))
+        canvas.DrawPolygon(RingPiece(x, y, outer, thick, from, upTo), True)
+        If filled > from
+            canvas.SetColor(BRASS)
+            canvas.DrawPolygon(RingPiece(x, y, outer, thick, from, Min(upTo, filled)), True)
+        End If
+    End For
+    canvas.SetColor(was)
+End Function
+
+// The piece of a ring from `from` round it to `upTo`, each from 0, its top, to 1, clockwise.
+Function RingPiece(x: Int32, y: Int32, outer: Int32, thick: Int32, from: Float, upTo: Float): Vec2[]
+    Local inner = (outer - thick) As Float
+    Local out = outer As Float
+    Local start = from * 6.28318 - 1.5708
+    Local end = upTo * 6.28318 - 1.5708
+    Local cx = x As Float
+    Local cy = y As Float
+    Return [Vec2(cx + Cos(start) * out, cy + Sin(start) * out),
+            Vec2(cx + Cos(end) * out, cy + Sin(end) * out),
+            Vec2(cx + Cos(end) * inner, cy + Sin(end) * inner),
+            Vec2(cx + Cos(start) * inner, cy + Sin(start) * inner)]
+End Function

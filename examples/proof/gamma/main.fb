@@ -1,8 +1,8 @@
-// Gamma as a game does it itself: a frame's copy added over it to brighten it, a gray multiplied over
-// it to darken it, and a real curve, a pixel at a time, by a table; the engine has no gamma of its own
-// until E6's tonemap. It prints each pixel it reads against the sums, the canvas blending in linear
-// light, and then, on a target of linear bytes, on what's stored, as DirectX 7 did; with --watch, a
-// window of a ramp, its keys changing it.
+// Gamma as a game does it itself: a frame's copy added over it to brighten it, a gray multiplied
+// over it to darken it, and a real curve, a pixel at a time, by a table; the engine's own, an HDR
+// camera's exposure, tonemap, and gamma, is apart from this. It prints each pixel it reads against
+// the sums, the canvas blending in linear light, and then, on a target of linear bytes, on what's
+// stored, as DirectX 7 did; with --watch, a window of a ramp, its keys changing it.
 
 Import std.collections
 Import std.core

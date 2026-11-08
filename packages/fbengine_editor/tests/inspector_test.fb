@@ -1390,6 +1390,48 @@ Function GameOf(games: TempDir, packages: Path, program: String): Path Throws IO
     Return folder
 End Function
 
+// A game with bodies: fbengine_physics adds Body as a kind of component, as a game's own are added, and
+// it's shown, added, edited, saved, and opened again, as theirs are.
+@Test
+Function APackagesKindIsTheEditorsToo() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local packages = Try Packages()
+    If packages == Null Then Skip("the packages aren't under here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local folder = Try GameOf(games, packages,
+                              "Import fbengine\nImport fbengine_physics\n\nAddBodyComponent()\nTry Components.Describe()\n")
+    Local engine = (packages / "fbengine").Text.Replace("\\", "/")
+    Local physics = (packages / "fbengine_physics").Text.Replace("\\", "/")
+    Try File.WriteText(folder / "project.toml",
+                       "[project]\nname = \"game\"\nversion = \"0.0.1\"\ntype = \"executable\"\n\n" +
+                       "[dependencies]\nfbengine = {{ path = \"{engine}\" }}\n" +
+                       "fbengine_physics = {{ path = \"{physics}\" }}\n")
+    Local editor = Try Trusting(settings, folder)
+    Finishing(editor)
+    Expect(editor.ShowingDialog() == Null, "it failed")
+    Local kinds = editor.Kinds.Kinds()
+    Expect(kinds.Count == 1 && kinds[0].Name == "Body", "it has {kinds.Count}")
+    editor.Actions.Run("add.cube")
+    Selecting(editor, editor.Edited.Entities()[0])
+    Try Adding(editor, "Body")
+    Expect(FieldOf(editor, "Friction").Text() == "0.2", FieldOf(editor, "Friction").Text())
+    Local moves = RowCalled(editor, "Moves") As? ChoiceRow<String>
+    If moves == Null Then Panic("Moves isn't a list")
+    Expect(moves.Chooser().Text() == "DYNAMIC", moves.Chooser().Text())
+    Try Entered(editor, "Mass", "3")
+    editor.SaveScene("res://bodies.scene")
+    editor.Step()
+    Local text = Try File.ReadText(folder / "assets" / "bodies.scene")
+    Expect(text.Contains("[entity.components.Body]") && text.Contains("Mass = 3.0"), text)
+    editor.OpenScene("res://bodies.scene")
+    editor.Step()
+    Selecting(editor, editor.Edited.Entities()[0])
+    Expect(FieldOf(editor, "Mass").Text() == "3", text)
+    Expect(FieldOf(editor, "Friction").Text() == "0.2", text)
+    editor.Finish()
+End Function
+
 Const SAYS_A_DOOR = "Import fbengine\nImport \"../door\"\n\nComponents.Add<Door>(\"Door\")\nTry Components.Describe()\n"
 
 // An editor on `folder`, whose code it's been told may run.
