@@ -47,6 +47,43 @@ FetchContent_MakeAvailable(JoltPhysics)
 # It goes into a DLL.
 set_target_properties(Jolt PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+# Jolt 5.6.0's Jolt/Core/Mutex.h (e77f175, lines 107-111) is patched on MinGW, where its Mutex and
+# SharedMutex, std::mutex and std::shared_mutex, leaked: winpthreads allocates each as it's first
+# locked, and libstdc++ never destroys them, so a world's 64 body mutexes, about 18 KB, stayed
+# after it was freed. There they're slim reader/writer locks, cmake/jolt/mutex_mingw.cpp's, which
+# allocate nothing. The patched copy comes before Jolt's own folder, and the patch's text has to be
+# there, once, or configuring fails.
+if(MINGW)
+  file(READ "${joltphysics_SOURCE_DIR}/Jolt/Core/Mutex.h" fbengine_jolt_mutex)
+  set(fbengine_jolt_mutex_from
+      "#else\n\n// On other platforms just use the STL implementation\nusing MutexBase = mutex;")
+  string(FIND "${fbengine_jolt_mutex}" "${fbengine_jolt_mutex_from}" fbengine_first)
+  string(FIND "${fbengine_jolt_mutex}" "${fbengine_jolt_mutex_from}" fbengine_last REVERSE)
+  if(fbengine_first EQUAL -1 OR NOT fbengine_first EQUAL fbengine_last)
+    message(FATAL_ERROR "Jolt/Core/Mutex.h doesn't have, once, what its patch expects")
+  endif()
+  string(CONCAT fbengine_jolt_mutex_to
+         "#elif defined(__MINGW32__)\n\n"
+         "// fbengine's patch: a slim reader/writer lock each, which allocates nothing, as\n"
+         "// cmake/jolt/mutex_mingw.cpp defines them.\n"
+         "class MutexBase : public NonCopyable\n{\npublic:\n"
+         "\tbool try_lock();\n\tvoid lock();\n\tvoid unlock();\n\n"
+         "private:\n\tvoid *mLock = nullptr;\n};\n\n"
+         "class SharedMutexBase : public NonCopyable\n{\npublic:\n"
+         "\tbool try_lock();\n\tvoid lock();\n\tvoid unlock();\n"
+         "\tbool try_lock_shared();\n\tvoid lock_shared();\n\tvoid unlock_shared();\n\n"
+         "private:\n\tvoid *mLock = nullptr;\n};\n\n"
+         "${fbengine_jolt_mutex_from}")
+  string(REPLACE "${fbengine_jolt_mutex_from}" "${fbengine_jolt_mutex_to}" fbengine_jolt_mutex
+                 "${fbengine_jolt_mutex}")
+  set(fbengine_jolt_patched "${CMAKE_BINARY_DIR}/jolt-patched")
+  file(WRITE "${fbengine_jolt_patched}/Jolt/Core/Mutex.h.in" "${fbengine_jolt_mutex}")
+  configure_file("${fbengine_jolt_patched}/Jolt/Core/Mutex.h.in"
+                 "${fbengine_jolt_patched}/Jolt/Core/Mutex.h" COPYONLY)
+  target_include_directories(Jolt BEFORE PUBLIC "$<BUILD_INTERFACE:${fbengine_jolt_patched}>")
+  target_sources(Jolt PRIVATE "${PROJECT_SOURCE_DIR}/cmake/jolt/mutex_mingw.cpp")
+endif()
+
 file(GLOB fbengine_physics_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*/*.cpp")
 fbengine_add_native(fbengine_physics_native fbengine_physics fbe_ ${fbengine_physics_sources})
 target_include_directories(fbengine_physics_native PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")

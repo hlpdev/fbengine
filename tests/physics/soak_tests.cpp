@@ -128,13 +128,12 @@ TEST_CASE("thousands of bodies, characters, joints, and worlds made and freed le
     CHECK(fbe_shape_count() == shapes);
     CHECK(fbe_physics_worlds() == worlds);
     // A round of about 1000 shapes, 1050 bodies, 200 joints, and 50 characters, and a world for
-    // them, holds about 2 MB, and leaves malloc holding no more than 32 KB more each round: none on
-    // glibc and macOS, and on MinGW about 18 KB, as winpthreads allocates a mutex as it's first
-    // locked, and libstdc++'s std::mutex and std::shared_mutex never destroy theirs, so each
-    // world's body mutexes, and each character's, stay. A sanitizer's allocator counts its own way,
-    // and LeakSanitizer and leak_tests' count of every allocation see a leak there.
+    // them, holds about 2 MB, and leaves malloc holding no more than 16 KB over what it held, on
+    // MinGW too, where Jolt's mutexes are patched to slim reader/writer locks, as a std::mutex
+    // locked there stayed allocated: about 18 KB a world. A sanitizer's allocator counts its own
+    // way, and LeakSanitizer and leak_tests' count of every allocation see a leak there.
     INFO("before " << before << ", most after a round " << most);
     if (!sanitized) {
-        CHECK(most <= before + (rounds * (std::uint64_t{ 32 } << 10U)));
+        CHECK(most <= before + (std::uint64_t{ 16 } << 10U));
     }
 }

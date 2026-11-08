@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <Jolt/Core/FPControlWord.h>
 #include <Jolt/Core/JobSystem.h>
+#include <Jolt/Core/Mutex.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/Body.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
@@ -125,7 +126,8 @@ public:
     std::vector<contact_event_t> take();
 
 private:
-    std::mutex m_lock;
+    // Jolt's, which on MinGW allocates nothing, where a std::mutex locked stays allocated.
+    JPH::Mutex m_lock;
     std::vector<contact_event_t> m_events;
 };
 
