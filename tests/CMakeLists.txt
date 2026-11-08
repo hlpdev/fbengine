@@ -236,6 +236,12 @@ if(FBENGINE_FB_TESTS)
              COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_simdjson_test.py")
     set_tests_properties(tools.check_simdjson_reads PROPERTIES
                          PASS_REGULAR_EXPRESSION "reads commands and rules as it should")
+    # miniaudio's decoders wrap a signed int's overflow, which a corrupt file's FLAC overflows.
+    add_test(NAME tools.miniaudio_wraps
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_miniaudio_wraps.py"
+                     "${PROJECT_BINARY_DIR}")
+    set_tests_properties(tools.miniaudio_wraps PROPERTIES SKIP_RETURN_CODE 77
+                         PASS_REGULAR_EXPRESSION "decoders wrap a signed int's overflow")
     # Each DLL's notices name every library it links, as the build links it, and that check fails as
     # it should. The build's link graph is CMake's file API's codemodel, which this asks for, and
     # CMake answers as it generates.
@@ -1889,14 +1895,27 @@ fbengine_set_warnings(fbengine_app_tests)
 catch_discover_tests(fbengine_app_tests TEST_PREFIX "app."
                      DL_PATHS "${fbengine_test_dll_paths}")
 
-# fbengine_video, through its DLL, against its test videos with bytes changed at random.
-add_executable(fbengine_video_tests video/mutation_tests.cpp)
+# What a test of fuzzing, races, or soaks has before ctest stops it: its slowest takes 47 s on Windows
+# in Debug, and a sanitizer's build is many times slower.
+if(FBENGINE_SANITIZE)
+  set(fbengine_stability_timeout 3600)
+else()
+  set(fbengine_stability_timeout 300)
+endif()
+
+# fbengine_video, through its DLL, against its test videos with bytes changed at random, fuzzed,
+# and played a thousand times over.
+add_executable(fbengine_video_tests video/mutation_tests.cpp video/soak_tests.cpp
+               video/fuzz_tests.cpp stability.cpp)
 target_link_libraries(fbengine_video_tests PRIVATE fbengine_video_native Catch2::Catch2WithMain)
+target_include_directories(fbengine_video_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(fbengine_video_tests PRIVATE
                            FBE_VIDEO_MEDIA="${PROJECT_SOURCE_DIR}/packages/fbengine_video/tests/media")
 fbengine_set_warnings(fbengine_video_tests)
-catch_discover_tests(fbengine_video_tests TEST_PREFIX "video."
-                     DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_video_native>")
+# A test tagged [stability], a fuzz, race, or soak, is labeled so, for sanitizers.yml.
+catch_discover_tests(fbengine_video_tests TEST_PREFIX "video." ADD_TAGS_AS_LABELS
+                     DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_video_native>"
+                     PROPERTIES TIMEOUT ${fbengine_stability_timeout})
 
 # A video's thread, built in with a decoder of the test's, for what only its timing shows.
 add_executable(fbengine_video_thread_tests video/thread_tests.cpp
@@ -2282,19 +2301,23 @@ catch_discover_tests(fbengine_audio_tests TEST_PREFIX "audio."
 
 # fbengine_audio_native's C API, with a thread of the test's own mixing, as a device's does, and on
 # Windows, with OLE, on the null backend.
-add_executable(fbengine_audio_native_tests audio/native_tests.cpp audio/memory_tests.cpp)
+add_executable(fbengine_audio_native_tests audio/native_tests.cpp audio/memory_tests.cpp
+               audio/fuzz_tests.cpp audio/race_tests.cpp audio/vorbis_tests.cpp stability.cpp)
 target_link_libraries(fbengine_audio_native_tests PRIVATE fbengine_audio_native
                       Catch2::Catch2WithMain)
+target_include_directories(fbengine_audio_native_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(fbengine_audio_native_tests PRIVATE
-                           FBE_AUDIO_TEST_DATA="${PROJECT_SOURCE_DIR}/packages/fbengine_audio/tests/data")
+                           FBE_AUDIO_TEST_DATA="${PROJECT_SOURCE_DIR}/packages/fbengine_audio/tests/data"
+                           FBE_AUDIO_TEST_CORPUS="${CMAKE_CURRENT_SOURCE_DIR}/audio/corpus")
 if(WIN32)
   target_sources(fbengine_audio_native_tests PRIVATE audio/ole_tests.cpp)
-  target_link_libraries(fbengine_audio_native_tests PRIVATE ole32 psapi)
+  target_link_libraries(fbengine_audio_native_tests PRIVATE ole32)
 endif()
 fbengine_set_warnings(fbengine_audio_native_tests)
 # A test tagged [stability], a fuzz, race, or soak, is labeled so, for sanitizers.yml.
 catch_discover_tests(fbengine_audio_native_tests TEST_PREFIX "audio." ADD_TAGS_AS_LABELS
-                     DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_audio_native>")
+                     DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_audio_native>"
+                     PROPERTIES TIMEOUT ${fbengine_stability_timeout})
 
 # fbengine_audio_native's C API with each of a call's allocations failing in turn: its sources built
 # into the test, whose operator new fails the one it says.

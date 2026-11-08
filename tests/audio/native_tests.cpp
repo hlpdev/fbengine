@@ -5,11 +5,11 @@
 #include "fbengine_audio.h"
 
 #include <algorithm>
-#include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <cstdint>
 #include <numbers>
+#include <stop_token>
 #include <thread>
 #include <vector>
 
@@ -67,12 +67,12 @@ std::uint64_t loop(const std::vector<std::uint8_t>& bytes, std::uint64_t bus) {
 /// on each side the mix made meanwhile.
 template <typename Change>
 std::pair<float, float> mixed_beside(Change change) {
-    std::atomic<bool> done = false;
     float left = 0.0F;
     float right = 0.0F;
-    std::thread mixing([&] {
+    // A jthread, which a REQUIRE's failure stops and joins on its way out.
+    std::jthread mixing([&](const std::stop_token& stop) {
         std::vector<float> samples(128);
-        while (!done.load()) {
+        while (!stop.stop_requested()) {
             fbe_audio_mix(samples.data(), 64);
             for (std::size_t i = 0; i < samples.size(); i += 2) {
                 left = std::max(left, std::abs(samples[i]));
@@ -81,7 +81,7 @@ std::pair<float, float> mixed_beside(Change change) {
         }
     });
     change();
-    done = true;
+    mixing.request_stop();
     mixing.join();
     return { left, right };
 }
