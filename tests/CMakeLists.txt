@@ -1547,6 +1547,17 @@ catch_discover_tests(fbengine_physics_internal_tests TEST_PREFIX "physics."
 
 # fbengine_physics' examples, checked against what they print.
 if(FBENGINE_FB_TESTS)
+  # A dedicated server's run, with the GPU disabled and no Vulkan driver given, so if anything
+  # loaded Vulkan it would fail: a World, a scene, physics, audio on MANUAL, a textured model
+  # loaded without its images, and a Texture refused.
+  add_test(NAME examples.dedicated_server
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/dedicated_server"
+                   -- "${PROJECT_SOURCE_DIR}/tests/models")
+  set_tests_properties(examples.dedicated_server PROPERTIES TIMEOUT 120
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;VK_DRIVER_FILES=${PROJECT_BINARY_DIR}/no-such-driver.json"
+                       PASS_REGULAR_EXPRESSION "a texture refused: the GPU is disabled?
+served, the GPU never started?
+$")
   add_test(NAME examples.falling_boxes
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/falling_boxes")
   set_tests_properties(examples.falling_boxes PROPERTIES PASS_REGULAR_EXPRESSION

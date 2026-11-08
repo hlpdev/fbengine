@@ -54,7 +54,8 @@ End Class
 
 /// A glTF or a binary glTF, as an Asset: `Assets.Load<Model>("res://door.glb")` reads it through
 /// res://, its Geometries, Materials, Textures, Skins, and Clips made as it's made, which Spawn's
-/// entities share, however many times it spawns. It starts the GPU if it hasn't, for its Textures.
+/// entities share, however many times it spawns. It starts the GPU if it hasn't, for its Textures,
+/// unless Gpu.SetDisabled said there's none: then it has no Textures.
 /// Hot reload puts a changed file in its place, and what each Spawn made is made again from it,
 /// under the root that Spawn gave, which stays where it is.
 ///
@@ -93,10 +94,11 @@ Public Final Class Model Implements Asset
     End New
 
     /// Assets' kind of load for one, a model's, on a GPU started, so its KTX2s of UASTC are
-    /// transcoded to what it samples. A GPU that can't start is what FromLoad throws.
+    /// transcoded to what it samples. A GPU that can't start is what FromLoad throws. With the GPU
+    /// disabled it starts nothing, and the model's made without its images.
     @MainThread
     Public Static Method LoadKind(): AssetKind
-        fbe_texture_start_loads()
+        If !fbe_gpu_disabled() Then fbe_texture_start_loads()
         Return AssetKind.MODEL
     End Method
 
@@ -343,8 +345,10 @@ Public Final Class Model Implements Asset
             If geometry == 0 Then Throw PartError()
             geometries.Add(Sourced(Geometry(geometry), "{load.Path()}#{at}"))
         End For
+        // With the GPU disabled, no image is made, and no material reads one.
+        Local imaged = !fbe_gpu_disabled()
         For at = 0 Until info.Images
-            If fbe_model_image_levels(load.Handle, at) == 0
+            If !imaged || fbe_model_image_levels(load.Handle, at) == 0
                 textures.Add(Null)
                 Continue
             End If
@@ -364,7 +368,7 @@ Public Final Class Model Implements Asset
         Local images = Buffer<Int32>(capacity As Int64 + 1)
         Local made: Int32 = 0
         Local failure: IOError? = Null
-        For at = 0 Until info.Materials
+        For at = 0 Until (imaged ? info.Materials : 0)
             Local bound = False
             Unsafe
                 bound = fbe_model_material_textures(load.Handle, at, handles[at], read.Pointer(),
