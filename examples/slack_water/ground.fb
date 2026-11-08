@@ -4,6 +4,7 @@
 
 Import std.core
 Import std.math
+Import std.time
 Import "./flow"
 Import "./map"
 
@@ -70,6 +71,57 @@ Function Mound(x: Float, z: Float, centerX: Float, centerZ: Float, radius: Float
     Return 1.0 - Sqrt(dx * dx + dz * dz) / edge
 End Function
 
+/// The main island's coves, as angles round the mill from +x toward +z, how far each cuts in, as a
+/// part of the island's reach there, and how wide it is, in radians: one in the south, which the
+/// shelf's in, one south-west, and one north-east, none where the road leaves to the east.
+Public Function Coves(): (Float, Float, Float)[]
+    Return [(1.62, 0.36, 0.3), (2.75, 0.4, 0.24), (-0.95, 0.34, 0.22)]
+End Function
+
+// The main rock's shape, as Mound's, with its coves cut into it.
+Function MainMound(x: Float, z: Float): Float
+    Local dx = x - MAIN_X
+    Local dz = z
+    Local angle = Atan2(dz, dx)
+    Local reach = 1.0
+    For cove In Coves()
+        Local apart = angle - cove.0
+        While apart > Pi
+            apart -= 2.0 * Pi
+        End While
+        While apart < -Pi
+            apart += 2.0 * Pi
+        End While
+        Local into = apart / cove.2
+        reach -= cove.1 * (Exp((-into * into) As Float64) As Float)
+    End For
+    Local edge = MAIN_RADIUS * (0.72 + Rough(x + 300.0, z + 300.0) * 0.56) * reach
+    Return 1.0 - Sqrt(dx * dx + dz * dz) / edge
+End Function
+
+// The sea stack off the headland: where it stands, how far its cliffs reach from its middle, and how
+// high it is.
+Const STACK_X: Float = HEADLAND_X + 6.0
+Const STACK_Z: Float = HEADLAND_Z - 33.0
+Const STACK_RADIUS: Float = 3.2
+/// How high the sea stack stands.
+Public Const STACK_HIGH: Float = 9.0
+
+/// Where the sea stack stands off the headland.
+Public Function StackSpot(): Vec2 => Vec2(STACK_X, STACK_Z)
+
+/// How far the main island's coast reaches from the mill at `angle`, from +x toward +z: the first
+/// ground, going out, that's under the sea at slack water, a quarter meter at a time.
+Public Function CoastAt(angle: Float): Float
+    Local c = Cos(angle As Float64) As Float
+    Local s = Sin(angle As Float64) As Float
+    Local reach = 10.0
+    While reach < 110.0 && GroundHeight(MAIN_X + c * reach, s * reach) > 0.0
+        reach += 0.25
+    End While
+    Return reach
+End Function
+
 // Noise folded into ridges, from 0 to 1: crags at two scales, sharp along their tops.
 Function Ridged(x: Float, z: Float): Float
     Local wide = 1.0 - Abs(2.0 * Noise(x * 0.04 + 11.0, z * 0.04 + 5.0) - 1.0)
@@ -77,28 +129,260 @@ Function Ridged(x: Float, z: Float): Float
     Return wide * wide * 0.6 + fine * fine * 0.4
 End Function
 
-// How high the ground is at (`x`, `z`), but for the road.
+// How far (`x`, `z`) is from where the far islet's walks go: from the road's end to its landing, to the
+// belt, and to the lighthouse.
+Function FromWalks(x: Float, z: Float): Float
+    Local way = [RoadEnd(True), Landing(True), BeltSpot(), LighthouseSpot()]
+    Local nearest = 1000000.0
+    For at = 0 Until way.Count - 1
+        Local a = way[at]
+        Local b = way[at + 1]
+        Local abx = b.x - a.x
+        Local abz = b.y - a.y
+        Local along = Clamp(((x - a.x) * abx + (z - a.y) * abz) / (abx * abx + abz * abz), 0.0, 1.0)
+        Local dx = x - (a.x + abx * along)
+        Local dz = z - (a.y + abz * along)
+        nearest = Min(nearest, Sqrt(dx * dx + dz * dz))
+    End For
+    Return nearest
+End Function
+
+// How high each of an outcrop's strata is, and how sharp its step is.
+Const STRATUM: Float = 1.6
+
+// `height` in terraces of STRATUM: flat a while, then up its step.
+Function Terraced(height: Float): Float
+    Local level = Floor(height / STRATUM)
+    Local within = height / STRATUM - level
+    Local step = Clamp((within - 0.6) / 0.4, 0.0, 1.0)
+    Return (level + step * step * (3.0 - 2.0 * step)) * STRATUM
+End Function
+
+/// How high the shore's rock shelf lies, over the sea at slack water.
+Public Const SHELF: Float = 0.12
+
+/// How much of what's at (`x`, `z`), `height` high as it is, is the shore's rock shelf, from 0 to 1:
+/// along the main island's south shore, between where it'd be under the sea's floor and up the beach.
+Public Function ShelfAt(x: Float, z: Float, height: Float): Float
+    Local along = Clamp((26.0 - Abs(x - SHELF_MIDDLE)) / 6.0, 0.0, 1.0) *
+                  Clamp((z - 6.0) / 5.0, 0.0, 1.0)
+    If along <= 0.0 Then Return 0.0
+    Local band = Clamp((height + 0.5) / 0.4, 0.0, 1.0) * Clamp((1.3 - height) / 0.5, 0.0, 1.0)
+    Return along * band
+End Function
+
+/// Where the shelf's middle is, across the south shore.
+Public Const SHELF_MIDDLE: Float = MAIN_X - 2.0
+
+/// How deep the shelf's tide pools are at (`x`, `z`), under the shelf: a hand's depth below the sea at
+/// slack water, so they hold it, or nothing.
+Public Function PoolAt(x: Float, z: Float): Float
+    Local pool = Clamp((Noise(x * 0.33 + 21.0, z * 0.33 + 4.0) - 0.55) * 6.0, 0.0, 1.0)
+    Return -0.3 * pool * pool * (3.0 - 2.0 * pool)
+End Function
+
+/// How far the lighthouse's plinth reaches from its middle.
+Public Const PLINTH: Float = 1.85
+
+// How high the ground is at (`x`, `z`), but for the road, and flat round the lighthouse, out a little
+// past its plinth, so it stands level.
 Public Function RockHeight(x: Float, z: Float): Float
+    Local spot = LighthouseSpot()
+    Local away = Sqrt((x - spot.x) * (x - spot.x) + (z - spot.y) * (z - spot.y))
+    Local pad = Clamp(1.0 - (away - PLINTH - 0.4) / 6.0, 0.0, 1.0)
+    Local height = Rock(x, z)
+    If pad <= 0.0 Then Return height
+    Return height + (Rock(spot.x, spot.y) - height) * pad
+End Function
+
+// How high the rocks are at (`x`, `z`), as they are.
+Function Rock(x: Float, z: Float): Float
     Local far = Mound(x, z, FAR_X, FAR_Z, FAR_RADIUS)
-    Local headland = Mound(x, z, HEADLAND_X, HEADLAND_Z, HEADLAND_RADIUS)
-    Local land = Max(Max(Mound(x, z, MAIN_X, 0.0, MAIN_RADIUS), far), headland)
+    // The headland's a ridge: its summit, and a lower one west of it, a saddle between.
+    Local headland = Max(Mound(x, z, HEADLAND_X, HEADLAND_Z, HEADLAND_RADIUS),
+                         Mound(x, z, HEADLAND_X - 17.0, HEADLAND_Z + 5.0, HEADLAND_RADIUS * 0.7) *
+                         0.8)
+    Local land = Max(Max(MainMound(x, z), far), headland)
     Local height = land * 6.0
     If land > 0.0
         Local high = Clamp(headland, 0.0, 1.0)
         Local low = Clamp(far, 0.0, 1.0)
-        Local crags = Max(high * high * HEADLAND_CRAGS, low * low * FAR_CRAGS) * Ridged(x, z)
+        // The far islet's crags part where its walks go, a trail through them.
+        Local trail = Clamp((FromWalks(x, z) - 3.0) / 6.0, 0.0, 1.0)
+        Local crags = Max(high * high * HEADLAND_CRAGS, low * low * FAR_CRAGS * trail) *
+                      Ridged(x, z)
         // What's broken up, but for its shores, which stay as smooth as sand.
         Local broken = (Noise(x * 0.6, z * 0.6) - 0.5) * 0.5 * Clamp((land - 0.12) * 6.0, 0.0, 1.0)
         height = land * (5.0 + Rough(x, z) * 9.0) + crags + broken
+        // Outcrops: where the rock's crags are, in patches, it breaks into terraces, its strata.
+        Local rocky = Clamp(Max(high, low) * 3.0 - 0.4, 0.0, 1.0) *
+                      Clamp((Noise(x * 0.07 + 40.0, z * 0.07 + 13.0) - 0.25) * 3.0, 0.0, 1.0)
+        rocky *= Clamp((FromWalks(x, z) - 5.0) / 4.0, 0.0, 1.0)
+        If rocky > 0.0 Then height += (Terraced(height) - height) * rocky
     End If
+    // The sea stack off the headland: a column, cliffs all round, its top broken.
+    Local stackAway = Sqrt((x - STACK_X) * (x - STACK_X) + (z - STACK_Z) * (z - STACK_Z))
+    Local column = Clamp((STACK_RADIUS - stackAway) / 0.9, 0.0, 1.0)
+    If column > 0.0
+        height = Max(height, -2.0 + column * (STACK_HIGH + 2.0 + Noise(x * 0.9, z * 0.9) * 1.2))
+    End If
+    // The rock shelf along the main island's south shore, its pools in it.
+    Local shelf = ShelfAt(x, z, height)
+    If shelf > 0.0 Then height += (SHELF + PoolAt(x, z) - height) * shelf
     // The yard's flat, where the mill stands.
     Local yard = Clamp(1.0 - (Sqrt((x - MAIN_X) * (x - MAIN_X) + z * z) - 22.0) / 14.0, 0.0, 1.0)
     Return height + (4.0 - height) * yard
 End Function
 
 /// How high the ground is at (`x`, `z`), meters from its middle: under the sea, 0 at slack water,
-/// but for the main rock, the far one, and the road from one to the other.
+/// but for the main rock, the far one, and the road from one to the other; with the lines the rain's
+/// cut down its slopes, but where it's kept for walking.
 Public Function GroundHeight(x: Float, z: Float): Float
+    Local height = BaseHeight(x, z)
+    Local kept = Eroding(x, z, height)
+    If kept <= 0.0 Then Return height
+    Return height + ErosionAt(x, z) * kept
+End Function
+
+// How much of the erosion at (`x`, `z`), `height` high, shows: none on the shores, the yard, the road
+// and its shores, the lighthouse's pad, or the landings.
+Function Eroding(x: Float, z: Float, height: Float): Float
+    Local up = Clamp((height - SHORES) / 1.5, 0.0, 1.0)
+    If up <= 0.0 Then Return 0.0
+    Local fromMill = Sqrt((x - MAIN_X) * (x - MAIN_X) + z * z)
+    up *= Clamp((fromMill - 36.0) / 6.0, 0.0, 1.0)
+    If x > ROAD_WEST - ROAD_INTO - 6.0 && x < ROAD_EAST + ROAD_INTO + 6.0
+        up *= Clamp((Abs(z - RoadZ(x)) - ROAD_SIDE - 6.0) / 4.0, 0.0, 1.0)
+    End If
+    Local spot = LighthouseSpot()
+    up *= Clamp((Sqrt((x - spot.x) * (x - spot.x) + (z - spot.y) * (z - spot.y)) - 6.0) / 3.0, 0.0,
+                1.0)
+    Return up
+End Function
+
+/// How high the shores reach, under which the ground's kept smooth, as walking's from the sea.
+Public Const SHORES: Float = 2.5
+
+// What the erosion's cut, or laid down, at each point of the ground's grid, built once.
+Global erosion: Float[] = []
+Global erosionSeconds: Float64 = 0.0
+
+/// How long building the erosion took, in seconds, the first time anything asked how high the ground
+/// is.
+Public Function ErosionSeconds(): Float64 => erosionSeconds
+
+/// How many drops of rain the erosion lets run down the ground, each from where its seed puts it.
+Public Const DROPS: Int = 40000
+
+// What the erosion's done at (`x`, `z`), between its grid's points.
+Function ErosionAt(x: Float, z: Float): Float
+    If erosion.Count == 0 Then Eroded()
+    Local half = (SIDE As Float) / 2.0
+    Local u = Clamp(x + half, 0.0, (SIDE As Float) - 0.001)
+    Local v = Clamp(z + half, 0.0, (SIDE As Float) - 0.001)
+    Local left = Floor(u) As Int
+    Local top = Floor(v) As Int
+    Local fu = u - (left As Float)
+    Local fv = v - (top As Float)
+    Local row = SIDE + 1
+    Local near = erosion[top * row + left] * (1.0 - fu) + erosion[top * row + left + 1] * fu
+    Local far = erosion[(top + 1) * row + left] * (1.0 - fu) +
+                erosion[(top + 1) * row + left + 1] * fu
+    Return near * (1.0 - fv) + far * fv
+End Function
+
+// The ground's grid as it is, then rain on it: each drop runs downhill, picking up what it can carry
+// as it speeds and laying it down as it slows, so the slopes have lines down them. Its seed's fixed, so
+// it's the same each time.
+Function Eroded()
+    Local began = Instant.Now()
+    Local row = SIDE + 1
+    Local half = (SIDE As Float) / 2.0
+    Local heights: Float[] = []
+    For z = 0 To SIDE
+        For x = 0 To SIDE
+            heights.Add(BaseHeight((x As Float) - half, (z As Float) - half))
+        End For
+    End For
+    Local first = heights.Clone()
+    Local most = (SIDE As Float) - 1.001
+    For drop = 0 Until DROPS
+        Local px = 1.0 + Hash(drop, 71) * (most - 1.0)
+        Local pz = 1.0 + Hash(drop, 72) * (most - 1.0)
+        Local dx = 0.0
+        Local dz = 0.0
+        Local speed = 1.0
+        Local water = 1.0
+        Local carried = 0.0
+        For life = 0 Until 40
+            Local cx = Floor(px) As Int
+            Local cz = Floor(pz) As Int
+            Local fx = px - (cx As Float)
+            Local fz = pz - (cz As Float)
+            Local at = cz * row + cx
+            Local a = heights[at]
+            Local b = heights[at + 1]
+            Local c = heights[at + row]
+            Local d = heights[at + row + 1]
+            Local gx = (b - a) * (1.0 - fz) + (d - c) * fz
+            Local gz = (c - a) * (1.0 - fx) + (d - b) * fx
+            Local here = a * (1.0 - fx) * (1.0 - fz) + b * fx * (1.0 - fz) + c * (1.0 - fx) * fz +
+                         d * fx * fz
+            // Downhill, as far as it's kept going the way it was.
+            dx = dx * 0.3 - gx * 0.7
+            dz = dz * 0.3 - gz * 0.7
+            Local length = Sqrt(dx * dx + dz * dz)
+            If length < 0.0001 Then Break
+            dx /= length
+            dz /= length
+            Local nx = px + dx
+            Local nz = pz + dz
+            If nx < 1.0 || nz < 1.0 || nx > most || nz > most Then Break
+            Local ncx = Floor(nx) As Int
+            Local ncz = Floor(nz) As Int
+            Local nfx = nx - (ncx As Float)
+            Local nfz = nz - (ncz As Float)
+            Local nat = ncz * row + ncx
+            Local there = heights[nat] * (1.0 - nfx) * (1.0 - nfz) +
+                          heights[nat + 1] * nfx * (1.0 - nfz) +
+                          heights[nat + row] * (1.0 - nfx) * nfz +
+                          heights[nat + row + 1] * nfx * nfz
+            Local fall = there - here
+            // Under the sea, it's done.
+            If here < 0.0 Then Break
+            Local holds = Max(-fall * speed * water * 8.0, 0.01)
+            If carried > holds || fall > 0.0
+                // Slowing, or uphill: some of what it carries stays where it is.
+                Local laid = fall > 0.0 ? Min(fall, carried) : (carried - holds) * 0.3
+                carried -= laid
+                heights[at] += laid * (1.0 - fx) * (1.0 - fz)
+                heights[at + 1] += laid * fx * (1.0 - fz)
+                heights[at + row] += laid * (1.0 - fx) * fz
+                heights[at + row + 1] += laid * fx * fz
+            Else
+                Local taken = Min((holds - carried) * 0.5, -fall)
+                carried += taken
+                heights[at] -= taken * (1.0 - fx) * (1.0 - fz)
+                heights[at + 1] -= taken * fx * (1.0 - fz)
+                heights[at + row] -= taken * (1.0 - fx) * fz
+                heights[at + row + 1] -= taken * fx * fz
+            End If
+            speed = Sqrt(Max(speed * speed - fall * 4.0, 0.0))
+            water *= 0.97
+            px = nx
+            pz = nz
+        End For
+    End For
+    Local cut: Float[] = []
+    For at = 0 Until heights.Count
+        cut.Add(Clamp(heights[at] - first[at], -1.2, 0.5))
+    End For
+    erosion = cut
+    erosionSeconds = (Instant.Now() - began).TotalSeconds
+End Function
+
+// How high the ground is at (`x`, `z`), before the rain: the rock, the road, and its edge.
+Function BaseHeight(x: Float, z: Float): Float
     Local height = RockHeight(x, z)
     If x > ROAD_WEST - ROAD_INTO && x < ROAD_EAST + ROAD_INTO
         Local road = Clamp(1.0 - (Abs(z - RoadZ(x)) - 3.0) / 3.0, 0.0, 1.0)
@@ -187,6 +471,23 @@ Public Function Blocked(x: Float, z: Float): Bool
     If inWalls && !inside && !door Then Return True
     // The works, inside, and the wheel, outside its east wall.
     If Abs(x - (MAIN_X + 3.5)) < 1.6 && Abs(z + 3.0) < 1.6 Then Return True
+    // The boulders on the slopes.
+    For boulder In BoulderSpots()
+        Local bx = x - boulder.0.x
+        Local bz = z - boulder.0.y
+        If bx * bx + bz * bz < boulder.1 * boulder.1 * 0.8 Then Return True
+    End For
+    // The lighthouse's foot.
+    Local place = LighthouseSpot()
+    If (x - place.x) * (x - place.x) + (z - place.y) * (z - place.y) <
+       LIGHTHOUSE_SOLID * LIGHTHOUSE_SOLID
+        Return True
+    End If
+    // The barrels and crates between the wheel and the door, which Pip goes around with the mill, and
+    // the millstone and bench inside.
+    If x > MAIN_X + 6.3 && x < MAIN_X + 9.3 && z > 3.5 && z < 5.6 Then Return True
+    If x > MAIN_X - 5.8 && x < MAIN_X - 4.8 && z > -3.6 && z < -1.6 Then Return True
+    If x > MAIN_X - 3.3 && x < MAIN_X + 0.3 && z > -4.8 && z < -3.7 Then Return True
     Return Abs(x - (MAIN_X + 8.0)) < 0.9 && Abs(z) < 3.4
 End Function
 
@@ -225,6 +526,13 @@ Function Mixed(from: Vec3, to: Vec3, amount: Float): Vec3
                 from.z + (to.z - from.z) * by)
 End Function
 
+// The cover's noise: fine, a meter or so across, and patches, many meters, as CoverParts has them.
+Function Fine(x: Float, z: Float): Float => Noise(x * 0.8 + 1.0, z * 0.8 + 2.0)
+
+Function Patches(x: Float, z: Float): Float
+    Return Noise(x * 0.09 + 4.0, z * 0.09 + 6.0) * 0.6 + Noise(x * 0.31 + 8.0, z * 0.31 + 1.0) * 0.4
+End Function
+
 /// How much of the ground at (`x`, `z`), `height` high with `slope` meters up to the meter, is sand, turf,
 /// and trodden ground, each from 0 to 1, as CoverAt paints them: what you're walking on.
 Public Function CoverParts(x: Float, z: Float, height: Float, slope: Float): (Float, Float, Float)
@@ -245,6 +553,14 @@ Public Function CoverParts(x: Float, z: Float, height: Float, slope: Float): (Fl
     Local sand = Clamp((1.5 + (patches - 0.5) * 1.8 - height) / 0.5, 0.0, 1.0) *
                  Clamp((1.3 - slope) / 0.4, 0.0, 1.0)
     Return (sand, turf, trodden)
+End Function
+
+/// How much of what covers the ground at (`x`, `z`), `height` high with `slope` meters up to the meter,
+/// is turf that shows, from 0 to 1: CoverAt's turf, less what's trodden over it and sand: where grass
+/// grows.
+Public Function TurfAt(x: Float, z: Float, height: Float, slope: Float): Float
+    Local parts = CoverParts(x, z, height, slope)
+    Return parts.1 * (1.0 - parts.2) * (1.0 - parts.0)
 End Function
 
 /// How high the terrain's grid of `heights` is at (`x`, `z`), meters from its corner: between its
@@ -287,9 +603,8 @@ End Function
 /// bands where it's steep, turf on what's high and flat, and the trodden ground by the mill and to the
 /// road. From noise at several scales, so it's patches that have nothing to do with where a map repeats.
 Public Function CoverAt(x: Float, z: Float, height: Float, slope: Float): (Vec3, Float)
-    Local fine = Noise(x * 0.8 + 1.0, z * 0.8 + 2.0)
-    Local patches = Noise(x * 0.09 + 4.0, z * 0.09 + 6.0) * 0.6 +
-                    Noise(x * 0.31 + 8.0, z * 0.31 + 1.0) * 0.4
+    Local fine = Fine(x, z)
+    Local patches = Patches(x, z)
     Local bands = Noise(x * 0.05 + z * 0.03, height * 1.6)
     Local color = Mixed(Vec3(0.27, 0.27, 0.27), Vec3(0.47, 0.46, 0.43), bands * 0.6 + fine * 0.4)
     // Its cracks, and lichen on it.
@@ -298,6 +613,10 @@ Public Function CoverAt(x: Float, z: Float, height: Float, slope: Float): (Vec3,
     Local lichen = Clamp((Noise(x * 0.6 + 9.0, z * 0.6 + 2.0) - 0.68) * 6.0, 0.0, 1.0)
     color = Mixed(color, Vec3(0.62, 0.6, 0.42), lichen * 0.6)
     Local rough = 0.72 + fine * 0.2
+    // Its strata, where it's steep: each terrace's step darker, as what's under it shows.
+    Local stratum = height / STRATUM - Floor(height / STRATUM)
+    Local strata = Clamp((stratum - 0.62) / 0.12, 0.0, 1.0) * Clamp((slope - 0.45) / 0.3, 0.0, 1.0)
+    color = Mixed(color, Vec3(color.x * 0.6, color.y * 0.58, color.z * 0.56), strata)
     // Where the high water reaches, it's dark and wet, in patches.
     Local tide = Clamp(1.0 - Abs(height - 1.7) / 0.35, 0.0, 1.0) *
                  Clamp((patches - 0.25) * 4.0, 0.0, 1.0)
@@ -324,5 +643,180 @@ Public Function CoverAt(x: Float, z: Float, height: Float, slope: Float): (Vec3,
     Local wet = Clamp((0.55 + (fine - 0.5) * 0.3 - height) / 0.3, 0.0, 1.0)
     color = Mixed(color, Vec3(color.x * 0.58, color.y * 0.56, color.z * 0.54), wet)
     rough = rough + (0.28 - rough) * wet
+    // The shore's rock shelf: dark, wet rock, smooth, where the sand would be.
+    Local shelf = ShelfAt(x, z, height)
+    color = Mixed(color, Vec3(0.2, 0.2, 0.19), shelf * 0.9)
+    rough = rough + (0.32 - rough) * shelf
     Return (color, Clamp(rough, 0.0, 1.0))
 End Function
+
+/// Where the far islet's lighthouse stands, on its side toward the yard.
+Public Function LighthouseSpot(): Vec2 => Vec2(FAR_X - 2.0, FAR_Z - 11.0)
+
+// How far from the lighthouse's middle its foot is solid: its plinth, and a person's width.
+Const LIGHTHOUSE_SOLID: Float = PLINTH + 0.6
+
+/// How far across the jetty runs, on the main island's west shore.
+Public Const JETTY_Z: Float = -6.0
+
+/// Where the main island's west shore is, along JETTY_Z: the first ground going west from the yard
+/// that's under 0.3, at slack water.
+Public Function JettyShore(): Vec2
+    Local x = MAIN_X - 20.0
+    While x > -(SIDE As Float) / 2.0 && GroundHeight(x, JETTY_Z) > 0.3
+        x -= 0.25
+    End While
+    Return Vec2(x, JETTY_Z)
+End Function
+
+/// The jetty's landward end, on the shore, and its seaward end, out over the sea.
+Public Function JettyStart(): Vec2 => Vec2(JettyShore().x + 3.0, JETTY_Z)
+
+Public Function JettyEnd(): Vec2 => Vec2(JettyShore().x - 12.0, JETTY_Z)
+
+/// How sandy what covers the ground is at (`x`, `z`), `height` high with `slope`, from 0 to 1, as
+/// CoverAt paints it: where what's washed up lies.
+Public Function SandAt(x: Float, z: Float, height: Float, slope: Float): Float
+    Return CoverParts(x, z, height, slope).0
+End Function
+
+/// How much of what shows at (`x`, `z`), `height` high with `slope`, is sand, from 0 to 1, as CoverAt
+/// paints it: sand, but not where the rock shelf's over it.
+Public Function SandShownAt(x: Float, z: Float, height: Float, slope: Float): Float
+    Return SandAt(x, z, height, slope) * (1.0 - ShelfAt(x, z, height) * 0.9)
+End Function
+
+/// Whether (`x`, `z`) is kept clear of what's washed up: the road and the causeway's shores, within 3 m
+/// of a part's spot or a landing, by the jetty, and where anything's solid.
+Public Function KeptClear(x: Float, z: Float): Bool
+    If x > ROAD_WEST - ROAD_INTO && x < ROAD_EAST + ROAD_INTO && Abs(z - RoadZ(x)) < ROAD_SIDE + 3.0
+        Return True
+    End If
+    If Blocked(x, z) Then Return True
+    For spot In [GearSpot(), PaddleSpot(), BeltSpot(), Landing(False), Landing(True),
+                 PipLanding(False),
+                 PipLanding(True), JettyStart()]
+        If (spot.x - x) * (spot.x - x) + (spot.y - z) * (spot.y - z) < 9.0 Then Return True
+    End For
+    Return Abs(z - JETTY_Z) < 4.0 && x < JettyStart().x + 2.0 && x > JettyEnd().x - 2.0
+End Function
+
+/// How high driftwood's ends lie at least, over slack water: past its swell, a twentieth of a meter, by
+/// three times that, so it's dry till the flood comes.
+Public Const BEACHED: Float = 0.2
+
+/// Where what's washed up lies along the shores, each on sand above the sea at slack water: where it
+/// is, what it is (0 driftwood, 1 rope, 2 a rock), how it's turned, and how big. Never on the road or
+/// the causeway's shores, by the parts' spots or the landings, by the jetty, or where anything's solid.
+/// Driftwood's beached, the ground at both its ends BEACHED or higher.
+Public Function ShoreSpots(): (Vec2, Int, Float, Float)[]
+    Local spots: (Vec2, Int, Float, Float)[] = []
+    Local half = (SIDE As Float) / 2.0 - EDGE
+    For row = 0 Until 60
+        For column = 0 Until 60
+            Local x = -half + ((column As Float) + Hash(column, row + 900)) * (2.0 * half / 60.0)
+            Local z = -half + ((row As Float) + Hash(column + 900, row)) * (2.0 * half / 60.0)
+            Local height = GroundHeight(x, z)
+            If height < 0.15 || height > 1.4 Then Continue
+            Local dx = GroundHeight(x + 1.0, z) - GroundHeight(x - 1.0, z)
+            Local dz = GroundHeight(x, z + 1.0) - GroundHeight(x, z - 1.0)
+            Local slope = Sqrt(dx * dx + dz * dz) / 2.0
+            If SandAt(x, z, height, slope) < 0.7 Then Continue
+            If KeptClear(x, z) Then Continue
+            // Only some of what passes, so it's scattered.
+            If Hash(column + 300, row + 700) > 0.45 Then Continue
+            Local kind = Min((Hash(column + 50, row + 60) * 3.0) As Int, 2)
+            Local yaw = Hash(column + 70, row + 80) * 6.283
+            Local size = 0.6 + Hash(column + 90, row + 10) * 0.8
+            // A log's beached: the ground at both its ends over slack water's swell, so it lies till
+            // the flood floats it; turned along the shore, as the sea leaves them, if it's not as it
+            // fell, and not there if neither way.
+            If kind == 0
+                If !Beached(x, z, yaw, size) Then yaw += Pi / 2.0
+                If !Beached(x, z, yaw, size) Then Continue
+            End If
+            spots.Add((Vec2(x, z), kind, yaw, size))
+        End For
+    End For
+    Return spots
+End Function
+
+// Whether a log at (`x`, `z`), turned `yaw` and `size` big, has the ground at both its ends BEACHED or
+// higher.
+Function Beached(x: Float, z: Float, yaw: Float, size: Float): Bool
+    Local end = Quat.FromEuler(0.0, yaw, 0.0) * Vec3(0.95 * 1.4 * size, 0.0, 0.0)
+    Return GroundHeight(x - end.x, z - end.z) >= BEACHED &&
+           GroundHeight(x + end.x, z + end.z) >= BEACHED
+End Function
+
+/// How steep ground may be where a walk goes, a meter up to this many along: as steep as the far
+/// islet's own dome, from the belt at its top down to the lighthouse, which nothing that's cut or
+/// terraced the ground makes steeper.
+Public Const WALKABLE: Float = 1.1
+
+// Where the boulders are, built once.
+Global boulders: (Vec2, Float)[] = []
+Global bouldersBuilt: Bool = False
+
+/// Where the boulders lie on the slopes, and how far each reaches from its middle: few, larger than
+/// what's on the shores, on high ground that's sloped, never where a walk goes or anything's kept clear.
+Public Function BoulderSpots(): (Vec2, Float)[]
+    If bouldersBuilt Then Return boulders
+    bouldersBuilt = True
+    Local found: (Vec2, Float)[] = []
+    Local half = (SIDE As Float) / 2.0 - EDGE
+    For row = 0 Until 30
+        For column = 0 Until 30
+            If Hash(column + 500, row + 600) > 0.6 Then Continue
+            Local x = -half + ((column As Float) + Hash(column, row + 800)) * (2.0 * half / 30.0)
+            Local z = -half + ((row As Float) + Hash(column + 800, row)) * (2.0 * half / 30.0)
+            Local height = BaseHeight(x, z)
+            If height < SHORES + 0.5 Then Continue
+            Local dx = BaseHeight(x + 1.0, z) - BaseHeight(x - 1.0, z)
+            Local dz = BaseHeight(x, z + 1.0) - BaseHeight(x, z - 1.0)
+            Local slope = Sqrt(dx * dx + dz * dz) / 2.0
+            If slope < 0.15 || slope > 1.3 Then Continue
+            If Eroding(x, z, height) < 0.3 Then Continue
+            Local reach = 0.9 + Hash(column + 30, row + 40) * 1.3
+            found.Add((Vec2(x, z), reach))
+        End For
+    End For
+    boulders = found
+    Return found
+End Function
+
+/// The places a walk goes through, or stands at, which have to stay walkable.
+Public Function KeptSpots(): Vec2[]
+    Local spots = [MillSpot(), DoorSpot(), GearSpot(), PaddleSpot(), BeltSpot(), Landing(False),
+                   Landing(True), PipLanding(False), PipLanding(True), RoadEnd(False),
+                   RoadEnd(True),
+                   JettyStart()]
+    // Along the road, and from the door to it, and from the landing on the far islet to the belt and
+    // the lighthouse's door.
+    For step = 0 To 20
+        Local x = ROAD_WEST + (ROAD_EAST - ROAD_WEST) * (step As Float) / 20.0
+        spots.Add(Vec2(x, RoadZ(x)))
+        Local door = DoorSpot()
+        spots.Add(Vec2(door.x + (ROAD_WEST - door.x) * (step As Float) / 20.0,
+                       door.y + (RoadZ(ROAD_WEST) - door.y) * (step As Float) / 20.0))
+        Local landing = Landing(True)
+        Local belt = BeltSpot()
+        spots.Add(Vec2(landing.x + (belt.x - landing.x) * (step As Float) / 20.0,
+                       landing.y + (belt.y - landing.y) * (step As Float) / 20.0))
+        // And on to the lighthouse, short of its solid foot.
+        Local light = LighthouseSpot()
+        Local through = (step As Float) / 20.0 * 0.75
+        spots.Add(Vec2(belt.x + (light.x - belt.x) * through,
+                       belt.y + (light.y - belt.y) * through))
+    End For
+    Return spots
+End Function
+
+/// How high the ground at (`x`, `z`) was before the rain cut it, to tell what it's cut.
+Public Function BaseHeightOf(x: Float, z: Float): Float => BaseHeight(x, z)
+
+/// How much of what the rain's cut shows at (`x`, `z`), from 0 to 1: none where a walk goes.
+Public Function ErosionShownAt(x: Float, z: Float): Float => Eroding(x, z, BaseHeight(x, z))
+
+/// The headland's summit, across the ground.
+Public Function HeadlandSpot(): Vec2 => Vec2(HEADLAND_X, HEADLAND_Z)

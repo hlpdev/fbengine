@@ -48,7 +48,7 @@ struct records_t {
 
 } // namespace
 
-TEST_CASE("every job runs once", "[jobs]") {
+TEST_CASE("every job runs once", "[jobs][stability]") {
     for (const int workers : { 1, 3, 16 }) {
         fbe::jobs_t jobs(workers);
         REQUIRE(jobs.workers() == workers);
@@ -69,7 +69,7 @@ TEST_CASE("every job runs once", "[jobs]") {
     }
 }
 
-TEST_CASE("there's a worker at least", "[jobs]") {
+TEST_CASE("there's a worker at least", "[jobs][stability]") {
     fbe::jobs_t jobs(0);
     REQUIRE(jobs.workers() == 1);
     std::atomic<int> ran = 0;
@@ -77,7 +77,7 @@ TEST_CASE("there's a worker at least", "[jobs]") {
     REQUIRE(ran == 1);
 }
 
-TEST_CASE("a job runs after the jobs it runs after", "[jobs]") {
+TEST_CASE("a job runs after the jobs it runs after", "[jobs][stability]") {
     fbe::jobs_t jobs(8);
     records_t records(5);
 
@@ -120,7 +120,7 @@ TEST_CASE("a job runs after the jobs it runs after", "[jobs]") {
     }
 }
 
-TEST_CASE("many jobs wait for one", "[jobs]") {
+TEST_CASE("many jobs wait for one", "[jobs][stability]") {
     fbe::jobs_t jobs(8);
     std::atomic<bool> open = false;
     std::atomic<int> early = 0;
@@ -155,7 +155,8 @@ TEST_CASE("many jobs wait for one", "[jobs]") {
     REQUIRE(early == 0);
 }
 
-TEST_CASE("a finished job's handle stays finished when its slot runs another", "[jobs]") {
+TEST_CASE("a finished job's handle stays finished when its slot runs another",
+          "[jobs][stability]") {
     fbe::jobs_t jobs(2);
     const fbe::job_t first = jobs.run([] {});
     jobs.wait(first);
@@ -183,7 +184,7 @@ TEST_CASE("a finished job's handle stays finished when its slot runs another", "
     jobs.wait(second);
 }
 
-TEST_CASE("run_for covers every item once, a grain a range at least", "[jobs]") {
+TEST_CASE("run_for covers every item once, a grain a range at least", "[jobs][stability]") {
     fbe::jobs_t jobs(6);
     const std::array<std::size_t, 7> counts = { 0, 1, 7, 10, 64, 1'000, 100'003 };
     const std::array<std::size_t, 8> grains = {
@@ -224,7 +225,7 @@ TEST_CASE("run_for covers every item once, a grain a range at least", "[jobs]") 
     }
 }
 
-TEST_CASE("run_for waits for the jobs it runs after", "[jobs]") {
+TEST_CASE("run_for waits for the jobs it runs after", "[jobs][stability]") {
     fbe::jobs_t jobs(4);
     std::atomic<bool> first = false;
     std::atomic<int> early = 0;
@@ -255,7 +256,7 @@ TEST_CASE("run_for waits for the jobs it runs after", "[jobs]") {
     REQUIRE(first);
 }
 
-TEST_CASE("a job can wait for the jobs it starts, with one worker", "[jobs]") {
+TEST_CASE("a job can wait for the jobs it starts, with one worker", "[jobs][stability]") {
     fbe::jobs_t jobs(1);
     std::atomic<int> leaves = 0;
     // Three levels of jobs waiting for their children: with one worker, only waits that run the
@@ -278,7 +279,7 @@ TEST_CASE("a job can wait for the jobs it starts, with one worker", "[jobs]") {
     REQUIRE(leaves == 64);
 }
 
-TEST_CASE("work handed to the main thread runs at hand_over, in order", "[jobs]") {
+TEST_CASE("work handed to the main thread runs at hand_over, in order", "[jobs][stability]") {
     fbe::jobs_t jobs(4);
     std::vector<int> order;
     std::atomic<int> outside = 0;
@@ -317,7 +318,7 @@ TEST_CASE("work handed to the main thread runs at hand_over, in order", "[jobs]"
     REQUIRE(order == std::vector{ 1, 2 });
 }
 
-TEST_CASE("ending the jobs with work queued runs all of it once", "[jobs]") {
+TEST_CASE("ending the jobs with work queued runs all of it once", "[jobs][stability]") {
     for (int round = 0; round < 20; ++round) {
         std::atomic<int> ran = 0;
         std::atomic<int> handed = 0;
@@ -351,7 +352,8 @@ TEST_CASE("ending the jobs with work queued runs all of it once", "[jobs]") {
     }
 }
 
-TEST_CASE("under stress, from many threads, every job runs once and in order", "[jobs][stress]") {
+TEST_CASE("under stress, from many threads, every job runs once and in order",
+          "[jobs][stress][stability]") {
     // Random graphs of jobs, each after a few of those made before it, started and waited for by
     // several threads at once, some jobs starting and waiting for jobs of their own. Catch2's seed
     // makes them, so `--rng-seed` makes a run's again.
@@ -430,7 +432,7 @@ TEST_CASE("under stress, from many threads, every job runs once and in order", "
     }
 }
 
-TEST_CASE("a job can hold what can't be copied", "[jobs]") {
+TEST_CASE("a job can hold what can't be copied", "[jobs][stability]") {
     fbe::jobs_t jobs(2);
     auto owned = std::make_unique<int>(41);
     std::atomic<int> seen = 0;
@@ -477,7 +479,7 @@ bool finishes(const fbe::jobs_t& jobs, fbe::job_t job) {
 
 } // namespace
 
-TEST_CASE("a wait runs only its job and what it runs after", "[jobs]") {
+TEST_CASE("a wait runs only its job and what it runs after", "[jobs][stability]") {
     // One worker: A waits for B, and C for D, which runs after A. A wait that ran whatever was
     // first in the queue would run C inside A's, and C would wait for D, which waits for A.
     // Leaked, so a deadlock fails the test rather than hanging it.
@@ -497,7 +499,7 @@ TEST_CASE("a wait runs only its job and what it runs after", "[jobs]") {
     delete jobs;
 }
 
-TEST_CASE("a wait ends soon after its job, whatever else is queued", "[jobs]") {
+TEST_CASE("a wait ends soon after its job, whatever else is queued", "[jobs][stability]") {
     using steady_t = std::chrono::steady_clock;
     fbe::jobs_t jobs(2);
     std::atomic<int> started = 0;
@@ -528,7 +530,7 @@ TEST_CASE("a wait ends soon after its job, whatever else is queued", "[jobs]") {
     REQUIRE_FALSE(long_ran_here);
 }
 
-TEST_CASE("waits don't stack on a thread", "[jobs]") {
+TEST_CASE("waits don't stack on a thread", "[jobs][stability]") {
     fbe::jobs_t jobs(2);
     hold_t slow(jobs);
     std::atomic<int> deepest = 0;
@@ -554,7 +556,7 @@ TEST_CASE("waits don't stack on a thread", "[jobs]") {
     REQUIRE(deepest == 1);
 }
 
-TEST_CASE("a wait for a long chain runs it without going deeper", "[jobs]") {
+TEST_CASE("a wait for a long chain runs it without going deeper", "[jobs][stability]") {
     fbe::jobs_t jobs(3);
     std::atomic<int> ran = 0;
     fbe::job_t last = 0;
@@ -579,7 +581,7 @@ TEST_CASE("a wait for a long chain runs it without going deeper", "[jobs]") {
     REQUIRE(ran == 5'000 + (30 * 8));
 }
 
-TEST_CASE("a thread that can't start stops the rest, and says so", "[jobs]") {
+TEST_CASE("a thread that can't start stops the rest, and says so", "[jobs][stability]") {
     REQUIRE_THROWS_AS(fbe::jobs_t(4, 2), std::system_error);
     REQUIRE_THROWS_AS(fbe::jobs_t(4, 0), std::system_error);
     // And with none of that, every one has.

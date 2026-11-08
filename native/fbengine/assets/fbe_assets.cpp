@@ -9,6 +9,24 @@
 #include "texture/texture.hpp"
 #include "vfs/vfs.hpp"
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+// clang-format off: psapi.h needs windows.h first.
+#include <windows.h>
+#include <psapi.h>
+// clang-format on
+#elifdef __APPLE__
+#include <mach/mach.h>
+#else
+#include <unistd.h>
+#endif
+
+#include <cstdio>
 #include <exception>
 #include <format>
 #include <limits>
@@ -235,6 +253,53 @@ FBE_API bool fbe_assets_free(uint64_t load) {
 
 FBE_API int64_t fbe_assets_count(void) {
     return static_cast<int64_t>(assets::loads().count());
+}
+
+FBE_API int64_t fbe_assets_resident_bytes(void) {
+#ifdef _WIN32
+    PROCESS_MEMORY_COUNTERS_EX counters{};
+    counters.cb = sizeof(counters);
+    if (K32GetProcessMemoryInfo(GetCurrentProcess(),
+                                reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters),
+                                sizeof(counters)) == 0) {
+        return 0;
+    }
+    return static_cast<int64_t>(counters.PrivateUsage);
+#elifdef __APPLE__
+    mach_task_basic_info_data_t info{};
+    mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info),
+                  &count) != KERN_SUCCESS) {
+        return 0;
+    }
+    return static_cast<int64_t>(info.resident_size);
+#else
+    // Its pages in all, then those resident, by C's stdio, as a DLL here has no iostreams.
+    std::FILE* statm = std::fopen("/proc/self/statm", "r");
+    if (statm == nullptr) {
+        return 0;
+    }
+    unsigned long all = 0;
+    unsigned long resident = 0;
+    // NOLINTNEXTLINE(cert-err34-c): what it read is checked by how many it read.
+    const int read = std::fscanf(statm, "%lu %lu", &all, &resident);
+    std::fclose(statm);
+    return read == 2 ? static_cast<int64_t>(resident) * sysconf(_SC_PAGESIZE) : 0;
+#endif
+}
+
+FBE_API bool fbe_assets_address_sanitized(void) {
+#ifdef __SANITIZE_ADDRESS__
+    return true;
+#elifdef __has_feature
+#if __has_feature(address_sanitizer)
+    return true;
+#else
+    return false;
+#endif
+#else
+    return false;
+#endif
 }
 
 FBE_API int64_t fbe_assets_size(uint64_t load) {

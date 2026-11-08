@@ -6,6 +6,7 @@ Import std.core
 Import std.ffi
 Import std.io
 Import std.text
+Import std.time
 Import fbengine
 Import "./cook"
 Import "./left_out"
@@ -59,7 +60,16 @@ Public Final Class GameBuild
             // The game's version, stamped in the pak, and said to Mount.
             Print("fb:rerun-if-changed=project.toml")
             Local version = Try VersionIn(folder)
-            Try Cooker.CookFolder(assets, cooked, out / "cook-cache", version)
+            // What each file took that wasn't in the cache, and all of it, in out's cook-times.txt,
+            // as fb shows a step's output only when it fails.
+            Local began = Instant.Now()
+            Local times: String[] = []
+            Try Cooker.CookFolder(assets, cooked, out / "cook-cache",
+                                  version, Function(file: String, seconds: Float64)
+                times.Add("{file} {seconds}")
+            End Function)
+            times.Add("all {(Instant.Now() - began).TotalSeconds}")
+            Try File.WriteText(out / "cook-times.txt", "\n".Join(times) + "\n")
             // The pak's own place is out, so one taken from beside the executable comes back: fb
             // runs this again when it's gone, and then it's the same, or no use.
             Print("fb:rerun-if-changed={pak}")

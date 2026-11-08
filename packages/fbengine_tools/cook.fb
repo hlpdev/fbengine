@@ -10,6 +10,7 @@ Import std.ffi
 Import std.io
 Import std.os
 Import std.text
+Import std.time
 Import fbengine
 Import "./c/fbe_cook"
 Import "./c/fbe_tools"
@@ -115,6 +116,8 @@ Public Final Class Cooker
     /// light, and its alpha for the material's cutoff, blend, and fog to go on with:
     ///
     /// - `surface.place`, `float3`: in the camera's view, x right, y up, looking down -z.
+    /// - `surface.world()`, `float3`: where it is in the world, and `surface.worldNormal()` its normal
+    ///   there, for what's mapped by the world, as rock on a cliff is.
     /// - `surface.normal`, `float3`: length 1, or 0 for what has none, facing the camera for a
     ///   two-sided material's back.
     /// - `surface.uv0`, `surface.uv1`, `float2`.
@@ -444,7 +447,8 @@ Public Final Class Cooker
     /// it, for Assets.MountRelease to refuse one of another.
     @MainThread
     Public Static Method CookFolder(source: Path, pak: Path, cache: Path? = Null,
-                                    version: String = "") Throws IOError
+                                    version: String = "",
+                                    timed: Func(String, Float64)? = Null) Throws IOError
         cooks += 1
         Local place = "res://fbengine-cooking-{cooks}"
         Assets.MountFolder(place, source)
@@ -528,6 +532,8 @@ Public Final Class Cooker
             Local kind = kinds[at]
             If kind == CookedAs.NOTHING || buffers.Contains(Folded(file.1)) Then Continue
             Local from = file.0
+            Local began = Instant.Now()
+            Local cooked = False
             If kind == CookedAs.IMAGE
                 Local settings = Try Assets.ReadSettings<ImageSettings>("{place}/{file.1}")
                 Local options = ImageOptions(settings)
@@ -536,7 +542,10 @@ Public Final Class Cooker
                 Local kept = CachedAs(cache, key, [file.0], ".ktx2")
                 from = kept ?? (scratch.Path / "cooked.ktx2")
                 used.Add(from.FileName())
-                If kept == Null || !File.Exists(from) Then Try CookImage(file.0, from, settings)
+                If kept == Null || !File.Exists(from)
+                    Try CookImage(file.0, from, settings)
+                    cooked = True
+                End If
             ElseIf kind == CookedAs.SHADER
                 from = Try CookedShader(file.0, file.1, cache, scratch.Path, used, ShaderStamp(),
                                         SlangcNamed())
@@ -559,8 +568,10 @@ Public Final Class Cooker
                 used.Add(from.FileName())
                 If kept == Null || !File.Exists(from)
                     Try CookModelIn(file.0, from, source, settings)
+                    cooked = True
                 End If
             End If
+            If cooked && timed != Null Then timed(file.1, (Instant.Now() - began).TotalSeconds)
             If !fbe_cook_pak_add(written, file.1, from.Text) Then Throw ToolsFailed(file.0.Text)
         End For
         If version != ""

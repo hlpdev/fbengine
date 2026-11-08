@@ -101,6 +101,13 @@ FBE_API bool fbe_assets_wait(uint64_t load);
 FBE_API bool fbe_assets_free(uint64_t load);
 // How many loads there are, not freed.
 FBE_API int64_t fbe_assets_count(void);
+// How much of the process's memory is its own now, in bytes, as its OS counts it: its private
+// bytes on Windows, its resident set elsewhere; 0 where that can't be told. What a soak of loads,
+// reloads, and mounts watches for what they leave.
+FBE_API int64_t fbe_assets_resident_bytes(void);
+// Whether this DLL's built with AddressSanitizer, whose memory a soak doesn't judge, as
+// LeakSanitizer does.
+FBE_API bool fbe_assets_address_sanitized(void);
 // A bytes load's bytes, and how many there are, which stay until it's freed; -1 and null for a
 // load that isn't a bytes load done and loaded.
 FBE_API int64_t fbe_assets_size(uint64_t load);
