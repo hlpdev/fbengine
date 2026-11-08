@@ -1942,8 +1942,8 @@ endif()
 
 # fbengine_video, through its DLL, against its test videos with bytes changed at random, fuzzed,
 # and played a thousand times over.
-add_executable(fbengine_video_tests video/mutation_tests.cpp video/soak_tests.cpp
-               video/fuzz_tests.cpp video/player_tests.cpp stability.cpp)
+add_executable(fbengine_video_tests video/mutation_tests.cpp video/fuzz_tests.cpp
+               video/player_tests.cpp stability.cpp)
 target_link_libraries(fbengine_video_tests PRIVATE fbengine_video_native Catch2::Catch2WithMain)
 target_include_directories(fbengine_video_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 if(WIN32)
@@ -1955,6 +1955,30 @@ fbengine_set_warnings(fbengine_video_tests)
 # A test tagged [stability], a fuzz, race, or soak, is labeled so, for sanitizers.yml.
 catch_discover_tests(fbengine_video_tests TEST_PREFIX "video." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_video_native>"
+                     PROPERTIES TIMEOUT ${fbengine_stability_timeout})
+
+# The video soak, fbengine_video's sources built in with tests/own_new.cpp, which counts each of
+# their allocations that's live, as a DLL's own operator new it couldn't.
+find_package(Threads REQUIRED)
+file(GLOB fbengine_video_soak_sources CONFIGURE_DEPENDS
+     "${PROJECT_SOURCE_DIR}/native/fbengine_video/*/*.cpp")
+add_executable(fbengine_video_soak_tests video/soak_tests.cpp own_new.cpp stability.cpp
+               ${fbengine_video_soak_sources})
+target_include_directories(fbengine_video_soak_tests PRIVATE
+                           "${PROJECT_SOURCE_DIR}/native/fbengine_video" "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_definitions(fbengine_video_soak_tests PRIVATE FBE_VIDEO_BUILDING
+                           FBE_VERSION="${PROJECT_VERSION}"
+                           FBE_VIDEO_MEDIA="${PROJECT_SOURCE_DIR}/packages/fbengine_video/tests/media")
+target_link_libraries(fbengine_video_soak_tests PRIVATE pl_mpeg Threads::Threads
+                      Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_video_soak_tests)
+# MinGW's C++ library, a DLL, would allocate and free with its own operator new, which the count
+# can't see; in the test, it's what's counted, as on Linux and macOS, where the test's replaces it.
+if(MINGW)
+  target_link_options(fbengine_video_soak_tests PRIVATE -static-libstdc++ -static-libgcc)
+endif()
+catch_discover_tests(fbengine_video_soak_tests TEST_PREFIX "video." ADD_TAGS_AS_LABELS
+                     DL_PATHS "${fbengine_test_dll_paths}"
                      PROPERTIES TIMEOUT ${fbengine_stability_timeout})
 
 # A video's thread, built in with a decoder of the test's, for what only its timing shows.
@@ -2369,6 +2393,28 @@ fbengine_set_warnings(fbengine_audio_native_tests)
 # A test tagged [stability], a fuzz, race, or soak, is labeled so, for sanitizers.yml.
 catch_discover_tests(fbengine_audio_native_tests TEST_PREFIX "audio." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_audio_native>"
+                     PROPERTIES TIMEOUT ${fbengine_stability_timeout})
+
+# The sound soak, fbengine_audio's sources built in with tests/own_new.cpp, which counts each of
+# their allocations that's live, as a DLL's own operator new it couldn't.
+file(GLOB fbengine_audio_soak_sources CONFIGURE_DEPENDS
+     "${PROJECT_SOURCE_DIR}/native/fbengine_audio/*/*.cpp")
+add_executable(fbengine_audio_soak_tests audio/soak_tests.cpp own_new.cpp stability.cpp
+               ${fbengine_audio_soak_sources})
+target_include_directories(fbengine_audio_soak_tests PRIVATE
+                           "${PROJECT_SOURCE_DIR}/native/fbengine_audio" "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_definitions(fbengine_audio_soak_tests PRIVATE FBE_AUDIO_BUILDING
+                           FBE_VERSION="${PROJECT_VERSION}"
+                           FBE_AUDIO_TEST_CORPUS="${CMAKE_CURRENT_SOURCE_DIR}/audio/corpus")
+target_link_libraries(fbengine_audio_soak_tests PRIVATE fbengine_miniaudio Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_audio_soak_tests)
+# MinGW's C++ library, a DLL, would allocate and free with its own operator new, which the count
+# can't see; in the test, it's what's counted, as on Linux and macOS, where the test's replaces it.
+if(MINGW)
+  target_link_options(fbengine_audio_soak_tests PRIVATE -static-libstdc++ -static-libgcc)
+endif()
+catch_discover_tests(fbengine_audio_soak_tests TEST_PREFIX "audio." ADD_TAGS_AS_LABELS
+                     DL_PATHS "${fbengine_test_dll_paths}"
                      PROPERTIES TIMEOUT ${fbengine_stability_timeout})
 
 # fbengine_audio_native's C API with each of a call's allocations failing in turn: its sources built

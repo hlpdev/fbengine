@@ -11,7 +11,7 @@
 #include <cstdint>
 #include <vector>
 
-using fbe::tests::allocated;
+using fbe::tests::malloc_bytes;
 using fbe::tests::sanitized;
 
 namespace {
@@ -150,7 +150,7 @@ TEST_CASE("thousands of bodies, characters, joints, and worlds made and freed le
     std::vector<std::uint64_t> held;
     for (int i = 0; i < 40; ++i) {
         soak(i % 2 == 0);
-        held.push_back(allocated());
+        held.push_back(malloc_bytes());
     }
     REQUIRE(fbe_physics_set_threads(threads));
     CHECK(fbe_shape_count() == shapes);

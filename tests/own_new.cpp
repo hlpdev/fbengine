@@ -33,6 +33,7 @@ void* plain(std::size_t size) {
     if (made == nullptr) {
         throw std::bad_alloc();
     }
+    ++fbe::tests::live;
     return made;
 }
 
@@ -49,12 +50,14 @@ void* aligned(std::size_t size, std::align_val_t alignment) {
     if (made == nullptr) {
         throw std::bad_alloc();
     }
+    ++fbe::tests::live;
     return made;
 }
 
 void release(void* pointer) noexcept {
     if (pointer != nullptr) {
         ++fbe::tests::freed;
+        --fbe::tests::live;
     }
     std::free(pointer);
 }
@@ -62,6 +65,7 @@ void release(void* pointer) noexcept {
 void release_aligned(void* pointer) noexcept {
     if (pointer != nullptr) {
         ++fbe::tests::freed;
+        --fbe::tests::live;
     }
 #ifdef _WIN32
     _aligned_free(pointer);
