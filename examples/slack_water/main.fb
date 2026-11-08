@@ -1091,8 +1091,14 @@ Function SaveViews(folder: Path, stillsOnly: Bool = False) Throws GraphicsError,
     End For
     lap = Lap("the views", lap)
     If !stillsOnly
+        // The sea's and the plants' checks compare what's drawn as it is, as they were written to:
+        // ambient occlusion shades it, and antialiasing over frames or from the picture moves it.
+        camera.SetAmbientOcclusion(0.0)
+        camera.SetTemporalAA(False)
+        camera.SetFxaa(False)
         Try SaveSeaAndSky(folder, camera, island)
         Try SavePlants(folder, camera, island)
+        Looked(camera)
         lap = Lap("the sea and sky", lap)
     End If
     // High tide, from the island's view.
