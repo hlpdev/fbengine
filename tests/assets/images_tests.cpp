@@ -686,7 +686,7 @@ void whole(const assets::image_t& image) {
 // Each kind of file decoded, mutated: each mutant is refused as invalid data, or decodes to an
 // image that's what it says, and nothing reads or writes past what it has, which ASan checks where
 // it runs. FBE_FUZZ_ROUNDS asks for more than the 400 a seed CI runs.
-TEST_CASE("an image's mutants are refused or decode whole", "[assets]") {
+TEST_CASE("an image's mutants are refused or decode whole", "[assets][stability]") {
     const char* asked = std::getenv("FBE_FUZZ_ROUNDS");
     const int rounds = asked != nullptr ? std::atoi(asked) : 400;
     bytes_t bmp(58, 0);
