@@ -212,3 +212,11 @@ jobs:
           name: golden-failures-${{ matrix.target }}
           path: build/golden-failures
           if-no-files-found: ignore
+      # The examples' --frames output, each test's own folder under build/example-frames, as Slack
+      # Water's frames test writes its stills, to look at where a check of what's drawn failed.
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: example-frames-${{ matrix.target }}
+          path: build/example-frames
+          if-no-files-found: ignore
