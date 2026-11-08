@@ -2181,9 +2181,10 @@ catch_discover_tests(fbengine_audio_native_tests TEST_PREFIX "audio." ADD_TAGS_A
 # into the test, whose operator new fails the one it says.
 file(GLOB fbengine_audio_oom_sources CONFIGURE_DEPENDS
      "${PROJECT_SOURCE_DIR}/native/fbengine_audio/*/*.cpp")
-add_executable(fbengine_audio_oom_tests audio/oom_tests.cpp ${fbengine_audio_oom_sources})
+add_executable(fbengine_audio_oom_tests audio/oom_tests.cpp own_new.cpp
+               ${fbengine_audio_oom_sources})
 target_include_directories(fbengine_audio_oom_tests PRIVATE
-                           "${PROJECT_SOURCE_DIR}/native/fbengine_audio")
+                           "${PROJECT_SOURCE_DIR}/native/fbengine_audio" "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(fbengine_audio_oom_tests PRIVATE FBE_AUDIO_BUILDING
                            FBE_VERSION="${PROJECT_VERSION}")
 target_link_libraries(fbengine_audio_oom_tests PRIVATE fbengine_miniaudio Catch2::Catch2WithMain)
@@ -2337,16 +2338,18 @@ catch_discover_tests(fbengine_anim_tests TEST_PREFIX "anim."
 
 # Animation's C API with each of a call's allocations failing in turn, with fbengine's sources, as
 # operator new is this test's.
-add_executable(fbengine_effects_oom_tests scene/effects_oom_tests.cpp)
+add_executable(fbengine_effects_oom_tests scene/effects_oom_tests.cpp own_new.cpp)
 target_link_libraries(fbengine_effects_oom_tests PRIVATE fbengine_internal Catch2::Catch2WithMain)
+target_include_directories(fbengine_effects_oom_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 fbengine_set_warnings(fbengine_effects_oom_tests)
 catch_discover_tests(fbengine_effects_oom_tests TEST_PREFIX "scene." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}"
                      PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}")
 
-add_executable(fbengine_anim_oom_tests anim/oom_tests.cpp)
+add_executable(fbengine_anim_oom_tests anim/oom_tests.cpp own_new.cpp)
 target_link_libraries(fbengine_anim_oom_tests PRIVATE fbengine_internal Catch2::Catch2WithMain
                       ${CMAKE_DL_LIBS})
+target_include_directories(fbengine_anim_oom_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_options(fbengine_anim_oom_tests PRIVATE
                       "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/anim/own_new.map")
@@ -2363,6 +2366,13 @@ fbengine_set_warnings(fbengine_anim_oom_tests)
 catch_discover_tests(fbengine_anim_oom_tests TEST_PREFIX "anim." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}"
                      PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}" TIMEOUT 120)
+
+# The out-of-memory tests' operator new and delete themselves, every form of them.
+add_executable(fbengine_own_new_tests own_new_tests.cpp own_new.cpp)
+target_link_libraries(fbengine_own_new_tests PRIVATE Catch2::Catch2WithMain)
+target_include_directories(fbengine_own_new_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+fbengine_set_warnings(fbengine_own_new_tests)
+catch_discover_tests(fbengine_own_new_tests TEST_PREFIX "tools.")
 
 # A program of the whole of it, as a game would write it.
 if(FBENGINE_FB_TESTS)
