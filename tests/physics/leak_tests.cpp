@@ -1,9 +1,11 @@
 // What fbengine_physics leaves allocated, counted: every allocation of its C++ and of Jolt's, by
-// the test's own operator new and Jolt's allocator hooks, which pass each on as it was. A world of
+// tests/own_new.cpp's every form of new and delete, and Jolt's allocator hooks, which pass each
+// on as it was, into one count. A world of
 // bodies, characters, and joints made, stepped, and freed, again and again, leaves the count as it
 // was, to the allocation.
 
 #include "fbengine_physics.h"
+#include "own_new.hpp"
 #include "physics/live.hpp"
 #include "physics/physics.hpp"
 
@@ -12,14 +14,14 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <Jolt/Core/Memory.h>
-#include <new>
 #include <vector>
 
 namespace {
 
-std::atomic<std::int64_t> live{ 0 };
+// tests/own_new.cpp's count, every form of new and delete paired as its own, which Jolt's hooks
+// count into too: one count.
+using fbe::tests::live;
 
 JPH::AllocateFunction jolt_allocate = nullptr;
 JPH::ReallocateFunction jolt_reallocate = nullptr;
@@ -170,27 +172,6 @@ bool round(bool piece_by_piece) {
 }
 
 } // namespace
-
-// The test's own, counting every allocation of the program's C++ as it goes.
-void* operator new(std::size_t size) {
-    void* made = std::malloc(size == 0 ? 1 : size);
-    if (made == nullptr) {
-        throw std::bad_alloc();
-    }
-    ++live;
-    return made;
-}
-
-void operator delete(void* block) noexcept {
-    if (block != nullptr) {
-        --live;
-    }
-    std::free(block);
-}
-
-void operator delete(void* block, std::size_t /*unused*/) noexcept {
-    operator delete(block);
-}
 
 TEST_CASE("worlds of bodies, characters, and joints made and freed leave no allocation behind",
           "[stability]") {

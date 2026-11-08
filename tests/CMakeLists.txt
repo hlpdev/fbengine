@@ -1679,7 +1679,7 @@ file(GLOB fbengine_physics_sources CONFIGURE_DEPENDS
      "${PROJECT_SOURCE_DIR}/native/fbengine_physics/*/*.cpp")
 add_executable(fbengine_physics_internal_tests physics/contacts_tests.cpp
                ${fbengine_physics_sources} physics/float_mode_tests.cpp physics/leak_tests.cpp
-               physics/soak_tests.cpp stability.cpp)
+               physics/soak_tests.cpp stability.cpp own_new.cpp)
 target_include_directories(fbengine_physics_internal_tests PRIVATE
                            "${PROJECT_SOURCE_DIR}/native/fbengine_physics" "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(fbengine_physics_internal_tests PRIVATE FBE_PHYSICS_BUILDING
