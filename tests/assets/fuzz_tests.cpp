@@ -56,9 +56,12 @@ bytes_t ktx2(std::uint32_t side, std::uint32_t levels, Finish finish) {
         const std::uint32_t across = std::max(side >> level, 1U);
         std::vector<std::uint8_t> texels;
         for (std::uint32_t at = 0; at < across * across; ++at) {
-            const std::array<std::uint8_t, 4> texel{ static_cast<std::uint8_t>(at * 7),
-                                                     static_cast<std::uint8_t>(at * 13),
-                                                     static_cast<std::uint8_t>(level * 50), 255 };
+            const std::array<std::uint8_t, 4> texel{
+                static_cast<std::uint8_t>(at * 7),
+                static_cast<std::uint8_t>(at * 13),
+                static_cast<std::uint8_t>(level * 50),
+                255,
+            };
             texels.insert(texels.end(), texel.begin(), texel.end());
         }
         REQUIRE(ktxTexture_SetImageFromMemory(reinterpret_cast<ktxTexture*>(texture.get()), level,
@@ -77,12 +80,12 @@ bytes_t ktx2(std::uint32_t side, std::uint32_t levels, Finish finish) {
 /// which the loader doesn't take, but whose header it reads.
 std::vector<bytes_t> image_seeds() {
     std::vector<std::uint8_t> texels;
-    texels.reserve(8 * 8 * 4);
+    texels.reserve(std::size_t{ 8 } * 8 * 4);
     for (int at = 0; at < 8 * 8 * 4; ++at) {
         texels.push_back(static_cast<std::uint8_t>(at * 11));
     }
     std::vector<std::uint16_t> wide;
-    wide.reserve(4 * 4 * 4);
+    wide.reserve(std::size_t{ 4 } * 4 * 4);
     for (int at = 0; at < 4 * 4 * 4; ++at) {
         wide.push_back(static_cast<std::uint16_t>(at * 997));
     }
@@ -217,8 +220,9 @@ std::vector<bytes_t> broken(const bytes_t& seed, std::mt19937& random, int count
     const auto at = [&random](std::size_t size) {
         return std::uniform_int_distribution<std::size_t>(0, size - 1)(random);
     };
-    constexpr std::array<std::uint32_t, 6> numbers{ 0,           1,           0x7fffffffU,
-                                                    0xffffffffU, 0x80000000U, 0x10000U };
+    constexpr std::array<std::uint32_t, 6> numbers{
+        0, 1, 0x7fffffffU, 0xffffffffU, 0x80000000U, 0x10000U,
+    };
     for (int made = 0; made < count; ++made) {
         bytes_t bytes = seed;
         switch (random() % 6) {
@@ -327,8 +331,9 @@ TEST_CASE("a KTX2 whose format descriptor is the wrong size fails in time",
                          std::ios::binary);
     const bytes_t hung{ std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>() };
     REQUIRE(hung.size() == 651);
+    const assets::image_options_t as_is;
     image_survives(hung);
-    const assets::result_t<assets::image_t> image = assets::decode_image(hung, {}, "hung");
+    const assets::result_t<assets::image_t> image = assets::decode_image(hung, as_is, "hung");
     REQUIRE_FALSE(image.has_value());
     REQUIRE(image.error().failure == assets::failure_t::INVALID_DATA);
 
@@ -338,7 +343,7 @@ TEST_CASE("a KTX2 whose format descriptor is the wrong size fails in time",
     const std::size_t descriptor =
         static_cast<std::size_t>(longer[48]) | (static_cast<std::size_t>(longer[49]) << 8U);
     longer[descriptor] = static_cast<std::uint8_t>(longer[descriptor] + 4);
-    const assets::result_t<assets::image_t> past = assets::decode_image(longer, {}, "longer");
+    const assets::result_t<assets::image_t> past = assets::decode_image(longer, as_is, "longer");
     REQUIRE_FALSE(past.has_value());
     REQUIRE(past.error().failure == assets::failure_t::INVALID_DATA);
 }
