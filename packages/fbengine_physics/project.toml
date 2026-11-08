@@ -7,9 +7,11 @@ description = "fbengine's physics, on Jolt: worlds of rigid bodies, joints, char
 readme = "README.md"
 repository = "https://github.com/hlpdev/fbengine"
 keywords = ["engine", "game", "physics", "jolt", "3d"]
+fb = ">=1.2.3"
 
+# By its folder here, and published by the version, which the folder's has to be in.
 [dependencies]
-fbengine = { path = "../fbengine" }
+fbengine = { path = "../fbengine", version = "0.1" }
 
 # fbengine_physics' own DLL, native/fbengine_physics, built for each target into native/<target>/,
 # with Jolt in it.

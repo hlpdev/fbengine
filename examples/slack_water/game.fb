@@ -145,6 +145,8 @@ Public Final Class Game
         // What moves on its own goes by real time, as the flow's clock runs ahead while it waits.
         island.SetWalker(Vec3(x, island.FloorAt(x, z), z))
         island.Animate(seconds)
+        // The wind's beat is real seconds, however fast the flow's clock goes.
+        island.Sway(seconds As Float64)
         camera.SetGrade(StormGrade(StormAt(flow.Clock())))
         Sync()
         TellWhatLies()

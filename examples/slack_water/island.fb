@@ -14,6 +14,7 @@ Import "./ground"
 Import "./landmarks"
 Import "./map"
 Import "./res" As Res
+Import "./plants"
 Import "./sea"
 Import "./shapes"
 Import "./sky"
@@ -461,6 +462,7 @@ Public Final Class Island
     Field ground: Terrain
     Field sea: Sea
     Field sunShown: SunShown
+    Field plants: Plants
     Field model: Model
     Field pip: Entity
     Field held: Texture[]
@@ -483,16 +485,17 @@ Public Final Class Island
     Field walker: Vec3? = Null
     Field props: (Entity, Int, Vec3)[]
 
-    New(scene: World, ground: Terrain, sea: Sea, sunShown: SunShown, model: Model, pip: Entity,
-        held: Texture[],
-        mill: Pivot, wheel: Mesh, lamp: Mesh, parts: Mesh[], sun: Light, around: Environment,
-        lantern: Light, landmarks: Landmarks, props: (Entity, Int, Vec3)[])
+    New(scene: World, ground: Terrain, sea: Sea, sunShown: SunShown, plants: Plants, model: Model,
+        pip: Entity, held: Texture[], mill: Pivot, wheel: Mesh, lamp: Mesh, parts: Mesh[],
+        sun: Light, around: Environment, lantern: Light, landmarks: Landmarks,
+        props: (Entity, Int, Vec3)[])
         Self.scene = scene
         Self.props = props
         Self.landmarks = landmarks
         Self.ground = ground
         Self.sea = sea
         Self.sunShown = sunShown
+        Self.plants = plants
         Self.model = model
         Self.pip = pip
         Self.held = held
@@ -548,6 +551,12 @@ Public Final Class Island
 
         Local sea = Try Sea.Make(held)
         Local sunShown = Try SunShown.Make(held)
+        // On the ground as it's drawn, from its samples, not as its noise has it between them.
+        Local drawnAt = Function(x: Float, z: Float): Float
+            Local point = ground.SurfacePoint(Vec3(x, 100.0, z))
+            Return point != Null ? point.y : GroundHeight(x, z)
+        End Function
+        Local plants = Try Plants.Make(drawnAt, held)
 
         Local mill, wheel, lamp, lantern, props = Try BuildMill(held)
         Local parts = Try BuildParts(held)
@@ -566,9 +575,8 @@ Public Final Class Island
         // Facing the yard's view, as glTF's front is +Z.
         pip.SetRotation(0.0, ToRadians(20.0), 0.0)
         pip.Player().Play(model.Clips()[0])
-        Local made = Island(scene, ground, sea, sunShown, model, pip, held, mill, wheel, lamp,
-                            parts,
-                            sun, around, lantern, landmarks, props)
+        Local made = Island(scene, ground, sea, sunShown, plants, model, pip, held, mill, wheel,
+                            lamp, parts, sun, around, lantern, landmarks, props)
         Try made.MakeBodies()
         Return made
     End Method
@@ -724,6 +732,7 @@ Public Final Class Island
     @MainThread
     Public Method Update(clock: Float64)
         sea.Update(clock)
+        plants.Update(clock)
         TurnSun(clock)
         landmarks.Update(clock)
         afloat?.SetClock(clock)
@@ -761,7 +770,7 @@ Public Final Class Island
     @MainThread
     Public Method Drawn(camera: Camera)
         camera.ResetHistory()
-        scene.Render()
+        Render()
     End Method
 
     /// The barrels and crates by the mill, each on a pivot of its own: what it is, 0 a barrel and 1 a
@@ -782,6 +791,7 @@ Public Final Class Island
         Local height, turned = SunAt(clock)
         sun.SetRotation(-height, turned, 0.0)
         sunShown.Update(clock)
+        PlaceSun()
     End Method
 
     /// Puts a part on the mill's works, each in its place.
@@ -803,6 +813,32 @@ Public Final Class Island
     /// What the sun's light does now, its rotation.
     @MainThread Public Method SunTurned(): Quat => sun.Rotation()
 
+    /// Draws its World, the sun as far off as it is, from the camera's place, wherever that is.
+    @MainThread
+    Public Method Render()
+        PlaceSun()
+        scene.Render()
+    End Method
+
+    // Puts the sun its way from the World's camera, so it's where its light's from wherever that is.
+    @MainThread
+    Method PlaceSun()
+        Local cameras = scene.Cameras()
+        sunShown.From(cameras.Count > 0 ? cameras[0].Position() : Vec3(0.0, 0.0, 0.0))
+    End Method
+
+    /// The sea around it.
+    @MainThread Public Method Waters(): Sea => sea
+
+    /// Moves the wind's beat on by `seconds` of real time.
+    @MainThread
+    Public Method Sway(seconds: Float64)
+        plants.Sway(seconds)
+    End Method
+
+    /// What grows on it.
+    @MainThread Public Method Grown(): Plants => plants
+
     /// Where the sun's drawn.
     @MainThread Public Method SunPlace(): Vec3 => sunShown.Place()
 
@@ -812,7 +848,7 @@ Public Final Class Island
     End Method
 
     /// How rough the sea is at most, as its wind's patches have it.
-    @MainThread Public Method SeaRoughness(): Float => sea.Shown().Roughness()
+    @MainThread Public Method SeaRoughness(): Float => sea.MostRough()
 
     /// Stills the sea, or sets it going again, to see what's in it.
     @MainThread Public Method SetSeaStill(still: Bool)

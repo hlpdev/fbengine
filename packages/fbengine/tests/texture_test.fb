@@ -1,6 +1,7 @@
 // Textures, made and written through the FB API, on the GPU ctest's tests use; a machine with no
 // Vulkan sets FBENGINE_NO_GPU to 1 and skips them.
 
+Import std.collections
 Import std.core
 Import std.image
 Import std.io
@@ -57,6 +58,27 @@ Function AnImageIsATexturesPixels() Throws GraphicsError
     gray.WritePixels(0, 0, 2, 1, [10 As UInt8, 20])
     Local bright = Try Texture(1, 1, TextureFormat.RGBA16F, False)
     bright.WritePixels(0, 0, 1, 1, [0 As UInt8, 60, 0, 64, 0, 56, 0, 0])
+    Expect(Gpu.ValidationErrors() == 0)
+End Function
+
+@Test
+Function ALevelWrittenIsReadBackAndTheOthersLeft() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local white = Image(4, 2)
+    white.Fill(Color32(255, 255, 255, 255))
+    Local texture = Try Texture.FromImage(white, True, TextureFormat.RGBA8_LINEAR)
+    Local level = Image(2, 1)
+    level[0, 0] = Color32(10, 20, 30, 40)
+    level[1, 0] = Color32(50, 60, 70, 80)
+    texture.WriteLevel(1, level)
+    Expect(texture.ReadPixels(1) == [10 As UInt8, 20, 30, 40, 50, 60, 70, 80])
+    Expect(texture.ReadPixels(2) == [255 As UInt8, 255, 255, 255])
+    Expect(texture.ReadPixels(0).Count == 32 &&
+           texture.ReadPixels(0).All(Function(byte: UInt8) => byte == 255))
+    // A write of the first makes them again from it.
+    texture.Write(0, 0, white)
+    Expect(texture.ReadPixels(1) == [255 As UInt8, 255, 255, 255, 255, 255, 255, 255])
     Expect(Gpu.ValidationErrors() == 0)
 End Function
 

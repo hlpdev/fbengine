@@ -21,6 +21,21 @@ set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 option(FBENGINE_BUILD_TESTS "Build the test suite" ON)
 
+# A sanitizer's build, as .github/workflows/sanitizers.yml makes: -fsanitize's list, such as
+# address,undefined or thread, for every target compiled here, the fetched ones too, as
+# ThreadSanitizer needs all of what runs built with it. Empty, as every other build has it, it's
+# none.
+set(FBENGINE_SANITIZE "" CACHE STRING "-fsanitize's list for every target, or empty for none")
+if(FBENGINE_SANITIZE)
+  if(MSVC)
+    message(FATAL_ERROR "FBENGINE_SANITIZE is for GCC and Clang")
+  endif()
+  # A sanitizer's finding stops the test, rather than only being printed.
+  add_compile_options(-fsanitize=${FBENGINE_SANITIZE} -fno-sanitize-recover=all
+                      -fno-omit-frame-pointer)
+  add_link_options(-fsanitize=${FBENGINE_SANITIZE})
+endif()
+
 # MSVC otherwise reads source files in the ANSI code page.
 if(MSVC)
   add_compile_options(/utf-8)

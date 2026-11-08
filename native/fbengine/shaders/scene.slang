@@ -558,13 +558,15 @@ void posed(Draw draw, uint index, inout float4 position, inout float3 normal, in
 #include "fbe_game_shader.slang"
 #endif
 
-// Where a shader of its own moves a vertex to, if it does.
-void movedByItsShader(Draw draw, Vertex vertex, inout float4 position, inout float3 normal)
+// Where a shader of its own moves a vertex to, if it does: `place` is where its instance is in its
+// Instances' space, or nowhere for what isn't one.
+void movedByItsShader(Draw draw, Vertex vertex, inout float4 position, inout float3 normal,
+                      float3 place = float3(0.0, 0.0, 0.0))
 {
 #ifdef FBE_MOVES_VERTICES
     MovingVertex moving = { float2(vertex.uv0[0], vertex.uv0[1]), float2(vertex.uv1[0], vertex.uv1[1]),
                             float4(vertex.color[0], vertex.color[1], vertex.color[2], vertex.color[3]),
-                            draw.material };
+                            draw.material, place };
     float3 moved = position.xyz;
     move(moved, normal, moving);
     position = float4(moved, position.w);
@@ -647,7 +649,7 @@ Corner drawnInstanceCorner(uint index, uint instance)
     const Instance one = instanceAt(draw.instances, instance);
     float4 start = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
     float3 given = float3(vertex.normal[0], vertex.normal[1], vertex.normal[2]);
-    movedByItsShader(draw, vertex, start, given);
+    movedByItsShader(draw, vertex, start, given, float3(one.rows[0].w, one.rows[1].w, one.rows[2].w));
     const float4 position = float4(dot(one.rows[0], start), dot(one.rows[1], start),
                                    dot(one.rows[2], start), 1.0);
     // Its matrix's columns, whose cofactors turn a normal.
@@ -981,7 +983,28 @@ float3 pixelShaded(Camera* camera, Material material, Corner corner, float3 base
     {
         emissive *= mapTexel(material.mapLayers[mapEmissive], corner).rgb;
     }
-    if (hasNormal && (material.maps & (1 << mapNormal)) != 0)
+    const bool mapped = (material.maps & (1 << mapNormal)) != 0;
+#ifdef FBE_BENDS_NORMALS
+    // A shader's own normal, in place of a map's, in the frame a map's would be: its surface's own
+    // tangents, through the map's UVs if it has one, or else the frame its UVs make.
+    if (hasNormal)
+    {
+        const Layer map = material.mapLayers[mapNormal];
+        const bool ownTangents = corner.tangent.w != 0.0 && (!mapped || map.bump.x == 0.0);
+        const float4 tangent =
+            ownTangents ? (mapped ? tangentThrough(map, normal, corner.tangent)
+                                  : float4(corner.tangent.xyz, corner.tangent.w < 0.0 ? -1.0 : 1.0))
+                        : tangentFromDerivatives(normal, place, mapped ? mapUv(map, corner) : corner.uv0);
+        // Facing the camera, as `shade`'s is, on a two-sided material's back.
+        const Surface bending = { place, twoSided != 0 && !front ? -normal : normal, corner.uv0, corner.uv1, corner.color,
+                                  float4(0.0, 0.0, 0.0, 0.0), corner.position.xy,
+                                  camera.draws[corner.draw].material };
+        const float3 bent = bend(bending);
+        normal = normalFromMap(normal, tangent, bent * 0.5 + float3(0.5, 0.5, 0.5),
+                               material.normalScale);
+    }
+#else
+    if (hasNormal && mapped)
     {
         const Layer map = material.mapLayers[mapNormal];
         // A surface's own tangents are its first UV set's.
@@ -990,6 +1013,7 @@ float3 pixelShaded(Camera* camera, Material material, Corner corner, float3 base
                                    : tangentFromDerivatives(normal, place, mapUv(map, corner));
         normal = normalFromMap(normal, tangent, mapTexel(map, corner).rgb, material.normalScale);
     }
+#endif
     // Seen from behind, the whole frame's turned around, as its map says of its front.
     if (twoSided != 0 && !front)
     {
@@ -1343,7 +1367,7 @@ PrepassCorner prepassInstanceVertex(uint index : SV_VulkanVertexID, uint instanc
     const Instance one = instanceAt(draw.instances, instance);
     float4 start = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
     float3 normal = float3(vertex.normal[0], vertex.normal[1], vertex.normal[2]);
-    movedByItsShader(draw, vertex, start, normal);
+    movedByItsShader(draw, vertex, start, normal, float3(one.rows[0].w, one.rows[1].w, one.rows[2].w));
     const float4 position = float4(dot(one.rows[0], start), dot(one.rows[1], start),
                                    dot(one.rows[2], start), 1.0);
     PrepassCorner corner = prepassCorner(camera, draw, push.draw, position, position, vertex,
@@ -1430,7 +1454,7 @@ ShadowCorner shadowInstanceVertex(uint index : SV_VulkanVertexID, uint instance 
     const Instance one = instanceAt(draw.instances, instance);
     float4 start = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
     float3 normal = float3(vertex.normal[0], vertex.normal[1], vertex.normal[2]);
-    movedByItsShader(draw, vertex, start, normal);
+    movedByItsShader(draw, vertex, start, normal, float3(one.rows[0].w, one.rows[1].w, one.rows[2].w));
     const float4 position = float4(dot(one.rows[0], start), dot(one.rows[1], start),
                                    dot(one.rows[2], start), 1.0);
     ShadowCorner corner;

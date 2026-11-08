@@ -2,9 +2,21 @@
 
 fbengine's editor: a program on its packages that opens a game's project folder.
 
+It isn't a package on the registry, as the registry takes only libraries. Each release of fbengine
+has it built for each target, with its DLLs beside it, on the release's page on
+[GitHub](https://github.com/hlpdev/fbengine/releases):
+
+```
+fbengine_editor <a game's folder>
+```
+
+Or, from a clone of the repository:
+
 ```
 fb run packages/fbengine_editor -- <a game's folder>
 ```
+
+Either way, it needs fb 1.2.3 or later on the PATH, which it builds and runs a game's code with.
 
 Its panes dock and resize, what's open in a project is kept between runs, in the user's folder for
 settings and not in the project, and everything it does is a command in one list, which its menus
@@ -64,3 +76,5 @@ about once, the same yes as for its components. A program finds the scene it's a
 `Scene.Requested()`, from `--scene`, which refuses what isn't a res:// path. What it says shows in the Output pane; Shift F5 stops it, as playing
 again, closing its project, and quitting do. A game's own processes, and a run left by the editor crashing,
 aren't stopped.
+
+Apache-2.0. The DLLs beside it are fbengine's, whose notices come with it, in notices/.
