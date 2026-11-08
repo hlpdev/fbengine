@@ -76,7 +76,8 @@ if(MINGW)
          "${fbengine_jolt_mutex_from}")
   string(REPLACE "${fbengine_jolt_mutex_from}" "${fbengine_jolt_mutex_to}" fbengine_jolt_mutex
                  "${fbengine_jolt_mutex}")
-  set(fbengine_jolt_patched "${CMAKE_BINARY_DIR}/jolt-patched")
+  # Beside Jolt, among what clang-tidy leaves as fetched.
+  set(fbengine_jolt_patched "${FETCHCONTENT_BASE_DIR}/jolt-patched")
   file(WRITE "${fbengine_jolt_patched}/Jolt/Core/Mutex.h.in" "${fbengine_jolt_mutex}")
   configure_file("${fbengine_jolt_patched}/Jolt/Core/Mutex.h.in"
                  "${fbengine_jolt_patched}/Jolt/Core/Mutex.h" COPYONLY)
