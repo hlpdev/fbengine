@@ -95,16 +95,31 @@ void fuzzed(const std::vector<std::string_view>& names, int changes, std::uint64
 
 TEST_CASE("the test videos, cut short and changed, open and play or are refused", "[stability]") {
     // Each kind of picture group, with sound and without.
-    fuzzed({ "colors.mpg", "silent.mpg", "countb.mpg", "cgop.mpg", "ntsc.mpg", "opengop.mpg",
-             "wide.mpg", "cutb.mpg" },
-           300, 0x9E3779B97F4A7C15ULL);
+    fuzzed(
+        {
+            "colors.mpg",
+            "silent.mpg",
+            "countb.mpg",
+            "cgop.mpg",
+            "ntsc.mpg",
+            "opengop.mpg",
+            "wide.mpg",
+            "cutb.mpg",
+        },
+        300, 0x9E3779B97F4A7C15ULL);
 }
 
 TEST_CASE("the videos that once broke pl_mpeg, cut short and changed, open and play or are "
           "refused",
           "[stability]") {
-    fuzzed({ "broken/heap-read-decode-block.mpg", "broken/heap-read-process-macroblock.mpg",
-             "broken/heap-write-decode-block.mpg", "broken/issue68.mpg", "broken/zero1.mpg",
-             "broken/zerotail.mpg" },
-           300, 0xD1B54A32D192ED03ULL);
+    fuzzed(
+        {
+            "broken/heap-read-decode-block.mpg",
+            "broken/heap-read-process-macroblock.mpg",
+            "broken/heap-write-decode-block.mpg",
+            "broken/issue68.mpg",
+            "broken/zero1.mpg",
+            "broken/zerotail.mpg",
+        },
+        300, 0xD1B54A32D192ED03ULL);
 }

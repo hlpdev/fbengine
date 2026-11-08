@@ -26,7 +26,7 @@ std::vector<float> from(std::uint64_t sound, double seconds, std::int32_t frames
     REQUIRE(fbe_audio_mix(samples.data(), frames));
     fbe_channel_stop(channel);
     // What's stopped ramps out in the next mix, before the next play.
-    std::vector<float> after(4410 * 2);
+    std::vector<float> after(std::size_t{ 4410 } * 2);
     REQUIRE(fbe_audio_mix(after.data(), 4410));
     return samples;
 }
