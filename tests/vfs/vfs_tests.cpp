@@ -1006,7 +1006,7 @@ std::vector<vfs::bytes_t> broken(const vfs::bytes_t& seed, std::mt19937& random,
             bytes.resize(at(bytes.size()));
             break;
         case 1:
-            for (std::uint32_t flips = 1 + random() % 4; flips > 0; --flips) {
+            for (std::uint32_t flips = 1 + (random() % 4); flips > 0; --flips) {
                 bytes[at(bytes.size())] ^= static_cast<std::uint8_t>(1U << (random() % 8));
             }
             break;
@@ -1021,7 +1021,7 @@ std::vector<vfs::bytes_t> broken(const vfs::bytes_t& seed, std::mt19937& random,
         case 3: {
             const std::size_t from = at(bytes.size());
             const std::size_t length =
-                std::min<std::size_t>(1 + random() % 48, bytes.size() - from);
+                std::min<std::size_t>(1 + (random() % 4)8, bytes.size() - from);
             const vfs::bytes_t piece(bytes.begin() + static_cast<std::ptrdiff_t>(from),
                                      bytes.begin() + static_cast<std::ptrdiff_t>(from + length));
             bytes.insert(bytes.begin() + static_cast<std::ptrdiff_t>(from), piece.begin(),
@@ -1031,7 +1031,7 @@ std::vector<vfs::bytes_t> broken(const vfs::bytes_t& seed, std::mt19937& random,
         default: {
             const std::size_t from = at(bytes.size());
             const std::size_t length =
-                std::min<std::size_t>(1 + random() % 48, bytes.size() - from);
+                std::min<std::size_t>(1 + (random() % 4)8, bytes.size() - from);
             bytes.erase(bytes.begin() + static_cast<std::ptrdiff_t>(from),
                         bytes.begin() + static_cast<std::ptrdiff_t>(from + length));
             break;
@@ -1062,8 +1062,9 @@ int walk(const vfs::view_t& view, const std::string& folder, int depth) {
         if (entry.kind == vfs::kind_t::FOLDER) {
             read += walk(view, at, depth + 1);
         } else {
-            (void)view.read(*parsed, 1U << 20U);
-            ++read;
+            if (view.read(*parsed, 1U << 20U).has_value()) {
+                ++read;
+            }
         }
     }
     return read;
@@ -1073,16 +1074,18 @@ int walk(const vfs::view_t& view, const std::string& folder, int depth) {
 
 // A broken pak isn't one, or is one whose index is what it has: none that crashes, hangs, or
 // reads past its end, opened, listed, and read.
-TEST_CASE("broken paks fail, never crash or hang", "[vfs][fuzz]") {
-    std::mt19937 random(20261109);
+TEST_CASE("broken paks fail, never crash or hang", "[vfs][fuzz][stability]") {
+    std::mt19937 random(20261109); // NOLINT(bugprone-random-generator-seed)
     for (const bool zip64 : { false, true }) {
         INFO(zip64);
-        const vfs::bytes_t seed = zip({ { .name = "a.txt", .data = "first" },
-                                        { .name = "models/b.glb", .data = std::string(300, 'b') },
-                                        { .name = "models/deep/c.png", .data = "cc" },
-                                        { .name = "d/", .data = "" },
-                                        { .name = "e.bin", .data = std::string(40, '\0') } },
-                                      zip64);
+        const std::vector<zip_entry_t> entries = {
+            { .name = "a.txt", .data = "first" },
+            { .name = "models/b.glb", .data = std::string(300, 'b') },
+            { .name = "models/deep/c.png", .data = "cc" },
+            { .name = "d/", .data = "" },
+            { .name = "e.bin", .data = std::string(40, '\0') },
+        };
+        const vfs::bytes_t seed = zip(entries, zip64);
         {
             vfs::result_t<std::shared_ptr<vfs::source_t>> whole = vfs::pak(seed);
             REQUIRE(whole.has_value());

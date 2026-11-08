@@ -1682,7 +1682,7 @@ add_executable(fbengine_jobs_tests jobs/jobs_tests.cpp
 target_include_directories(fbengine_jobs_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
 target_link_libraries(fbengine_jobs_tests PRIVATE Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_jobs_tests)
-catch_discover_tests(fbengine_jobs_tests TEST_PREFIX "jobs."
+catch_discover_tests(fbengine_jobs_tests TEST_PREFIX "jobs." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}")
 
 # res://'s paths, folders, and paks, built into the tests from their own sources.
@@ -1694,7 +1694,7 @@ add_executable(fbengine_vfs_tests vfs/vfs_tests.cpp
 target_include_directories(fbengine_vfs_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
 target_link_libraries(fbengine_vfs_tests PRIVATE Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_vfs_tests)
-catch_discover_tests(fbengine_vfs_tests TEST_PREFIX "vfs."
+catch_discover_tests(fbengine_vfs_tests TEST_PREFIX "vfs." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}")
 
 # A program that awaits jobs before its first Flip, which the main scheduler's ticks hand over.
@@ -1733,7 +1733,7 @@ fbengine_set_warnings(fbengine_assets_tests)
 if(MINGW)
   target_link_options(fbengine_assets_tests PRIVATE -mcrtdll=ucrt)
 endif()
-catch_discover_tests(fbengine_assets_tests TEST_PREFIX "assets."
+catch_discover_tests(fbengine_assets_tests TEST_PREFIX "assets." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}")
 
 # What Assets' mounts panic for, each by a run of tests/assets/panics, which says it, at the line
@@ -2099,7 +2099,7 @@ endif()
 if(FBENGINE_FB_TESTS)
   add_test(NAME soak.cook_load_reload COMMAND "${FBENGINE_FB}" --color never run
            "${CMAKE_CURRENT_SOURCE_DIR}/soak")
-  set_tests_properties(soak.cook_load_reload PROPERTIES TIMEOUT 1800
+  set_tests_properties(soak.cook_load_reload PROPERTIES TIMEOUT 1800 LABELS stability
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;FBENGINE_SLANGC=${FBENGINE_SLANGC}"
                        PASS_REGULAR_EXPRESSION "
 soaked?

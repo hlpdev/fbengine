@@ -9,7 +9,7 @@
 #include "texture/texture.hpp"
 #include "vfs/vfs.hpp"
 
-#if defined(_WIN32)
+#ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -20,7 +20,7 @@
 #include <windows.h>
 #include <psapi.h>
 // clang-format on
-#elif defined(__APPLE__)
+#elifdef __APPLE__
 #include <mach/mach.h>
 #else
 #include <unistd.h>
@@ -256,7 +256,7 @@ FBE_API int64_t fbe_assets_count(void) {
 }
 
 FBE_API int64_t fbe_assets_resident_bytes(void) {
-#if defined(_WIN32)
+#ifdef _WIN32
     PROCESS_MEMORY_COUNTERS_EX counters{};
     counters.cb = sizeof(counters);
     if (K32GetProcessMemoryInfo(GetCurrentProcess(),
@@ -265,7 +265,7 @@ FBE_API int64_t fbe_assets_resident_bytes(void) {
         return 0;
     }
     return static_cast<int64_t>(counters.PrivateUsage);
-#elif defined(__APPLE__)
+#elifdef __APPLE__
     mach_task_basic_info_data_t info{};
     mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
     if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info),

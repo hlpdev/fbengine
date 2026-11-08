@@ -1,9 +1,10 @@
 // A soak of the asset pipeline, headless: a folder of a PNG and a glTF, changed each time round,
 // cooked to a pak, the pak mounted, both loaded, the PNG reloaded, and all let go of and
 // unmounted, FBENGINE_SOAK_ITERATIONS times, 2000 unless it says. Each time round, the loads
-// there are and the holds on assets come back to what there were, and over the second half of the rounds, once caches have
-// settled, the process's own memory doesn't grow by more than SOAK_GROWTH. It prints how it went,
-// and exits 1 if it didn't.
+// there are and the holds on assets come back to what there were; and the process's own memory,
+// sampled every 100 rounds once the first quarter's warmed the caches, doesn't rise steadily, by
+// SOAK_RISE a round, as a leak's does. Under AddressSanitizer, with ASAN_OPTIONS set, its memory
+// isn't judged: LeakSanitizer does that, at the end. It prints how it went, and exits 1 if it didn't.
 
 Import std.core
 Import std.image.image
@@ -15,10 +16,29 @@ Import std.time
 Import fbengine
 Import fbengine_tools
 
-// How much the process's memory may grow over the second half of the rounds, in bytes: what an
-// allocator's pages wander by, far under what a leak of a load a round, of a few kilobytes, makes
-// over a thousand.
-Const SOAK_GROWTH: Int64 = 4 * 1024 * 1024
+// How much the process's memory may rise a round, steadily, in bytes: more than an allocator's
+// pages wander by, which was under 1 KiB a round, and less than a leak of a load's few kilobytes.
+Const SOAK_RISE: Float64 = 2048.0
+
+// How steeply `samples` rise, by least squares, in bytes a round, each `every` rounds apart.
+Function Rise(samples: Int64[], every: Int): Float64
+    Local n = samples.Count As Float64
+    If n < 2.0 Then Return 0.0
+    Local meanX: Float64 = 0.0
+    Local meanY: Float64 = 0.0
+    For at = 0 Until samples.Count
+        meanX += (at As Float64) / n
+        meanY += (samples[at] As Float64) / n
+    End For
+    Local over: Float64 = 0.0
+    Local under: Float64 = 0.0
+    For at = 0 Until samples.Count
+        Local dx = (at As Float64) - meanX
+        over += dx * ((samples[at] As Float64) - meanY)
+        under += dx * dx
+    End For
+    Return over / under / (every As Float64)
+End Function
 
 // An image load, reloaded in place, as a texture is.
 Class SoakPicture Implements Asset
@@ -120,7 +140,7 @@ Local pak = root / "soak.pak"
 Local cache = root / "cache"
 Local loads = Assets.Loads()
 Local holds = Assets.Holds()
-Local settled: Int64 = 0
+Local samples: Int64[] = []
 Local started = Instant.Now()
 Local wrong = ""
 For round = 0 Until iterations
@@ -135,7 +155,7 @@ For round = 0 Until iterations
         wrong = "round {round}: {wrong}"
         Break
     End If
-    If round == iterations / 2 Then settled = Assets.ResidentBytes()
+    If round >= iterations / 4 && round % 100 == 0 Then samples.Add(Assets.ResidentBytes())
     If round % 250 == 0
         Print("round {round}: {Assets.ResidentBytes() / 1024} KiB, {Assets.Loads()} loads")
     End If
@@ -145,11 +165,11 @@ If wrong != ""
     Print(wrong)
     Process.Exit(1)
 End If
-Local grew = Assets.ResidentBytes() - settled
-Print("{iterations} rounds in {Instant.Now() - started}; the second half grew " +
-      "{grew / 1024} KiB")
-If grew > SOAK_GROWTH
-    Print("grew more than {SOAK_GROWTH / 1024} KiB")
+Local rise = Rise(samples, 100)
+Print("{iterations} rounds in {Instant.Now() - started}; after the first quarter, memory rose " +
+      "{rise} bytes a round")
+If Env.Get("ASAN_OPTIONS") == Null && rise > SOAK_RISE
+    Print("it rose more than {SOAK_RISE} bytes a round")
     Process.Exit(1)
 End If
 Print("soaked")

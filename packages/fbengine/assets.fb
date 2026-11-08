@@ -569,9 +569,9 @@ Public Final Class Assets
         Return count
     End Method
 
-    /// How much of the process's memory is its own now, in bytes, as its OS counts it: its
-    /// private bytes on Windows, its resident set elsewhere; 0 where that can't be told. What a
-    /// soak of loads, reloads, and mounts watches for what they leave behind.
+    // A test hook, for tests/soak, not a game's: how much of the process's memory is its own now,
+    // in bytes, as its OS counts it, its private bytes on Windows and its resident set elsewhere;
+    // 0 where that can't be told.
     Public Static Method ResidentBytes(): Int64 => fbe_assets_resident_bytes()
 
     /// What hot reload, or Reload, has loaded again since this was last asked, in the order each

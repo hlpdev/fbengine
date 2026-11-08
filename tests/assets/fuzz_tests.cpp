@@ -56,9 +56,10 @@ bytes_t ktx2(std::uint32_t side, std::uint32_t levels, Finish finish) {
         const std::uint32_t across = std::max(side >> level, 1U);
         std::vector<std::uint8_t> texels;
         for (std::uint32_t at = 0; at < across * across; ++at) {
-            texels.insert(texels.end(),
-                          { static_cast<std::uint8_t>(at * 7), static_cast<std::uint8_t>(at * 13),
-                            static_cast<std::uint8_t>(level * 50), 255 });
+            const std::array<std::uint8_t, 4> texel{ static_cast<std::uint8_t>(at * 7),
+                                                     static_cast<std::uint8_t>(at * 13),
+                                                     static_cast<std::uint8_t>(level * 50), 255 };
+            texels.insert(texels.end(), texel.begin(), texel.end());
         }
         REQUIRE(ktxTexture_SetImageFromMemory(reinterpret_cast<ktxTexture*>(texture.get()), level,
                                               0, 0, texels.data(), texels.size()) == KTX_SUCCESS);
@@ -76,10 +77,12 @@ bytes_t ktx2(std::uint32_t side, std::uint32_t levels, Finish finish) {
 /// which the loader doesn't take, but whose header it reads.
 std::vector<bytes_t> image_seeds() {
     std::vector<std::uint8_t> texels;
+    texels.reserve(8 * 8 * 4);
     for (int at = 0; at < 8 * 8 * 4; ++at) {
         texels.push_back(static_cast<std::uint8_t>(at * 11));
     }
     std::vector<std::uint16_t> wide;
+    wide.reserve(4 * 4 * 4);
     for (int at = 0; at < 4 * 4 * 4; ++at) {
         wide.push_back(static_cast<std::uint16_t>(at * 997));
     }
@@ -131,7 +134,7 @@ bytes_t model_seed(bool binary) {
     test::append<float>(buffer, { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 });
     test::append<std::uint16_t>(buffer, { 1, 0 });
     test::append<float>(buffer, { 2, 2, 2 });
-    std::vector<std::uint8_t> texels(4 * 4 * 4, 200);
+    const std::vector<std::uint8_t> texels(std::size_t{ 4 } * 4 * 4, 200);
     const bytes_t image = test::png(4, 4, 4, texels);
     const std::string views =
         R"("bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},)"
@@ -166,12 +169,12 @@ bytes_t model_seed(bool binary) {
     if (binary) {
         bytes_t both = buffer;
         both.resize((both.size() + 3) / 4 * 4, 0);
-        const std::size_t imageAt = both.size();
+        const std::size_t image_at = both.size();
         both.insert(both.end(), image.begin(), image.end());
         const std::string json =
             R"({"asset":{"version":"2.0"},"buffers":[{"byteLength":)" +
             std::to_string(both.size()) + "}]," + views.substr(0, views.size() - 1) +
-            R"(,{"buffer":0,"byteOffset":)" + std::to_string(imageAt) + R"(,"byteLength":)" +
+            R"(,{"buffer":0,"byteOffset":)" + std::to_string(image_at) + R"(,"byteLength":)" +
             std::to_string(image.size()) + R"(}],)" + accessors +
             R"(,"images":[{"bufferView":12,"mimeType":"image/png"}])" + rest;
         return test::glb(json, both);
@@ -223,7 +226,7 @@ std::vector<bytes_t> broken(const bytes_t& seed, std::mt19937& random, int count
             bytes.resize(at(bytes.size()));
             break;
         case 1:
-            for (std::uint32_t flips = 1 + random() % 4; flips > 0; --flips) {
+            for (std::uint32_t flips = 1 + (random() % 4); flips > 0; --flips) {
                 bytes[at(bytes.size())] ^= static_cast<std::uint8_t>(1U << (random() % 8));
             }
             break;
@@ -239,7 +242,7 @@ std::vector<bytes_t> broken(const bytes_t& seed, std::mt19937& random, int count
         case 3: {
             const std::size_t from = at(bytes.size());
             const std::size_t length =
-                std::min<std::size_t>(1 + random() % 64, bytes.size() - from);
+                std::min<std::size_t>(1 + (random() % 64), bytes.size() - from);
             const bytes_t piece(bytes.begin() + static_cast<std::ptrdiff_t>(from),
                                 bytes.begin() + static_cast<std::ptrdiff_t>(from + length));
             bytes.insert(bytes.begin() + static_cast<std::ptrdiff_t>(from), piece.begin(),
@@ -249,7 +252,7 @@ std::vector<bytes_t> broken(const bytes_t& seed, std::mt19937& random, int count
         case 4: {
             const std::size_t from = at(bytes.size());
             const std::size_t length =
-                std::min<std::size_t>(1 + random() % 64, bytes.size() - from);
+                std::min<std::size_t>(1 + (random() % 64), bytes.size() - from);
             bytes.erase(bytes.begin() + static_cast<std::ptrdiff_t>(from),
                         bytes.begin() + static_cast<std::ptrdiff_t>(from + length));
             break;
@@ -275,22 +278,8 @@ vfs::path_t path(std::string_view text) {
     return *vfs::parse(text);
 }
 
-/// Keeps what's about to be decoded in the file FBENGINE_FUZZ_LAST names, if it names one, so a
-/// decode that hangs leaves what it hung on.
-void about_to(const bytes_t& bytes) {
-    // NOLINTNEXTLINE(concurrency-mt-unsafe): the tests read the environment on one thread.
-    const char* last = std::getenv("FBENGINE_FUZZ_LAST");
-    if (last == nullptr) {
-        return;
-    }
-    std::ofstream stream(last, std::ios::binary | std::ios::trunc);
-    stream.write(reinterpret_cast<const char*>(bytes.data()),
-                 static_cast<std::streamsize>(bytes.size()));
-}
-
 /// Decodes `bytes` as an image every way, timed: it must decode or fail, in time.
 void image_survives(const bytes_t& bytes) {
-    about_to(bytes);
     for (const assets::transcode_t transcode :
          { assets::transcode_t::RGBA8, assets::transcode_t::BC7, assets::transcode_t::ASTC_4X4 }) {
         const auto started = std::chrono::steady_clock::now();
@@ -300,7 +289,7 @@ void image_survives(const bytes_t& bytes) {
         if (image.has_value()) {
             // What it says it has is what it has.
             for (const assets::level_t& level : image->levels) {
-                REQUIRE(level.offset + level.size * image->layers * image->faces <=
+                REQUIRE(level.offset + (level.size * image->layers * image->faces) <=
                         image->texels.size());
             }
         }
@@ -309,7 +298,6 @@ void image_survives(const bytes_t& bytes) {
 
 /// Decodes `bytes` as a model at `at`, timed: it must decode or fail, in time.
 void model_survives(const bytes_t& bytes, const vfs::path_t& at, const vfs::view_t& files) {
-    about_to(bytes);
     const auto started = std::chrono::steady_clock::now();
     const assets::result_t<assets::model_t> model = assets::decode_model(at, bytes, files, {});
     REQUIRE(std::chrono::steady_clock::now() - started < longest);
@@ -318,8 +306,8 @@ void model_survives(const bytes_t& bytes, const vfs::path_t& at, const vfs::view
 
 } // namespace
 
-TEST_CASE("broken images fail, never crash or hang", "[assets][fuzz]") {
-    std::mt19937 random(20261106);
+TEST_CASE("broken images fail, never crash or hang", "[assets][fuzz][stability]") {
+    std::mt19937 random(20261106); // NOLINT(bugprone-random-generator-seed)
     const std::vector<bytes_t> seeds = image_seeds();
     for (std::size_t at = 0; at < seeds.size(); ++at) {
         const bytes_t& seed = seeds[at];
@@ -333,7 +321,8 @@ TEST_CASE("broken images fail, never crash or hang", "[assets][fuzz]") {
 
 // The fuzzer's find: a KTX2 whose data format descriptor has a block of size 0, which libktx walks
 // forever; and one whose descriptor says it's longer than the header does, which libktx reads past.
-TEST_CASE("a KTX2 whose format descriptor is the wrong size fails in time", "[assets][fuzz]") {
+TEST_CASE("a KTX2 whose format descriptor is the wrong size fails in time",
+          "[assets][fuzz][stability]") {
     std::ifstream stream(std::filesystem::path(FBENGINE_ASSETS_FIXTURES) / "zstd_hang.ktx2",
                          std::ios::binary);
     const bytes_t hung{ std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>() };
@@ -346,17 +335,18 @@ TEST_CASE("a KTX2 whose format descriptor is the wrong size fails in time", "[as
     bytes_t longer = ktx2(8, 4, [](ktxTexture2*) {});
     REQUIRE(assets::decode_image(longer, {}, "seed").has_value());
     // The descriptor's own size, at the offset the header gives at byte 48, made 4 more.
-    const std::size_t descriptor = longer[48] | (longer[49] << 8U);
+    const std::size_t descriptor =
+        static_cast<std::size_t>(longer[48]) | (static_cast<std::size_t>(longer[49]) << 8U);
     longer[descriptor] = static_cast<std::uint8_t>(longer[descriptor] + 4);
     const assets::result_t<assets::image_t> past = assets::decode_image(longer, {}, "longer");
     REQUIRE_FALSE(past.has_value());
     REQUIRE(past.error().failure == assets::failure_t::INVALID_DATA);
 }
 
-TEST_CASE("broken models fail, never crash or hang", "[assets][fuzz]") {
+TEST_CASE("broken models fail, never crash or hang", "[assets][fuzz][stability]") {
     vfs::vfs_t files;
     files.mount(path("res://models"), vfs::folder(FBENGINE_ASSETS_FIXTURES));
-    std::mt19937 random(20261107);
+    std::mt19937 random(20261107); // NOLINT(bugprone-random-generator-seed)
     for (const bool binary : { false, true }) {
         INFO(binary);
         const bytes_t seed = model_seed(binary);
@@ -371,10 +361,11 @@ TEST_CASE("broken models fail, never crash or hang", "[assets][fuzz]") {
     }
 }
 
-TEST_CASE("the corpus, broken further, fails, never crashing or hanging", "[assets][fuzz]") {
+TEST_CASE("the corpus, broken further, fails, never crashing or hanging",
+          "[assets][fuzz][stability]") {
     vfs::vfs_t files;
     files.mount(path("res://models"), vfs::folder(FBENGINE_ASSETS_FIXTURES));
-    std::mt19937 random(20261108);
+    std::mt19937 random(20261108); // NOLINT(bugprone-random-generator-seed)
     for (const auto& [name, seed] : corpus()) {
         INFO(name);
         const bool model = name.ends_with(".gltf") || name.ends_with(".glb");
