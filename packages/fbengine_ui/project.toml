@@ -7,6 +7,8 @@ description = "fbengine's UI, in FutureBlitz: layout, themes, widgets, focus, a 
 readme = "README.md"
 repository = "https://github.com/hlpdev/fbengine"
 keywords = ["engine", "game", "ui", "gui", "localization"]
+fb = ">=1.2.3"
 
+# By its folder here, and published by the version, which the folder's has to be in.
 [dependencies]
-fbengine = { path = "../fbengine" }
+fbengine = { path = "../fbengine", version = "0.1" }
