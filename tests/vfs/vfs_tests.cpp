@@ -1021,7 +1021,7 @@ std::vector<vfs::bytes_t> broken(const vfs::bytes_t& seed, std::mt19937& random,
         case 3: {
             const std::size_t from = at(bytes.size());
             const std::size_t length =
-                std::min<std::size_t>(1 + (random() % 4)8, bytes.size() - from);
+                std::min<std::size_t>(1 + (random() % 48), bytes.size() - from);
             const vfs::bytes_t piece(bytes.begin() + static_cast<std::ptrdiff_t>(from),
                                      bytes.begin() + static_cast<std::ptrdiff_t>(from + length));
             bytes.insert(bytes.begin() + static_cast<std::ptrdiff_t>(from), piece.begin(),
@@ -1031,7 +1031,7 @@ std::vector<vfs::bytes_t> broken(const vfs::bytes_t& seed, std::mt19937& random,
         default: {
             const std::size_t from = at(bytes.size());
             const std::size_t length =
-                std::min<std::size_t>(1 + (random() % 4)8, bytes.size() - from);
+                std::min<std::size_t>(1 + (random() % 48), bytes.size() - from);
             bytes.erase(bytes.begin() + static_cast<std::ptrdiff_t>(from),
                         bytes.begin() + static_cast<std::ptrdiff_t>(from + length));
             break;

@@ -2101,9 +2101,7 @@ if(FBENGINE_FB_TESTS)
            "${CMAKE_CURRENT_SOURCE_DIR}/soak")
   set_tests_properties(soak.cook_load_reload PROPERTIES TIMEOUT 1800 LABELS stability
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;FBENGINE_SLANGC=${FBENGINE_SLANGC}"
-                       PASS_REGULAR_EXPRESSION "
-soaked?
-$")
+                       PASS_REGULAR_EXPRESSION "\nsoaked\r?\n$")
 endif()
 
 # The job system's threads, started as the process ends, which mustn't hang its exit.

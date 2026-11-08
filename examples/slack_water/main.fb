@@ -528,7 +528,8 @@ Function CheckBentNormals(camera: Camera, island: Island) Throws GraphicsError, 
     Local bending = looked(True, True)
     Local unbent = looked(False, True)
     Local still = looked(False, False)
-    Local middle = Vec3(MAIN_X, 60.0, 80.0)
+    // Out over the sea, past the lighthouse's beam's reach, which turns as it's drawn.
+    Local middle = Vec3(MAIN_X, 60.0, 260.0)
     island.Grown().SetShown(False)
     Local sides = [(Vec3(0.0, 0.0, -0.6), Vec3(0.0, 2.0, 0.0), Vec3(0.0, 0.0, 1.2),
                     Vec3(1.0, 0.0, 0.0),
@@ -553,12 +554,47 @@ Function CheckBentNormals(camera: Camera, island: Island) Throws GraphicsError, 
     island.Grown().SetShown(True)
 End Function
 
+// Where a person stands to look at the mill over its turf: of places 18 to 30 meters from it, all
+// round, on land, the one with the most turf on the way, from 2 to 12 meters out toward the mill.
+Function GrassyStand(): Vec2
+    Local best = Vec2(MAIN_X - 24.0, 18.0)
+    Local most = -1.0
+    For step = 0 Until 32
+        Local angle = (step As Float) * Pi / 16.0
+        For reach In [18.0, 24.0, 30.0]
+            Local x = MAIN_X + Cos(angle) * reach
+            Local z = Sin(angle) * reach
+            If GroundHeight(x, z) < 1.0 || Blocked(x, z) Then Continue
+            Local turf = 0.0
+            For out = 2 To 12
+                Local tx = x - Cos(angle) * (out As Float)
+                Local tz = z - Sin(angle) * (out As Float)
+                Local height = GroundHeight(tx, tz)
+                Local dx = GroundHeight(tx + 1.0, tz) - GroundHeight(tx - 1.0, tz)
+                Local dz = GroundHeight(tx, tz + 1.0) - GroundHeight(tx, tz - 1.0)
+                turf += TurfAt(tx, tz, height, Sqrt(dx * dx + dz * dz) / 2.0)
+            End For
+            If turf > most
+                most = turf
+                best = Vec2(x, z)
+            End If
+        End For
+    End For
+    Return best
+End Function
+
 // What grows, saved to look at, and what it's for, by the pixels and where it is.
 Function SavePlants(folder: Path, camera: Camera, island: Island) Throws GraphicsError, IOError
+    // Its views compare frames drawn one after another, as they'd be with no antialiasing over
+    // frames, whose history would blend each into the next.
+    Local smoothed = camera.TemporalAA()
+    camera.SetTemporalAA(False)
+    Defer camera.SetTemporalAA(smoothed)
     Try CheckBentNormals(camera, island)
     Local grown = island.Grown()
     grown.Sway(10.0)
-    Local eye = Vec3(MAIN_X - 24.0, GroundHeight(MAIN_X - 24.0, 18.0) + 1.7, 18.0)
+    Local stand = GrassyStand()
+    Local eye = Vec3(stand.x, GroundHeight(stand.x, stand.y) + 1.7, stand.y)
     camera.SetPosition(eye)
     camera.PointAt(Vec3(MAIN_X, GroundHeight(MAIN_X, 0.0) + 1.0, 0.0))
     Local with = Try SavedAs(island, folder, "plants")
@@ -608,8 +644,9 @@ Function SavePlants(folder: Path, camera: Camera, island: Island) Throws Graphic
     Checks("a tuft's levels have fewer blades, then a card, then none",
            levelCount == 4 && levels.Count == 5 && levels[0] > levels[1] && levels[1] > levels[2] &&
            levels[2] > levels[3] && levels[3] > 0 && levels[4] == 0)
-    // From high over the island, every tuft's past its last level, so the grass draws nothing.
-    camera.SetPosition(Views()[0].1)
+    // From high over the island, every tuft's past its last level, so the grass draws nothing: from
+    // the island's view, twice as far off along it, as this island's grass clusters wider.
+    camera.SetPosition(Views()[0].2 + (Views()[0].1 - Views()[0].2) * 2.0)
     camera.PointAt(Views()[0].2)
     grown.SetGrassShown(False)
     Local farWithout = Try TrianglesDrawn(island)
@@ -1040,15 +1077,16 @@ Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws Grap
         Checks("where its {drift.0} wraps, at {wraps} s, its foam doesn't jump",
                across < unwrapped * 2 + 200)
     End For
+    island.Update(0.0)
     // Its foam, over a sandy shore, where it shows: the first round the main rock from the south
     // that's sand up to high water, seen along the coast with the sun behind, so its glare's not on the
     // deep water.
     Local sandy = SandyShore()
     Local outward = Vec2(Cos(sandy.2), Sin(sandy.2))
     Local beside = Vec2(-outward.y, outward.x)
-    Local onSand = Function(up: Float, out: Float, along: Float): Vec3
-        Return Vec3(sandy.0 - beside.x * along + outward.x * out, up,
-                    sandy.1 - beside.y * along + outward.y * out)
+    Local onSand = Function(up: Float, out: Float, aside: Float): Vec3
+        Return Vec3(sandy.0 - beside.x * aside + outward.x * out, up,
+                    sandy.1 - beside.y * aside + outward.y * out)
     End Function
     Local sandyAt = Vec3(sandy.0 + beside.x * 2.0 - outward.x, 0.0,
                          sandy.1 + beside.y * 2.0 - outward.y)
