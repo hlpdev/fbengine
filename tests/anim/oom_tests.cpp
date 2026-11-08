@@ -185,29 +185,45 @@ TEST_CASE("players' calls that run out of memory say so, and leave things workin
     sweep([](const rig_t& rig) { return fbe_player_release(rig.player, rig.mesh); });
 }
 
-TEST_CASE("shaders' calls that run out of memory say so, and leave things working") {
-    // Its SPIR-V's made by hand, which isn't whole enough for SPIRV-Tools' validator.
+namespace {
+
+using entry_t = std::pair<std::uint32_t, std::string_view>;
+
+/// The scene's entry points, as a material's shader has them.
+constexpr std::array<entry_t, 10> scene_entries{
+    {
+        { 0, "vertexMain" },
+        { 4, "fragmentMain" },
+        { 0, "particleVertex" },
+        { 0, "shadowVertex" },
+        { 4, "shadowFragment" },
+        { 0, "instanceVertex" },
+        { 0, "shadowInstanceVertex" },
+        { 0, "prepassVertex" },
+        { 0, "prepassInstanceVertex" },
+        { 4, "prepassFragment" },
+    },
+};
+
+/// A full-screen pass's.
+constexpr std::array<entry_t, 2> pass_entries{
+    {
+        { 0, "passVertex" },
+        { 4, "passFragment" },
+    },
+};
+
+/// A cooked shader of `entries`, which a pipeline's never made of here.
+std::vector<std::uint8_t> cooked(std::span<const entry_t> entries) {
+    // It's made by hand, which isn't whole enough for SPIRV-Tools' validator.
 #ifdef _WIN32
     REQUIRE(_putenv_s("FBE_SPIRV_VALIDATION", "0") == 0);
 #else
     REQUIRE(setenv("FBE_SPIRV_VALIDATION", "0", 1) == 0);
 #endif
-    // SPIR-V's header, and the scene's entry points.
+    // SPIR-V's header, and the entry points.
     std::vector<std::uint32_t> words{ 0x07230203, 0x00010500, 0, 1, 0 };
-    for (const auto& [model, name] : std::array<std::pair<std::uint32_t, std::string_view>, 10>{
-             {
-                 { 0, "vertexMain" },
-                 { 4, "fragmentMain" },
-                 { 0, "particleVertex" },
-                 { 0, "shadowVertex" },
-                 { 4, "shadowFragment" },
-                 { 0, "instanceVertex" },
-                 { 0, "shadowInstanceVertex" },
-                 { 0, "prepassVertex" },
-                 { 0, "prepassInstanceVertex" },
-                 { 4, "prepassFragment" },
-             },
-         }) {
+    for (const auto& [model, name] : entries) {
         const std::size_t name_words = (name.size() / 4) + 1;
         words.push_back(static_cast<std::uint32_t>((3 + name_words) << 16U) | 15U);
         words.push_back(model);
@@ -228,6 +244,13 @@ TEST_CASE("shaders' calls that run out of memory say so, and leave things workin
     const std::size_t at = bytes.size();
     bytes.resize(at + (words.size() * sizeof(std::uint32_t)));
     std::memcpy(bytes.data() + at, words.data(), words.size() * sizeof(std::uint32_t));
+    return bytes;
+}
+
+} // namespace
+
+TEST_CASE("shaders' calls that run out of memory say so, and leave things working") {
+    const std::vector<std::uint8_t> bytes = cooked(scene_entries);
     const auto size = static_cast<std::int64_t>(bytes.size());
     sweep([&](const rig_t&) {
         const std::uint64_t made =
@@ -239,6 +262,64 @@ TEST_CASE("shaders' calls that run out of memory say so, and leave things workin
     const std::uint64_t made = fbe_shader_create(bytes.data(), size, "after");
     CHECK(made != 0);
     CHECK(fbe_shader_release(made));
+}
+
+// fbe_shader_create made a slot before its place, and a deque allocates as it's added to past each
+// of its blocks, at a count of its own on each library, and libc++'s at its first: a create out of
+// memory there left the slot with no place, and the next one made past the end of them, which hung
+// macOS's run. With as many shaders kept as reach the end of a block on any library, each create
+// out of memory leaves every shader where it was, by its name.
+TEST_CASE("shaders made out of memory, however many are kept, leave each in its place") {
+    const std::vector<std::uint8_t> bytes = cooked(scene_entries);
+    const auto size = static_cast<std::int64_t>(bytes.size());
+    std::vector<std::uint64_t> kept;
+    std::vector<std::string> names;
+    for (int count = 0; count < 300; ++count) {
+        sweep([&](const rig_t&) {
+            const std::uint64_t made =
+                fbe_shader_create(bytes.data(), size, "a name long enough to be allocated");
+            return made != 0 && fbe_shader_release(made);
+        });
+        names.push_back("kept shader " + std::to_string(count));
+        kept.push_back(fbe_shader_create(bytes.data(), size, names.back().c_str()));
+        for (std::size_t i = 0; i < kept.size(); ++i) {
+            CHECK(fbe_shader_alive(kept[i]));
+            CHECK(std::string_view(fbe_shader_path(kept[i])) == names[i]);
+        }
+    }
+    for (const std::uint64_t shader : kept) {
+        CHECK(fbe_shader_release(shader));
+    }
+}
+
+// fbe_shader_replace set a shader's code before its name, so running out of memory on the name
+// left it a pass's, though it said it failed.
+TEST_CASE("a shader replaced out of memory is as it was") {
+    const std::vector<std::uint8_t> material = cooked(scene_entries);
+    const std::vector<std::uint8_t> pass = cooked(pass_entries);
+    const std::uint64_t shader =
+        fbe_shader_create(material.data(), static_cast<std::int64_t>(material.size()), "replaced");
+    REQUIRE(shader != 0);
+    for (long which = 0; which < 2000; ++which) {
+        allocated = 0;
+        failed = false;
+        failing = which;
+        const bool done =
+            fbe_shader_replace(shader, pass.data(), static_cast<std::int64_t>(pass.size()),
+                               "a name long enough to be allocated");
+        failing = -1;
+        if (!failed) {
+            CHECK(done);
+            CHECK(fbe_shader_is_pass(shader));
+            CHECK(std::string_view(fbe_shader_path(shader)) ==
+                  "a name long enough to be allocated");
+            break;
+        }
+        CHECK_FALSE(done);
+        CHECK_FALSE(fbe_shader_is_pass(shader));
+        CHECK(std::string_view(fbe_shader_path(shader)) == "replaced");
+    }
+    CHECK(fbe_shader_release(shader));
 }
 
 // A release never allocates, so none can run out of memory: freeing a slot puts it where make made

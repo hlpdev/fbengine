@@ -47,7 +47,13 @@ endif()
 # Every Catch2 test found at build time sees only the tests' Vulkan driver too, or, for tests that
 # start no GPU, fbengine_discover_environment instead: one variable, as Catch's discovery splits a
 # list's, and a test's ENVIRONMENT is the last it's given.
+# A call gives no ENVIRONMENT of its own: where the driver is the job's, as macOS's MoltenVK
+# is, the environment is "", which passing ${ARGV} on drops, and the property after it, a
+# TIMEOUT, went as its value.
 function(catch_discover_tests)
+  if("ENVIRONMENT" IN_LIST ARGV)
+    message(FATAL_ERROR "catch_discover_tests(${ARGV0}) gives an ENVIRONMENT, which this one does")
+  endif()
   set(environment "${fbengine_vulkan_environment}")
   if(DEFINED fbengine_discover_environment)
     set(environment "${fbengine_discover_environment}")
@@ -102,7 +108,7 @@ fbengine_add_shaders(TARGETS fbengine_gpu_tests NAMESPACE fbe::test_shaders
                      INCLUDES gpu/shaders/own)
 catch_discover_tests(fbengine_gpu_tests TEST_PREFIX "gpu." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}"
-                     PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}" TIMEOUT 300)
+                     PROPERTIES TIMEOUT 300)
 
 # The scene's insides, built in from fbengine_internal: how moves are run, and their scratch.
 add_executable(fbengine_scene_internal_tests scene/moves_tests.cpp)
@@ -2539,9 +2545,9 @@ add_executable(fbengine_effects_oom_tests scene/effects_oom_tests.cpp own_new.cp
 target_link_libraries(fbengine_effects_oom_tests PRIVATE fbengine_internal Catch2::Catch2WithMain)
 target_include_directories(fbengine_effects_oom_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 fbengine_set_warnings(fbengine_effects_oom_tests)
+# A deadlock is a failure too.
 catch_discover_tests(fbengine_effects_oom_tests TEST_PREFIX "scene." ADD_TAGS_AS_LABELS
-                     DL_PATHS "${fbengine_test_dll_paths}"
-                     PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}")
+                     DL_PATHS "${fbengine_test_dll_paths}" PROPERTIES TIMEOUT 120)
 
 add_executable(fbengine_anim_oom_tests anim/oom_tests.cpp own_new.cpp)
 target_link_libraries(fbengine_anim_oom_tests PRIVATE fbengine_internal Catch2::Catch2WithMain

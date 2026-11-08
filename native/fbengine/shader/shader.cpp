@@ -517,11 +517,15 @@ FBE_API uint64_t fbe_shader_create(const uint8_t* bytes, int64_t size, const cha
         return 0;
     }
     own::shaders_t& shaders = own::all();
-    const std::uint32_t slot = shaders.slots.make();
-    if (slot == shaders.kept.size()) {
+    // Its name, and a place for a new slot, first: a slot made with no place left the next one
+    // made past the end of them, as a deque that allocates its first block as it's first added to,
+    // libc++'s, did out of memory.
+    std::string path = name != nullptr ? name : "";
+    if (shaders.kept.size() <= shaders.slots.size()) {
         shaders.kept.emplace_back();
     }
-    shaders.kept[slot] = { .references = 1, .code = code, .path = name != nullptr ? name : "" };
+    const std::uint32_t slot = shaders.slots.make();
+    shaders.kept[slot] = { .references = 1, .code = code, .path = std::move(path) };
     own::use(code);
     return shaders.slots.handle(slot);
 } catch (const std::bad_alloc&) {
@@ -573,10 +577,12 @@ FBE_API bool fbe_shader_replace(uint64_t shader, const uint8_t* bytes, int64_t s
     if (code == 0) {
         return false;
     }
-    // Had first, so one replaced by itself isn't let go of.
+    // Its name first, so running out of memory leaves the shader as it was; and had first, so one
+    // replaced by itself isn't let go of.
+    std::string path = name != nullptr ? name : "";
     own::use(code);
     own::stop_using(std::exchange(own::all().kept[slot].code, code));
-    own::all().kept[slot].path = name != nullptr ? name : "";
+    own::all().kept[slot].path = std::move(path);
     return true;
 } catch (const std::bad_alloc&) {
     return fail("out of memory");
