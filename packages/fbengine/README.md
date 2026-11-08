@@ -54,6 +54,8 @@ Its sound is `fbengine_audio`, its physics `fbengine_physics`, its UI `fbengine_
 - fastgltf is MIT (notices/fastgltf.txt), with simdjson, Apache-2.0 or MIT (notices/simdjson.txt);
 - volk is MIT (notices/volk.txt), Vulkan-Headers Apache-2.0 or MIT (notices/vulkan-headers.txt),
   and the Vulkan Memory Allocator MIT (notices/vma.txt);
+- SPIRV-Tools, which validates a game's shader, is Apache-2.0 (notices/spirv-tools.txt), with
+  SPIRV-Headers under Khronos' MIT-style license (notices/spirv-headers.txt);
 - on Windows, MinGW-w64's winpthreads is MIT and BSD-style (notices/winpthreads.txt);
 - Font.BuiltIn's font is a subset of Noto Sans, under the SIL Open Font License 1.1
   (notices/noto-sans.txt).
