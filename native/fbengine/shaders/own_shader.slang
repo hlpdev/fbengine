@@ -78,6 +78,21 @@ struct Surface
         return sampleTextureBiased(layer.texture, layer.sampler, uv, push.camera.lodBias);
     }
 
+    // Where it is in the world.
+    float3 world()
+    {
+        const float4 rows[3] = push.camera.worldRows;
+        return float3(dot(rows[0].xyz, place) + rows[0].w, dot(rows[1].xyz, place) + rows[1].w,
+                      dot(rows[2].xyz, place) + rows[2].w);
+    }
+
+    // Its normal, in the world.
+    float3 worldNormal()
+    {
+        const float4 rows[3] = push.camera.worldRows;
+        return float3(dot(rows[0].xyz, normal), dot(rows[1].xyz, normal), dot(rows[2].xyz, normal));
+    }
+
     // The light that reaches here on a normal, per pixel and in linear light, whatever the material's
     // shading.
     float3 light(float3 toward, float shininess)

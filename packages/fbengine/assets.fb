@@ -556,6 +556,19 @@ Public Final Class Assets
         End For
     End Method
 
+    /// How many loads there are, not freed: what's loading, and what's loaded but not yet made.
+    @MainThread Public Static Method Loads(): Int64 => fbe_assets_count()
+
+    /// How many holds on assets there are: one for each Load, until its Release.
+    @MainThread
+    Public Static Method Holds(): Int
+        Local count = 0
+        For bucket In held.Values()
+            count += bucket.Count
+        End For
+        Return count
+    End Method
+
     /// What hot reload, or Reload, has loaded again since this was last asked, in the order each
     /// was done.
     @MainThread

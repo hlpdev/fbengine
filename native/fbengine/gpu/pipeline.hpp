@@ -71,15 +71,16 @@ VkPipelineLayout pipeline_layout();
 /// fbe_error's why, if it can't be.
 VkPipeline pipeline(const pipeline_desc_t& desc);
 
+/// Destroys the pipelines of `shader` and its module, which nothing the GPU's doing uses, as a
+/// game's shader's code goes once nothing has it.
+void forget_pipelines_of(const shader_t* shader);
+
 /// For a test: pipelines of a shader of `name` aren't made, as a driver might refuse them, "" for
 /// all to be, or only those drawing `samples` a pixel if it says; and how many have been asked for
 /// since.
 void refuse_pipelines_of(std::string_view name,
                          VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_FLAG_BITS_MAX_ENUM);
 std::uint32_t pipelines_refused();
-
-/// How many pipelines have been made since the GPU started, for a test.
-std::size_t pipelines_made();
 
 /// Loads the pipeline cache as the device starts: the file fbe_gpu_set_pipeline_cache names, if
 /// it's this device's and whole, or an empty cache.

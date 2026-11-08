@@ -1,0 +1,73 @@
+// The cover map lies on the terrain where CoverAt paints it: read where the terrain's UVs put a
+// place, its v running against z, as the engine makes a terrain's.
+
+Import std.image.image
+Import std.math
+Import std.test
+Import slack_water.ground
+Import slack_water.island
+
+// The terrain's heights, a row of SIDE + 1 after another, as the island makes them.
+Function Heights(): Float[]
+    Local heights: Float[] = []
+    For z = 0 To SIDE
+        For x = 0 To SIDE
+            heights.Add(GroundHeight((x - SIDE / 2) As Float, (z - SIDE / 2) As Float))
+        End For
+    End For
+    Return heights
+End Function
+
+// The cover map's color round where the terrain draws (`x`, `z`): a pixel each way, from 0 to 1. A
+// terrain's u is x from its corner, and its v the terrain's size less z from its corner, in meters;
+// the map's over the whole of it.
+Function CoverShownAt(cover: Image, x: Float, z: Float): Vec3
+    Local half = (SIDE As Float) / 2.0
+    Local u = (x + half) / (SIDE As Float)
+    Local v = ((SIDE As Float) - (z + half)) / (SIDE As Float)
+    Local column = (u * (cover.Width As Float)) As Int
+    Local row = (v * (cover.Height As Float)) As Int
+    Local sum = Vec3(0.0, 0.0, 0.0)
+    For dy = -1 To 1
+        For dx = -1 To 1
+            Local pixel = cover[column + dx, row + dy]
+            sum = sum + Vec3(pixel.r As Float, pixel.g As Float, pixel.b As Float) * (1.0 / 255.0)
+        End For
+    End For
+    Return sum * (1.0 / 9.0)
+End Function
+
+@Test
+Function TheHeadlandsCragReadsRockAndTheBeachSand()
+    Local cover = GroundCover(Heights()).0
+    // The headland's steepest crag, high above the sea, is rock: as grey as it's blue.
+    Local crag = Vec2(0.0, 0.0)
+    Local steepest = 0.0
+    For across = -20 To 20
+        For along = -20 To 20
+            Local x = HeadlandSpot().x + (across As Float)
+            Local z = HeadlandSpot().y + (along As Float)
+            Local slope = Abs(GroundHeight(x + 0.5, z) - GroundHeight(x - 0.5, z))
+            If slope > steepest && GroundHeight(x, z) > 4.0
+                steepest = slope
+                crag = Vec2(x, z)
+            End If
+        End For
+    End For
+    Local rock = CoverShownAt(cover, crag.x, crag.y)
+    Expect(Abs(rock.x - rock.z) < 0.1 && rock.x < 0.6, "{crag}: {rock}")
+    // And low down by the sea, where it's sand, it's sand: warm and bright.
+    Local found = False
+    For x = -100 To 100
+        For z = -100 To 100
+            Local height = GroundHeight(x As Float, z As Float)
+            If found || height < 0.3 || height > 0.8 Then Continue
+            If SandShownAt(x As Float, z As Float, height, 0.1) < 0.99 Then Continue
+            If SandShownAt((x + 2) As Float, z As Float, height, 0.1) < 0.99 Then Continue
+            Local sand = CoverShownAt(cover, x As Float, z As Float)
+            Expect(sand.x > 0.6 && sand.x > sand.z + 0.15, "({x}, {z}): {sand}")
+            found = True
+        End For
+    End For
+    Expect(found)
+End Function

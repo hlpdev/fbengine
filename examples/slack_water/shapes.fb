@@ -1,0 +1,250 @@
+// Shapes built in code, for what's made of more than boxes: a box with its edges and corners cut,
+// as what's made by hand has, and what's turned on a lathe, by its outline. Their UVs are in
+// meters, so a material's maps are the same size on all of them.
+
+Import std.collections
+Import std.core
+Import std.math
+Import fbengine
+
+// A corner's point on its face across `axis`: the corner, `half` from the middle by `signs`, but
+// for the other two axes, which are in by `bevel`.
+Function Cut(half: Vec3, signs: Vec3, axis: Int, bevel: Float): Vec3
+    Local x = signs.x * (axis == 0 ? half.x : half.x - bevel)
+    Local y = signs.y * (axis == 1 ? half.y : half.y - bevel)
+    Local z = signs.z * (axis == 2 ? half.z : half.z - bevel)
+    Return Vec3(x, y, z)
+End Function
+
+// One of a vector's three by `axis`.
+Function Along(v: Vec3, axis: Int): Float => axis == 0 ? v.x : (axis == 1 ? v.y : v.z)
+
+// Adds a flat face of `points`, a convex outline, to `surface`, facing away from the middle, its
+// UVs in meters across it: along its longer side of `half` down v, as a grain runs along a plank.
+Function Face(surface: Surface, points: Vec3[], half: Vec3)
+    Local normal = Normalize(Cross(points[1] - points[0], points[2] - points[0]))
+    Local middle = Vec3(0.0, 0.0, 0.0)
+    For point In points
+        middle = middle + point
+    End For
+    If Dot(normal, middle) < 0.0
+        normal = normal * -1.0
+        points.Reverse()
+    End If
+    // Across what the face faces most, the two other axes, the longer one down v.
+    Local facing = 2
+    If Abs(normal.x) >= Abs(normal.y) && Abs(normal.x) >= Abs(normal.z)
+        facing = 0
+    ElseIf Abs(normal.y) >= Abs(normal.z)
+        facing = 1
+    End If
+    Local one = facing == 0 ? 1 : 0
+    Local other = facing == 2 ? 1 : 2
+    If Along(half, one) > Along(half, other)
+        Local swapped = one
+        one = other
+        other = swapped
+    End If
+    Local first = -1
+    For point In points
+        Local at = surface.AddVertex(Vertex(point, normal,
+                                            Vec2(Along(point, one), Along(point, other))))
+        If first < 0 Then first = at
+    End For
+    For at = 1 To points.Count - 2
+        surface.AddTriangle(first, first + at, first + at + 1)
+    End For
+End Function
+
+/// A box `half` across from its middle on each axis, its edges and corners cut by `bevel`, each
+/// face flat, so its edges catch the light.
+@MainThread
+Public Function Beveled(half: Vec3, bevel: Float): Geometry
+    Local geometry = Geometry()
+    Local surface = geometry.AddSurface()
+    Local cut = Min(bevel, Min(half.x, Min(half.y, half.z)) * 0.5)
+    Local signs = [-1.0, 1.0]
+    // Its faces, each a corner's point on that face from each of its four corners.
+    For axis = 0 To 2
+        For side In signs
+            Local points: Vec3[] = []
+            For a In signs
+                For b In (a < 0.0 ? signs : [1.0, -1.0])
+                    Local s = axis == 0 ? Vec3(side, a,
+                                               b) : (axis == 1 ? Vec3(a, side, b)
+                                                               : Vec3(a, b, side))
+                    points.Add(Cut(half, s, axis, cut))
+                End For
+            End For
+            Face(surface, points, half)
+        End For
+    End For
+    // Its edges, between two faces, along the third axis.
+    For along = 0 To 2
+        Local one = along == 0 ? 1 : 0
+        Local other = along == 2 ? 1 : 2
+        For a In signs
+            For b In signs
+                Local points: Vec3[] = []
+                For end In signs
+                    Local s = [0.0, 0.0, 0.0]
+                    s[one] = a
+                    s[other] = b
+                    s[along] = end
+                    Local signed = Vec3(s[0], s[1], s[2])
+                    points.Add(Cut(half, signed, one, cut))
+                    points.Add(Cut(half, signed, other, cut))
+                End For
+                // In order around: the first face's at one end, the other's, then back.
+                Face(surface, [points[0], points[1], points[3], points[2]], half)
+            End For
+        End For
+    End For
+    // Its corners, a point from each of the three faces there.
+    For x In signs
+        For y In signs
+            For z In signs
+                Local s = Vec3(x, y, z)
+                Face(surface, [Cut(half, s, 0, cut), Cut(half, s, 1, cut), Cut(half, s, 2, cut)],
+                     half)
+            End For
+        End For
+    End For
+    Return geometry
+End Function
+
+/// What's turned around y by its `outline`, of radius and height in x and y, from its bottom up, in
+/// `segments` around, smooth, with a flat cap at each end that isn't at the axis, if it's `capped`; an
+/// outline whose first point is its last is a ring, round its axis, and has none.
+@MainThread
+Public Function Turned(outline: Vec2[], segments: Int, capped: Bool = True): Geometry
+    Local geometry = Geometry()
+    Local surface = geometry.AddSurface()
+    Local widest = 0.0
+    For point In outline
+        widest = Max(widest, point.x)
+    End For
+    Local around = 2.0 * Pi * widest
+    // A ring, its outline closed, goes round from its last point to its first.
+    Local last = outline.Count - 1
+    Local ring = outline[0] == outline[last]
+    For at = 0 Until outline.Count
+        // Its slope there, from its neighbors, turned out a quarter.
+        Local before = outline[Max(at - 1, 0)]
+        Local after = outline[Min(at + 1, last)]
+        If ring && (at == 0 || at == last)
+            before = outline[last - 1]
+            after = outline[1]
+        End If
+        Local outward = Normalize(Vec2(after.y - before.y, before.x - after.x))
+        For step = 0 To segments
+            Local angle = 2.0 * Pi * (step As Float) / (segments As Float)
+            Local c = Cos(angle)
+            Local s = Sin(angle)
+            Local point = outline[at]
+            surface.AddVertex(Vertex(Vec3(point.x * c, point.y, point.x * s),
+                                     Vec3(outward.x * c, outward.y, outward.x * s),
+                                     Vec2(around * (step As Float) / (segments As Float), point.y)))
+        End For
+    End For
+    Local row = segments + 1
+    For at = 0 Until outline.Count - 1
+        For step = 0 Until segments
+            Local a = at * row + step
+            Local b = a + row
+            surface.AddTriangle(a, b, a + 1)
+            surface.AddTriangle(a + 1, b, b + 1)
+        End For
+    End For
+    // The caps, but for a ring's, which has none, or one left open.
+    If ring || !capped Then Return geometry
+    For which In [0, outline.Count - 1]
+        Local point = outline[which]
+        If point.x <= 0.0 Then Continue
+        Local up = which == 0 ? -1.0 : 1.0
+        Local middle = surface.AddVertex(Vertex(Vec3(0.0, point.y, 0.0), Vec3(0.0, up, 0.0),
+                                                Vec2(0.0, 0.0)))
+        For step = 0 To segments
+            Local angle = 2.0 * Pi * (step As Float) / (segments As Float)
+            Local x = point.x * Cos(angle)
+            Local z = point.x * Sin(angle)
+            surface.AddVertex(Vertex(Vec3(x, point.y, z), Vec3(0.0, up, 0.0), Vec2(x, z)))
+        End For
+        For step = 0 Until segments
+            If up > 0.0
+                surface.AddTriangle(middle, middle + step + 2, middle + step + 1)
+            Else
+                surface.AddTriangle(middle, middle + step + 1, middle + step + 2)
+            End If
+        End For
+    End For
+    Return geometry
+End Function
+
+/// A gable end: a triangle `halfDepth` either side of its middle and `rise` up to its peak, `thick`
+/// either side across x, its bottom at y 0.
+@MainThread
+Public Function Gable(halfDepth: Float, rise: Float, thick: Float): Geometry
+    Local geometry = Geometry()
+    Local surface = geometry.AddSurface()
+    // About its middle, so each face can tell which way is out.
+    Local low = -rise / 3.0
+    Local high = low + rise
+    Local half = Vec3(thick, rise * 0.5, halfDepth)
+    For x In [-thick, thick]
+        Face(surface, [Vec3(x, low, -halfDepth), Vec3(x, low, halfDepth), Vec3(x, high, 0.0)], half)
+    End For
+    Face(surface,
+         [Vec3(-thick, low, -halfDepth), Vec3(thick, low, -halfDepth), Vec3(thick, low, halfDepth),
+          Vec3(-thick, low, halfDepth)], half)
+    For z In [-halfDepth, halfDepth]
+        Face(surface, [Vec3(-thick, low, z), Vec3(thick, low, z), Vec3(thick, high, 0.0),
+                       Vec3(-thick, high, 0.0)], half)
+    End For
+    geometry.Translate(Vec3(0.0, rise / 3.0, 0.0))
+    Return geometry
+End Function
+
+// A number from 0 to 1 for `at` of `seed`, the same each time.
+Function Scattered(at: Int, seed: Int): Float
+    Local mixed: Int64 = (((at As Int64) * 73856093) ^ ((seed As Int64) * 19349663)) & 0x7FFFFFFF
+    mixed = ((mixed ^ (mixed >> 13)) * 1274126177) & 0x7FFFFFFF
+    Return ((mixed & 0xFFFF) As Float) / 65535.0
+End Function
+
+/// A rock about `radius` across from its middle, lumpy by `seed`: a sphere of 8 rings and 12 around,
+/// each point in or out by up to a quarter, its faces flat, as a broken stone's are.
+@MainThread
+Public Function Lumpy(radius: Float, seed: Int): Geometry
+    Local geometry = Geometry()
+    Local surface = geometry.AddSurface()
+    Local rings = 8
+    Local around = 12
+    Local points: Vec3[] = []
+    For ring = 0 To rings
+        Local down = Pi64 * (ring As Float64) / (rings As Float64)
+        Local up = Cos(down) As Float
+        Local out = ring == 0 || ring == rings ? 0.0 : Sin(down) As Float
+        For step = 0 Until around
+            Local angle = 2.0 * Pi * (step As Float) / (around As Float)
+            Local lump = 1.0
+            If ring > 0 && ring < rings Then lump = 0.78 + Scattered(ring * around + step,
+                                                                     seed) * 0.44
+            points.Add(Vec3(out * Cos(angle) * radius * lump, up * radius * lump,
+                            out * Sin(angle) * radius * lump))
+        End For
+    End For
+    Local half = Vec3(radius, radius, radius)
+    For ring = 0 Until rings
+        For step = 0 Until around
+            Local next = (step + 1) % around
+            Local a = points[ring * around + step]
+            Local b = points[(ring + 1) * around + step]
+            Local c = points[ring * around + next]
+            Local d = points[(ring + 1) * around + next]
+            If ring > 0 Then Face(surface, [a, b, c], half)
+            If ring < rings - 1 Then Face(surface, [c, b, d], half)
+        End For
+    End For
+    Return geometry
+End Function

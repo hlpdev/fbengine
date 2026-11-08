@@ -90,7 +90,8 @@ good modern engine on its own. Every structural choice is checked against both.
 
 - **The game's view is a tree of entities**: `Pivot`, `Camera`, `Light`, `Mesh`, `Sprite`,
   `Terrain`, each with a parent, a local transform, a name, and its render, pick, and collision
-  settings.
+  settings. A Terrain's UVs are in its squares, u along x and v its size less z, so a map over it
+  has its first row at the far edge, the reverse of its heights' order.
 - **Inside, it's data-oriented**: transforms in arrays with dirty flags, world matrices updated
   once a frame for what moved, components (mesh renderer, light, camera, collider) in pools
   indexed by entity. No ECS is exposed; a game never sees the arrays.

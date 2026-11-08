@@ -9,10 +9,12 @@ Import fbengine
 Import "./flow"
 Import "./follow"
 Import "./ground"
+Import "./landmarks"
 Import "./map"
 Import "./res" As Res
 Import "./plants"
 Import "./sea"
+Import "./shapes"
 Import "./sky"
 
 // How high the mill's floor is above the yard.
@@ -28,10 +30,14 @@ Const EXPOSURE: Float = 0.8
 Const BLOOM: Float = 1.4
 // From past the sky's brightness, as it fades in from half of this.
 Const BLOOM_FROM: Float = 2.2
-Const LAMP_GLOW: Float = 4.0
+Const LAMP_GLOW: Float = 5.0
 Const LANTERN_LIGHT: Float = 30.0
 /// How high the mill's ceiling is, from its floor.
 Public Const CEILING: Float = 4.97
+// How strong ambient occlusion is, and how far it reaches, in meters: a person's size, so the mill's
+// corners, Pip's joints, and the rocks' folds darken.
+Const OCCLUSION: Float = 1.0
+Const OCCLUSION_RADIUS: Float = 1.5
 /// How many meters of ground each repeat of the rock's maps takes.
 Public Const GROUND_REPEAT: Float = 12.0
 // How many meters the ground's finer grit takes to repeat, which goes evenly into nothing the other does.
@@ -112,8 +118,15 @@ Function Ground(held: Texture[], heights: Float[]): Material Throws IOError, Gra
     material.SetMap(MaterialMap.METAL_ROUGH, rough)
     material.SetMapUv(MaterialMap.METAL_ROUGH, whole)
     material.SetMetalRough(0.0, 1.0)
+    // Its detail up close: each cover's own, faded out from DETAIL_NEAR to DETAIL_FAR.
+    material.SetShader(Try Assets.Load<Shader>(Res.Ground))
+    material.SetParameter(0, Vec4(SIDE As Float, DETAIL_FAR, DETAIL_FAR - DETAIL_NEAR, 0.0))
     Return material
 End Function
+
+// Where the ground's own detail starts to fade, and where it's gone, in meters from the eye.
+Const DETAIL_NEAR: Float = 12.0
+Const DETAIL_FAR: Float = 30.0
 
 /// What covers the ground of these `heights`, as two images over the whole of it: its color, and its
 /// roughness in green, as a material's map has it.
@@ -122,8 +135,9 @@ Public Function GroundCover(heights: Float[]): (Image, Image)
     Local color = Image(side, side)
     Local rough = Image(side, side)
     Local half = (SIDE As Float) / 2.0
+    // Its rows from the terrain's far edge, as a terrain's v runs against z.
     For y = 0 Until side
-        Local z = ((y As Float) + 0.5) / (COVER_PER_METER As Float)
+        Local z = (SIDE As Float) - ((y As Float) + 0.5) / (COVER_PER_METER As Float)
         For x = 0 Until side
             Local across = ((x As Float) + 0.5) / (COVER_PER_METER As Float)
             Local baked = BakedAt(heights, across, z)
@@ -154,9 +168,10 @@ Function Iron(held: Texture[], color: Color): Material Throws IOError
 End Function
 
 /// Sets `camera` to see as the game does: into an HDR image, its light past white rolled off, bloom on
-/// what's brightest, and its far edge into the haze.
+/// what's brightest, and its far edge into the haze; with ambient occlusion and antialiasing over
+/// frames, or, `low`, for what a low GPU can spend, antialiasing from the picture alone.
 @MainThread
-Public Function Looked(camera: Camera)
+Public Function Looked(camera: Camera, low: Bool = False)
     camera.SetClearColor(SKY)
     camera.SetRange(0.1, 4000.0)
     camera.SetFogMode(FogMode.LINEAR)
@@ -166,6 +181,10 @@ Public Function Looked(camera: Camera)
     camera.SetTonemap(Tonemap.ACES)
     camera.SetExposure(EXPOSURE)
     camera.SetBloom(BLOOM, BLOOM_FROM)
+    camera.SetAmbientOcclusion(low ? 0.0 : OCCLUSION)
+    camera.SetAmbientOcclusionRadius(OCCLUSION_RADIUS)
+    camera.SetTemporalAA(!low)
+    camera.SetFxaa(low)
 End Function
 
 /// What the storm does to what's seen: `storm`, from 0 to 1, greys it, cools it, and darkens it.
@@ -197,47 +216,217 @@ Function Box(parent: Entity, material: Material, x: Float, y: Float, z: Float, w
     box.SetScale(Vec3(w, h, d))
 End Function
 
-// The mill, blocked out: walls with a door in the south one, a floor, a roof, the wheel by its east
-// wall, and the lamp on top; gives its pivot, its wheel, and its lamp.
+// A block of `material`, its middle at (`x`, `y`, `z`) from `parent`, `half` across, its edges cut by
+// `bevel`.
 @MainThread
-Function BuildMill(held: Texture[]): (Pivot, Mesh, Mesh, Light) Throws IOError, GraphicsError
+Function Block(parent: Entity, material: Material, x: Float, y: Float, z: Float, half: Vec3,
+               bevel: Float = 0.05): Mesh
+    Local block = Mesh(Beveled(half, bevel), parent)
+    block.SetMaterial(material)
+    block.SetPosition(Vec3(x, y, z))
+    Return block
+End Function
+
+// The roof's two sides, each in rows of boards that lap the row under them, from the walls' top at
+// `eaves`, `rise` up to the ridge.
+@MainThread
+Function Roof(mill: Pivot, boards: Material, eaves: Float, rise: Float)
+    Local run = MILL_D + 0.9
+    Local slope = Sqrt(run * run + rise * rise)
+    Local pitch = Atan2(rise, run)
+    Local rows = 7
+    For side In [-1.0, 1.0]
+        For row = 0 Until rows
+            // Down the slope, from the ridge, each a little over the one above.
+            Local along = (row As Float + 0.5) * slope / (rows As Float)
+            Local z = side * along * Cos(pitch)
+            Local y = eaves + rise - along * Sin(pitch) + 0.06 + (row As Float) * 0.012
+            Local board = Block(mill, boards, 0.0, y, z,
+                                Vec3(MILL_W + 1.0, 0.05, slope / (rows As Float) * 0.56),
+                                0.02)
+            board.SetRotation(side * pitch, 0.0, 0.0)
+        End For
+    End For
+End Function
+
+// The wheel, of wood: a hub, eight spokes, a rim at each side, and twelve paddles, as one mesh, its axle
+// along y.
+@MainThread
+Function WheelGeometry(): Geometry
+    Local wheel = Turned([Vec2(0.0, -0.6), Vec2(0.38, -0.6), Vec2(0.38, 0.6), Vec2(0.0, 0.6)], 16)
+    For spoke = 0 Until 8
+        Local angle = 2.0 * Pi * (spoke As Float) / 8.0
+        Local turn = Quat.FromAxisAngle(Vec3(0.0, 1.0, 0.0), angle)
+        For side In [-0.38, 0.38]
+            wheel.Add(Beveled(Vec3(1.35, 0.06, 0.08), 0.02),
+                      Mat4.Compose(turn * Vec3(1.5, side, 0.0), turn, Vec3(1.0, 1.0, 1.0)))
+        End For
+    End For
+    For side In [-0.42, 0.42]
+        Local rim = Turned([Vec2(2.72, -0.06), Vec2(2.98, -0.06), Vec2(2.98, 0.06),
+                            Vec2(2.72, 0.06),
+                            Vec2(2.72, -0.06)], 32)
+        wheel.Add(rim, Mat4.Translation(Vec3(0.0, side, 0.0)))
+        rim.Free()
+    End For
+    For paddle = 0 Until 12
+        Local angle = 2.0 * Pi * (paddle As Float) / 12.0
+        Local turn = Quat.FromAxisAngle(Vec3(0.0, 1.0, 0.0), angle)
+        wheel.Add(Beveled(Vec3(0.34, 0.46, 0.04), 0.015),
+                  Mat4.Compose(turn * Vec3(3.12, 0.0, 0.0), turn, Vec3(1.0, 1.0, 1.0)))
+    End For
+    Return wheel
+End Function
+
+/// How big a barrel is: its radius at its belly, and its height, its pivot at its bottom's middle.
+Public Const BARREL_RADIUS: Float = 0.37
+Public Const BARREL_HIGH: Float = 0.9
+
+// A barrel's staves, bellied, and its iron hoops, on a pivot of its own at (`x`, `z`) on the mill's
+// floor, at its bottom's middle.
+@MainThread
+Function Barrel(parent: Entity, wood: Material, iron: Material, x: Float, z: Float): Pivot
+    Local barrel = Pivot(parent)
+    barrel.SetPosition(Vec3(x, FLOOR - 0.1, z))
+    Local staves = Mesh(Turned([Vec2(0.0, 0.0), Vec2(0.3, 0.0), Vec2(0.35, 0.22),
+                                Vec2(BARREL_RADIUS, 0.45), Vec2(0.35, 0.68), Vec2(0.3, BARREL_HIGH),
+                                Vec2(0.0, BARREL_HIGH)], 14), barrel)
+    staves.SetMaterial(wood)
+    Local hoops = Turned([Vec2(0.335, 0.12), Vec2(0.36, 0.12), Vec2(0.36, 0.18), Vec2(0.335, 0.18),
+                          Vec2(0.335, 0.12)], 14)
+    hoops.Add(Turned([Vec2(0.335, 0.72), Vec2(0.36, 0.72), Vec2(0.36, 0.78), Vec2(0.335, 0.78),
+                      Vec2(0.335, 0.72)], 14))
+    Local bands = Mesh(hoops, barrel)
+    bands.SetMaterial(iron)
+    Return barrel
+End Function
+
+// A crate of `boards`, `half` across, on a pivot of its own at its middle, (`x`, `y`, `z`) from `parent`.
+@MainThread
+Function Crate(parent: Entity, boards: Material, x: Float, y: Float, z: Float, half: Vec3): Pivot
+    Local crate = Pivot(parent)
+    crate.SetPosition(Vec3(x, y, z))
+    Block(crate, boards, 0.0, 0.0, 0.0, half, 0.04)
+    Return crate
+End Function
+
+// The mill: a stone house on a plinth, its corners of bigger stones, a door framed in wood in its south
+// wall, a roof of boards to a ridge, the wheel by its east wall, and the lamp in an iron cage on the
+// ridge; barrels and crates by its west wall, and a millstone and bench inside. Gives its pivot, its
+// wheel, its lamp, and its lantern.
+@MainThread
+Function BuildMill(held: Texture[]): (Pivot, Mesh, Mesh, Light,
+                                      (Entity, Int, Vec3)[]) Throws IOError,
+                                                                    GraphicsError
     Local wood = Try Wood(held)
+    Local boards = Try Surfaced(held, Res.WoodAlbedo, Res.WoodNormal, Res.WoodRough, 0.0,
+                                Color(0.62, 0.55, 0.5), 1.0)
     Local iron = Try Iron(held, Color(1.0, 1.0, 1.0))
-    Local stone = Try Rock(held, Color(0.8, 0.8, 0.82), 0.5)
+    Local stone = Try Rock(held, Color(0.8, 0.8, 0.82), 1.0)
+    Local quoin = Try Rock(held, Color(1.0, 0.97, 0.92), 1.0)
     Local brass = Try Brass(held)
     Local mill = Pivot()
     mill.SetPosition(Vec3(MAIN_X, GroundHeight(MAIN_X, 0.0), 0.0))
-    // Its floor, a little above the yard, so they don't fight.
-    Box(mill, Try Indoors(stone, held), 0.0, 0.0, 0.0, 6.0, FLOOR, 5.0)
-    Box(mill, stone, 0.0, 2.5, -5.0, 6.0, 2.5, 0.3)
-    Box(mill, stone, -6.0, 2.5, 0.0, 0.3, 2.5, 5.0)
-    Box(mill, stone, 6.0, 2.5, 0.0, 0.3, 2.5, 5.0)
-    Box(mill, stone, -4.0, 2.5, 5.0, 2.0, 2.5, 0.3)
-    Box(mill, stone, 4.0, 2.5, 5.0, 2.0, 2.5, 0.3)
-    Box(mill, stone, 0.0, 4.2, 5.0, 2.0, 0.8, 0.3)
-    Box(mill, wood, 0.0, 5.3, 0.0, 6.6, 0.3, 5.6)
+    // Its floor, a little above the yard, so they don't fight, and the plinth the walls stand on.
+    Block(mill, Try Indoors(stone, held), 0.0, 0.0, 0.0, Vec3(6.0, FLOOR, 5.0), 0.02)
+    Block(mill, quoin, 0.0, 0.18, -5.0, Vec3(6.5, 0.25, 0.5))
+    Block(mill, quoin, -6.0, 0.18, 0.0, Vec3(0.5, 0.25, 5.0))
+    Block(mill, quoin, 6.0, 0.18, 0.0, Vec3(0.5, 0.25, 5.0))
+    Block(mill, quoin, -4.25, 0.18, 5.0, Vec3(2.25, 0.25, 0.5))
+    Block(mill, quoin, 4.25, 0.18, 5.0, Vec3(2.25, 0.25, 0.5))
+    // Its walls.
+    Block(mill, stone, 0.0, 2.5, -5.0, Vec3(6.0, 2.5, 0.3))
+    Block(mill, stone, -6.0, 2.5, 0.0, Vec3(0.3, 2.5, 5.0))
+    Block(mill, stone, 6.0, 2.5, 0.0, Vec3(0.3, 2.5, 5.0))
+    Block(mill, stone, -4.0, 2.5, 5.0, Vec3(2.0, 2.5, 0.3))
+    Block(mill, stone, 4.0, 2.5, 5.0, Vec3(2.0, 2.5, 0.3))
+    Block(mill, stone, 0.0, 4.2, 5.0, Vec3(2.0, 0.8, 0.3))
+    // Its corners, of bigger stones on its outer faces, long one way and then the other, up the wall.
+    For x In [-1.0, 1.0]
+        For z In [-1.0, 1.0]
+            For course = 0 Until 6
+                Local long = course % 2 == 0 ? 0.62 : 0.37
+                Local short = course % 2 == 0 ? 0.37 : 0.62
+                Local y = 0.8 + (course As Float) * 0.78
+                Block(mill, quoin, x * 6.32, y, z * (5.3 - long), Vec3(0.06, 0.36, long), 0.04)
+                Block(mill, quoin, x * (6.3 - short), y, z * 5.32, Vec3(short, 0.36, 0.06), 0.04)
+            End For
+        End For
+    End For
+    // The door's frame, and a beam over it.
+    Block(mill, wood, -2.12, 1.75, 5.0, Vec3(0.16, 1.75, 0.4), 0.03)
+    Block(mill, wood, 2.12, 1.75, 5.0, Vec3(0.16, 1.75, 0.4), 0.03)
+    Block(mill, wood, 0.0, 3.55, 5.0, Vec3(2.6, 0.2, 0.42), 0.03)
+    // The roof: a gable of stone at each end, its boards, and the ridge.
+    Local rise = 2.6
+    For x In [-6.0, 6.0]
+        Local gable = Mesh(Gable(MILL_D + 0.3, rise, 0.3), mill)
+        gable.SetMaterial(stone)
+        gable.SetPosition(Vec3(x, 5.0, 0.0))
+    End For
+    Roof(mill, boards, 5.0, rise)
+    Block(mill, wood, 0.0, 5.0 + rise + 0.12, 0.0, Vec3(MILL_W + 1.1, 0.13, 0.13), 0.03)
     // The ceiling, under the roof, whose wood would reflect the sky.
     Box(mill, Try Indoors(wood, held), 0.0, CEILING, 0.0, 5.7, 0.02, 4.7)
     // What the parts go on, inside.
-    Box(mill, iron, 3.5, 1.0, -3.0, 1.2, 1.0, 1.2)
+    Block(mill, iron, 3.5, 1.0, -3.0, Vec3(1.2, 1.0, 1.2), 0.04)
+    // A millstone against the west wall, and a bench by the north one.
+    Local millstone = Mesh(Turned([Vec2(0.0, -0.16), Vec2(0.85, -0.16), Vec2(0.9, -0.1),
+                                   Vec2(0.9, 0.1),
+                                   Vec2(0.85, 0.16), Vec2(0.0, 0.16)], 24), mill)
+    millstone.SetMaterial(quoin)
+    millstone.SetPosition(Vec3(-5.4, 1.0, -2.6))
+    millstone.SetRotation(0.0, 0.0, ToRadians(78.0))
+    Block(mill, wood, -1.5, 0.55, -4.25, Vec3(1.4, 0.06, 0.3), 0.02)
+    For x In [-2.7, -0.3]
+        Block(mill, wood, x, 0.28, -4.25, Vec3(0.06, 0.25, 0.25), 0.02)
+    End For
+    // Between the wheel and the door, outside: barrels, and crates stacked.
+    Local props: (Entity, Int, Vec3)[] = []
+    Local barrel = Vec3(BARREL_RADIUS, BARREL_HIGH, BARREL_RADIUS)
+    For at In [Vec2(6.95, 4.0), Vec2(7.7, 4.45), Vec2(6.95, 4.8)]
+        props.Add((Barrel(mill, wood, iron, at.x, at.y) As Entity, 0, barrel))
+    End For
+    For crate In [(Vec3(8.65, FLOOR + 0.3, 4.3), Vec3(0.4, 0.4, 0.4)),
+                  (Vec3(8.6, FLOOR + 0.98, 4.35), Vec3(0.3, 0.28, 0.3))]
+        props.Add((Crate(mill, boards, crate.0.x, crate.0.y, crate.0.z, crate.1) As Entity, 1,
+                   crate.1))
+    End For
     // The wheel, on its axle, by the east wall.
-    Local wheel = Mesh(Geometry.Cylinder(16), mill)
+    Local wheel = Mesh(WheelGeometry(), mill)
     wheel.SetMaterial(wood)
     wheel.SetPosition(Vec3(8.0, 2.4, 0.0))
     wheel.SetRotation(0.0, 0.0, ToRadians(90.0))
-    wheel.SetScale(Vec3(3.0, 0.5, 3.0))
+    Local axle = Mesh(Turned([Vec2(0.0, -0.8), Vec2(0.12, -0.8), Vec2(0.12, 0.8), Vec2(0.0, 0.8)],
+                             12),
+                      wheel)
+    axle.SetMaterial(iron)
     // A lantern over the works, so what's fitted can be seen, as the walls keep the sky out.
     Local lantern = Light(LightType.POINT, mill)
     lantern.SetColor(Color(1.0, 0.72, 0.42))
     lantern.SetIntensity(LANTERN_LIGHT)
     lantern.SetRange(14.0)
     lantern.SetPosition(Vec3(0.5, 3.8, 0.0))
-    // The lamp on the roof, unlit until the water's back.
-    Local lamp = Mesh(Geometry.Sphere(10), mill)
+    // The lamp on the ridge, in an iron cage, unlit until the water's back.
+    Local top = 5.0 + rise + 0.25
+    Local cage = Mesh(Turned([Vec2(0.0, 0.0), Vec2(0.42, 0.0), Vec2(0.42, 0.08), Vec2(0.0, 0.08)],
+                             12),
+                      mill)
+    cage.SetMaterial(iron)
+    cage.SetPosition(Vec3(0.0, top, 0.0))
+    Local cap = Mesh(Turned([Vec2(0.46, 0.0), Vec2(0.0, 0.32)], 12), mill)
+    cap.SetMaterial(iron)
+    cap.SetPosition(Vec3(0.0, top + 0.95, 0.0))
+    For post = 0 Until 4
+        Local angle = Pi * 0.25 + Pi * 0.5 * (post As Float)
+        Block(mill, iron, Cos(angle) * 0.36, top + 0.5, Sin(angle) * 0.36, Vec3(0.03, 0.45, 0.03),
+              0.01)
+    End For
+    Local lamp = Mesh(Geometry.Sphere(16), mill)
     lamp.SetMaterial(brass)
-    lamp.SetPosition(Vec3(0.0, 6.1, 0.0))
-    lamp.SetScale(Vec3(0.5, 0.5, 0.5))
-    Return (mill, wheel, lamp, lantern)
+    lamp.SetPosition(Vec3(0.0, top + 0.48, 0.0))
+    lamp.SetScale(Vec3(0.36, 0.36, 0.36))
+    Return (mill, wheel, lamp, lantern, props)
 End Function
 
 // The parts, each lying where it does, by its number: the gear, the paddle, and the belt.
@@ -278,12 +467,16 @@ Public Final Class Island
     Field sizes: Vec3[] = []
     Field pipHead: Entity
     Field pipMesh: Mesh
+    Field landmarks: Landmarks
+    Field props: (Entity, Int, Vec3)[]
 
     New(scene: World, ground: Terrain, sea: Sea, sunShown: SunShown, plants: Plants, model: Model,
         pip: Entity, held: Texture[], mill: Pivot, wheel: Mesh, lamp: Mesh, parts: Mesh[],
-        sun: Light,
-        around: Environment, lantern: Light)
+        sun: Light, around: Environment, lantern: Light, landmarks: Landmarks,
+        props: (Entity, Int, Vec3)[])
         Self.scene = scene
+        Self.props = props
+        Self.landmarks = landmarks
         Self.ground = ground
         Self.sea = sea
         Self.sunShown = sunShown
@@ -345,8 +538,14 @@ Public Final Class Island
         End Function
         Local plants = Try Plants.Make(drawnAt, held)
 
-        Local mill, wheel, lamp, lantern = Try BuildMill(held)
+        Local mill, wheel, lamp, lantern, props = Try BuildMill(held)
         Local parts = Try BuildParts(held)
+        Local landmarks = Landmarks.Make(Try Wood(held),
+                                         Try Surfaced(held, Res.WoodAlbedo, Res.WoodNormal,
+                                                      Res.WoodRough, 0.0, Color(0.62, 0.55, 0.5),
+                                                      1.0),
+                                         Try Iron(held, Color(1.0, 1.0, 1.0)),
+                                         Try Rock(held, Color(0.8, 0.8, 0.82), 1.0))
 
         Local model = Try Assets.Load<Model>(Res.Pip)
         Local pip = Try model.Spawn()
@@ -357,8 +556,7 @@ Public Final Class Island
         pip.SetRotation(0.0, ToRadians(20.0), 0.0)
         pip.Player().Play(model.Clips()[0])
         Return Island(scene, ground, sea, sunShown, plants, model, pip, held, mill, wheel, lamp,
-                      parts,
-                      sun, around, lantern)
+                      parts, sun, around, lantern, landmarks, props)
     End Method
 
     /// The World it's in.
@@ -435,7 +633,30 @@ Public Final Class Island
         sea.Update(clock)
         plants.Update(clock)
         TurnSun(clock)
+        landmarks.Update(clock)
     End Method
+
+    /// Moves what moves on its own on `seconds` of real time: the lighthouse's lamp, and the boat.
+    @MainThread
+    Public Method Animate(seconds: Float)
+        landmarks.Animate(seconds)
+    End Method
+
+    /// Draws what `camera` sees afresh, for a still: what the frames before had there, which
+    /// antialiasing over frames blends in, forgotten, as at a cut.
+    @MainThread
+    Public Method Drawn(camera: Camera)
+        camera.ResetHistory()
+        Render()
+    End Method
+
+    /// The barrels and crates by the mill, each on a pivot of its own: what it is, 0 a barrel and 1 a
+    /// crate; and its size: a barrel's radius, height, and radius, its pivot at its bottom's middle, or a
+    /// crate's half sizes, its pivot at its middle.
+    @MainThread Public Method Props(): (Entity, Int, Vec3)[] => props
+
+    /// The lighthouse, the jetty, the boat, and what's along the shores.
+    @MainThread Public Method Marks(): Landmarks => landmarks
 
     /// What the ground's drawn with.
     @MainThread
@@ -611,7 +832,9 @@ Public Final Class Island
             Local spot = PartSpot(number As Part)
             Local thing = parts[number]
             thing.SetParent(Null, False)
-            thing.SetPosition(Vec3(spot.x, GroundHeight(spot.x, spot.y) + 0.15, spot.y))
+            // Lying on the ground, by its half-height, which its scale is, a centimeter in it.
+            thing.SetPosition(Vec3(spot.x, GroundHeight(spot.x, spot.y) + sizes[number].y - 0.01,
+                                   spot.y))
             thing.SetRotation(0.0, 0.0, 0.0)
             thing.SetScale(sizes[number])
             thing.Show()

@@ -3,9 +3,13 @@
 // materials that tile.
 
 Import std.collections
+Import std.data.json
 Import std.core
+Import std.io
 Import std.math
 Import std.test
+Import std.text
+Import slack_water_tools.pip
 Import slack_water_tools.sounds
 Import slack_water_tools.textures
 
@@ -196,5 +200,172 @@ Function EveryMaterialTiles()
             End For
         End For
         Expect(wrap <= inside)
+    End For
+End Function
+
+@Test
+Function PipsPartsAreRoundAndItsEyesShutToTheirBottoms()
+    Local shape = Shape()
+    // Its lid at its own bottom.
+    shape.Ellipsoid(1.0, 2.0, 3.0, 0.1, 0.2, 0.3, 4, 0.9, 1.8)
+    Local count = shape.Joints.Count
+    Expect(count > 0)
+    For at = 0 Until count
+        Local dx = (shape.Positions[at * 3] - 1.0) / 0.1
+        Local dy = (shape.Positions[at * 3 + 1] - 2.0) / 0.2
+        Local dz = (shape.Positions[at * 3 + 2] - 3.0) / 0.3
+        // On its surface, its normal out from its middle, and by its joint.
+        Expect(Abs(dx * dx + dy * dy + dz * dz - 1.0) < 0.001)
+        // Its normal is across the surface there: along its point over its radii, squared.
+        Local gx = dx / 0.1
+        Local gy = dy / 0.2
+        Local gz = dz / 0.3
+        Local length = Sqrt(gx * gx + gy * gy + gz * gz)
+        Expect(Abs(shape.Normals[at * 3] - gx / length) < 0.0001 &&
+               Abs(shape.Normals[at * 3 + 1] - gy / length) < 0.0001 &&
+               Abs(shape.Normals[at * 3 + 2] - gz / length) < 0.0001)
+        Expect(shape.Joints[at] == 4)
+        // Shut, everything's at its bottom, but for a tenth of how far over it it was.
+        Local shut = shape.Positions[at * 3 + 1] + shape.Shut[at]
+        Local over = (dy + 1.0) * 0.2
+        Expect(Abs(shut - (1.8 + over * 0.1)) < 0.0001)
+    End For
+    // Its triangles face out.
+    Local indices = shape.Indices
+    For at = 0 Until indices.Count / 3
+        Local points: Vec3[] = []
+        For corner = 0 To 2
+            Local index = indices[at * 3 + corner]
+            Expect(index < count)
+            points.Add(Vec3(shape.Positions[index * 3] - 1.0, shape.Positions[index * 3 + 1] - 2.0,
+                            shape.Positions[index * 3 + 2] - 3.0))
+        End For
+        Local turning = Cross(points[1] - points[0], points[2] - points[0])
+        // None of no size, at a pole either.
+        Expect(Dot(turning, turning) >= 0.0000000001)
+        Expect(Dot(turning, points[0] + points[1] + points[2]) > 0.0)
+    End For
+End Function
+
+// Each of a glTF's primitives: its material's name, its positions' greatest z, and its blink's
+// least y, and how many targets it has.
+Function Primitives(gltf: Value): (String, Double, Double, Int)[]
+    Local found: (String, Double, Double, Int)[] = []
+    Local accessors = gltf["accessors"]?.AsArray() ?? []
+    Local materials = gltf["materials"]?.AsArray() ?? []
+    For primitive In gltf.Path("meshes[0].primitives")?.AsArray() ?? []
+        Local material = primitive["material"]?.AsInt() ?? -1
+        Local name = material >= 0 ? (materials[material]["name"]?.AsString() ?? "") : ""
+        Local position = accessors[primitive.Path("attributes.POSITION")?.AsInt() ?? 0]
+        Local targets = primitive["targets"]?.AsArray() ?? []
+        Local least = 0.0 As Double
+        If targets.Count > 0
+            least = accessors[targets[0]["POSITION"]?.AsInt() ?? 0].Path("min[1]")?.AsDouble() ??
+                    0.0
+        End If
+        found.Add((name, position.Path("max[2]")?.AsDouble() ?? 0.0, least, targets.Count))
+    End For
+    Return found
+End Function
+
+@Test
+Function PipsEyesAreWhiteWithDarkPupilsInFrontAndBothShut() Throws IOError, ParseError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Expect((Try WritePip(folder.Path)) == 8)
+    Local gltf = Try Json.Read(Try File.ReadText(folder.Path / "pip.gltf"))
+    Local primitives = Primitives(gltf)
+    Expect(primitives.Count == 3)
+    // Brass, the pupils, and the whites, each with the blink.
+    Expect(primitives[0].0 == "brass" && primitives[1].0 == "eye" && primitives[2].0 == "white")
+    For primitive In primitives
+        Expect(primitive.3 == 1, "{primitive.0}")
+    End For
+    // The pupils are in front of the whites, and the eyes are what the blink moves.
+    Expect(primitives[1].1 > primitives[2].1)
+    Expect(primitives[1].2 < 0.0 && primitives[2].2 < 0.0)
+    Expect(primitives[0].2 == 0.0)
+    Local materials = gltf["materials"]?.AsArray() ?? []
+    Expect(Abs((materials[1].Path("pbrMetallicRoughness.baseColorFactor[0]")?.AsDouble() ?? 1.0) -
+               0.02) < 0.0001)
+    Expect(Abs((materials[2].Path("pbrMetallicRoughness.baseColorFactor[0]")?.AsDouble() ?? 0.0) -
+               0.9) < 0.0001)
+End Function
+
+@Test
+Function APipsEyeShutsToOneLine()
+    Local shapes = PipShapes()
+    Local whitesTop = -1000.0
+    Local pupilsTop = -1000.0
+    For at = 0 Until shapes[2].Joints.Count
+        whitesTop = Max(whitesTop, shapes[2].Positions[at * 3 + 1] + shapes[2].Shut[at])
+    End For
+    For at = 0 Until shapes[1].Joints.Count
+        pupilsTop = Max(pupilsTop, shapes[1].Positions[at * 3 + 1] + shapes[1].Shut[at])
+    End For
+    Expect(pupilsTop <= whitesTop, "{pupilsTop} {whitesTop}")
+End Function
+
+@Test
+Function PipsShouldersAreWhereItsArmsTurn()
+    Local joints = PipJoints()
+    Local brass = PipShapes()[0]
+    For arm In [4, 5]
+        Local x, y, z = JointAt(joints, arm)
+        // Some part of it is a ball about the joint: its middle, the mean of a part's vertices.
+        Local nearest = 1000.0
+        Local at = 0
+        While at < brass.Joints.Count
+            // Each part's vertices, until its joint changes or its count of 11 rings of 17 runs
+            // out.
+            Local count = 11 * 17
+            If brass.Joints[at] == arm
+                Local sx = 0.0
+                Local sy = 0.0
+                Local sz = 0.0
+                For vertex = at Until at + count
+                    sx += brass.Positions[vertex * 3]
+                    sy += brass.Positions[vertex * 3 + 1]
+                    sz += brass.Positions[vertex * 3 + 2]
+                End For
+                Local n = count As Float
+                Local dx = sx / n - x
+                Local dy = sy / n - y
+                Local dz = sz / n - z
+                nearest = Min(nearest, Sqrt(dx * dx + dy * dy + dz * dz))
+            End If
+            at += count
+        End While
+        Expect(nearest < 0.005, "{nearest}")
+    End For
+End Function
+
+@Test
+Function MoreVerticesThan16BitsHoldAreIndexedIn32()
+    For many In [65536, 65537]
+        Local shape = Shape()
+        For at = 0 Until many
+            For value = 1 To 3
+                shape.Positions.Add(0.0)
+                shape.Normals.Add(0.0)
+            End For
+            shape.Uvs.Add(0.0)
+            shape.Uvs.Add(0.0)
+            shape.Joints.Add(0)
+            shape.Shut.Add(0.0)
+        End For
+        For index In [0, 1, many - 1]
+            shape.Indices.Add(index)
+        End For
+        Local parts = Parts()
+        shape.Primitive(parts, 0)
+        Local wide = many > 65536
+        Expect(parts.Accessors[parts.Accessors.Count - 1].Contains(wide ? "5125" : "5123"))
+        // The last index, as it's read back.
+        Local bytes = parts.Bytes
+        Local last =
+            wide ? (bytes[bytes.Count - 4] As Int) | ((bytes[bytes.Count - 3] As Int) << 8) |
+            ((bytes[bytes.Count - 2] As Int) << 16) : -1
+        If wide Then Expect(last == many - 1, "{last}")
     End For
 End Function

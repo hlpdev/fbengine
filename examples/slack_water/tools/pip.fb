@@ -1,5 +1,6 @@
-// Pip, as a glTF: a small two-legged brass helper of boxes, each moved by one joint, its eyes with
-// a morph target that shuts them, and its idle, walk, and carry clips, in pip.gltf and pip.bin.
+// Pip, as a glTF: a small two-legged brass helper, rounded, each part moved by one joint, its eyes
+// white with dark pupils, a morph target that shuts them, and its idle, walk, and carry clips, in
+// pip.gltf and pip.bin.
 
 Import std.collections
 Import std.core
@@ -8,19 +9,19 @@ Import std.math
 Import std.text
 
 // A joint: its name, its parent's index or -1, and where it is, in its parent's space.
-Struct Joint
-    Field Name: String
-    Field Parent: Int
-    Field X: Float
-    Field Y: Float
-    Field Z: Float
+Public Struct Joint
+    Public Field Name: String
+    Public Field Parent: Int
+    Public Field X: Float
+    Public Field Y: Float
+    Public Field Z: Float
 End Struct
 
 // What's in pip.bin, a part after another, each 4-byte aligned, and each one's JSON.
-Final Class Parts
-    Field Bytes: UInt8[] = []
-    Field Views: String[] = []
-    Field Accessors: String[] = []
+Public Final Class Parts
+    Public Field Bytes: UInt8[] = []
+    Public Field Views: String[] = []
+    Public Field Accessors: String[] = []
 
     // A float at its end.
     Method Float(value: Float)
@@ -30,8 +31,8 @@ Final Class Parts
         End For
     End Method
 
-    // An accessor over what's been added since `start`, `count` of `type`, of `component`; gives its
-    // index. `bounds` is what's added after its other keys, as POSITION's min and max.
+    // An accessor over what's been added since `start`, `count` of `type`, of `component`; gives
+    // its index. `bounds` is what's added after its other keys, as POSITION's min and max.
     Method Accessor(start: Int, count: Int, type: String, component: Int, bounds: String = ""): Int
         While Bytes.Count % 4 != 0
             Bytes.Add(0)
@@ -44,53 +45,68 @@ Final Class Parts
 End Class
 
 // A surface being made: its vertices, each by its joint, and its triangles.
-Final Class Shape
-    Field Positions: Float[] = []
-    Field Normals: Float[] = []
-    Field Uvs: Float[] = []
-    Field Joints: Int[] = []
-    Field Indices: Int[] = []
+Public Final Class Shape
+    Public Field Positions: Float[] = []
+    Public Field Normals: Float[] = []
+    Public Field Uvs: Float[] = []
+    Public Field Joints: Int[] = []
+    Public Field Indices: Int[] = []
     // What a shut eye moves each vertex by, on y, and 0 for what doesn't.
-    Field Shut: Float[] = []
+    Public Field Shut: Float[] = []
 
-    // A box, its middle at (`x`, `y`, `z`), `w`, `h`, and `d` across, moved by `joint`, with `shut`
-    // telling how far down its top vertices move when its eyes shut.
-    Method Box(x: Float, y: Float, z: Float, w: Float, h: Float, d: Float, joint: Int,
-               shut: Float = 0.0)
-        // A face's normal, then its two directions across, as it's seen from outside.
-        Local faces = [[0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-                       [0.0, 0.0, -1.0, -1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-                       [1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0],
-                       [-1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0],
-                       [0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0],
-                       [0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]]
-        For face In faces
-            Local first = Joints.Count
-            For corner = 0 To 3
-                Local su = corner == 1 || corner == 2 ? 1.0 : -1.0
-                Local sv = corner >= 2 ? 1.0 : -1.0
-                Local px = face[0] + face[3] * su + face[6] * sv
-                Local py = face[1] + face[4] * su + face[7] * sv
-                Local pz = face[2] + face[5] * su + face[8] * sv
-                Positions.Add(x + px * w * 0.5)
-                Positions.Add(y + py * h * 0.5)
-                Positions.Add(z + pz * d * 0.5)
-                Normals.Add(face[0])
-                Normals.Add(face[1])
-                Normals.Add(face[2])
-                Uvs.Add((su + 1.0) * 0.5)
-                Uvs.Add((1.0 - sv) * 0.5)
+    // A rounded part: an ellipsoid, its middle at (`x`, `y`, `z`), `rx`, `ry`, and `rz` from it to
+    // its sides, smooth, moved by `joint`. A shut eye's lid comes down to `lid`, the height of the
+    // eye's own bottom, so its white and its pupil shut to one line: `shut` of how far over it each
+    // vertex is.
+    Public Method Ellipsoid(x: Float, y: Float, z: Float, rx: Float, ry: Float, rz: Float,
+                            joint: Int, shut: Float = 0.0, lid: Float = 0.0)
+        Local rings = 10
+        Local around = 16
+        Local first = Joints.Count
+        For ring = 0 To rings
+            // From its top down, its poles on its axis exactly.
+            Local down = Pi64 * (ring As Float64) / (rings As Float64)
+            Local up = Cos(down) As Float
+            Local out = ring == 0 || ring == rings ? 0.0 : Sin(down) As Float
+            For step = 0 To around
+                Local angle = 2.0 * Pi * (step As Float) / (around As Float)
+                Local nx = out * (Sin(angle As Float64) As Float)
+                Local nz = out * (Cos(angle As Float64) As Float)
+                Positions.Add(x + nx * rx)
+                Positions.Add(y + up * ry)
+                Positions.Add(z + nz * rz)
+                // An ellipsoid's normal is its point over its radii, squared.
+                Local gx = nx / rx
+                Local gy = up / ry
+                Local gz = nz / rz
+                Local length = Sqrt(gx * gx + gy * gy + gz * gz)
+                Normals.Add(gx / length)
+                Normals.Add(gy / length)
+                Normals.Add(gz / length)
+                Uvs.Add((step As Float) / (around As Float))
+                Uvs.Add((ring As Float) / (rings As Float))
                 Joints.Add(joint)
-                Shut.Add(py > 0.0 ? shut : 0.0)
+                Shut.Add(-shut * Max(y + up * ry - lid, 0.0))
             End For
-            For index In [0, 1, 2, 0, 2, 3]
-                Indices.Add(first + index)
+        End For
+        Local row = around + 1
+        For ring = 0 Until rings
+            For step = 0 Until around
+                Local a = first + ring * row + step
+                Local b = a + row
+                // At a pole, a ring's a point, and its quad one triangle.
+                Local quad = [a, b, a + 1, a + 1, b, b + 1]
+                Local from = ring == 0 ? 3 : 0
+                Local until = ring == rings - 1 ? 3 : 6
+                For at = from Until until
+                    Indices.Add(quad[at])
+                End For
             End For
         End For
     End Method
 
     // Its attributes and indices in `parts`, as one primitive of a glTF's mesh, in `material`.
-    Method Primitive(parts: Parts, material: Int): String
+    Public Method Primitive(parts: Parts, material: Int): String
         Local vertices = Joints.Count
         Local start = parts.Bytes.Count
         Local low = [1000000.0, 1000000.0, 1000000.0]
@@ -140,14 +156,17 @@ Final Class Shape
         End For
         Local blink = parts.Accessor(start, vertices, "VEC3", 5126,
                                      ",\"min\":[0,{lowest},0],\"max\":[0,0,0]")
+        // In 16 bits, or 32 where there are more vertices than 16 hold.
         start = parts.Bytes.Count
+        Local wide = vertices > 65536
         For index In Indices
-            Local value = index
-            parts.Bytes.Add((value & 0xFF) As UInt8)
-            parts.Bytes.Add(((value >> 8) & 0xFF) As UInt8)
+            For at = 0 Until (wide ? 4 : 2)
+                parts.Bytes.Add(((index >> (at * 8)) & 0xFF) As UInt8)
+            End For
         End For
-        Local indices = parts.Accessor(start, Indices.Count, "SCALAR", 5123)
-        Return "{{\"attributes\":{{\"POSITION\":{position},\"NORMAL\":{normal},\"TEXCOORD_0\":{uv}," +
+        Local indices = parts.Accessor(start, Indices.Count, "SCALAR", wide ? 5125 : 5123)
+        Return "{{\"attributes\":{{\"POSITION\":{position},\"NORMAL\":{normal}," +
+               "\"TEXCOORD_0\":{uv}," +
                "\"JOINTS_0\":{joints},\"WEIGHTS_0\":{weights}}},\"indices\":{indices}," +
                "\"material\":{material},\"targets\":[{{\"POSITION\":{blink}}}]}}"
     End Method
@@ -155,7 +174,8 @@ End Class
 
 // A key's rotation about X, by `angle` radians, as a glTF's x, y, z, w.
 Function AboutX(parts: Parts, angle: Float)
-    // Through the double-precision libm, whose results round the same on every machine this far down.
+    // Through the double-precision libm, whose results round the same on every machine this far
+    // down.
     parts.Float(Sin((angle / 2.0) As Float64) As Float)
     parts.Float(0.0)
     parts.Float(0.0)
@@ -212,23 +232,134 @@ End Class
 
 Function Joined(parts: String[]): String => ",".Join(parts)
 
-// How high the hips are with the legs swung `angle` radians, so a foot's lowest corner is on the
-// ground: a leg's LEG long and FOOT thick.
-Const LEG: Float = 0.36
-Const FOOT: Float = 0.08
+// A leg's LEG long, its foot FOOT high, FOOT_LONG from its middle to its toe or heel, as far
+// forward as FOOT_FORWARD, and FOOT_WIDE from its middle to its side.
+Public Const LEG: Float = 0.36
+Public Const FOOT: Float = 0.08
+Const FOOT_LONG: Float = 0.07
+Const FOOT_FORWARD: Float = 0.018
+Const FOOT_WIDE: Float = 0.052
 
-Function HipHeight(angle: Float): Float
-    Return LEG * (Cos(angle As Float64) As Float) +
-           FOOT / 2.0 * (Sin(Abs(angle) As Float64) As Float)
+// How low a foot reaches under its hip, the leg swung `angle` radians about x: its middle, turned,
+// and its half-height across, which is the ellipse's, turned.
+Function FootDepth(angle: Float): Float
+    Local c = Cos(angle As Float64) As Float
+    Local s = Sin(angle As Float64) As Float
+    Local middle = (FOOT / 2.0 - LEG) * c - FOOT_FORWARD * s
+    Local across = Sqrt(FOOT / 2.0 * c * FOOT / 2.0 * c + FOOT_LONG * s * FOOT_LONG * s)
+    Return -(middle - across)
+End Function
+
+/// How high the hips are with one leg swung `angle` radians and the other back by as much, so the
+/// lower foot's lowest point is on the ground.
+Public Function HipHeight(angle: Float): Float => Max(FootDepth(angle), FootDepth(-angle))
+
+// A clip's eighths: its times, and the legs' angles at each, going from `swing` forward to as far
+// back and forward again.
+Const EIGHTHS: Float[] = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]
+
+Function Swung(swing: Float): Float[]
+    Local angles: Float[] = []
+    For at = 0 To 8
+        Local through = (at As Float) / 8.0
+        angles.Add(swing * (through <= 0.5 ? 1.0 - 4.0 * through : 4.0 * through - 3.0))
+    End For
+    Return angles
+End Function
+
+Function Negated(angles: Float[]): Float[]
+    Local negated: Float[] = []
+    For angle In angles
+        negated.Add(-angle)
+    End For
+    Return negated
+End Function
+
+Function Hips(angles: Float[]): Float[]
+    Local heights: Float[] = []
+    For angle In angles
+        heights.Add(HipHeight(angle))
+    End For
+    Return heights
+End Function
+
+// The shoulders: where each arm's joint is, under the body's, which a shoulder's ball is around.
+Public Const SHOULDER_X: Float = 0.16
+Public Const SHOULDER_Y: Float = 0.12
+
+/// Pip's joints, as its nodes, by their indices: it stands on y 0, facing +Z, 0.9 m high to its
+/// antenna's top.
+Public Function PipJoints(): Joint[]
+    Return [Joint("root", -1, 0.0, 0.0, 0.0), Joint("hips", 0, 0.0, LEG, 0.0),
+            Joint("body", 1, 0.0, 0.06, 0.0), Joint("head", 2, 0.0, 0.2, 0.0),
+            Joint("arm_l", 2, SHOULDER_X, SHOULDER_Y, 0.0),
+            Joint("arm_r", 2, -SHOULDER_X, SHOULDER_Y, 0.0), Joint("leg_l", 1, 0.08, 0.0, 0.0),
+            Joint("leg_r", 1, -0.08, 0.0, 0.0)]
+End Function
+
+/// Where joint `at` of `joints` is, in the whole.
+Public Function JointAt(joints: Joint[], at: Int): (Float, Float, Float)
+    Local x = 0.0
+    Local y = 0.0
+    Local z = 0.0
+    Local up = at
+    While up >= 0
+        x += joints[up].X
+        y += joints[up].Y
+        z += joints[up].Z
+        up = joints[up].Parent
+    End While
+    Return (x, y, z)
+End Function
+
+/// Pip's shapes: its brass, its pupils, and its eyes' whites, on its joints, in that order.
+Public Function PipShapes(): Shape[]
+    Local joints = PipJoints()
+    Local body = 2
+    Local head = 3
+    Local armL = 4
+    Local armR = 5
+    Local legL = 6
+    Local legR = 7
+    // Rounded: a round body with a band at its middle, a head wider than it's high, on a neck, an
+    // antenna with a bulb, arms with hands, and legs with feet, all brass.
+    Local brass = Shape()
+    brass.Ellipsoid(0.0, 0.5, 0.0, 0.14, 0.15, 0.115, body)
+    brass.Ellipsoid(0.0, 0.5, 0.0, 0.148, 0.025, 0.122, body)
+    brass.Ellipsoid(0.0, 0.64, 0.0, 0.045, 0.04, 0.045, head)
+    brass.Ellipsoid(0.0, 0.73, 0.0, 0.13, 0.085, 0.105, head)
+    brass.Ellipsoid(0.0, 0.84, 0.0, 0.008, 0.04, 0.008, head)
+    brass.Ellipsoid(0.0, 0.882, 0.0, 0.018, 0.018, 0.018, head)
+    For side In [1.0, -1.0]
+        Local arm = side > 0.0 ? armL : armR
+        Local shoulder = JointAt(joints, arm)
+        brass.Ellipsoid(shoulder.0, shoulder.1, 0.0, 0.035, 0.035, 0.035, arm)
+        brass.Ellipsoid(side * 0.17, shoulder.1 - 0.09, 0.0, 0.028, 0.1, 0.028, arm)
+        brass.Ellipsoid(side * 0.17, shoulder.1 - 0.2, 0.0, 0.035, 0.03, 0.035, arm)
+        Local leg = side > 0.0 ? legL : legR
+        brass.Ellipsoid(side * 0.08, LEG / 2.0 + FOOT / 2.0, 0.0, 0.032, LEG / 2.0 - FOOT / 4.0,
+                        0.032, leg)
+        brass.Ellipsoid(side * 0.08, FOOT / 2.0, FOOT_FORWARD, FOOT_WIDE, FOOT / 2.0, FOOT_LONG,
+                        leg)
+        // Its ears, as bolts.
+        brass.Ellipsoid(side * 0.13, 0.73, 0.0, 0.012, 0.025, 0.025, head)
+    End For
+    // Its eyes: white bulbs, a dark pupil in each, both shutting to the white's bottom.
+    Local whites = Shape()
+    Local pupils = Shape()
+    Local eyeY = 0.745
+    Local eyeHigh = 0.036
+    Local lid = eyeY - eyeHigh
+    For side In [1.0, -1.0]
+        whites.Ellipsoid(side * 0.05, eyeY, 0.085, 0.033, eyeHigh, 0.022, head, 0.9, lid)
+        pupils.Ellipsoid(side * 0.05, eyeY - 0.003, 0.104, 0.014, 0.016, 0.006, head, 0.9, lid)
+    End For
+    Return [brass, pupils, whites]
 End Function
 
 /// Writes Pip in `folder`, and gives how many joints it has.
 Public Function WritePip(folder: Path): Int Throws IOError
-    // Its joints, as its nodes, by their indices: it stands on y 0, facing +Z, 0.8 m high.
-    Local joints = [Joint("root", -1, 0.0, 0.0, 0.0), Joint("hips", 0, 0.0, LEG, 0.0),
-                    Joint("body", 1, 0.0, 0.06, 0.0), Joint("head", 2, 0.0, 0.2, 0.0),
-                    Joint("arm_l", 2, 0.16, 0.12, 0.0), Joint("arm_r", 2, -0.16, 0.12, 0.0),
-                    Joint("leg_l", 1, 0.08, 0.0, 0.0), Joint("leg_r", 1, -0.08, 0.0, 0.0)]
+    Local joints = PipJoints()
     Local hips = 1
     Local body = 2
     Local head = 3
@@ -236,58 +367,46 @@ Public Function WritePip(folder: Path): Int Throws IOError
     Local armR = 5
     Local legL = 6
     Local legR = 7
-    Local brass = Shape()
-    brass.Box(0.0, 0.5, 0.0, 0.26, 0.28, 0.2, body)
-    brass.Box(0.0, 0.72, 0.0, 0.22, 0.16, 0.18, head)
-    brass.Box(0.16, 0.46, 0.0, 0.06, 0.26, 0.06, armL)
-    brass.Box(-0.16, 0.46, 0.0, 0.06, 0.26, 0.06, armR)
-    brass.Box(0.08, LEG / 2.0, 0.0, FOOT, LEG, FOOT, legL)
-    brass.Box(-0.08, LEG / 2.0, 0.0, FOOT, LEG, FOOT, legR)
-    Local eyes = Shape()
-    eyes.Box(0.05, 0.74, 0.095, 0.045, 0.05, 0.01, head, -0.045)
-    eyes.Box(-0.05, 0.74, 0.095, 0.045, 0.05, 0.01, head, -0.045)
+    Local shapes = PipShapes()
 
     Local parts = Parts()
-    Local primitives = [brass.Primitive(parts, 0), eyes.Primitive(parts, 1)]
+    Local primitives = [shapes[0].Primitive(parts, 0), shapes[1].Primitive(parts, 1),
+                        shapes[2].Primitive(parts, 2)]
 
     // Each joint's inverse bind: taking the mesh's space to its own, by where it is in the whole.
     Local start = parts.Bytes.Count
     For at = 0 Until joints.Count
-        Local x = 0.0
-        Local y = 0.0
-        Local z = 0.0
-        Local up = at
-        While up >= 0
-            x += joints[up].X
-            y += joints[up].Y
-            z += joints[up].Z
-            up = joints[up].Parent
-        End While
+        Local x, y, z = JointAt(joints, at)
         For value In [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -x, -y, -z, 1.0]
             parts.Float(value)
         End For
     End For
     Local binds = parts.Accessor(start, joints.Count, "MAT4", 5126)
 
-    // Its body breathes down into its hips, so no gap opens over its legs. Its hips come down as its
-    // legs swing, so its feet stay on the ground.
+    // Its body breathes down into its hips, so no gap opens over its legs. Its hips come down as
+    // its legs swing, so its feet stay on the ground.
     Local idle = Clip(parts, [0.0, 1.0, 2.0])
     idle.Bob(parts, body, 0.0, [0.06, 0.045, 0.06], 0.0)
     idle.Turn(parts, head, [0.0, 0.08, 0.0])
-    Local walk = Clip(parts, [0.0, 0.25, 0.5, 0.75, 1.0])
-    walk.Turn(parts, legL, [0.7, 0.0, -0.7, 0.0, 0.7])
-    walk.Turn(parts, legR, [-0.7, 0.0, 0.7, 0.0, -0.7])
-    walk.Turn(parts, armL, [-0.3, 0.0, 0.3, 0.0, -0.3])
-    walk.Turn(parts, armR, [0.3, 0.0, -0.3, 0.0, 0.3])
-    Local low = HipHeight(0.7)
-    walk.Bob(parts, hips, 0.0, [low, LEG, low, LEG, low], 0.0)
-    Local carry = Clip(parts, [0.0, 0.25, 0.5, 0.75, 1.0])
-    carry.Turn(parts, legL, [0.5, 0.0, -0.5, 0.0, 0.5])
-    carry.Turn(parts, legR, [-0.5, 0.0, 0.5, 0.0, -0.5])
-    carry.Turn(parts, armL, [-1.4, -1.4, -1.4, -1.4, -1.4])
-    carry.Turn(parts, armR, [-1.4, -1.4, -1.4, -1.4, -1.4])
-    Local lowCarrying = HipHeight(0.5)
-    carry.Bob(parts, hips, 0.0, [lowCarrying, LEG, lowCarrying, LEG, lowCarrying], 0.0)
+    // At each eighth, so between them its feet stay within a few millimeters of the ground.
+    Local walk = Clip(parts, EIGHTHS)
+    Local striding = Swung(0.7)
+    walk.Turn(parts, legL, striding)
+    walk.Turn(parts, legR, Negated(striding))
+    walk.Turn(parts, armL, Negated(Swung(0.3)))
+    walk.Turn(parts, armR, Swung(0.3))
+    walk.Bob(parts, hips, 0.0, Hips(striding), 0.0)
+    Local carry = Clip(parts, EIGHTHS)
+    Local carrying = Swung(0.5)
+    carry.Turn(parts, legL, carrying)
+    carry.Turn(parts, legR, Negated(carrying))
+    Local held: Float[] = []
+    For at = 0 To 8
+        held.Add(-1.4)
+    End For
+    carry.Turn(parts, armL, held)
+    carry.Turn(parts, armR, held)
+    carry.Bob(parts, hips, 0.0, Hips(carrying), 0.0)
     Local clips = [idle.Json("idle"), walk.Json("walk"), carry.Json("carry")]
 
     Local nodes: String[] = []
@@ -310,15 +429,20 @@ Public Function WritePip(folder: Path): Int Throws IOError
     Local gltf = "{{\"asset\":{{\"version\":\"2.0\",\"generator\":\"slack_water_tools\"}}," +
                  "\"scene\":0,\"scenes\":[{{\"nodes\":[0,{joints.Count}]}}]," +
                  "\"nodes\":[{Joined(nodes)}]," +
-                 "\"meshes\":[{{\"name\":\"pip\",\"weights\":[0],\"primitives\":[{Joined(primitives)}]}}]," +
+                 "\"meshes\":[{{\"name\":\"pip\",\"weights\":[0]," +
+                 "\"primitives\":[{Joined(primitives)}]}}]," +
                  "\"skins\":[{{\"joints\":[{Joined(names)}],\"skeleton\":0," +
                  "\"inverseBindMatrices\":{binds}}}]," +
                  "\"animations\":[{Joined(clips)}]," +
-                 "\"materials\":[{{\"name\":\"brass\",\"pbrMetallicRoughness\":{{\"baseColorFactor\":" +
+                 "\"materials\":[{{\"name\":\"brass\"," +
+                 "\"pbrMetallicRoughness\":{{\"baseColorFactor\":" +
                  "[0.86,0.66,0.3,1],\"metallicFactor\":1,\"roughnessFactor\":0.38}}}}," +
                  "{{\"name\":\"eye\",\"pbrMetallicRoughness\":{{\"baseColorFactor\":" +
-                 "[0.02,0.02,0.03,1],\"metallicFactor\":0,\"roughnessFactor\":0.2}}}}]," +
-                 "\"accessors\":[{Joined(parts.Accessors)}],\"bufferViews\":[{Joined(parts.Views)}]," +
+                 "[0.02,0.02,0.03,1],\"metallicFactor\":0,\"roughnessFactor\":0.2}}}}," +
+                 "{{\"name\":\"white\",\"pbrMetallicRoughness\":{{\"baseColorFactor\":" +
+                 "[0.9,0.9,0.86,1],\"metallicFactor\":0,\"roughnessFactor\":0.15}}}}]," +
+                 "\"accessors\":[{Joined(parts.Accessors)}]," +
+                 "\"bufferViews\":[{Joined(parts.Views)}]," +
                  "\"buffers\":[{{\"uri\":\"pip.bin\",\"byteLength\":{parts.Bytes.Count}}}]}}\n"
     Try File.WriteBytes(folder / "pip.bin", parts.Bytes)
     Try File.WriteText(folder / "pip.gltf", gltf)

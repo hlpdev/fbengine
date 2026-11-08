@@ -7,6 +7,7 @@
 
 #include "core/engine.hpp"
 #include "fbengine.h"
+#include "gpu/pipeline.hpp"
 #include "gpu/vulkan.hpp"
 #include "scene/scene.hpp"
 
@@ -21,7 +22,9 @@
 #include <format>
 #include <new>
 #include <optional>
+#include <SDL3/SDL.h>
 #include <span>
+#include <spirv-tools/libspirv.hpp>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -94,6 +97,13 @@ struct kept_code_t {
     bool pass = false;
     /// Whether a camera's been told it isn't a pass.
     bool said_not_a_pass = false;
+    /// How many shaders have it now: once none do, and the frames that drew with it are done, it
+    /// goes, its pipelines with it, and its number is another's.
+    std::uint32_t users = 0;
+    bool free = false;
+    /// How many times it's been let go of by every shader, which a free waits for the last of: one
+    /// from before it was had and let go of again would free it while that one's frames are drawn.
+    std::uint64_t released = 0;
 };
 
 struct shader_t {
@@ -112,6 +122,8 @@ struct shaders_t {
     /// Where none moves as more are made, so the text fbe_shader_path gives of one stays.
     std::deque<shader_t> kept;
     std::deque<kept_code_t> codes;
+    /// The numbers of codes gone, which new ones take first.
+    std::vector<std::uint32_t> free_codes;
 };
 
 shaders_t& all() {
@@ -225,6 +237,36 @@ bool binds_only_the_scene(std::span<const std::uint32_t> words) {
 }
 
 /// A cooked file's SPIR-V, or nothing, with fbe_error saying why.
+/// Whether what's checked is validated too, as it is unless FBE_SPIRV_VALIDATION is 0, as the
+/// scene's tests have it, of the checks before it, whose SPIR-V is made by hand and isn't whole
+/// enough for the validator.
+bool validates() {
+    // The C runtime's, which SDL's own copy allocates to read, as a call that runs out of memory
+    // can't.
+    const char* setting = SDL_getenv_unsafe("FBE_SPIRV_VALIDATION");
+    return setting == nullptr || std::string_view(setting) != "0";
+}
+
+/// Whether `words` are SPIR-V that Vulkan takes, as SPIRV-Tools' validator says, for the Vulkan of
+/// their SPIR-V's version; false, with fbe_error saying the validator's first error, if not, as a
+/// driver's handed what isn't valid does anything.
+bool valid(std::span<const std::uint32_t> words) {
+    constexpr std::uint32_t spirv_1_6 = 0x00010600;
+    spvtools::SpirvTools tools(words[1] >= spirv_1_6 ? SPV_ENV_VULKAN_1_3 : SPV_ENV_VULKAN_1_2);
+    std::string why;
+    tools.SetMessageConsumer([&why](spv_message_level_t level, const char* /*source*/,
+                                    const spv_position_t& /*position*/, const char* message) {
+        if (why.empty() && level <= SPV_MSG_ERROR) {
+            why = message;
+        }
+    });
+    if (tools.Validate(words.data(), words.size(), spvtools::ValidatorOptions())) {
+        return true;
+    }
+    return fail(
+        std::format("the shader isn't valid SPIR-V, as SPIRV-Tools' validator says: {}", why));
+}
+
 std::optional<std::vector<std::uint32_t>> words_of(const std::uint8_t* bytes, std::int64_t size) {
     if (bytes == nullptr || size < 0) {
         fail("a shader's bytes are given");
@@ -285,6 +327,13 @@ std::optional<std::vector<std::uint32_t>> words_of(const std::uint8_t* bytes, st
             "static: it reads only what a Surface and its material's parameters have");
         return std::nullopt;
     }
+    // Once a code: words a shader has already were valid when it was made.
+    const bool kept = std::ranges::any_of(all().codes, [&words](const kept_code_t& code) {
+        return !code.free && code.words == words;
+    });
+    if (!kept && validates() && !valid(words)) {
+        return std::nullopt;
+    }
     return words;
 }
 
@@ -292,21 +341,71 @@ std::optional<std::vector<std::uint32_t>> words_of(const std::uint8_t* bytes, st
 /// why.
 std::uint32_t keep(std::vector<std::uint32_t> words, const char* name) {
     shaders_t& shaders = all();
-    const auto found = std::ranges::find(shaders.codes, words, &kept_code_t::words);
+    // One no shader has, waiting for its frames to be done, is had again.
+    const auto found = std::ranges::find_if(shaders.codes, [&words](const kept_code_t& kept) {
+        return !kept.free && kept.words == words;
+    });
     if (found != shaders.codes.end()) {
         return static_cast<std::uint32_t>(found - shaders.codes.begin()) + 1;
     }
-    if (shaders.codes.size() >= most_codes) {
-        fail("there have been more different shaders than a pipeline's key can number");
+    if (shaders.free_codes.empty() && shaders.codes.size() >= most_codes) {
+        fail("there are more different shaders than a pipeline's key can number");
         return 0;
     }
     std::string named = name != nullptr ? name : "a game's shader";
-    kept_code_t& kept = shaders.codes.emplace_back();
+    // Room first, so nothing's taken from the free list unless it's kept.
+    shaders.free_codes.reserve(shaders.free_codes.size() + 1);
+    if (shaders.free_codes.empty()) {
+        shaders.codes.emplace_back();
+        shaders.free_codes.push_back(static_cast<std::uint32_t>(shaders.codes.size()));
+    }
+    const std::uint32_t code = shaders.free_codes.back();
+    shaders.free_codes.pop_back();
+    kept_code_t& kept = shaders.codes[code - 1];
     kept.words = std::move(words);
     kept.name = std::move(named);
     kept.shader = { .name = kept.name, .code = kept.words };
     kept.pass = has_entry(kept.words, pass_entries[1].name, pass_entries[1].model);
-    return static_cast<std::uint32_t>(shaders.codes.size());
+    kept.said_not_a_pass = false;
+    kept.refused = false;
+    kept.users = 0;
+    kept.free = false;
+    return code;
+}
+
+/// Frees a code no shader has, its pipelines and module with it, once the frames that could have
+/// drawn with it are done, unless a shader's had it again by then.
+void forget(std::uint32_t code) {
+    const std::uint64_t release = ++all().codes[code - 1].released;
+    const auto gone = [code, release] {
+        shaders_t& shaders = all();
+        kept_code_t& kept = shaders.codes[code - 1];
+        if (kept.users != 0 || kept.free || kept.released != release) {
+            return;
+        }
+        gpu::forget_pipelines_of(&kept.shader);
+        kept.words = {};
+        kept.name = {};
+        kept.shader = {};
+        kept.free = true;
+        shaders.free_codes.push_back(code);
+    };
+    if (gpu::device() != nullptr) {
+        gpu::after_frame(gone);
+    } else {
+        gone();
+    }
+}
+
+/// A shader has `code`, or has it no longer.
+void use(std::uint32_t code) {
+    ++all().codes[code - 1].users;
+}
+
+void stop_using(std::uint32_t code) {
+    if (code != 0 && --all().codes[code - 1].users == 0) {
+        forget(code);
+    }
 }
 
 std::uint32_t any_code_of(std::uint64_t shader) {
@@ -330,7 +429,8 @@ std::uint32_t pass_code_of(std::uint64_t shader) {
 }
 
 const gpu::shader_t* shader_of(std::uint32_t code) {
-    return code != 0 && code <= all().codes.size() && !all().codes[code - 1].refused
+    return code != 0 && code <= all().codes.size() && !all().codes[code - 1].refused &&
+                   !all().codes[code - 1].free
                ? &all().codes[code - 1].shader
                : nullptr;
 }
@@ -377,6 +477,7 @@ void release(std::uint64_t shader) {
     const auto slot = all().slots.find(shader);
     if (slot && --all().kept[*slot].references == 0) {
         all().slots.free(*slot);
+        stop_using(all().kept[*slot].code);
     }
 }
 
@@ -425,6 +526,7 @@ FBE_API uint64_t fbe_shader_create(const uint8_t* bytes, int64_t size, const cha
     }
     const std::uint32_t slot = shaders.slots.make();
     shaders.kept[slot] = { .references = 1, .code = code, .path = std::move(path) };
+    own::use(code);
     return shaders.slots.handle(slot);
 } catch (const std::bad_alloc&) {
     fail("out of memory");
@@ -475,9 +577,11 @@ FBE_API bool fbe_shader_replace(uint64_t shader, const uint8_t* bytes, int64_t s
     if (code == 0) {
         return false;
     }
-    // Its name first, so running out of memory leaves the shader as it was.
+    // Its name first, so running out of memory leaves the shader as it was; and had first, so one
+    // replaced by itself isn't let go of.
     std::string path = name != nullptr ? name : "";
-    own::all().kept[slot].code = code;
+    own::use(code);
+    own::stop_using(std::exchange(own::all().kept[slot].code, code));
     own::all().kept[slot].path = std::move(path);
     return true;
 } catch (const std::bad_alloc&) {

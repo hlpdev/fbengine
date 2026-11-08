@@ -807,7 +807,8 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
         const vec3_t row(to_world.at(0, static_cast<int>(axis)),
                          to_world.at(1, static_cast<int>(axis)),
                          to_world.at(2, static_cast<int>(axis)));
-        data.world_rows[axis] = { row.x, row.y, row.z, 0.0F };
+        // Its w, where the eye is in the world, on that axis.
+        data.world_rows[axis] = { row.x, row.y, row.z, to_world.at(3, static_cast<int>(axis)) };
     }
     bool failed = false;
     data.draws = in_ring<draw_data_t>(draws, failed).address;
