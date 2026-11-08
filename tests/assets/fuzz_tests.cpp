@@ -220,9 +220,7 @@ std::vector<bytes_t> broken(const bytes_t& seed, std::mt19937& random, int count
     const auto at = [&random](std::size_t size) {
         return std::uniform_int_distribution<std::size_t>(0, size - 1)(random);
     };
-    constexpr std::array<std::uint32_t, 6> numbers{
-        0, 1, 0x7fffffffU, 0xffffffffU, 0x80000000U, 0x10000U,
-    };
+    constexpr std::array numbers{ 0U, 1U, 0x7fffffffU, 0xffffffffU, 0x80000000U, 0x10000U };
     for (int made = 0; made < count; ++made) {
         bytes_t bytes = seed;
         switch (random() % 6) {
