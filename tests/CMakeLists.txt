@@ -1357,8 +1357,11 @@ if(UNIX)
   set_tests_properties(scene.ends_during_moves PROPERTIES
                        PASS_REGULAR_EXPRESSION "ended" TIMEOUT 300)
 endif()
+# Their game's shaders are SPIR-V made by hand, to try the checks before SPIRV-Tools' validator,
+# which isn't whole enough for it; the GPU's tests validate what Slang makes.
 catch_discover_tests(fbengine_scene_tests TEST_PREFIX "scene."
-                     DL_PATHS "${fbengine_test_dll_paths}" "${PROJECT_BINARY_DIR}/native/fbengine")
+                     DL_PATHS "${fbengine_test_dll_paths}" "${PROJECT_BINARY_DIR}/native/fbengine"
+                     PROPERTIES ENVIRONMENT "FBE_SPIRV_VALIDATION=0")
 
 # The scene's panics, each a case of tests/scene/panics run on its own, which has to panic saying
 # what it does.

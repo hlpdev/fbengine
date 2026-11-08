@@ -5951,8 +5951,31 @@ TEST_CASE("the light a shader's told of is linear, whatever its material's shadi
 // A game's shader's SPIR-V mutated: words flipped, set, their counts set to none or past the end,
 // and the end cut. Each is checked, and made where it's taken, reading nothing past what it has,
 // which ASan checks where it runs. FBE_FUZZ_ROUNDS asks for more than CI's 2000.
+namespace {
+
+/// SPIRV-Tools' validator off while it lives, as FBE_SPIRV_VALIDATION=0 has it, in SDL's
+/// environment, which the engine reads.
+struct unvalidated_t {
+    unvalidated_t() {
+        require(
+            SDL_SetEnvironmentVariable(SDL_GetEnvironment(), "FBE_SPIRV_VALIDATION", "0", true));
+    }
+    unvalidated_t(const unvalidated_t&) = delete;
+    unvalidated_t& operator=(const unvalidated_t&) = delete;
+    unvalidated_t(unvalidated_t&&) = delete;
+    unvalidated_t& operator=(unvalidated_t&&) = delete;
+    ~unvalidated_t() {
+        SDL_UnsetEnvironmentVariable(SDL_GetEnvironment(), "FBE_SPIRV_VALIDATION");
+    }
+};
+
+} // namespace
+
+// The checks before the validator, which it takes a Debug build a quarter of a second to run on
+// each: so they're tried on their own here, as many times as there are rounds.
 TEST_CASE("a game's shader's mutants are checked without reading past them",
           "[gpu][scene][stability]") {
+    const unvalidated_t unvalidated;
     const int rounds = asked_for("FBE_FUZZ_ROUNDS", 2000);
     const std::span<const std::uint32_t> seed = fbe::test_shaders::game_shader.code;
     REQUIRE(seed.size() > 5);
@@ -5999,6 +6022,85 @@ TEST_CASE("a game's shader's mutants are checked without reading past them",
     CHECK(taken < rounds);
 }
 
+// Mutants SPIRV-Tools' validator takes are drawn, as a game would draw them: some are refused,
+// saying what the validator says, and what's taken draws, with no validation errors. The first
+// three taken are drawn, as each makes pipelines, seconds each on lavapipe.
+TEST_CASE("a game's shader's mutants the validator takes are drawn", "[gpu][scene][stability]") {
+    const scene_t scene;
+    const int rounds = asked_for("FBE_FUZZ_VALIDATED_ROUNDS", 40);
+    const std::span<const std::uint32_t> seed = fbe::test_shaders::game_shader.code;
+    // Seeds that repeat, so what a run finds is found again.
+    std::mt19937 random(20261108); // NOLINT(bugprone-random-generator-seed)
+    const auto at = [&](std::size_t size) {
+        return std::uniform_int_distribution<std::size_t>(0, size - 1)(random);
+    };
+    // Where its constants' values are, OpConstant's last word, which changed is still valid SPIR-V,
+    // if not the shader it was.
+    constexpr std::uint32_t op_constant = 43;
+    std::vector<std::size_t> values;
+    for (std::size_t word = 5; word < seed.size();) {
+        const std::uint32_t count = seed[word] >> 16U;
+        if ((seed[word] & 0xFFFFU) == op_constant && count == 4) {
+            values.push_back(word + 3);
+        }
+        word += std::max(count, 1U);
+    }
+    REQUIRE(!values.empty());
+    int refused_by_validator = 0;
+    int drawn = 0;
+    for (int round = 0; round < rounds; ++round) {
+        CAPTURE(round);
+        std::vector<std::uint32_t> words(seed.begin(), seed.end());
+        // A bit flipped past the header, which the validator mostly refuses, or in a constant's
+        // value, which it mostly takes.
+        const std::size_t where =
+            round % 2 == 0 ? 5 + at(words.size() - 5) : values.at(at(values.size()));
+        words[where] ^= 1U << at(32);
+        const std::vector<std::uint8_t> bytes = cooked_shader(words);
+        const std::uint64_t shader =
+            fbe_shader_create(bytes.data(), static_cast<std::int64_t>(bytes.size()), "a mutant");
+        if (shader == 0) {
+            refused_by_validator +=
+                std::string_view(fbe_error()).contains("SPIRV-Tools' validator says") ? 1 : 0;
+            continue;
+        }
+        if (drawn < 3) {
+            const std::uint64_t material = fbe_material_create();
+            require(fbe_material_set_shader(material, shader));
+            const std::uint64_t mesh = cube(scene.world, 0.0F, 0.0F, -6.0F, material);
+            static_cast<void>(scene.drawn());
+            require(fbe_entity_free(mesh));
+            fbe_material_release(material);
+            ++drawn;
+        }
+        require(fbe_shader_release(shader));
+    }
+    CAPTURE(refused_by_validator, drawn);
+    CHECK(refused_by_validator > 0);
+    CHECK(drawn > 0);
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+// A pak's shader whose bytes are broken past what the checks before the validator see, its SPIR-V's
+// bound on its ids less than its ids, is refused as it's made, saying what the validator says,
+// before any driver's handed it.
+TEST_CASE("a pak's shader that isn't valid SPIR-V is refused with the validator's message",
+          "[gpu][scene]") {
+    std::vector<std::uint32_t> words(fbe::test_shaders::game_shader.code.begin(),
+                                     fbe::test_shaders::game_shader.code.end());
+    words[3] = 2;
+    const std::vector<std::uint8_t> bytes = cooked_shader(words);
+    CHECK(fbe_shader_create(bytes.data(), static_cast<std::int64_t>(bytes.size()),
+                            "res://broken.slang") == 0);
+    const std::string_view why = fbe_error();
+    CAPTURE(why);
+    CHECK(why.starts_with("the shader isn't valid SPIR-V, as SPIRV-Tools' validator says: "));
+    CHECK(why.size() > std::string_view("the shader isn't valid SPIR-V, as SPIRV-Tools' "
+                                        "validator says: ")
+                           .size());
+    CHECK(!fbe_shader_check(bytes.data(), static_cast<std::int64_t>(bytes.size())));
+}
+
 TEST_CASE("a shader no pipeline can be made of draws as the scene's own, and isn't tried again",
           "[gpu][scene]") {
     const scene_t scene;
@@ -6006,7 +6108,8 @@ TEST_CASE("a shader no pipeline can be made of draws as the scene's own, and isn
     // Bytes of its own, so it's a code of its own, by its name.
     std::vector<std::uint32_t> words(fbe::test_shaders::game_shader.code.begin(),
                                      fbe::test_shaders::game_shader.code.end());
-    words.push_back(1U << 16U);
+    // Its generator's word, which nothing reads.
+    words[2] = 0xFB01;
     const std::vector<std::uint8_t> bytes = cooked_shader(words);
     const std::uint64_t shader = fbe_shader_create(
         bytes.data(), static_cast<std::int64_t>(bytes.size()), "res://refused.slang");
@@ -12590,7 +12693,8 @@ TEST_CASE("a shader no pipeline can be made of draws as the scene's own, in stor
     // Bytes of its own, so it's a code of its own, by its name.
     std::vector<std::uint32_t> words(fbe::test_shaders::game_shader.code.begin(),
                                      fbe::test_shaders::game_shader.code.end());
-    words.push_back(2U << 16U);
+    // Its generator's word, which nothing reads.
+    words[2] = 0xFB02;
     const std::vector<std::uint8_t> bytes = cooked_shader(words);
     const std::uint64_t shader = fbe_shader_create(
         bytes.data(), static_cast<std::int64_t>(bytes.size()), "res://refused_stored.slang");

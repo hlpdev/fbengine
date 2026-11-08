@@ -8,9 +8,9 @@ target_compile_definitions(fbengine_native PRIVATE FBE_BUILDING
                            FBE_VERSION="${PROJECT_VERSION}")
 # What it links, which the tests' static library of its sources links too: SDL; FreeType,
 # HarfBuzz, and SheenBidi for text; stb, KTX, and fastgltf for assets; and the GPU's Vulkan,
-# through volk and VMA.
+# through volk and VMA, and SPIRV-Tools, which validates a game's shader.
 set(fbengine_links SDL3::SDL3-static freetype fbengine_harfbuzz fbengine_sheenbidi fbengine_stb
-    ktx_read fastgltf::fastgltf volk Vulkan::Headers fbengine_vma)
+    ktx_read fastgltf::fastgltf volk Vulkan::Headers fbengine_vma SPIRV-Tools-static)
 target_link_libraries(fbengine_native PRIVATE ${fbengine_links})
 # fastgltf's own simdjson, before any other a folder of the rest has (cmake/assets.cmake).
 fbengine_use_fetched_simdjson(fbengine_native)

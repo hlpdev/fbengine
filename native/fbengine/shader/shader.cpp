@@ -22,7 +22,9 @@
 #include <format>
 #include <new>
 #include <optional>
+#include <SDL3/SDL.h>
 #include <span>
+#include <spirv-tools/libspirv.hpp>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -216,6 +218,34 @@ bool binds_only_the_scene(std::span<const std::uint32_t> words) {
 }
 
 /// A cooked file's SPIR-V, or nothing, with fbe_error saying why.
+/// Whether what's checked is validated too, as it is unless FBE_SPIRV_VALIDATION is 0, as the
+/// scene's tests have it, of the checks before it, whose SPIR-V is made by hand and isn't whole
+/// enough for the validator.
+bool validates() {
+    const char* setting = SDL_getenv("FBE_SPIRV_VALIDATION");
+    return setting == nullptr || std::string_view(setting) != "0";
+}
+
+/// Whether `words` are SPIR-V that Vulkan takes, as SPIRV-Tools' validator says, for the Vulkan of
+/// their SPIR-V's version; false, with fbe_error saying the validator's first error, if not, as a
+/// driver's handed what isn't valid does anything.
+bool valid(std::span<const std::uint32_t> words) {
+    constexpr std::uint32_t spirv_1_6 = 0x00010600;
+    spvtools::SpirvTools tools(words[1] >= spirv_1_6 ? SPV_ENV_VULKAN_1_3 : SPV_ENV_VULKAN_1_2);
+    std::string why;
+    tools.SetMessageConsumer([&why](spv_message_level_t level, const char* /*source*/,
+                                    const spv_position_t& /*position*/, const char* message) {
+        if (why.empty() && level <= SPV_MSG_ERROR) {
+            why = message;
+        }
+    });
+    if (tools.Validate(words.data(), words.size(), spvtools::ValidatorOptions())) {
+        return true;
+    }
+    return fail(
+        std::format("the shader isn't valid SPIR-V, as SPIRV-Tools' validator says: {}", why));
+}
+
 std::optional<std::vector<std::uint32_t>> words_of(const std::uint8_t* bytes, std::int64_t size) {
     if (bytes == nullptr || size < 0) {
         fail("a shader's bytes are given");
@@ -272,6 +302,13 @@ std::optional<std::vector<std::uint32_t>> words_of(const std::uint8_t* bytes, st
         fail(
             "the shader has what fbengine's pipelines don't bind, a texture or a global that isn't "
             "static: it reads only what a Surface and its material's parameters have");
+        return std::nullopt;
+    }
+    // Once a code: words a shader has already were valid when it was made.
+    const bool kept = std::ranges::any_of(all().codes, [&words](const kept_code_t& code) {
+        return !code.free && code.words == words;
+    });
+    if (!kept && validates() && !valid(words)) {
         return std::nullopt;
     }
     return words;
