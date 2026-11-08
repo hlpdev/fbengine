@@ -1814,6 +1814,7 @@ target_include_directories(fbengine_vfs_tests PRIVATE "${PROJECT_SOURCE_DIR}/nat
 target_link_libraries(fbengine_vfs_tests PRIVATE Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_vfs_tests)
 catch_discover_tests(fbengine_vfs_tests TEST_PREFIX "vfs." ADD_TAGS_AS_LABELS
+                     PROPERTIES TIMEOUT 300
                      DL_PATHS "${fbengine_test_dll_paths}")
 
 # A program that awaits jobs before its first Flip, which the main scheduler's ticks hand over.
@@ -1853,6 +1854,7 @@ if(MINGW)
   target_link_options(fbengine_assets_tests PRIVATE -mcrtdll=ucrt)
 endif()
 catch_discover_tests(fbengine_assets_tests TEST_PREFIX "assets." ADD_TAGS_AS_LABELS
+                     PROPERTIES TIMEOUT 300
                      DL_PATHS "${fbengine_test_dll_paths}")
 
 # What Assets' mounts panic for, each by a run of tests/assets/panics, which says it, at the line
@@ -2213,8 +2215,9 @@ if(FBENGINE_FB_TESTS)
 endif()
 
 # A soak of the asset pipeline, headless: a folder cooked, its pak mounted, loaded, reloaded, and
-# let go of, 2000 times, the loads coming back to as many each time and the process's memory not
-# growing over the second half; tests/soak says how it went.
+# let go of, 2000 times, the loads and holds coming back to as many each round, and the process's
+# memory, sampled every 100 rounds after the first quarter, not rising by more than 2 KiB a round,
+# by its least-squares slope; tests/soak says how it went.
 if(FBENGINE_FB_TESTS)
   add_test(NAME soak.cook_load_reload COMMAND "${FBENGINE_FB}" --color never run
            "${CMAKE_CURRENT_SOURCE_DIR}/soak")

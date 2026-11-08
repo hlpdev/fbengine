@@ -171,9 +171,9 @@ result_t<void> check_dfd(std::span<const std::uint8_t> bytes, std::uint32_t offs
     constexpr std::uint32_t block_header = 8;
     constexpr std::uint32_t samples = block + 24;
     constexpr std::uint32_t sample = 16;
-    // Its total size is what the header says it is, and its blocks fill it, each a block's header
-    // or more of whole words, as libktx walks them by their sizes: one of none has it loop forever,
-    // and one past the rest read past it.
+    // Its total size is what the header says it is, which libktx v4.4.2 holds it to too, and its
+    // blocks fill it, each a block's header or more of whole words, as libktx walks them by their
+    // sizes: one of none has it loop forever, and one past the rest read past it.
     if (length < block + block_header || length % 4 != 0 || u32(bytes, offset) != length) {
         return std::unexpected(invalid(name, "has a data format descriptor of the wrong size"));
     }

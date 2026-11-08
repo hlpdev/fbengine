@@ -3,8 +3,9 @@
 // unmounted, FBENGINE_SOAK_ITERATIONS times, 2000 unless it says. Each time round, the loads
 // there are and the holds on assets come back to what there were; and the process's own memory,
 // sampled every 100 rounds once the first quarter's warmed the caches, doesn't rise steadily, by
-// SOAK_RISE a round, as a leak's does. Under AddressSanitizer, with ASAN_OPTIONS set, its memory
-// isn't judged: LeakSanitizer does that, at the end. It prints how it went, and exits 1 if it didn't.
+// SOAK_RISE a round, as a leak's does. With the engine built under AddressSanitizer, as its DLL
+// says, its memory isn't judged: LeakSanitizer does that, at the end. It prints how it went, and
+// exits 1 if it didn't.
 
 Import std.core
 Import std.image.image
@@ -15,6 +16,7 @@ Import std.text
 Import std.time
 Import fbengine
 Import fbengine_tools
+Import fbengine.c.fbe_assets
 
 // How much the process's memory may rise a round, steadily, in bytes: more than an allocator's
 // pages wander by, which was under 1 KiB a round, and less than a leak of a load's few kilobytes.
@@ -155,9 +157,9 @@ For round = 0 Until iterations
         wrong = "round {round}: {wrong}"
         Break
     End If
-    If round >= iterations / 4 && round % 100 == 0 Then samples.Add(Assets.ResidentBytes())
+    If round >= iterations / 4 && round % 100 == 0 Then samples.Add(fbe_assets_resident_bytes())
     If round % 250 == 0
-        Print("round {round}: {Assets.ResidentBytes() / 1024} KiB, {Assets.Loads()} loads")
+        Print("round {round}: {fbe_assets_resident_bytes() / 1024} KiB, {Assets.Loads()} loads")
     End If
 End For
 Try? Dir.RemoveAll(root)
@@ -168,7 +170,7 @@ End If
 Local rise = Rise(samples, 100)
 Print("{iterations} rounds in {Instant.Now() - started}; after the first quarter, memory rose " +
       "{rise} bytes a round")
-If Env.Get("ASAN_OPTIONS") == Null && rise > SOAK_RISE
+If !fbe_assets_address_sanitized() && rise > SOAK_RISE
     Print("it rose more than {SOAK_RISE} bytes a round")
     Process.Exit(1)
 End If

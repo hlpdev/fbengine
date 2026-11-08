@@ -2,8 +2,9 @@
 // and models (glTF and binary glTF), each made here whole and then cut short, its bytes flipped,
 // its numbers made huge or zero, pieces of it repeated or taken out, from seeds that repeat; and
 // the hostile files in fixtures/, the corpus the reviews found, broken the same ways. Each must
-// decode or fail with an error, never crash or hang: a decode that takes more than two seconds
-// fails. Under AddressSanitizer, as WSL's build has it, what reads past its end is found too.
+// decode or fail with an error, never crash or hang: a decode that comes back after more than two
+// seconds fails, and one that never comes back is ended by ctest's TIMEOUT. Under AddressSanitizer,
+// as the nightly sanitizers' build has it, what reads past its end is found too.
 
 #include "assets/image.hpp"
 #include "assets/model.hpp"
@@ -322,7 +323,8 @@ TEST_CASE("broken images fail, never crash or hang", "[assets][fuzz][stability]"
 }
 
 // The fuzzer's find: a KTX2 whose data format descriptor has a block of size 0, which libktx walks
-// forever; and one whose descriptor says it's longer than the header does, which libktx reads past.
+// forever. And a guard: one whose descriptor says it's longer than the header does, which libktx
+// v4.4.2 refuses itself (texture2.c), and the engine's check does too.
 TEST_CASE("a KTX2 whose format descriptor is the wrong size fails in time",
           "[assets][fuzz][stability]") {
     std::ifstream stream(std::filesystem::path(FBENGINE_ASSETS_FIXTURES) / "zstd_hang.ktx2",

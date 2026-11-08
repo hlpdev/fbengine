@@ -288,6 +288,20 @@ FBE_API int64_t fbe_assets_resident_bytes(void) {
 #endif
 }
 
+FBE_API bool fbe_assets_address_sanitized(void) {
+#ifdef __SANITIZE_ADDRESS__
+    return true;
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+    return true;
+#else
+    return false;
+#endif
+#else
+    return false;
+#endif
+}
+
 FBE_API int64_t fbe_assets_size(uint64_t load) {
     const assets::load_t* found = loaded(load, assets::load_kind_t::BYTES);
     return found != nullptr ? static_cast<int64_t>(found->bytes.size()) : -1;
