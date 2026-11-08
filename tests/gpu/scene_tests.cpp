@@ -5953,19 +5953,17 @@ TEST_CASE("the light a shader's told of is linear, whatever its material's shadi
 // which ASan checks where it runs. FBE_FUZZ_ROUNDS asks for more than CI's 2000.
 namespace {
 
-/// SPIRV-Tools' validator off while it lives, as FBE_SPIRV_VALIDATION=0 has it, in SDL's
-/// environment, which the engine reads.
+/// SPIRV-Tools' validator off while it lives, as FBE_SPIRV_VALIDATION=0 has it.
 struct unvalidated_t {
     unvalidated_t() {
-        require(
-            SDL_SetEnvironmentVariable(SDL_GetEnvironment(), "FBE_SPIRV_VALIDATION", "0", true));
+        fbe::tests::set_variable("FBE_SPIRV_VALIDATION", "0");
     }
     unvalidated_t(const unvalidated_t&) = delete;
     unvalidated_t& operator=(const unvalidated_t&) = delete;
     unvalidated_t(unvalidated_t&&) = delete;
     unvalidated_t& operator=(unvalidated_t&&) = delete;
     ~unvalidated_t() {
-        SDL_UnsetEnvironmentVariable(SDL_GetEnvironment(), "FBE_SPIRV_VALIDATION");
+        fbe::tests::set_variable("FBE_SPIRV_VALIDATION", "1");
     }
 };
 
@@ -12209,6 +12207,8 @@ TEST_CASE("a game's shader freed and had again, frame after frame, keeps its pip
 // once one's freed, and its frames done, there's room for another.
 TEST_CASE("as many shaders as a pipeline's key numbers are kept at once",
           "[gpu][scene][stability]") {
+    // Validated, 4095 would take a Debug build a quarter of a second each.
+    const unvalidated_t unvalidated;
     const scene_t scene;
     std::vector<std::uint64_t> made;
     for (std::uint32_t generation = 1; generation <= 4095; ++generation) {

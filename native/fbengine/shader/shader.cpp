@@ -222,7 +222,9 @@ bool binds_only_the_scene(std::span<const std::uint32_t> words) {
 /// scene's tests have it, of the checks before it, whose SPIR-V is made by hand and isn't whole
 /// enough for the validator.
 bool validates() {
-    const char* setting = SDL_getenv("FBE_SPIRV_VALIDATION");
+    // The C runtime's, which SDL's own copy allocates to read, as a call that runs out of memory
+    // can't.
+    const char* setting = SDL_getenv_unsafe("FBE_SPIRV_VALIDATION");
     return setting == nullptr || std::string_view(setting) != "0";
 }
 

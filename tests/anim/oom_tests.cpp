@@ -228,6 +228,12 @@ TEST_CASE("players' calls that run out of memory say so, and leave things workin
 }
 
 TEST_CASE("shaders' calls that run out of memory say so, and leave things working") {
+    // Its SPIR-V's made by hand, which isn't whole enough for SPIRV-Tools' validator.
+#ifdef _WIN32
+    REQUIRE(_putenv_s("FBE_SPIRV_VALIDATION", "0") == 0);
+#else
+    REQUIRE(setenv("FBE_SPIRV_VALIDATION", "0", 1) == 0);
+#endif
     // SPIR-V's header, and the scene's entry points.
     std::vector<std::uint32_t> words{ 0x07230203, 0x00010500, 0, 1, 0 };
     for (const auto& [model, name] : std::array<std::pair<std::uint32_t, std::string_view>, 10>{

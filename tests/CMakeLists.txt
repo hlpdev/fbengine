@@ -44,12 +44,18 @@ if(NOT fbengine_vulkan_driver STREQUAL "")
   cmake_path(NATIVE_PATH fbengine_vulkan_driver fbengine_vulkan_driver)
   set(fbengine_vulkan_environment "VK_DRIVER_FILES=${fbengine_vulkan_driver}")
 endif()
-# Every Catch2 test found at build time sees only the tests' Vulkan driver too.
+# Every Catch2 test found at build time sees only the tests' Vulkan driver too, or, for tests that
+# start no GPU, fbengine_discover_environment instead: one variable, as Catch's discovery splits a
+# list's, and a test's ENVIRONMENT is the last it's given.
 function(catch_discover_tests)
-  if(fbengine_vulkan_environment STREQUAL "")
+  set(environment "${fbengine_vulkan_environment}")
+  if(DEFINED fbengine_discover_environment)
+    set(environment "${fbengine_discover_environment}")
+  endif()
+  if(environment STREQUAL "")
     _catch_discover_tests(${ARGV})
   else()
-    _catch_discover_tests(${ARGV} PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}")
+    _catch_discover_tests(${ARGV} PROPERTIES ENVIRONMENT "${environment}")
   endif()
 endfunction()
 
@@ -1358,10 +1364,11 @@ if(UNIX)
                        PASS_REGULAR_EXPRESSION "ended" TIMEOUT 300)
 endif()
 # Their game's shaders are SPIR-V made by hand, to try the checks before SPIRV-Tools' validator,
-# which isn't whole enough for it; the GPU's tests validate what Slang makes.
+# which isn't whole enough for it; the GPU's tests validate what Slang makes. They start no GPU.
+set(fbengine_discover_environment "FBE_SPIRV_VALIDATION=0")
 catch_discover_tests(fbengine_scene_tests TEST_PREFIX "scene."
-                     DL_PATHS "${fbengine_test_dll_paths}" "${PROJECT_BINARY_DIR}/native/fbengine"
-                     PROPERTIES ENVIRONMENT "FBE_SPIRV_VALIDATION=0")
+                     DL_PATHS "${fbengine_test_dll_paths}" "${PROJECT_BINARY_DIR}/native/fbengine")
+unset(fbengine_discover_environment)
 
 # The scene's panics, each a case of tests/scene/panics run on its own, which has to panic saying
 # what it does.
@@ -2364,8 +2371,7 @@ endif()
 fbengine_set_warnings(fbengine_anim_oom_tests)
 # A deadlock is a failure too, as an allocation failing inside a layer's lock was.
 catch_discover_tests(fbengine_anim_oom_tests TEST_PREFIX "anim." ADD_TAGS_AS_LABELS
-                     DL_PATHS "${fbengine_test_dll_paths}"
-                     PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}" TIMEOUT 120)
+                     DL_PATHS "${fbengine_test_dll_paths}" PROPERTIES TIMEOUT 120)
 
 # A program of the whole of it, as a game would write it.
 if(FBENGINE_FB_TESTS)
