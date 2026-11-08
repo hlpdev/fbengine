@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -171,6 +172,26 @@ TEST_CASE("every seed of the corpus is a sound, but Opus, which miniaudio doesn'
         CHECK(seconds >= 0.099);
         CHECK(seconds < 0.15);
         fbe_sound_free(sound);
+    }
+    fbe_audio_stop();
+}
+
+// Fuzzing found a W64 whose chunk says it's 2^64 bytes, which dr_wav stepped over 2 GB at a time,
+// each step a seek past the end of its bytes that said it went all the way: minutes, until
+// native/fbengine_audio/CMakeLists.txt's patch made such a seek fail.
+TEST_CASE("a W64 whose chunk says it's 2^64 bytes is refused at once") {
+    REQUIRE(fbe_audio_start(2, rate, 2, nullptr, 0.0));
+    const std::vector<std::uint8_t> bytes = fbe::tests::read(
+        std::filesystem::path(FBE_AUDIO_TEST_CORPUS) / "found" / "w64_chunk_of_2_to_the_64.w64");
+    REQUIRE(bytes.size() == 17774);
+    const auto size = static_cast<std::int64_t>(bytes.size());
+    for (const bool stream : { false, true }) {
+        INFO((stream ? "streamed" : "loaded"));
+        const auto started = std::chrono::steady_clock::now();
+        const std::uint64_t sound =
+            stream ? fbe_sound_stream(bytes.data(), size) : fbe_sound_load(bytes.data(), size);
+        CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds(1));
+        CHECK(sound == 0);
     }
     fbe_audio_stop();
 }

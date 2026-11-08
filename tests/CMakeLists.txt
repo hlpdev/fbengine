@@ -1776,6 +1776,14 @@ fbengine_set_warnings(fbengine_app_tests)
 catch_discover_tests(fbengine_app_tests TEST_PREFIX "app."
                      DL_PATHS "${fbengine_test_dll_paths}")
 
+# What a test of fuzzing, races, or soaks has before ctest stops it: its slowest takes 47 s on Windows
+# in Debug, and a sanitizer's build is many times slower.
+if(FBENGINE_SANITIZE)
+  set(fbengine_stability_timeout 3600)
+else()
+  set(fbengine_stability_timeout 300)
+endif()
+
 # fbengine_video, through its DLL, against its test videos with bytes changed at random, fuzzed,
 # and played a thousand times over.
 add_executable(fbengine_video_tests video/mutation_tests.cpp video/soak_tests.cpp
@@ -1787,7 +1795,8 @@ target_compile_definitions(fbengine_video_tests PRIVATE
 fbengine_set_warnings(fbengine_video_tests)
 # A test tagged [stability], a fuzz, race, or soak, is labeled so, for sanitizers.yml.
 catch_discover_tests(fbengine_video_tests TEST_PREFIX "video." ADD_TAGS_AS_LABELS
-                     DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_video_native>")
+                     DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_video_native>"
+                     PROPERTIES TIMEOUT ${fbengine_stability_timeout})
 
 # A video's thread, built in with a decoder of the test's, for what only its timing shows.
 add_executable(fbengine_video_thread_tests video/thread_tests.cpp
@@ -2188,7 +2197,8 @@ endif()
 fbengine_set_warnings(fbengine_audio_native_tests)
 # A test tagged [stability], a fuzz, race, or soak, is labeled so, for sanitizers.yml.
 catch_discover_tests(fbengine_audio_native_tests TEST_PREFIX "audio." ADD_TAGS_AS_LABELS
-                     DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_audio_native>")
+                     DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_audio_native>"
+                     PROPERTIES TIMEOUT ${fbengine_stability_timeout})
 
 # fbengine_audio_native's C API with each of a call's allocations failing in turn: its sources built
 # into the test, whose operator new fails the one it says.

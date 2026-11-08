@@ -33,6 +33,11 @@ FetchContent_MakeAvailable(miniaudio)
 #   miniaudio 0.11.26's extras have it, whose start_decoder calls crc32_init (line 992) at line
 #   3707, "to avoid multithread race conditions". The copy's table is const, its values worked out
 #   here as crc32_init does, so nothing makes it and no decoder can start without it.
+# - A seek in a stream asserts what a file's pages say, their order and that the last has a
+#   sample's place, which a forged Ogg breaks (fuzzing found it): seek_to_sample_coarse, from line
+#   4700 of v1.22 as miniaudio 0.11.26's extras have it, at lines 4730, 4743, and 4785. Where
+#   asserts are on, that stops the program, and where they're off, the search's unsigned range of
+#   bytes wraps. The copy fails the seek instead.
 # Each patch's text has to be there, once, or configuring fails.
 file(READ "${miniaudio_SOURCE_DIR}/extras/stb_vorbis.c" fbengine_stb_vorbis)
 set(fbengine_stb_vorbis_patches
@@ -59,7 +64,13 @@ set(fbengine_stb_vorbis_patches
     "   x += get8_packet(f) << 8\;\n   x += get8_packet(f) << 16\;\n"
     "   x += (uint32) get8_packet(f) << 8\;\n   x += (uint32) get8_packet(f) << 16\;\n"
     "   crc32_init()\; // always init it, to avoid multithread race conditions\n"
-    "   // The CRC table is const, worked out by fbengine_audio's CMakeLists.txt.\n")
+    "   // The CRC table is const, worked out by fbengine_audio's CMakeLists.txt.\n"
+    "   assert(right.last_decoded_sample != ~0U)\;\n"
+    "   if (right.last_decoded_sample == ~0U) goto error\;\n"
+    "      assert(left.page_end < right.page_start)\;\n"
+    "      if (left.page_end >= right.page_start) goto error\;\n"
+    "         assert(mid.page_start < right.page_start)\;\n"
+    "         if (mid.page_start >= right.page_start) goto error\;\n")
 # Replaces `from` in stb_vorbis.c's text with `to`, where it's there once, or fails.
 function(fbengine_patch_stb_vorbis from to)
   string(FIND "${fbengine_stb_vorbis}" "${from}" first)
@@ -104,6 +115,37 @@ static void crc32_init(void)
 ]=] "static const uint32 crc_table[256] = {\n${fbengine_crc_table}};\n")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/stb_vorbis.c.in" "${fbengine_stb_vorbis}")
 configure_file("${CMAKE_CURRENT_BINARY_DIR}/stb_vorbis.c.in" "${CMAKE_CURRENT_BINARY_DIR}/stb_vorbis.c"
+               COPYONLY)
+
+# miniaudio 0.11.26, patched where a decoder over memory seeks past the end of its bytes: it went
+# as far as the end, and said it went all the way (ma_decoder__on_seek_memory, from line 66628 of
+# miniaudio.h, at lines 66637 and 66663). So dr_wav stepped over a chunk that says it's 2^64 bytes,
+# in a corrupt W64 of 17 KB (fuzzing found it), in 2^33 seeks of 2 GB: a load of minutes. The copy
+# fails such a seek, and dr_wav stops reading chunks there. miniaudio.c, beside it, includes the
+# copy; what's compiled against miniaudio.h elsewhere only declares what it changes. Each patch's
+# text has to be there, once, or configuring fails.
+file(READ "${miniaudio_SOURCE_DIR}/miniaudio.h" fbengine_miniaudio_header)
+set(fbengine_miniaudio_patches
+    "                byteOffset = (ma_int64)(pDecoder->data.memory.dataSize - pDecoder->data.memory.currentReadPos)\;  /* Trying to seek too far forward. */\n"
+    "                return MA_BAD_SEEK\;  /* Past the end: fbengine_audio's patch. */\n"
+    "                pDecoder->data.memory.currentReadPos = pDecoder->data.memory.dataSize\;  /* Trying to seek too far forward. */\n"
+    "                return MA_BAD_SEEK\;  /* Past the end: fbengine_audio's patch. */\n")
+list(LENGTH fbengine_miniaudio_patches fbengine_patch_count)
+math(EXPR fbengine_patch_last "${fbengine_patch_count} - 1")
+foreach(fbengine_patch RANGE 0 ${fbengine_patch_last} 2)
+  math(EXPR fbengine_patched "${fbengine_patch} + 1")
+  list(GET fbengine_miniaudio_patches ${fbengine_patch} fbengine_from)
+  list(GET fbengine_miniaudio_patches ${fbengine_patched} fbengine_to)
+  string(FIND "${fbengine_miniaudio_header}" "${fbengine_from}" fbengine_first)
+  string(FIND "${fbengine_miniaudio_header}" "${fbengine_from}" fbengine_last REVERSE)
+  if(fbengine_first EQUAL -1 OR NOT fbengine_first EQUAL fbengine_last)
+    message(FATAL_ERROR "miniaudio.h doesn't have, once, what a patch expects: ${fbengine_from}")
+  endif()
+  string(REPLACE "${fbengine_from}" "${fbengine_to}" fbengine_miniaudio_header
+                 "${fbengine_miniaudio_header}")
+endforeach()
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/miniaudio.h.in" "${fbengine_miniaudio_header}")
+configure_file("${CMAKE_CURRENT_BINARY_DIR}/miniaudio.h.in" "${CMAKE_CURRENT_BINARY_DIR}/miniaudio.h"
                COPYONLY)
 
 set(fbengine_miniaudio_source "${CMAKE_CURRENT_BINARY_DIR}/miniaudio.c")
