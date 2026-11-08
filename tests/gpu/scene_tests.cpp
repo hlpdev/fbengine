@@ -7950,22 +7950,33 @@ TEST_CASE("an Instances' clusters share a shadow's draw, and one set sends one",
     fbe_material_release(paint);
 }
 
-TEST_CASE("an Instances takes what it's given, of a place or how many", "[gpu][scene]") {
+TEST_CASE("an Instances refuses a place that isn't a number, and takes as many as it holds",
+          "[gpu][scene]") {
     const scene_t scene;
     require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
     const std::uint64_t paint = unlit(1.0F, 0.0F, 0.0F);
     const std::uint64_t made = cubes_at(scene.world, paint, {});
-    SECTION("no number, or one going on forever, in a place") {
+    SECTION("no number, or one going on forever, in a place, leaving what it had") {
         std::array<fbe_instance_t, 4> all{};
         all.fill(instance_at(0.0F, 0.0F, -4.0F));
+        require(fbe_instances_set(made, all.data(), 4));
+        (void)scene.drawn();
         all[1].matrix.m[12] = std::nanf("");
         all[2].matrix.m[13] = std::numeric_limits<float>::infinity();
         all[3].matrix.m[14] = -std::numeric_limits<float>::infinity();
-        require(fbe_instances_set(made, all.data(), 4));
+        CHECK_FALSE(fbe_instances_set(made, all.data(), 4));
+        CHECK(std::string_view(fbe_error()) == "instance 1's matrix isn't finite");
+        CHECK_FALSE(fbe_instances_set_one(made, 2, &all[2]));
+        CHECK(std::string_view(fbe_error()) == "instance 2's matrix isn't finite");
         CHECK(fbe_instances_count(made) == 4);
-        fbe_instance_t got{};
-        require(fbe_instances_get(made, 0, &got));
-        CHECK(got.matrix.m[14] == -4.0F);
+        for (std::int32_t i = 0; i < 4; ++i) {
+            fbe_instance_t got{};
+            require(fbe_instances_get(made, i, &got));
+            CHECK(got.matrix.m[12] == 0.0F);
+            CHECK(got.matrix.m[13] == 0.0F);
+            CHECK(got.matrix.m[14] == -4.0F);
+        }
+        (void)scene.drawn();
         CHECK(fbe_gpu_validation_errors() == 0);
     }
     SECTION("past the most") {
