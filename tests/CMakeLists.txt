@@ -1890,6 +1890,12 @@ target_compile_definitions(fbengine_assets_tests PRIVATE
 # stb_image_write's code, C as it's written, without fbengine's C++ warnings.
 add_library(fbengine_stb_write STATIC assets/stb_write.c)
 target_link_libraries(fbengine_stb_write PUBLIC fbengine_stb)
+# Under the sanitizers, UBSan's shift check is off in this file alone: stb_image_write, at stb's commit
+# 003501f6d7a8668ce8b6d875e34dd97ad0d5d5b5, shifts into an int's sign in its JPEG writer
+# (stb_image_write.h:1263, stbiw__jpg_writeBits), which only the tests write their seed images with.
+if(FBENGINE_SANITIZE)
+  set_source_files_properties(assets/stb_write.c PROPERTIES COMPILE_OPTIONS -fno-sanitize=shift)
+endif()
 target_link_libraries(fbengine_assets_tests PRIVATE Catch2::Catch2WithMain fbengine_stb_write ktx
                       fastgltf::fastgltf)
 fbengine_set_warnings(fbengine_assets_tests)
