@@ -7907,6 +7907,20 @@ TEST_CASE("an Instances' clusters draw the level their size in the view has", "[
         require(fbe_entity_set_position(made, 0.0F, 0.0F, -390.0F, FBE_SPACE_WORLD));
         CHECK(geometries().empty());
     }
+    SECTION("by its cull box, if it has one, as what's moved by its shader is that big") {
+        group_at(all, -90.0F);
+        require(fbe_instances_set(made, all.data(), 128));
+        CHECK(geometries() == std::vector{ coarse });
+        // Four times its bounds each way: as big in the view as its own level asks, at 90.
+        const fbe_aabb_t bigger{
+            .min = { .x = -4.0F, .y = -4.0F, .z = -4.0F },
+            .max = { .x = 4.0F, .y = 4.0F, .z = 4.0F },
+        };
+        require(fbe_geometry_set_cull_box(fine, &bigger));
+        CHECK(geometries() == std::vector{ fine });
+        require(fbe_geometry_clear_cull_box(fine));
+        CHECK(geometries() == std::vector{ coarse });
+    }
     SECTION("each cluster its own") {
         group_at(all, -10.0F);
         group_at(all, -100.0F);
@@ -11338,6 +11352,212 @@ void check_both_ways(const scene_t& scene, std::array<std::uint8_t, 3> linear,
 
 } // namespace
 
+// What a shader bends a PBR material's normal to is what a normal map of that normal would give: as
+// lit by the sun, toward it and away, and in what the shader's given as the material's color.
+TEST_CASE("a shader of its own bends a normal as a normal map would", "[gpu][scene]") {
+    const scene_t scene;
+    sun_from_right(scene.world);
+    const std::uint64_t material = by_game_shader(5.0F);
+    require(fbe_material_set_metal_rough(material, 0.0F, 0.4F));
+    const std::uint64_t mesh = wall(scene.world, -4.0F, 10.0F, material);
+    const auto bent_to = [&](float x, float y, float z) {
+        require(fbe_material_set_parameter(material, 5, x, y, z, 1.0F));
+        return middle(scene.drawn());
+    };
+    const rgba_t straight = middle(scene.drawn());
+    CHECK(near(bent_to(0.0F, 0.0F, 1.0F), { straight[0], straight[1], straight[2] }, 1));
+    const rgba_t toward = bent_to(0.6F, 0.0F, 0.8F);
+    const rgba_t away = bent_to(-0.6F, 0.0F, 0.8F);
+    INFO(int{ straight[0] } << " " << int{ toward[0] } << " " << int{ away[0] });
+    CHECK(toward[0] > straight[0] + 10);
+    CHECK(away[0] + 10 < straight[0]);
+
+    // The same normal from a map, with no shader of its own.
+    const std::uint64_t mapped = fbe_material_create();
+    require(fbe_material_set_metal_rough(mapped, 0.0F, 0.4F));
+    const std::uint64_t normals = fbe_texture_create(1, 1, FBE_TEXTURE_RGBA8_LINEAR, false);
+    REQUIRE(normals != 0);
+    const std::array<std::uint8_t, 4> texel{ 204, 128, 230, 255 };
+    require(fbe_texture_write(normals, 0, 0, 1, 1, texel.data(), 4));
+    require(fbe_material_set_map(mapped, FBE_MAP_NORMAL, normals, 0));
+    require(fbe_mesh_set_material(mesh, mapped));
+    const rgba_t by_map = middle(scene.drawn());
+    CHECK(near(by_map, { toward[0], toward[1], toward[2] }, 3));
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_texture_release(normals);
+    fbe_material_release(mapped);
+    fbe_material_release(material);
+}
+
+// Through a surface's own tangents, as a map goes, where it has them: here up the wall, not along
+// its UVs, so a frame from its UVs would bend it the wrong way. Every pixel, edges and all.
+TEST_CASE("a shader of its own bends through a surface's own tangents, as a map does",
+          "[gpu][scene]") {
+    const scene_t scene;
+    sun_from_right(scene.world);
+    const std::uint64_t material = by_game_shader(5.0F);
+    require(fbe_material_set_metal_rough(material, 0.0F, 0.4F));
+    const std::uint64_t mesh = wall(scene.world, -4.0F, 1.5F, material);
+    const std::uint64_t geometry = fbe_mesh_geometry(mesh);
+    REQUIRE(geometry != 0);
+    const std::uint64_t mapped = fbe_material_create();
+    require(fbe_material_set_metal_rough(mapped, 0.0F, 0.4F));
+    const std::uint64_t normals = fbe_texture_create(1, 1, FBE_TEXTURE_RGBA8_LINEAR, false);
+    REQUIRE(normals != 0);
+    require(fbe_material_set_map(mapped, FBE_MAP_NORMAL, normals, 0));
+    // Its bitangent either way round, as a mirrored mesh's is.
+    for (const float handed : { 1.0F, -1.0F }) {
+        const fbe_vertex_tangent_t tangent{ .x = 0.0F, .y = 1.0F, .z = 0.0F, .w = handed };
+        const std::array<fbe_vertex_tangent_t, 4> up{ tangent, tangent, tangent, tangent };
+        require(fbe_surface_set_tangents(geometry, 0, up.data(), 4));
+        for (const auto& [x, y, red, green] :
+             { std::tuple{ 0.6F, 0.0F, 204, 128 }, std::tuple{ 0.0F, 0.6F, 128, 204 } }) {
+            INFO(handed << ": " << x << ", " << y);
+            require(fbe_mesh_set_material(mesh, material));
+            require(fbe_material_set_parameter(material, 5, x, y, 0.8F, 1.0F));
+            const fbe::golden::frame_t bent = scene.drawn();
+            const std::array<std::uint8_t, 4> texel{
+                static_cast<std::uint8_t>(red),
+                static_cast<std::uint8_t>(green),
+                230,
+                255,
+            };
+            require(fbe_texture_write(normals, 0, 0, 1, 1, texel.data(), 4));
+            require(fbe_mesh_set_material(mesh, mapped));
+            const fbe::golden::frame_t by_map = scene.drawn();
+            CHECK(fbe::golden::compare(by_map, bent, 3).pixels == 0);
+        }
+    }
+    const fbe_vertex_tangent_t upward{ .x = 0.0F, .y = 1.0F, .z = 0.0F, .w = 1.0F };
+    const std::array<fbe_vertex_tangent_t, 4> up{ upward, upward, upward, upward };
+    require(fbe_surface_set_tangents(geometry, 0, up.data(), 4));
+    // And they're turned from the frame its UVs make, or this says nothing.
+    require(fbe_mesh_set_material(mesh, material));
+    require(fbe_material_set_parameter(material, 5, 0.6F, 0.0F, 0.8F, 1.0F));
+    const fbe::golden::frame_t through_tangents = scene.drawn();
+    require(fbe_surface_set_tangents(geometry, 0, nullptr, 0));
+    CHECK(fbe::golden::compare(through_tangents, scene.drawn(), 3).pixels > 100);
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_geometry_release(geometry);
+    fbe_texture_release(normals);
+    fbe_material_release(mapped);
+    fbe_material_release(material);
+}
+
+// On a two-sided material's back, what bend's given faces the camera, as shade's does.
+TEST_CASE("a shader of its own bends a two-sided back as its front", "[gpu][scene]") {
+    const scene_t scene;
+    sun_from_right(scene.world);
+    const std::uint64_t material = by_game_shader(5.0F);
+    require(fbe_material_set_metal_rough(material, 0.0F, 0.4F));
+    require(fbe_material_set_two_sided(material, true));
+    // Turned round, so its back's toward the camera, and the sun.
+    const std::uint64_t mesh = wall(scene.world, -4.0F, 10.0F, material);
+    require(fbe_entity_set_rotation(mesh, 0.0F, 1.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+    require(fbe_material_set_parameter(material, 5, 0.6F, 0.0F, 0.8F, 1.0F));
+    const rgba_t toward = middle(scene.drawn());
+    require(fbe_material_set_parameter(material, 5, -0.6F, 0.0F, 0.8F, 1.0F));
+    const rgba_t away = middle(scene.drawn());
+    require(fbe_material_set_parameter(material, 5, 0.6F, 0.0F, 0.8F, 2.0F));
+    const rgba_t by_facing = middle(scene.drawn());
+    INFO(int{ toward[0] } << " " << int{ away[0] } << " " << int{ by_facing[0] });
+    CHECK(!near(toward, { away[0], away[1], away[2] }, 6));
+    CHECK(near(by_facing, { toward[0], toward[1], toward[2] }, 1));
+    fbe_material_release(material);
+}
+
+// Each instance's place reaches its shader's move, so two of one geometry move apart by where they
+// are: here up by how far across each is, so the right one's up and the left one's down.
+TEST_CASE("a shader of its own moves each instance by where it is", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t material = by_game_shader();
+    require(fbe_material_set_shading(material, FBE_SHADING_UNLIT));
+    cubes_at(scene.world, material,
+             { instance_at(-3.0F, 0.0F, -10.0F), instance_at(3.0F, 0.0F, -10.0F) });
+    const auto red_at = [&](const fbe::golden::frame_t& frame, float x, float y) {
+        return pixel_of(frame, pixel_at(scene.camera, x, y, -9.0F))[0] > 200;
+    };
+    const fbe::golden::frame_t level = scene.drawn();
+    CHECK(red_at(level, -3.0F, 0.0F));
+    CHECK(red_at(level, 3.0F, 0.0F));
+    require(fbe_material_set_parameter(material, 4, 0.5F, 0.0F, 0.0F, 0.0F));
+    const fbe::golden::frame_t moved = scene.drawn();
+    CHECK(red_at(moved, 3.0F, 1.5F));
+    CHECK(!red_at(moved, 3.0F, -1.2F));
+    CHECK(red_at(moved, -3.0F, -1.5F));
+    CHECK(!red_at(moved, -3.0F, 1.2F));
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_material_release(material);
+}
+
+TEST_CASE("a shader of its own moves each instance by where it is in its Instances, not the world",
+          "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t material = by_game_shader();
+    require(fbe_material_set_shading(material, FBE_SHADING_UNLIT));
+    require(fbe_material_set_parameter(material, 4, 0.5F, 0.0F, 0.0F, 0.0F));
+    const std::uint64_t made =
+        cubes_at(scene.world, material,
+                 { instance_at(-3.0F, 0.0F, -10.0F), instance_at(3.0F, 0.0F, -10.0F) });
+    const fbe::golden::frame_t where = scene.drawn();
+    // Its Instances 10 along, and the camera with them: each instance where it is in them is as
+    // it was, so nothing it draws changes.
+    require(fbe_entity_set_position(made, 10.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+    require(fbe_entity_set_position(scene.camera, 10.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+    CHECK(fbe::golden::compare(where, scene.drawn(), 1).pixels == 0);
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_material_release(material);
+}
+
+TEST_CASE("an Instances is culled by its geometry's cull box, as what its shader moves leaves "
+          "its bounds",
+          "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t material = by_game_shader();
+    require(fbe_material_set_shading(material, FBE_SHADING_UNLIT));
+    // Past the view's left edge, until its shader moves it 30 to the middle.
+    require(fbe_material_set_parameter(material, 1, 30.0F, 0.0F, 0.0F, 0.0F));
+    const std::uint64_t made =
+        cubes_at(scene.world, material, { instance_at(-30.0F, 0.0F, -10.0F) });
+    const std::uint64_t geometry = fbe_instances_geometry(made);
+    const fbe_aabb_t moved{
+        .min = { .x = -1.0F, .y = -1.0F, .z = -1.0F },
+        .max = { .x = 31.0F, .y = 1.0F, .z = 1.0F },
+    };
+    SECTION("by its bounds, it's culled, until a box is set after it's drawn") {
+        CHECK(near(middle(scene.drawn()), { 0, 0, 255 }));
+        // Its clusters, worked out as it was drawn, are worked out again by the box.
+        require(fbe_geometry_set_cull_box(geometry, &moved));
+        CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
+    }
+    SECTION("its Bounds and InView are by its geometry's bounds, not the box") {
+        room_to_move(geometry);
+        CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
+        fbe_aabb_t own{};
+        require(fbe_geometry_bounds(geometry, &own));
+        fbe_aabb_t bounds{};
+        require(fbe_entity_bounds(made, &bounds));
+        CHECK(bounds.min.x == own.min.x - 30.0F);
+        CHECK(bounds.max.x == own.max.x - 30.0F);
+        CHECK(bounds.min.y == own.min.y);
+        CHECK(bounds.max.z == own.max.z - 10.0F);
+        const auto size = static_cast<float>(frame_size);
+        CHECK(fbe_camera_entity_in_view(scene.camera, size, size, made) == 0);
+    }
+    SECTION("by a box that takes its move, it's drawn") {
+        require(fbe_geometry_set_cull_box(geometry, &moved));
+        CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
+        // And by its bounds again once it's cleared.
+        require(fbe_geometry_clear_cull_box(geometry));
+        CHECK(near(middle(scene.drawn()), { 0, 0, 255 }));
+    }
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_material_release(material);
+}
+
 TEST_CASE("a shader of its own draws an Instances, each moved in its own space", "[gpu][scene]") {
     const scene_t scene;
     const std::uint64_t material = by_game_shader();
@@ -11380,6 +11600,20 @@ TEST_CASE("a shader of its own draws an Instances, each moved in its own space",
         CHECK(middle(scene.drawn())[0] == 0);
         require(fbe_entity_set_casts_shadows(made, false));
         CHECK(middle(scene.drawn())[0] != 0);
+        fbe_material_release(paint);
+    }
+    SECTION("casting, moved by where it is in its Instances") {
+        const std::uint64_t paint = fbe_material_create();
+        wall(scene.world, -10.0F, 30.0F, paint);
+        sun_from_right(scene.world);
+        // 10 along its Instances, which are 5 back, it's off the sun's way to the wall's middle,
+        // until its shader moves it up by 0.3 of that.
+        const std::uint64_t made =
+            cubes_at(scene.world, material, { instance_at(10.0F, -3.0F, -5.0F) });
+        require(fbe_entity_set_position(made, -5.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+        CHECK(middle(scene.drawn())[0] != 0);
+        require(fbe_material_set_parameter(material, 4, 0.3F, 0.0F, 0.0F, 0.0F));
+        CHECK(middle(scene.drawn())[0] == 0);
         fbe_material_release(paint);
     }
     CHECK(fbe_gpu_validation_errors() == 0);
@@ -11474,6 +11708,20 @@ TEST_CASE("a shader of its own reaches the prepass: what it moves, and what it c
             require(fbe_entity_free(by_place));
             require(fbe_material_set_parameter(scene.moved, 1, 3.0F, 0.0F, 0.0F, 0.0F));
             cubes_at(scene.world, scene.moved, { turned_instance_at(0.0F, -3.0F, -9.0F) });
+            CHECK(same(reference, scene.drawn()));
+        });
+    parts.emplace_back(
+        "an instance it moves by where it is in its Instances is too",
+        [&](const prepass_scene_t& scene) {
+            const std::uint64_t by_place = cube(scene.world, 0.0F, 0.0F, -9.0F, scene.placed);
+            const fbe::golden::frame_t reference = scene.drawn();
+            REQUIRE(darkened(reference));
+            require(fbe_entity_free(by_place));
+            // 6 along its Instances, which are 6 back, so 3 below; moved up by half of 6.
+            require(fbe_material_set_parameter(scene.moved, 4, 0.5F, 0.0F, 0.0F, 0.0F));
+            const std::uint64_t made =
+                cubes_at(scene.world, scene.moved, { instance_at(6.0F, -3.0F, -9.0F) });
+            require(fbe_entity_set_position(made, -6.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
             CHECK(same(reference, scene.drawn()));
         });
     parts.emplace_back(

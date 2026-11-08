@@ -141,6 +141,8 @@ Public Final Class Game
         Seat()
         PlacePip(seconds)
         island.Update(flow.Clock())
+        // The wind's beat is real seconds, however fast the flow's clock goes.
+        island.Sway(seconds As Float64)
         camera.SetGrade(StormGrade(StormAt(flow.Clock())))
         Sync()
         TellWhatLies()

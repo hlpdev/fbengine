@@ -674,6 +674,14 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(examples.slack_water.assets_match PROPERTIES RESOURCE_LOCK slack_water
                        FIXTURES_REQUIRED slack_water_made
                        ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen" TIMEOUT 300)
+  # The sea's shader is cooked by the game's build step, which every one of its tests runs, by the
+  # Slang release the engine's own are.
+  get_directory_property(fbengine_tests_here TESTS)
+  foreach(test IN LISTS fbengine_tests_here)
+    if(test MATCHES "^examples[.]slack_water[.]")
+      set_property(TEST "${test}" APPEND PROPERTY ENVIRONMENT "FBENGINE_SLANGC=${FBENGINE_SLANGC}")
+    endif()
+  endforeach()
   foreach(name IN ITEMS sprites_over_a_scene pixels_of_images_and_textures
           textures_by_their_settings)
     add_test(NAME proof.${name}_no_gpu
@@ -2165,7 +2173,8 @@ if(WIN32)
   target_link_libraries(fbengine_audio_native_tests PRIVATE ole32 psapi)
 endif()
 fbengine_set_warnings(fbengine_audio_native_tests)
-catch_discover_tests(fbengine_audio_native_tests TEST_PREFIX "audio."
+# A test tagged [stability], a fuzz, race, or soak, is labeled so, for sanitizers.yml.
+catch_discover_tests(fbengine_audio_native_tests TEST_PREFIX "audio." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_audio_native>")
 
 # fbengine_audio_native's C API with each of a call's allocations failing in turn: its sources built
