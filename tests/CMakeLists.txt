@@ -230,6 +230,41 @@ if(FBENGINE_FB_TESTS)
              COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_simdjson_test.py")
     set_tests_properties(tools.check_simdjson_reads PROPERTIES
                          PASS_REGULAR_EXPRESSION "reads commands and rules as it should")
+    # Each DLL's notices name every library it links, as the build links it, and that check fails as
+    # it should. The build's link graph is CMake's file API's codemodel, which this asks for, and
+    # CMake answers as it generates.
+    cmake_file_api(QUERY API_VERSION 1 CODEMODEL 2)
+    add_test(NAME tools.check_notices
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_notices.py" "${PROJECT_BINARY_DIR}"
+                     "${PROJECT_SOURCE_DIR}")
+    set_tests_properties(tools.check_notices PROPERTIES
+                         PASS_REGULAR_EXPRESSION "name every library they link")
+    add_test(NAME tools.check_notices_test
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_notices_test.py")
+    set_tests_properties(tools.check_notices_test PROPERTIES PASS_REGULAR_EXPRESSION "cases hold")
+    # Each library's `fb publish --dry-run` passes, in publish.yml's order, with a folder of its own
+    # for the registry, so nothing's uploaded.
+    add_test(NAME tools.check_publish
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_publish.py" "${FBENGINE_FB}"
+                     "${PROJECT_SOURCE_DIR}")
+    set_tests_properties(tools.check_publish PROPERTIES
+                         PASS_REGULAR_EXPRESSION "libraries' dry runs passed, in publish.yml's order"
+                         TIMEOUT 900)
+    add_test(NAME tools.check_publish_test
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_publish_test.py")
+    set_tests_properties(tools.check_publish_test PROPERTIES PASS_REGULAR_EXPRESSION "cases hold")
+    # The editor packed for this target as publish.yml packs it for the release: its program by
+    # this OS's name, its DLLs, and the notices of what fb build bundled and of each DLL's package.
+    add_test(NAME tools.pack_editor
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/pack_editor.py" "${FBENGINE_FB}"
+                     "${PROJECT_VERSION}" "${FBENGINE_TARGET}" "${CMAKE_CURRENT_BINARY_DIR}/packed_editor"
+                     "${PROJECT_SOURCE_DIR}")
+    set_tests_properties(tools.pack_editor PROPERTIES
+                         PASS_REGULAR_EXPRESSION "packed the editor, its DLLs, and the notices"
+                         TIMEOUT 900)
+    add_test(NAME tools.pack_editor_test
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/pack_editor_test.py")
+    set_tests_properties(tools.pack_editor_test PROPERTIES PASS_REGULAR_EXPRESSION "cases hold")
   endif()
   add_test(NAME models.golden
            COMMAND fbengine_gpu_tests "the sample models' frames match their golden images")
@@ -1386,8 +1421,12 @@ add_executable(fbengine_scene_tests scene/world_tests.cpp scene/transform_tests.
                scene/handles_tests.cpp scene/pick_tests.cpp scene/sprite_tests.cpp
                scene/plane_tests.cpp scene/draw_tests.cpp
                scene/terrain_tests.cpp scene/clusters_tests.cpp scene/effects_tests.cpp
-               "${PROJECT_SOURCE_DIR}/native/fbengine/scene/bvh.cpp")
+               scene/stability_tests.cpp "${PROJECT_SOURCE_DIR}/native/fbengine/scene/bvh.cpp")
 target_link_libraries(fbengine_scene_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
+if(WIN32)
+  # What the soak measures the process holds by.
+  target_link_libraries(fbengine_scene_tests PRIVATE psapi)
+endif()
 fbengine_set_warnings(fbengine_scene_tests)
 # bvh.cpp, built here too, rounds as the DLL's does.
 if(NOT MSVC)
@@ -1416,13 +1455,15 @@ if(UNIX)
   set_tests_properties(scene.ends_during_moves PROPERTIES
                        PASS_REGULAR_EXPRESSION "ended" TIMEOUT 300)
 endif()
-catch_discover_tests(fbengine_scene_tests TEST_PREFIX "scene."
+catch_discover_tests(fbengine_scene_tests TEST_PREFIX "scene." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}" "${PROJECT_BINARY_DIR}/native/fbengine")
 
 # The scene's panics, each a case of tests/scene/panics run on its own, which has to panic saying
 # what it does.
 if(FBENGINE_FB_TESTS)
   set(fbengine_scene_panics
+      "position-not-finite=SetPosition on a Pivot: a position isn't finite"
+      "translate-past-a-float=Translate on a Pivot: where the translation goes isn't finite"
       "particles-colors=SetColors on a Particles: a particle's alpha is 0 to 1, not 2"
       "particles-roll=SetRoll on a Particles: a particle's roll is up to 0 to Pi each way, not -1"
       "decal-limit=Decal: a decal's limit is above 0 and up to Pi / 2, not 2"
@@ -1600,6 +1641,15 @@ catch_discover_tests(fbengine_physics_internal_tests TEST_PREFIX "physics."
 
 # fbengine_physics' examples, checked against what they print.
 if(FBENGINE_FB_TESTS)
+  # A dedicated server's run, with the GPU disabled and no Vulkan driver given, so if anything
+  # loaded Vulkan it would fail: a World, a scene, physics, audio on MANUAL, a textured model
+  # loaded without its images, and a Texture refused.
+  add_test(NAME examples.dedicated_server
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/dedicated_server"
+                   -- "${PROJECT_SOURCE_DIR}/tests/models")
+  set_tests_properties(examples.dedicated_server PROPERTIES TIMEOUT 120
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;VK_DRIVER_FILES=${PROJECT_BINARY_DIR}/no-such-driver.json"
+                       PASS_REGULAR_EXPRESSION "a texture refused: the GPU is disabled\r?\nserved, the GPU never started\r?\n$")
   add_test(NAME examples.falling_boxes
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/falling_boxes")
   set_tests_properties(examples.falling_boxes PROPERTIES PASS_REGULAR_EXPRESSION
@@ -2392,10 +2442,13 @@ catch_discover_tests(fbengine_core_tests TEST_PREFIX "core."
 # fbengine's C API, with no window or GPU.
 add_executable(fbengine_anim_tests anim/sample_tests.cpp anim/clip_tests.cpp anim/player_tests.cpp
                anim/skin_tests.cpp anim/model_tests.cpp anim/morph_tests.cpp anim/fuzz_tests.cpp
-               "${PROJECT_SOURCE_DIR}/native/fbengine/clip/sample.cpp")
+               anim/model_fuzz_tests.cpp "${PROJECT_SOURCE_DIR}/native/fbengine/clip/sample.cpp")
 target_link_libraries(fbengine_anim_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
+# The sample models model_fuzz_tests.cpp changes, as they're kept beside the tests.
+target_compile_definitions(fbengine_anim_tests PRIVATE
+                           FBENGINE_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/models")
 fbengine_set_warnings(fbengine_anim_tests)
-catch_discover_tests(fbengine_anim_tests TEST_PREFIX "anim."
+catch_discover_tests(fbengine_anim_tests TEST_PREFIX "anim." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}" "${PROJECT_BINARY_DIR}/native/fbengine")
 
 # Animation's C API with each of a call's allocations failing in turn, with fbengine's sources, as

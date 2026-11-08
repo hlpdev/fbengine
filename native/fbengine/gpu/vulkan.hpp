@@ -202,6 +202,9 @@ std::uint32_t pool_images();
 
 /// Points the set's texture `index` at `view`, sampled in SHADER_READ_ONLY_OPTIMAL.
 void write_texture(std::uint32_t index, VkImageView view);
+/// Points every one of the set's textures at `view`, as write_texture does, so an index no texture
+/// has samples it, not whatever a descriptor never written holds, which a real device faults on.
+void write_every_texture(VkImageView view);
 
 /// A slot in the set for a multisampled image, with its view, for a shader to read its samples by;
 /// no_samples_slot if they're all taken. A slot given back is for another image, once the GPU's

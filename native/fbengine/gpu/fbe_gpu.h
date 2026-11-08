@@ -68,6 +68,12 @@ FBE_API int32_t fbe_gpu_device(void);
 // it can't, and then it never starts, saying why each time.
 FBE_API bool fbe_gpu_start(void);
 FBE_API bool fbe_gpu_started(void);
+// Whether there's to be no GPU at all, as for a dedicated server, set before anything starts it:
+// Vulkan's never loaded and no device is made, so it needs no driver, loader, or display. Each
+// thing that would start it fails saying "the GPU is disabled", and a model's loaded without its
+// images. False, disabling it, if it's started, or Vulkan's loaded; enabling it again is true.
+FBE_API bool fbe_gpu_set_disabled(bool disable);
+FBE_API bool fbe_gpu_disabled(void);
 // How many times it's been stopped, so what was made before can tell that it's gone.
 FBE_API uint64_t fbe_gpu_stops(void);
 // Stops the GPU, if it's started, freeing everything it made, the window's swapchain first; the
