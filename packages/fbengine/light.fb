@@ -149,7 +149,7 @@ Public Final Class Light Extends Entity
     /// Sets how far a point or spot light reaches, in its shading model's meaning. Per pixel, it's
     /// where it ends, a distance d away falling as glTF's KHR_lights_punctual,
     /// `clamp(1 - (d / range)^4, 0, 1)^2 / max(d^2, 0.0001)`. Per vertex, Shading.VERTEX, it's where
-    /// it starts to fall, `min(range / d, 1)`, with no end, as Blitz's LightRange. One not above 0
+    /// it starts to fall, `min(range / d, 1)`, with no end. One not above 0
     /// panics.
     @Limits(0, Above: True)
     @MainThread @PanicsAtCaller

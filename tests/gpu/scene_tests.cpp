@@ -700,7 +700,7 @@ TEST_CASE("a VERTEX material's highlight is at its vertices, as its shininess sa
     fbe_material_release(material);
 }
 
-TEST_CASE("a layer's UVs turn and scale as Blitz's did", "[gpu][scene]") {
+TEST_CASE("a layer's UVs turn and scale with its angle and scale", "[gpu][scene]") {
     const scene_t scene;
     const std::uint64_t material = unlit(1.0F, 1.0F, 1.0F);
     // Across: red then green. Down: red then blue.

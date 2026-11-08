@@ -34,7 +34,14 @@ where an entity is with `Follow`, a batch a frame. A world is deterministic: mad
 same order, it moves the same, bit for bit, on any number of threads, whatever floating point mode
 the game's thread is in, `Save` and `Restore` take it back to where it was, and `StateHash` says,
 for a game in lockstep, whether two have gone apart. Jolt is built to
-make it the same on every target, compiler, and build too, which is checked on Windows x64 so far.
+make it the same on every target, compiler, and build too. Its tests, which run each world twice
+and compare, pass on each of the five targets; a hash from one target isn't yet compared with
+another's.
 
-Released with fbengine at the same version. Apache-2.0; Jolt, in its DLL, is MIT
-(notices/jolt.txt).
+A saved state is for rewinding and replays: it restores only in the build that saved it, the same
+fbengine_physics and Jolt, and `Restore` refuses one from any other, a patch release's included.
+It isn't a save file, so a game keeps its own save of what a player's done.
+
+Released with fbengine at the same version, and needs fb 1.2.3 or later. Apache-2.0; in its DLL,
+Jolt is MIT (notices/jolt.txt), and on Windows MinGW-w64's winpthreads is MIT and BSD-style
+(notices/winpthreads.txt).

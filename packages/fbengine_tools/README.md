@@ -12,7 +12,7 @@ format by its bytes, not its name.
   `ModelSettings`) says `optimize = false`. A glTF the engine wouldn't load stops the cook.
 - Shaders (named `.slang`, but for a `.inc.slang`, which is what they include) are compiled, with
   the engine's scene shader, into what `Assets.Load<Shader>` loads, in debug builds too. They need
-  Slang's `slangc`, of the one release the engine's are compiled with, on the PATH or named by
+  Slang's `slangc`, of the one release the engine's are compiled with, 2026.20, on the PATH or named by
   `FBENGINE_SLANGC`; a game with no shaders doesn't.
 - Every other file, sidecars and buffers too, goes in the pak as it is.
 
@@ -62,4 +62,12 @@ Try References.Write(Path("game/res"), Path("game/src/res.fb"))
 Local wall = Try Assets.Load<Texture>(Res.Textures.Wall)
 ```
 
-A game's release ships fbengine's DLL, never this one.
+A game's release ships fbengine's DLL, never this one. Released with fbengine at the same version,
+and needs fb 1.2.3 or later. Apache-2.0. In its DLL:
+- KTX-Software's writer is Apache-2.0 (notices/ktx.txt), with Basis Universal's encoder
+  (notices/basisu.txt), the ASTC encoder, Apache-2.0 (notices/astc-encoder.txt), and zstd,
+  BSD-3-Clause (notices/zstd.txt);
+- meshoptimizer is MIT (notices/meshoptimizer.txt);
+- fastgltf is MIT (notices/fastgltf.txt), with simdjson, Apache-2.0 or MIT (notices/simdjson.txt);
+- stb is MIT or public domain (notices/stb.txt);
+- on Windows, MinGW-w64's winpthreads is MIT and BSD-style (notices/winpthreads.txt).

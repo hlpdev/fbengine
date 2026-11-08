@@ -3,6 +3,7 @@
 Import std.math
 Import fbengine
 Import "./flow"
+Import "./settings"
 
 // How fast a stick held all the way over turns you, in radians a second.
 Const TURN_SPEED: Float = 2.4
@@ -44,7 +45,8 @@ Public Final Class TextControls
     End Method
 End Class
 
-/// A game's keys, mouse, and gamepad on the island, bound to what they do.
+/// A game's keys, mouse, and gamepad on the island, bound to what they do: the keys as `keys` says,
+/// or as they're made.
 Public Final Class Controls
     Public Field Set: ActionSet
     Public Field Move: Action
@@ -52,15 +54,19 @@ Public Final Class Controls
     Public Field Turn: Action
     Public Field Use: Action
     Public Field Hand: Action
+    // How far looking turns, as a player's options set it, and whether up looks down.
+    Field sensitivity: Float = 1.0
+    Field inverted: Bool = False
 
-    Public New()
+    Public New(keys: KeyMap? = Null)
+        Local bound = keys ?? KeyMap()
         Set = ActionSet()
         Move = Set.Add("move")
-        Move.Bind(Binding.OfKey(Key.D))
-        Move.Bind(Binding.OfKey(Key.A, -1.0))
+        Move.Bind(Binding.OfKey(bound.Of(Bound.RIGHT)))
+        Move.Bind(Binding.OfKey(bound.Of(Bound.LEFT), -1.0))
         Move.Bind(Binding.OfGamepadAxis(GamepadAxis.LEFT_X))
-        Move.BindY(Binding.OfKey(Key.W))
-        Move.BindY(Binding.OfKey(Key.S, -1.0))
+        Move.BindY(Binding.OfKey(bound.Of(Bound.FORWARD)))
+        Move.BindY(Binding.OfKey(bound.Of(Bound.BACK), -1.0))
         Move.BindY(Binding.OfGamepadAxis(GamepadAxis.LEFT_Y, -1.0))
         Look = Set.Add("look")
         Look.Bind(Binding.OfMouseAxis(MouseAxis.X))
@@ -69,15 +75,18 @@ Public Final Class Controls
         Turn.Bind(Binding.OfGamepadAxis(GamepadAxis.RIGHT_X))
         Turn.BindY(Binding.OfGamepadAxis(GamepadAxis.RIGHT_Y))
         Use = Set.Add("use")
-        Use.Bind(Binding.OfKey(Key.E))
+        Use.Bind(Binding.OfKey(bound.Of(Bound.USE)))
         Use.Bind(Binding.OfGamepadButton(GamepadButton.SOUTH))
         Hand = Set.Add("hand")
-        Hand.Bind(Binding.OfKey(Key.Q))
+        Hand.Bind(Binding.OfKey(bound.Of(Bound.HAND)))
         Hand.Bind(Binding.OfGamepadButton(GamepadButton.WEST))
     End New
 
     /// Whether E or its button was pressed.
     @MainThread Public Method UseHit(): Bool => Use.Hit()
+
+    /// Whether Use is held down, as of the last Flip.
+    @MainThread Public Method UseDown(): Bool => Use.Down()
 
     /// Whether Q or its button was pressed.
     @MainThread Public Method HandHit(): Bool => Hand.Hit()
@@ -85,9 +94,20 @@ Public Final Class Controls
     /// Which way you're walking: across, and ahead.
     @MainThread Public Method Walking(): Vec2 => Move.Vector()
 
-    /// How far the mouse has moved.
-    @MainThread Public Method Looking(): Vec2 => Look.Vector()
+    /// Sets how far looking turns, 1 as it was made, and whether up looks down, for the mouse and the
+    /// right stick both.
+    Public Method SetLook(scale: Float, invertY: Bool)
+        sensitivity = scale
+        inverted = invertY
+    End Method
 
-    /// How far a stick's held over, from -1 to 1 each way.
-    @MainThread Public Method Turning(): Vec2 => Turn.Vector()
+    /// How far the mouse has moved, by the look's sensitivity, and the other way up if it's inverted.
+    @MainThread Public Method Looking(): Vec2 => Felt(Look.Vector())
+
+    /// How far a stick's held over, from -1 to 1 each way, by the same.
+    @MainThread Public Method Turning(): Vec2 => Felt(Turn.Vector())
+
+    Method Felt(way: Vec2): Vec2
+        Return Vec2(way.x * sensitivity, (inverted ? -way.y : way.y) * sensitivity)
+    End Method
 End Class

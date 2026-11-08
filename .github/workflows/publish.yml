@@ -1,10 +1,13 @@
 name: Publish
 
-# Publishes every package, at the version their project.toml says, to a registry, through trusted
-# publishing: each package trusts this workflow on the registry, so there's no stored token. It
-# runs by hand, on the tag v<version>: `gh workflow run publish.yml --ref v0.1.0 -f
+# Publishes every library package, at the version their project.toml says, to a registry, through
+# trusted publishing: each package trusts this workflow on the registry, so there's no stored token.
+# It runs by hand, on the tag v<version>: `gh workflow run publish.yml --ref v0.1.0 -f
 # registry=staging`. Each target's DLLs are built first (native.yml), into the packages' target
 # archives; then fb's release adds each package from the registry, on each target, and runs it.
+# fbengine_editor is a program, which the registry doesn't take: published to futureblitz, it's built
+# for each target with its DLLs beside it and attached to the tag's GitHub release, which has to be
+# made first.
 # Published to futureblitz, it's posted last in the Discord server's releases channel, through the
 # webhook DISCORD_RELEASES_WEBHOOK, pinging the role DISCORD_RELEASES_ROLE.
 
@@ -94,16 +97,76 @@ jobs:
               test -d "packages/$package/native/$target"
             done
           done
-          # fbengine first, since the others depend on it, and fbengine_editor last, as it depends on
-          # them. A package's first version is published from the user's `fb login`, as trusted
+          # In the order they depend on each other, as the registry refuses a dependency it hasn't
+          # got: fbengine; then what needs only it; then fbengine_video, which needs fbengine_audio
+          # too. A package's first version is published from the user's `fb login`, as trusted
           # publishing only publishes packages already on the registry that trust this workflow.
-          fb publish packages/fbengine --registry "$INDEX"
-          for package in packages/*/; do
-            if [ "$package" != packages/fbengine/ ] && [ "$package" != packages/fbengine_editor/ ]; then
-              fb publish "$package" --registry "$INDEX"
-            fi
+          for package in fbengine fbengine_audio fbengine_physics fbengine_ui fbengine_tools \
+                         fbengine_video; do
+            fb publish "packages/$package" --registry "$INDEX"
           done
-          fb publish packages/fbengine_editor --registry "$INDEX"
+
+  # The editor, built for each target as a release's programs are, with the DLLs it loads beside it
+  # and the notices of what they bundle, packed, and attached to the tag's release: only for
+  # futureblitz, once its packages are published, as staging's runs have no release to touch.
+  editor:
+    name: editor ${{ matrix.target }}
+    needs: [version, native, publish]
+    if: inputs.registry == 'futureblitz'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x64
+            os: windows-2025
+          - target: linux-x64
+            os: ubuntu-22.04
+          - target: linux-arm64
+            os: ubuntu-22.04-arm
+          - target: macos-arm64
+            os: macos-15
+          - target: macos-x64
+            os: macos-15-intel
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: native-${{ matrix.target }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - uses: ./.github/actions/install-fb
+        with:
+          version: ${{ env.FB_VERSION }}
+
+      - name: Build and attach
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tar -xf "native-$TARGET.tar"
+          if ! gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "::error::There's no release v$VERSION to attach the editor to: make it first"
+            exit 1
+          fi
+          # The program by its OS's name, its DLLs, and notices/: what fb build says it bundled, and
+          # each DLL's package's. The archive's path is the last line.
+          python tools/pack_editor.py fb "$VERSION" "$TARGET" "$RUNNER_TEMP/editor" | tee "$RUNNER_TEMP/packed"
+          archive="$(tail -n 1 "$RUNNER_TEMP/packed")"
+          gh release upload "v$VERSION" "$archive" --clobber -R "$GITHUB_REPOSITORY"
 
   check:
     name: check ${{ matrix.target }}
@@ -163,7 +226,7 @@ jobs:
   # engine role is pinged.
   discord:
     name: discord
-    needs: [version, check]
+    needs: [version, check, editor]
     if: inputs.registry == 'futureblitz'
     runs-on: ubuntu-24.04
     steps:

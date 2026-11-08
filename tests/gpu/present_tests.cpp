@@ -493,3 +493,27 @@ TEST_CASE("a lost GPU is caught on a Flip with nothing to run", "[gpu]") {
     CHECK(std::string(fbe_error()).starts_with("the GPU was lost"));
     stop_gpu();
 }
+
+TEST_CASE("a GPU disabled loads no Vulkan and starts for nothing, until it's enabled again",
+          "[gpu]") {
+    REQUIRE(fbe_window_set_headless(true));
+    REQUIRE(!fbe_gpu_started());
+    REQUIRE(fbe_gpu_set_disabled(true));
+    CHECK(fbe_gpu_disabled());
+    CHECK_FALSE(fbe_gpu_start());
+    CHECK(std::string_view(fbe_error()) == "the GPU is disabled");
+    CHECK(fbe_texture_create(4, 4, FBE_TEXTURE_RGBA8, false) == 0);
+    CHECK(std::string_view(fbe_error()) == "the GPU is disabled");
+    CHECK(fbe_gpu_device_count() == -1);
+    CHECK_FALSE(fbe_gpu_started());
+    // Enabled again, it starts, and then it can't be disabled until it's stopped.
+    REQUIRE(fbe_gpu_set_disabled(false));
+    require(fbe_gpu_start());
+    CHECK_FALSE(fbe_gpu_set_disabled(true));
+    CHECK(std::string_view(fbe_error()).contains("stop it before disabling it"));
+    CHECK_FALSE(fbe_gpu_disabled());
+    fbe_gpu_stop();
+    CHECK(fbe_gpu_set_disabled(true));
+    CHECK_FALSE(fbe_gpu_start());
+    CHECK(fbe_gpu_set_disabled(false));
+}

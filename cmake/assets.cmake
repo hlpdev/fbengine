@@ -77,24 +77,29 @@ FetchContent_Declare(
   EXCLUDE_FROM_ALL
 )
 FetchContent_MakeAvailable(stb KTX fastgltf)
-# The fetched simdjson, through a header of ours beside it, fbengine_simdjson.h, whose quoted include
-# finds the simdjson.h in its own folder first, whatever folders come before: an Intel Mac's Homebrew
-# puts its own simdjson.h in /usr/local/include, and a dependency's plain -I reaching it is searched
-# before the fetched folder, which comes as -isystem from fastgltf, a SYSTEM dependency. Beside it,
-# it's a system header as simdjson.h is, whose warnings aren't ours. Its version, which gltf.cpp
-# holds the header it gets to, so one from elsewhere fails the build; what builds gltf.cpp calls
-# fbengine_use_fetched_simdjson, and tools/check_simdjson.py asks each one's compile what it reads.
-set(fbengine_simdjson_folder "${fastgltf_SOURCE_DIR}/deps/simdjson")
-file(STRINGS "${fbengine_simdjson_folder}/simdjson.h" fbengine_simdjson_line
+# The fetched simdjson, through a header of ours, fbengine_simdjson.h, beside a copy of it in a folder of
+# the build's own: its quoted include finds the simdjson.h in its own folder first, whatever folders
+# come before, as an Intel Mac's Homebrew puts its own in /usr/local/include, and a dependency's plain
+# -I reaching it is searched before -isystem's. It has to be beside one: a header the quoted include
+# finds elsewhere, by its whole path, isn't a system header, and simdjson's warnings would be ours.
+# The copy's there and not beside fastgltf's, which can be a checkout of someone's own
+# (FETCHCONTENT_SOURCE_DIR_FASTGLTF). Its version, which gltf.cpp holds the header it gets to, so one
+# from elsewhere fails the build; what builds gltf.cpp calls fbengine_use_fetched_simdjson, and
+# tools/check_simdjson.py asks each one's compile what it reads.
+set(fbengine_simdjson_fetched "${fastgltf_SOURCE_DIR}/deps/simdjson")
+file(STRINGS "${fbengine_simdjson_fetched}/simdjson.h" fbengine_simdjson_line
      REGEX "^#define SIMDJSON_VERSION \"[0-9.]+\"")
 string(REGEX MATCH "[0-9.]+" fbengine_simdjson_version "${fbengine_simdjson_line}")
 if(NOT fbengine_simdjson_version)
   message(FATAL_ERROR "fastgltf's simdjson.h says no version")
 endif()
-target_include_directories(fastgltf BEFORE PRIVATE "${fbengine_simdjson_folder}")
+target_include_directories(fastgltf BEFORE PRIVATE "${fbengine_simdjson_fetched}")
+set(fbengine_simdjson_folder "${PROJECT_BINARY_DIR}/fbengine_simdjson")
+configure_file("${fbengine_simdjson_fetched}/simdjson.h" "${fbengine_simdjson_folder}/simdjson.h" COPYONLY)
 file(CONFIGURE OUTPUT "${fbengine_simdjson_folder}/fbengine_simdjson.h"
-     CONTENT "// Made by fbengine's cmake/assets.cmake: the simdjson.h beside it.\n#include \"simdjson.h\"\n")
+     CONTENT "// Made by fbengine's cmake/assets.cmake: the simdjson.h beside it, fastgltf's.\n#include \"simdjson.h\"\n")
 function(fbengine_use_fetched_simdjson target)
+  target_include_directories(${target} SYSTEM PRIVATE "${fbengine_simdjson_folder}")
   target_compile_definitions(${target} PRIVATE FBE_SIMDJSON_VERSION="${fbengine_simdjson_version}")
 endfunction()
 
@@ -234,6 +239,10 @@ fbengine_patch_text("\t\tidx = nextSlash; // Path includes this slash"
 # An empty version, which it reads the first character of.
 fbengine_patch_text("\t\tif (assetInfo[\"version\"].get_string().get(version) != SUCCESS) FASTGLTF_UNLIKELY {"
                     "\t\tif (assetInfo[\"version\"].get_string().get(version) != SUCCESS || version.empty()) FASTGLTF_UNLIKELY {")
+# A whole-number accessor's bounds given as a float past an int64, which it casts to one, as C++
+# leaves undefined: NaN, infinite, or 1e30, refused as an invalid glTF.
+fbengine_patch_text("\t\t\t\t\t\t\t\tarray.set(idx++, value);\n\t\t\t\t\t\t\t} else if (array.isType<std::int64_t>()) {\n\t\t\t\t\t\t\t\tarray.set(idx++, static_cast<std::int64_t>(value));"
+                    "\t\t\t\t\t\t\t\tarray.set(idx++, value);\n\t\t\t\t\t\t\t} else if (array.isType<std::int64_t>()) {\n\t\t\t\t\t\t\t\tif (!(value >= -9223372036854775808.0 && value < 9223372036854775808.0)) FASTGLTF_UNLIKELY {\n\t\t\t\t\t\t\t\t\treturn Error::InvalidGltf;\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\tarray.set(idx++, static_cast<std::int64_t>(value));")
 file(WRITE "${fbengine_fastgltf_patched}/fastgltf.cpp.in" "${fbengine_text}")
 configure_file("${fbengine_fastgltf_patched}/fastgltf.cpp.in"
                "${fbengine_fastgltf_patched}/fastgltf.cpp" COPYONLY)

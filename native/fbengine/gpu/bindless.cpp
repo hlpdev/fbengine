@@ -343,6 +343,41 @@ void write_texture(std::uint32_t index, VkImageView view) {
     vkUpdateDescriptorSets(device()->device, 1, &write, 0, nullptr);
 }
 
+void write_every_texture(VkImageView view) {
+    // The first few written, then copied after themselves, twice as many each time, as a copy's
+    // cheaper than a write; and in arrays of its own, so it needs no memory.
+    constexpr std::uint32_t written = 256;
+    std::array<VkDescriptorImageInfo, written> images{};
+    images.fill({
+        .imageView = view,
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    });
+    const VkWriteDescriptorSet write{
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = set,
+        .dstBinding = texture_binding,
+        .dstArrayElement = 0,
+        .descriptorCount = std::min(written, capacity),
+        .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+        .pImageInfo = images.data(),
+    };
+    std::array<VkCopyDescriptorSet, 32> copies{};
+    std::uint32_t count = 0;
+    for (std::uint32_t done = written; done < capacity; done *= 2) {
+        copies.at(count++) = {
+            .sType = VK_STRUCTURE_TYPE_COPY_DESCRIPTOR_SET,
+            .srcSet = set,
+            .srcBinding = texture_binding,
+            .srcArrayElement = 0,
+            .dstSet = set,
+            .dstBinding = texture_binding,
+            .dstArrayElement = done,
+            .descriptorCount = std::min(done, capacity - done),
+        };
+    }
+    vkUpdateDescriptorSets(device()->device, 1, &write, count, copies.data());
+}
+
 std::uint32_t take_samples_slot(VkImageView view) {
     if (free_samples_slots.empty()) {
         return no_samples_slot;
