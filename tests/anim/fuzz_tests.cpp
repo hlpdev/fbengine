@@ -87,7 +87,7 @@ bool weights_are_numbers(std::uint64_t mesh, float tween) {
 
 } // namespace
 
-TEST_CASE("random calls leave every pose in numbers") {
+TEST_CASE("random calls leave every pose in numbers", "[stability]") {
     int bad = 0;
     for (std::uint32_t seed = 1; seed <= 20; ++seed) {
         std::mt19937 random(seed);

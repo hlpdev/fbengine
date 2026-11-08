@@ -1,0 +1,277 @@
+// What a player chooses in Options: how loud each part is, how much the picture spends, the window,
+// how looking feels, and which key does what. Kept as an INI file in the OS's folder for a program's settings, through
+// std's Ini, as item 19's sample keeps its own; one that's missing or can't be read is the defaults,
+// and each value that isn't one is its own default.
+
+Import std.collections
+Import std.core
+Import std.data.ini
+Import std.io
+Import std.math
+Import std.os
+Import std.text
+Import fbengine
+
+/// How much the picture spends: everything, or what a low GPU can, with no bloom and no sun's shadows.
+Public Enum Quality
+    HIGH = 0
+    LOW = 1
+End Enum
+
+// How far looking's sensitivity goes either way from 1.
+Public Const LEAST_LOOK: Float = 0.25
+Public Const MOST_LOOK: Float = 3.0
+
+/// What a key can be bound to.
+Public Enum Bound
+    FORWARD = 0
+    BACK = 1
+    LEFT = 2
+    RIGHT = 3
+    /// Take, fit, or open.
+    USE = 4
+    /// Hand to Pip, or take back.
+    HAND = 5
+    PAUSE = 6
+End Enum
+
+// Each Bound's name in the INI file and on its row, by its number.
+Const BOUND_KEYS = ["forward", "back", "left", "right", "use", "hand", "pause"]
+Const BOUND_NAMES = ["Forward", "Back", "Left", "Right", "Use", "Hand to Pip", "Pause"]
+
+/// What `bound`'s called on its row.
+Public Function BoundName(bound: Bound): String => BOUND_NAMES[bound As Int]
+
+/// Which key does what: W, S, A, D, E, Q, and Escape as it's made.
+Public Final Class KeyMap
+    Package Field keys: Key[] = []
+
+    Public New()
+        keys = [Key.W, Key.S, Key.A, Key.D, Key.E, Key.Q, Key.ESCAPE]
+    End New
+
+    /// The key for `bound`.
+    Public Method Of(bound: Bound): Key => keys[bound As Int]
+
+    /// What `key` is bound to, or Null for nothing.
+    Public Method BoundTo(key: Key): Bound?
+        For at = 0 Until keys.Count
+            If keys[at] == key Then Return at As Bound
+        End For
+        Return Null
+    End Method
+
+    /// Binds `bound` to `key`, unless another's bound to it, which it gives, changing nothing.
+    Public Method Bind(bound: Bound, key: Key): Bound?
+        Local had = BoundTo(key)
+        If had != Null && had != bound Then Return had
+        keys[bound As Int] = key
+        Return Null
+    End Method
+
+    /// Whether no two do the same.
+    Public Method Distinct(): Bool
+        For at = 0 Until keys.Count
+            For other = at + 1 Until keys.Count
+                If keys[at] == keys[other] Then Return False
+            End For
+        End For
+        Return True
+    End Method
+
+    /// A copy of it.
+    Public Method Clone(): KeyMap
+        Local copy = KeyMap()
+        copy.keys = keys.Clone()
+        Return copy
+    End Method
+End Class
+
+/// The key whose name, as the INI keeps it, is `name`: "W", "ESCAPE", "SPACE"; or Null for none.
+Public Function KeyNamed(name: String): Key?
+    If name == "" || name == "UNKNOWN" Then Return Null
+    For code = 1 To 300
+        Local key = code As Key
+        If "{key}" == name Then Return key
+    End For
+    Return Null
+End Function
+
+/// A player's options.
+Public Final Class Options
+    /// The whole mix's volume, 0 to 1.
+    Public Field Master: Float = 1.0
+    /// The music's, 0 to 1.
+    Public Field Music: Float = 1.0
+    /// The wind's and the sea's, 0 to 1.
+    Public Field Ambience: Float = 1.0
+    /// Everything else's: steps, gulls, creaks, the wheel, the splash, 0 to 1.
+    Public Field Effects: Float = 1.0
+    /// How much the picture spends.
+    Public Field Picture: Quality = Quality.HIGH
+    /// How the window shows: framed, on the whole screen at a display mode, or borderless at the
+    /// desktop's.
+    Public Field Shown: WindowMode = WindowMode.WINDOWED
+    /// The display mode a fullscreen window's at, or 0 by 0 for the one nearest the window's size.
+    Public Field Width: Int = 0
+    Public Field Height: Int = 0
+    /// How far the view turns for the mouse or a stick, 1 as it was made.
+    Public Field Look: Float = 1.0
+    /// Whether up looks down.
+    Public Field InvertY: Bool = False
+    /// Which key does what.
+    Public Field Keys: KeyMap
+    /// Whether what's said is shown, the game's and Pip's lines.
+    Public Field Subtitles: Bool = True
+    /// Whether sounds are shown in words, as they're heard.
+    Public Field SoundCaptions: Bool = False
+    /// How large text is: 0, as it's made, 1 larger, or 2 larger still.
+    Public Field TextSize: Int = 0
+    /// Whether what moves by itself moves less: the title's flight slower, and your eyes not bobbing
+    /// as you walk.
+    Public Field ReducedMotion: Bool = False
+    /// Whether the sluice opens by holding Use, or, off, by a press.
+    Public Field HoldToOpen: Bool = True
+
+    /// The defaults.
+    Public New()
+        Keys = KeyMap()
+    End New
+
+    /// Options as `text`, an INI file, says, each value that's missing or isn't one its default,
+    /// and numbers kept to their ranges.
+    Public Static Method Read(text: String): Options
+        Local options = Options()
+        Local settings = Value.Object()
+        Try
+            settings = Try Ini.Read(text)
+        Catch e As ParseError
+            Return options
+        End Try
+        options.Master = Number(settings, "audio.master", 1.0, 0.0, 1.0)
+        options.Music = Number(settings, "audio.music", 1.0, 0.0, 1.0)
+        options.Ambience = Number(settings, "audio.ambience", 1.0, 0.0, 1.0)
+        options.Effects = Number(settings, "audio.effects", 1.0, 0.0, 1.0)
+        options.Picture = Said(settings, "video.quality") == "low" ? Quality.LOW : Quality.HIGH
+        Select Said(settings, "video.window")
+            Case "fullscreen"
+                options.Shown = WindowMode.FULLSCREEN
+            Case "borderless"
+                options.Shown = WindowMode.BORDERLESS
+            Default
+                options.Shown = WindowMode.WINDOWED
+        End Select
+        options.Width = Whole(settings, "video.width")
+        options.Height = Whole(settings, "video.height")
+        If options.Width <= 0 || options.Height <= 0
+            options.Width = 0
+            options.Height = 0
+        End If
+        options.Look = Number(settings, "controls.look", 1.0, LEAST_LOOK, MOST_LOOK)
+        options.InvertY = Said(settings, "controls.invert_y") == "true"
+        options.Subtitles = Said(settings, "access.subtitles") != "false"
+        options.SoundCaptions = Said(settings, "access.sound_captions") == "true"
+        options.TextSize = Clamp(Whole(settings, "access.text_size"), 0, 2)
+        options.ReducedMotion = Said(settings, "access.reduced_motion") == "true"
+        options.HoldToOpen = Said(settings, "access.hold_to_open") != "false"
+        // Each key that's one, or its default; and all the defaults if two are the same.
+        Local read = KeyMap()
+        For at = 0 Until BOUND_KEYS.Count
+            Local named = settings.Path("keys.{BOUND_KEYS[at]}")?.AsString()
+            Local key = named != Null ? KeyNamed(named.Trim().ToUpper()) : Null
+            If key != Null Then read.keys[at] = key
+        End For
+        If read.Distinct() Then options.Keys = read
+        Return options
+    End Method
+
+    /// It as an INI file.
+    Public Method Written(): String
+        Local settings = Value.Object()
+        Local audio = Value.Object()
+        audio["master"] = Value("{Master:.2}")
+        audio["music"] = Value("{Music:.2}")
+        audio["ambience"] = Value("{Ambience:.2}")
+        audio["effects"] = Value("{Effects:.2}")
+        settings["audio"] = audio
+        Local video = Value.Object()
+        video["quality"] = Value(Picture == Quality.LOW ? "low" : "high")
+        Local window = "windowed"
+        If Shown == WindowMode.FULLSCREEN Then window = "fullscreen"
+        If Shown == WindowMode.BORDERLESS Then window = "borderless"
+        video["window"] = Value(window)
+        video["width"] = Value("{Width}")
+        video["height"] = Value("{Height}")
+        settings["video"] = video
+        Local controls = Value.Object()
+        controls["look"] = Value("{Look:.2}")
+        controls["invert_y"] = Value(InvertY ? "true" : "false")
+        settings["controls"] = controls
+        Local keys = Value.Object()
+        For at = 0 Until BOUND_KEYS.Count
+            keys[BOUND_KEYS[at]] = Value("{Keys.Of(at As Bound)}")
+        End For
+        settings["keys"] = keys
+        Local access = Value.Object()
+        access["subtitles"] = Value(Subtitles ? "true" : "false")
+        access["sound_captions"] = Value(SoundCaptions ? "true" : "false")
+        access["text_size"] = Value("{TextSize}")
+        access["reduced_motion"] = Value(ReducedMotion ? "true" : "false")
+        access["hold_to_open"] = Value(HoldToOpen ? "true" : "false")
+        settings["access"] = access
+        Return Ini.Write(settings)
+    End Method
+
+    /// How much text's scaled for its TextSize.
+    Public Method TextScale(): Float => [1.0, 1.25, 1.5][TextSize]
+
+    /// A copy of it.
+    Public Method Clone(): Options => Options.Read(Written())
+
+    /// Whether it's the same as `other`, as it'd be written.
+    Public Method Same(other: Options): Bool => Written() == other.Written()
+End Class
+
+// The text at `path`, lowercase and trimmed, or "".
+Function Said(settings: Value, path: String): String
+    Return (settings.Path(path)?.AsString() ?? "").Trim().ToLower()
+End Function
+
+// The number at `path`, kept from `least` to `most`, or `otherwise` for none, or what isn't one.
+Function Number(settings: Value, path: String, otherwise: Float, least: Float, most: Float): Float
+    Local read = Float32.Parse(Said(settings, path))
+    If read == Null || !IsFinite(read) Then Return otherwise
+    Return Clamp(read, least, most)
+End Function
+
+// The whole number at `path`, or 0.
+Function Whole(settings: Value, path: String): Int => Int.Parse(Said(settings, path)) ?? 0
+
+/// Where the options are kept: in SLACK_WATER_SETTINGS's folder, for a test, which only one with
+/// SLACK_WATER_CHECKS=1 takes; or else the OS's folder for a program's settings, under Slack Water;
+/// Null where there's no such folder.
+Public Function OptionsFile(): Path?
+    Local folder = Env.Get("SLACK_WATER_SETTINGS")
+    If Env.Get("SLACK_WATER_CHECKS") == "1" && folder != Null && folder != ""
+        Return Path(folder) / "options.ini"
+    End If
+    Local config = Folders.Config
+    If config == Null || config == "" Then Return Null
+    Return Path(config) / "Slack Water" / "options.ini"
+End Function
+
+/// The options kept in `file`, or the defaults where there are none, or they can't be read.
+Public Function KeptOptions(file: Path?): Options
+    If file == Null || !File.Exists(file) Then Return Options()
+    Try
+        Return Options.Read(Try File.ReadText(file))
+    Catch e As IOError
+        Return Options()
+    End Try
+End Function
+
+/// Keeps `options` in `file`, whole or not at all, making its folder.
+Public Function KeepOptions(options: Options, file: Path) Throws IOError
+    Try Dir.CreateAll(file.Parent())
+    Try File.WriteTextAtomic(file, options.Written())
+End Function

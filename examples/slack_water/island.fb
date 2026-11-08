@@ -123,19 +123,6 @@ Function Ground(held: Texture[], heights: Float[]): Material Throws IOError, Gra
     Return material
 End Function
 
-// `heights` between its points, at (`x`, `z`) meters from its corner.
-Function HeightIn(heights: Float[], x: Float, z: Float): Float
-    Local left = Min(Floor(x) As Int, SIDE - 1)
-    Local top = Min(Floor(z) As Int, SIDE - 1)
-    Local u = x - (left As Float)
-    Local v = z - (top As Float)
-    Local row = SIDE + 1
-    Local near = heights[top * row + left] * (1.0 - u) + heights[top * row + left + 1] * u
-    Local far = heights[(top + 1) * row + left] * (1.0 - u) +
-                heights[(top + 1) * row + left + 1] * u
-    Return near * (1.0 - v) + far * v
-End Function
-
 /// What covers the ground of these `heights`, as two images over the whole of it: its color, and its
 /// roughness in green, as a material's map has it.
 Public Function GroundCover(heights: Float[]): (Image, Image)
@@ -143,17 +130,12 @@ Public Function GroundCover(heights: Float[]): (Image, Image)
     Local color = Image(side, side)
     Local rough = Image(side, side)
     Local half = (SIDE As Float) / 2.0
-    Local most = (SIDE As Float) - 1.0
     For y = 0 Until side
         Local z = ((y As Float) + 0.5) / (COVER_PER_METER As Float)
         For x = 0 Until side
             Local across = ((x As Float) + 0.5) / (COVER_PER_METER As Float)
-            Local height = HeightIn(heights, across, z)
-            Local dx = HeightIn(heights, Min(across + 1.0, most), z) -
-                       HeightIn(heights, Max(across - 1.0, 0.0), z)
-            Local dz = HeightIn(heights, across, Min(z + 1.0, most)) -
-                       HeightIn(heights, across, Max(z - 1.0, 0.0))
-            Local cover = CoverAt(across - half, z - half, height, Sqrt(dx * dx + dz * dz) / 2.0)
+            Local baked = BakedAt(heights, across, z)
+            Local cover = CoverAt(across - half, z - half, baked.0, baked.1)
             color[x, y] = Color32((cover.0.x * 255.0) As UInt8, (cover.0.y * 255.0) As UInt8,
                                   (cover.0.z * 255.0) As UInt8, 255)
             rough[x, y] = Color32(255, (cover.1 * 255.0) As UInt8, 0, 255)
@@ -540,12 +522,7 @@ Public Final Class Island
 
         Local ground = Terrain(SIDE)
         ground.SetPosition(Vec3(-(SIDE As Float) / 2.0, 0.0, -(SIDE As Float) / 2.0))
-        Local heights: Float[] = []
-        For z = 0 To SIDE
-            For x = 0 To SIDE
-                heights.Add(GroundHeight((x - SIDE / 2) As Float, (z - SIDE / 2) As Float))
-            End For
-        End For
+        Local heights = TerrainHeights()
         ground.SetHeights(heights)
         ground.SetMaterial(Try Ground(held, heights))
 

@@ -249,21 +249,15 @@ Function Mixed(from: Vec3, to: Vec3, amount: Float): Vec3
                 from.z + (to.z - from.z) * by)
 End Function
 
-// The cover's noise: fine, a meter or so across, and patches, many meters.
-Function Fine(x: Float, z: Float): Float => Noise(x * 0.8 + 1.0, z * 0.8 + 2.0)
-
-Function Patches(x: Float, z: Float): Float
-    Return Noise(x * 0.09 + 4.0, z * 0.09 + 6.0) * 0.6 + Noise(x * 0.31 + 8.0, z * 0.31 + 1.0) * 0.4
-End Function
-
-// How much turf holds on, `height` high with `slope`, in `patches`: high and flat.
-Function Turf(height: Float, slope: Float, patches: Float): Float
+/// How much of the ground at (`x`, `z`), `height` high with `slope` meters up to the meter, is sand, turf,
+/// and trodden ground, each from 0 to 1, as CoverAt paints them: what you're walking on.
+Public Function CoverParts(x: Float, z: Float, height: Float, slope: Float): (Float, Float, Float)
+    Local fine = Noise(x * 0.8 + 1.0, z * 0.8 + 2.0)
+    Local patches = Noise(x * 0.09 + 4.0, z * 0.09 + 6.0) * 0.6 +
+                    Noise(x * 0.31 + 8.0, z * 0.31 + 1.0) * 0.4
     Local flat = Clamp((0.8 - slope) / 0.4, 0.0, 1.0)
-    Return flat * Clamp((patches - 0.28) * 5.0, 0.0, 1.0) * Clamp((height - 2.3) / 1.2, 0.0, 1.0)
-End Function
-
-// How trodden (`x`, `z`) is: around the mill, and from its door to the road, where it isn't steep.
-Function Trodden(x: Float, z: Float, slope: Float, patches: Float, fine: Float): Float
+    Local turf = flat * Clamp((patches - 0.28) * 5.0, 0.0, 1.0) *
+                 Clamp((height - 2.3) / 1.2, 0.0, 1.0)
     Local fromMill = Sqrt((x - MAIN_X) * (x - MAIN_X) + z * z)
     Local trodden = Clamp((12.0 + patches * 5.0 - fromMill) / 3.0, 0.0, 1.0)
     If x > MAIN_X && x < ROAD_WEST
@@ -271,23 +265,67 @@ Function Trodden(x: Float, z: Float, slope: Float, patches: Float, fine: Float):
         Local pathZ = DoorSpot().y + (RoadZ(ROAD_WEST) - DoorSpot().y) * across
         trodden = Max(trodden, Clamp((2.2 + fine - Abs(z - pathZ)) / 1.2, 0.0, 1.0))
     End If
-    Return trodden * Clamp((1.2 - slope) / 0.4, 0.0, 1.0)
+    trodden *= Clamp((1.2 - slope) / 0.4, 0.0, 1.0)
+    Local sand = Clamp((1.5 + (patches - 0.5) * 1.8 - height) / 0.5, 0.0, 1.0) *
+                 Clamp((1.3 - slope) / 0.4, 0.0, 1.0)
+    Return (sand, turf, trodden)
 End Function
 
-// How sandy it is, `height` high with `slope`, in `patches`: low down, up to what the rock breaks.
+// The cover's noise: fine, a meter or so across, and patches, many meters, as CoverParts' own.
+Function Fine(x: Float, z: Float): Float => Noise(x * 0.8 + 1.0, z * 0.8 + 2.0)
+
+Function Patches(x: Float, z: Float): Float
+    Return Noise(x * 0.09 + 4.0, z * 0.09 + 6.0) * 0.6 + Noise(x * 0.31 + 8.0, z * 0.31 + 1.0) * 0.4
+End Function
+
+// How sandy it is, `height` high with `slope`, in `patches`: low down, up to what the rock breaks, as
+// CoverParts has it.
 Function Sand(height: Float, slope: Float, patches: Float): Float
     Return Clamp((1.5 + (patches - 0.5) * 1.8 - height) / 0.5, 0.0, 1.0) *
            Clamp((1.3 - slope) / 0.4, 0.0, 1.0)
 End Function
 
 /// How much of what covers the ground at (`x`, `z`), `height` high with `slope` meters up to the meter,
-/// is turf that shows, from 0 to 1: CoverAt's turf, less what's trodden over it and sand: where grass
+/// is turf that shows, from 0 to 1: CoverParts' turf, less what's trodden over it and sand: where grass
 /// grows.
 Public Function TurfAt(x: Float, z: Float, height: Float, slope: Float): Float
-    Local patches = Patches(x, z)
-    Local turf = Turf(height, slope, patches)
-    Return turf * (1.0 - Trodden(x, z, slope, patches, Fine(x, z))) *
-           (1.0 - Sand(height, slope, patches))
+    Local sand, turf, trodden = CoverParts(x, z, height, slope)
+    Return turf * (1.0 - trodden) * (1.0 - sand)
+End Function
+
+/// How high the terrain's grid of `heights` is at (`x`, `z`), meters from its corner: between its
+/// samples, a meter apart, as the terrain draws it and its cover's baked by; past its edges, as high
+/// as the nearest edge.
+Public Function HeightIn(heights: Float[], x: Float, z: Float): Float
+    Local left = Clamp(Floor(x) As Int, 0, SIDE - 1)
+    Local top = Clamp(Floor(z) As Int, 0, SIDE - 1)
+    Local u = Clamp(x - (left As Float), 0.0, 1.0)
+    Local v = Clamp(z - (top As Float), 0.0, 1.0)
+    Local row = SIDE + 1
+    Local near = heights[top * row + left] * (1.0 - u) + heights[top * row + left + 1] * u
+    Local far = heights[(top + 1) * row + left] * (1.0 - u) +
+                heights[(top + 1) * row + left + 1] * u
+    Return near * (1.0 - v) + far * v
+End Function
+
+/// How high and steep the terrain of `heights` is at (`x`, `z`), meters from its corner, its slope in
+/// meters up to the meter over a meter each way, held to the terrain: what its cover's baked by.
+Public Function BakedAt(heights: Float[], x: Float, z: Float): (Float, Float)
+    Local most = (SIDE As Float) - 1.0
+    Local dx = HeightIn(heights, Min(x + 1.0, most), z) - HeightIn(heights, Max(x - 1.0, 0.0), z)
+    Local dz = HeightIn(heights, x, Min(z + 1.0, most)) - HeightIn(heights, x, Max(z - 1.0, 0.0))
+    Return (HeightIn(heights, x, z), Sqrt(dx * dx + dz * dz) / 2.0)
+End Function
+
+/// The terrain's heights, a sample each meter from its corner, as GroundHeight has them.
+Public Function TerrainHeights(): Float[]
+    Local heights: Float[] = []
+    For z = 0 To SIDE
+        For x = 0 To SIDE
+            heights.Add(GroundHeight((x - SIDE / 2) As Float, (z - SIDE / 2) As Float))
+        End For
+    End For
+    Return heights
 End Function
 
 /// What covers the ground at (`x`, `z`), `height` high with `slope` meters up to the meter: its color, as
@@ -311,19 +349,20 @@ Public Function CoverAt(x: Float, z: Float, height: Float, slope: Float): (Vec3,
     color = Mixed(color, Vec3(0.18, 0.18, 0.16), tide * 0.7)
     rough -= tide * 0.3
     // Turf, where it can hold on.
+    Local parts = CoverParts(x, z, height, slope)
     Local blades = Noise(x * 2.3 + 3.0, z * 2.3 + 7.0)
-    Local turf = Turf(height, slope, patches)
+    Local turf = parts.1
     color = Mixed(color,
                   Mixed(Vec3(0.29, 0.35, 0.18), Vec3(0.45, 0.47, 0.25),
                         patches * 0.6 + blades * 0.6 - 0.2),
                   turf)
     rough = rough + (0.95 - rough) * turf
     // Trodden ground around the mill, and from its door to the road.
-    Local trodden = Trodden(x, z, slope, patches, fine)
+    Local trodden = parts.2
     color = Mixed(color, Mixed(Vec3(0.38, 0.33, 0.25), Vec3(0.5, 0.43, 0.32), fine), trodden)
     rough = rough + (0.88 - rough) * trodden
     // Sand, up to what's broken by the rock's own shape.
-    Local sand = Sand(height, slope, patches)
+    Local sand = parts.0
     color = Mixed(color, Mixed(Vec3(0.72, 0.64, 0.47), Vec3(0.83, 0.76, 0.59), fine), sand)
     rough = rough + (0.92 - rough) * sand
     // Wet, where the sea's just been: darker, and it shines.

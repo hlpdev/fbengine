@@ -447,6 +447,27 @@ Function AnImageBoxFitsItsImage() Throws GraphicsError
     EndGraphics()
 End Function
 
+// A scale set between an Update and a Draw is what's drawn: laid out at it, not at the last.
+@Test
+Function AScaleSetBeforeADrawIsDrawn() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Graphics(100, 100)
+    Local root = Node("root")
+    root.SetArrangement(Arrangement.STACK)
+    Local panel = Sized(Widget("panel"), 10.0, 10.0)
+    panel.SetAnchors(Anchors.Point(0.5, 0.5))
+    root.Add(panel)
+    Local ui = Ui(root, Plain())
+    Drawn(ui)
+    Expect(panel.Box().Center == Vec2(50.0, 50.0), "{panel.Box()}")
+    ui.SetScale(2.0)
+    ui.Draw()
+    // At twice the size, the window's 50 units across, so its middle is at 25.
+    Expect(panel.Box().Center == Vec2(25.0, 25.0), "{panel.Box()}")
+    EndGraphics()
+End Function
+
 @Test
 Function AUiDrawsIntoATargetAtItsScale() Throws GraphicsError
     If NoGpu() Then Skip("no GPU here")

@@ -1,0 +1,101 @@
+// A dedicated server's run with no GPU at all: Gpu.SetDisabled before anything, then a World of
+// entities picked and updated, a scene read, physics stepped, audio mixed by hand, a textured model
+// loaded without its images and spawned, and a Texture refused. Nothing loads Vulkan, so it runs
+// where there's no driver, loader, or display. Its one argument is the folder of the sample models.
+
+Import std.collections
+Import std.core
+Import std.io
+Import std.math
+Import std.os
+Import fbengine
+Import fbengine_audio
+Import fbengine_physics
+
+// A WAV of a short sine, 48000 Hz mono 16-bit.
+Function Tone(): UInt8[]
+    Local frames = 4800
+    Local bytes: UInt8[] = []
+    Local Word = Function(value: Int, size: Int)
+        For i = 0 Until size
+            bytes.Add(((value >> (i * 8)) & 0xFF) As UInt8)
+        End For
+    End Function
+    bytes.AddAll("RIFF".Bytes)
+    Word(36 + frames * 2, 4)
+    bytes.AddAll("WAVEfmt ".Bytes)
+    Word(16, 4)
+    Word(1, 2)
+    Word(1, 2)
+    Word(48000, 4)
+    Word(96000, 4)
+    Word(2, 2)
+    Word(16, 2)
+    bytes.AddAll("data".Bytes)
+    Word(frames * 2, 4)
+    For i = 0 Until frames
+        Word((Sin((i As Float) * 0.05) * 10000.0) As Int & 0xFFFF, 2)
+    End For
+    Return bytes
+End Function
+
+Function Serve(models: String) Throws Error
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+
+    Local crate = Mesh(Geometry.Cube())
+    crate.SetPosition(Vec3(0, 0, -5))
+    crate.SetPickMode(PickMode.MESH)
+    If world.Pick(Vec3(0, 0, 0), Vec3(0, 0, -10)) == Null Then Throw Error("nothing picked")
+    UpdateWorld(1.0 / 60.0)
+
+    Local roots = Try Scene.FromText("format = 1\n[[entity]]\npath = \"a\"\nkind = \"PIVOT\"\n")
+    If roots.Count != 1 Then Throw Error("a scene of {roots.Count}")
+
+    Local physics = PhysicsWorld()
+    Local floor = Pivot()
+    Body(physics, Shape.Box(Vec3(20, 1, 20)), Motion.STATIC, floor)
+    Local falling = Pivot()
+    falling.SetPosition(Vec3(0, 5, 0))
+    Body(physics, Shape.Box(Vec3(1, 1, 1)), Motion.DYNAMIC, falling)
+    For step = 1 To 120
+        physics.Step(1.0 / 60.0)
+    End For
+    If falling.Position().y > 4 Then Throw Error("it didn't fall")
+
+    Try Audio.Start(AudioDevice.MANUAL)
+    Local emitter = Emitter()
+    emitter.Play(Try Sound.FromBytes(Tone()))
+    If Audio.Mix(480).Count != 960 Then Throw Error("not mixed")
+    Audio.Stop()
+
+    Assets.MountFolder("res://models", Path(models))
+    Local fox = Try Assets.Load<Model>("res://models/Fox/Fox.glb")
+    Defer fox.Free()
+    If fox.TextureOf(0) != Null Then Throw Error("a texture with the GPU disabled")
+    Local spawned = Try fox.Spawn()
+    If fox.Clips().Count > 0
+        spawned.Player().Play(fox.Clips()[0])
+        UpdateWorld(0.5)
+    End If
+    Local scene = Try Scene.FromText(
+        "format = 1\n[[entity]]\npath = \"b\"\nkind = \"MESH\"\ngeometry = \"res://models/Fox/Fox.glb#0\"\n")
+    If scene.Count != 1 Then Throw Error("a scene of the fox of {scene.Count}")
+
+    Try
+        Try Texture(4, 4)
+        Throw Error("a texture made with the GPU disabled")
+    Catch refused As GraphicsError
+        Print("a texture refused: {refused.Message}")
+    End Try
+    Flip(False)
+End Function
+
+Gpu.SetDisabled(True)
+Try
+    Try Serve(Process.Arguments()[0])
+    Print("served, the GPU {Gpu.Started() ? "started" : "never started"}")
+Catch error As Error
+    Print("THREW: {error.Message}")
+End Try

@@ -26,21 +26,28 @@ Import std.time
 Import fbengine
 Import fbengine_audio
 Import fbengine_physics
+Import fbengine_ui
 Import "./checks"
 Import "./controls"
 Import "./cues"
 Import "./flow"
+Import "./captions"
 Import "./follow"
+Import "./frontend"
 Import "./game"
+Import "./hud"
 Import "./ground"
 Import "./afloat"
 Import "./island"
 Import "./landmarks"
 Import "./map"
+Import "./prompts"
 Import "./res" As Res
 Import "./plants"
+Import "./screenmode"
 Import "./screens"
 Import "./sea"
+Import "./settings"
 Import "./sky"
 Import "./soundscape"
 Import "./walks"
@@ -1981,6 +1988,7 @@ Final Class Walker
     Field walk: String[]
     Field next: Int = 0
     Field walking: Bool = False
+    Field holding: Bool = False
 
     New(walk: String[])
         Self.walk = walk
@@ -2017,6 +2025,17 @@ Final Class Walker
                 next += 1
                 Return step
             End If
+        ElseIf holding
+            // Held till the sluice opens, as a person holds it.
+            If game.Story().SluiceOpen()
+                Try Simulate.KeyUp(Key.E)
+                holding = False
+                next += 1
+                Return step
+            End If
+        ElseIf game.HoldsToOpen()
+            Try Simulate.KeyDown(Key.E)
+            holding = True
         Else
             Try Simulate.PressKey(Key.E)
             next += 1
@@ -2029,7 +2048,9 @@ Final Class Walker
     @MainThread
     Method Stop() Throws GraphicsError
         If walking Then Try Simulate.KeyUp(Key.W)
+        If holding Then Try Simulate.KeyUp(Key.E)
         walking = False
+        holding = False
     End Method
 End Class
 
@@ -2075,7 +2096,7 @@ Function Fault(game: Game, island: Island): String?
         End If
     End For
     Local seen = game.View().Position()
-    If !IsClose(seen, Vec3(here.x, game.EyeAt(), here.y), 0.001) Then Return "you see from {seen}"
+    If !IsClose(seen, Vec3(here.x, game.EyeAt() + game.Bob(), here.y), 0.001) Then Return "you see from {seen}"
     Local wanted = flow.PipHolds() != Null ? "carry" : game.PipMoved() > 0.0 ? "walk" : "idle"
     If island.PipClipName() != wanted Then Return "Pip's playing {island.PipClipName()}, not {wanted}"
     Return Null
@@ -2093,7 +2114,7 @@ Function Walked3d(island: Island, walk: String[], lines: String[],
     End Function)
     Defer game.Free()
     // Heard as a person would, mixed here, as nothing's to play it to.
-    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Try StartAudio(AudioDevice.MANUAL, 44100)
     Defer Audio.Stop()
     Local scape = Try Soundscape.Make(game, island)
     Defer scape.Free()
@@ -2132,6 +2153,14 @@ Function Walked3d(island: Island, walk: String[], lines: String[],
     Try walker.Stop()
     stepped(game, "ended")
     Checks("it stood as the flow says, all along", fault == Null)
+    // Heard on for 3 seconds past the end, as the game goes on, so Pip says how it feels.
+    For step = 1 To 30
+        Flip(False)
+        game.Step(controls, 0.1)
+        scape.Update(game, 0.1)
+        loudest = Max(loudest, PeakOf(Audio.Mix(4410)))
+        steps += 1
+    End For
     Heard(scape, game.Story(), loudest)
     Flip(False)
     Checks("you hear from where you see", IsClose(Listener.Position(), game.View().Position(), 1.0))
@@ -2172,7 +2201,9 @@ Function Walked3d(island: Island, walk: String[], lines: String[],
         End For
         Checks("out of the door, after the end, it's not muffled",
                scape.OutsideNow() == OutsideCutoff(False))
-        Checks("nor quieter", IsClose(scape.SeaNow(), SeaLevel(game.Story().Clock(), False), 0.001))
+        Checks("nor quieter",
+               IsClose(scape.SeaNow(), SeaLevel(game.Story().Clock(), False), 0.001) &&
+               IsClose(scape.SurfNow(), SurfLevel(game.Story().Clock(), False), 0.001))
     End If
     Return ended
 End Function
@@ -2206,13 +2237,48 @@ Function HighsOf(samples: Float[]): Float
     Return Sqrt(sum / Max(samples.Count As Float, 1.0))
 End Function
 
-// Whether what a walk heard is what it should be: the wind and sea all along, your feet, and the
-// flood; the wheel by how it ended; and a mix that's not silent, and doesn't clip.
+// Whether what a walk heard is what it should be: the wind, sea, and surf all along, your feet on each
+// surface, the flood, the mill's parts and sluice; the wheel and works by how it ended; and a mix
+// that's not silent, and doesn't clip.
 Function Heard(scape: Soundscape, flow: Flow, loudest: Float)
-    Checks("the wind and sea are streamed, and playing", scape.AroundYou())
-    Checks("your steps are heard", scape.Played(Cue.STEP_1) > 0 && scape.Played(Cue.STEP_2) > 0 &&
-           scape.Played(Cue.STEP_3) > 0)
+    Checks("the wind, sea, and surf are streamed, and playing", scape.AroundYou())
+    Checks("the music's streamed, and playing", scape.MusicPlaying())
+    // By the end the storm's in: its theme, and none of the calm's.
+    Local levels = MusicLevels(flow.Clock(), False)
+    Checks("the music's at its levels by the weather and tide",
+           IsClose(scape.MusicNow().0, levels.0, 0.0001) &&
+           IsClose(scape.MusicNow().1, levels.1, 0.0001))
+    // The storm's in by the end: the wind's whistling, at its pitch.
+    Checks("the wind's pitched by the storm",
+           IsClose(scape.WindPitchNow(), WindPitch(flow.Clock()), 0.001) &&
+           scape.WindPitchNow() > 1.0)
+    // On rock, sand, the trodden ground from the door to the road, and the mill's boards, each a walk
+    // crosses.
+    Checks("your steps are heard on rock, sand, turf, and boards",
+           scape.Played(Cue.STEP_1) + scape.Played(Cue.STEP_2) + scape.Played(Cue.STEP_3) > 0 &&
+           scape.Played(Cue.SAND_1) + scape.Played(Cue.SAND_2) > 0 &&
+           scape.Played(Cue.TURF_1) + scape.Played(Cue.TURF_2) > 0 &&
+           scape.Played(Cue.FLOOR_1) + scape.Played(Cue.FLOOR_2) > 0)
+    Checks("there's a sound for each cue", scape.CueCount() == CUES)
+    // Pip: a hello each time it's said to catch up with you, worried at the flood, and glad or sad by
+    // how it ended.
+    Checks("Pip says hello as it catches up, and is worried at the flood",
+           scape.Played(Cue.PIP_HELLO) == flow.CaughtUp() && flow.CaughtUp() > 0 &&
+           scape.Played(Cue.PIP_WORRIES) == (flow.Flooded() ? 1 : 0))
+    Checks("Pip's glad or sad, as it ended",
+           scape.Played(Cue.PIP_GLAD) == (flow.Ended() == Ending.BRIGHT ? 1 : 0) &&
+           scape.Played(Cue.PIP_SAD) == (flow.Ended() == Ending.BRIGHT ? 0 : 1))
     Checks("the flood splashes, once", scape.Played(Cue.SPLASH) == 1)
+    // A clank for each part fitted, and the sluice once, as how it ended says.
+    Local fitted = 0
+    For part In [Part.GEAR, Part.PADDLE, Part.BELT]
+        If flow.Fitted(part) Then fitted += 1
+    End For
+    Checks("each part fitted's heard, and the sluice if it opened",
+           scape.Played(Cue.FIT) == fitted &&
+           scape.Played(Cue.SLUICE) == (flow.SluiceOpen() ? 1 : 0))
+    Checks("the works run at the wheel's speed",
+           IsClose(scape.WorksPitch(), WheelSpeed(flow.Ended()), 0.001))
     Checks("the wheel's pitch is its speed",
            IsClose(scape.WheelPitch(), WheelSpeed(flow.Ended()), 0.001))
     Print("its loudest was {loudest}")
@@ -2230,7 +2296,7 @@ Function Listened() Throws GraphicsError, IOError, AudioError
     Local game = Game(island, Function(line: String)
     End Function)
     Defer game.Free()
-    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Try StartAudio(AudioDevice.MANUAL, 44100)
     Defer Audio.Stop()
     Local scape = Try Soundscape.Make(game, island)
     Defer scape.Free()
@@ -2242,6 +2308,17 @@ Function Listened() Throws GraphicsError, IOError, AudioError
     Audio.Mix(rate)
     Local bed = RmsOf(Audio.Mix(rate))
     Checks("the wind and sea are heard at slack water", bed > 0.005)
+    // The surf by itself, over a whole wave each: at its level, and louder with the storm in and its
+    // roar than at slack water, by more than the wind and sea alone could make it.
+    scape.SetWindAndSea(0.0)
+    Local slackSurf = WaveOf(scape, 0.0, rate)
+    Local stormSurf = WaveOf(scape, TIDE_IN_AT, rate)
+    Checks("the surf's at its level, with the storm in",
+           IsClose(scape.SurfNow(), SurfLevel(TIDE_IN_AT, False), 0.0001))
+    Checks("the surf by itself is louder with the storm in", stormSurf > 2.0 * slackSurf)
+    scape.SetWindAndSea(1.0)
+    scape.Surroundings(0.0, False, 1.0)
+    Audio.Mix(rate)
     // A gull, off over the water, over them.
     Local gullOver = 0
     For call = 1 To 6
@@ -2252,25 +2329,188 @@ Function Listened() Throws GraphicsError, IOError, AudioError
     scape.SetBeds(0.0)
     Audio.Mix(rate)
     Audio.Mix(rate)
+    // The music by itself: ducked under a gull and back, and turning to the storm's theme with no click.
+    scape.SetMusic(1.0)
+    Listener.SetPosition(Vec3(door.x, 5.0, door.y))
+    // Long enough after the gulls above to have come back from under them: a second after the last
+    // ends, and 0.8 s up.
+    For step = 1 To 300
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Checks("the music's whole at slack water", IsClose(scape.MusicBusNow(), 1.0, 0.0001))
+    scape.Play(Cue.GULL, door)
+    For step = 1 To 30
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Checks("the music ducks under a gull", IsClose(scape.MusicBusNow(), 0.5, 0.0001))
+    For step = 1 To 150
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Checks("and comes back after", IsClose(scape.MusicBusNow(), 1.0, 0.0001))
+    // The weather and tide from slack water to the tide in, over a whole loop, 16 seconds, against a
+    // whole loop of each theme held still: no step through the crossfade larger than the two still
+    // themes' added, which a crossfade of the two can come to.
+    Local stillStep = 0.0
+    For step = 1 To 960
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        stillStep = Max(stillStep, LargestStep(Audio.Mix(735)))
+    End For
+    Local turningStep = 0.0
+    For step = 1 To 960
+        scape.Surroundings(TIDE_IN_AT * (step As Float64) / 960.0, False, 1.0 / 60.0)
+        turningStep = Max(turningStep, LargestStep(Audio.Mix(735)))
+    End For
+    Local stormStep = 0.0
+    For step = 1 To 960
+        scape.Surroundings(TIDE_IN_AT, False, 1.0 / 60.0)
+        stormStep = Max(stormStep, LargestStep(Audio.Mix(735)))
+    End For
+    Print("the music's largest step, calm {stillStep}, storm {stormStep}, turning {turningStep}")
+    Checks("the music turns to the storm's with no click",
+           !Clicks(turningStep, stillStep + stormStep))
+    Checks("the storm's theme is all of it, once the tide's in",
+           scape.MusicNow().0 < 0.0001 &&
+           IsClose(scape.MusicNow().1, MusicLevels(TIDE_IN_AT, False).1, 0.0001))
+    // Quieter inside.
+    For step = 1 To 60
+        scape.Surroundings(TIDE_IN_AT, True, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Checks("the music's quieter inside", IsClose(scape.MusicBusNow(), 0.7, 0.0001))
+    For step = 1 To 60
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    scape.SetMusic(0.0)
+    For step = 1 To 6
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Audio.Mix(rate)
     Checks("with the beds at nothing, it's silent", PeakOf(Audio.Mix(1024)) < 0.0005)
-    // Each cue, by itself, in its band, from nearby.
+    // The mill's room: what's in it is on its bus, whose ring's heard; your steps ring there, after
+    // they've ended, and not outside; and it's muffled from out, as the outside is from in.
+    Checks("the audio's stereo, as StartAudio starts it", Audio.Channels() == 2)
+    Checks("what's in the mill is in its room, which rings, and your steps in it",
+           scape.MillOnItsBus())
+    For step = 1 To 60
+        scape.Surroundings(0.0, True, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    scape.Play(Cue.FLOOR_1, door)
+    Audio.Mix(rate / 5)
+    Local ringing = RmsOf(Audio.Mix(rate * 2 / 5))
+    For step = 1 To 60
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Audio.Mix(rate)
+    scape.Play(Cue.FLOOR_1, door)
+    Audio.Mix(rate / 5)
+    Local dry = RmsOf(Audio.Mix(rate * 2 / 5))
+    Print("a step's ring, inside {ringing}, and out {dry}")
+    Checks("your steps ring in the mill, and not outside", ringing > 0.0005 && ringing > 10.0 * dry)
+    Checks("the mill's muffled from outside", scape.MillNow() == OutsideCutoff(True))
+    // A creak at the mill, from beside it, outside and in: from outside, its highs are 10 times less.
+    Local atWorks = scape.MillAt()
+    Listener.SetPosition(Vec3(atWorks.x, atWorks.y, atWorks.z + 1.0))
+    Local creakFrom = Function(inside: Bool): Float
+        For step = 1 To 60
+            scape.Surroundings(0.0, inside, 1.0 / 60.0)
+            Audio.Mix(735)
+        End For
+        Audio.Mix(rate)
+        scape.Play(Cue.CREAK, door)
+        Return HighBandOf(Audio.Mix(rate * 3 / 5), rate)
+    End Function
+    Local creakOutside = creakFrom(False)
+    Local creakInside = creakFrom(True)
+    Print("a creak's highs, from outside {creakOutside}, and in {creakInside}")
+    Checks("a creak's muffled from outside, by what's heard", creakInside > 10.0 * creakOutside)
+    // Item 1: the first step in is as bright as one long in, within 3 dB above 1 kHz.
+    For step = 1 To 60
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Audio.Mix(rate)
+    scape.Surroundings(0.0, True, 1.0 / 60.0)
+    scape.Play(Cue.FLOOR_1, door)
+    Local firstIn = HighBandOf(Audio.Mix(rate / 5), rate)
+    For step = 1 To 120
+        scape.Surroundings(0.0, True, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Audio.Mix(rate)
+    scape.Play(Cue.FLOOR_1, door)
+    Local longIn = HighBandOf(Audio.Mix(rate / 5), rate)
+    Print("a step's highs, the first frame in {firstIn}, and long in {longIn}")
+    Checks("the first step in is as bright as the rest",
+           firstIn > 0.708 * longIn && firstIn < 1.413 * longIn)
+    For step = 1 To 60
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Audio.Mix(rate)
+    // Each cue, by itself, in its band, from nearby: the splash on the road, from outside, and the
+    // rest at the mill's works, from inside it, where they are.
     Local mill = scape.MillAt()
     Local road = scape.SplashAt()
     For cue In [Cue.STEP_1, Cue.STEP_2, Cue.STEP_3, Cue.FLOOR_1, Cue.FLOOR_2, Cue.WADE_1,
-                Cue.WADE_2,
-                Cue.CREAK, Cue.SPLASH]
-        Local near = cue == Cue.SPLASH ? road : mill
+                Cue.WADE_2, Cue.SAND_1, Cue.SAND_2, Cue.TURF_1, Cue.TURF_2,
+                Cue.CREAK, Cue.SPLASH, Cue.FIT, Cue.SLUICE, Cue.PIP_HELLO, Cue.PIP_TAKES,
+                Cue.PIP_GIVES, Cue.PIP_WORRIES, Cue.PIP_GLAD, Cue.PIP_SAD]
+        Local near = cue == Cue.SPLASH ? road : IsPip(cue) ? scape.PipAt() : mill
         Listener.SetPosition(Vec3(near.x, near.y, near.z + 1.0))
+        // From inside for what's in the mill, Pip's voice too while it's there, as it is to start.
+        Local fromInside = IsPip(cue) ? scape.PipInMill() : cue != Cue.SPLASH
+        For step = 1 To 30
+            scape.Surroundings(0.0, fromInside, 1.0 / 60.0)
+            Audio.Mix(735)
+        End For
         scape.Play(cue, door)
-        Local peak = PeakOf(Audio.Mix(rate))
+        // The sluice's rush, of 2.2 s, all of it.
+        Local peak = PeakOf(Audio.Mix(cue == Cue.SLUICE ? rate * 3 : rate))
+        Print("cue {cue As Int} peaks at {peak}")
         Checks("cue {cue As Int} reaches the mix", peak > 0.05 && peak < 0.5)
     End For
-    // A gull, out over the water, heard from where you stand.
+    // A gull, out over the water, heard from where you stand, outside.
     Listener.SetPosition(Vec3(door.x, 5.0, door.y))
+    For step = 1 To 60
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
     scape.Play(Cue.GULL, door)
     Local gullPeak = PeakOf(Audio.Mix(rate))
+    Print("a gull peaks at {gullPeak}")
     Checks("a gull reaches the mix", gullPeak > 0.01 && gullPeak < 0.5)
-    Checks("what's outside is on its bus", scape.OutsideOnItsBus())
+    Checks("what's outside is on its buses, under the options' levels", scape.OutsideOnItsBus())
+    // Each of the options' levels at 0 silences its own, and only that; Master, all of it.
+    Local heardAt = Function(slider: Mix): (Float, Float, Float)
+        For mix In [Mix.MASTER, Mix.MUSIC, Mix.AMBIENCE, Mix.EFFECTS]
+            scape.SetLevel(mix, mix == slider ? 0.0 : 1.0)
+        End For
+        Return Heard3(scape, door, rate)
+    End Function
+    Local all = Heard3(scape, door, rate)
+    Checks("with every level up, music, beds, and effects are heard",
+           all.0 > 0.0005 && all.1 > 0.0005 && all.2 > 0.01)
+    For slider In [Mix.MUSIC, Mix.AMBIENCE, Mix.EFFECTS]
+        Local heard = heardAt(slider)
+        Local silent = slider == Mix.MUSIC ? heard.0 : slider == Mix.AMBIENCE ? heard.1 : heard.2
+        Local rest = slider == Mix.MUSIC ? heard.1 + heard.2 : slider == Mix.AMBIENCE ? heard.0 + heard.2 : heard.0 + heard.1
+        Print("{slider} at 0: music {heard.0}, beds {heard.1}, a gull {heard.2}")
+        // Silent is 60 dB under what's still heard, as the mill's ring from a while ago is still there.
+        Checks("{slider} at 0 silences it, and only it", silent < 0.001 * rest && rest > 0.001)
+    End For
+    Local mastered = heardAt(Mix.MASTER)
+    Checks("Master at 0 silences everything", mastered.0 + mastered.1 + mastered.2 < 0.00001)
+    For mix In [Mix.MASTER, Mix.MUSIC, Mix.AMBIENCE, Mix.EFFECTS]
+        scape.SetLevel(mix, 1.0)
+        Checks("{mix}'s level is what was set", scape.Level(mix) == 1.0)
+    End For
     Local works = island.PlaceOf(Spot.WORKS)
     Checks("a creak's at the mill's works",
            IsClose(mill.x, works.x, 0.01) && IsClose(mill.z, works.y, 0.01))
@@ -2297,7 +2537,7 @@ Function Listened() Throws GraphicsError, IOError, AudioError
     For second = 1 To 3
         Audio.Mix(rate)
     End For
-    Checks("only the wind and sea play on", Audio.Playing() == 2)
+    Checks("only the beds and the music play on", Audio.Playing() == 5)
     // The wheel's where it's drawn, and heard outside.
     Local wheel = scape.WheelAt()
     Local drawn = island.WheelAt()
@@ -2309,12 +2549,13 @@ Function Listened() Throws GraphicsError, IOError, AudioError
         scape.Surroundings(0.0, False, 1.0 / 60.0)
         Audio.Mix(735)
     End For
-    Local outsideMix = Audio.Mix(rate)
+    // Over a whole wave of the surf, which breaks each 4 seconds, so it's each at its average.
+    Local outsideMix = Audio.Mix(rate * 4)
     For step = 1 To 60
         scape.Surroundings(0.0, True, 1.0 / 60.0)
         Audio.Mix(735)
     End For
-    Local insideMix = Audio.Mix(rate)
+    Local insideMix = Audio.Mix(rate * 4)
     Local lower = 20.0 * Log10((RmsOf(outsideMix) / Max(RmsOf(insideMix), 0.00001)) As Float64)
     Print("from inside, it's {lower} dB lower")
     Checks("from inside, it's at least 6 dB lower", lower >= 6.0)
@@ -2334,15 +2575,17 @@ Function Listened() Throws GraphicsError, IOError, AudioError
     End For
     scape.Play(Cue.SPLASH, door)
     Checks("the splash is muffled from inside", openSplash > 2.0 * HighsOf(Audio.Mix(rate)))
-    // Through the door and back, a frame at a time, with no click: no sample's step stands out.
+    // Through the door and back, a frame at a time, with no click: no sample's step stands out, over the
+    // wind and sea, with the surf's crashes at nothing, as they'd hide one.
     scape.SetBeds(1.0)
+    scape.SetSurf(0.0)
     For step = 1 To 60
         scape.Surroundings(0.0, False, 1.0 / 60.0)
         Audio.Mix(735)
     End For
-    // Over as long as its waves take.
+    // Over 8 seconds, long enough that the beds' own largest step is found, as a shorter while can miss it.
     Local largestBefore = 0.0
-    For step = 1 To 240
+    For step = 1 To 480
         scape.Surroundings(0.0, False, 1.0 / 60.0)
         largestBefore = Max(largestBefore, LargestStep(Audio.Mix(735)))
     End For
@@ -2354,7 +2597,10 @@ Function Listened() Throws GraphicsError, IOError, AudioError
         End For
     End For
     Print("the largest step's {largestBefore}, and {largestDuring} through the door")
-    Checks("the door doesn't click", largestDuring <= 1.5 * largestBefore)
+    Checks("the door doesn't click", !Clicks(largestDuring, largestBefore))
+    Checks("a click of 1.4 times the largest step would",
+           Clicks(1.4 * largestBefore, largestBefore))
+    scape.SetSurf(1.0)
 End Function
 
 // Whether the PNGs of each view in `one` are close to the same in `other`, by their PSNR, in decibels.
@@ -2366,6 +2612,75 @@ Function AlikeViews(one: Path, other: Path, floor: Float) Throws IOError
         Print("{name}: {psnr} dB")
         Checks("{name} is alike in both", psnr >= floor)
     End For
+End Function
+
+// How loud what's above 1 kHz is, of stereo `samples`' left, at `rate`: through four one-pole
+// high-passes, 24 dB an octave, so what's an octave or two below hardly counts.
+Function HighBandOf(samples: Float[], rate: Int): Float
+    Local kept = 1.0 / (1.0 + 6.2831853 * 1000.0 / (rate As Float))
+    Local count = samples.Count / 2
+    Local band: Float[] = []
+    For at = 0 Until count
+        band.Add(samples[at * 2])
+    End For
+    For stage = 1 To 4
+        Local out = 0.0
+        Local last = 0.0
+        For at = 0 Until count
+            Local input = band[at]
+            out = kept * (out + input - last)
+            last = input
+            band[at] = out
+        End For
+    End For
+    Local sum = 0.0
+    For value In band
+        sum += value * value
+    End For
+    Return Sqrt(sum / Max(count As Float, 1.0))
+End Function
+
+// Starts the audio on `device`, at `rate`, or its own for 0, in stereo whatever its output is, as the
+// mill's reverb, Freeverb's, can only be heard in stereo, and a surround output would leave it dry.
+Function StartAudio(device: AudioDevice, rate: Int32 = 0) Throws AudioError
+    Try Audio.Start(device, rate, 2)
+End Function
+
+// How loud the music, the beds, and a gull are, each by itself, from the door: the others at nothing.
+Function Heard3(scape: Soundscape, door: Vec2, rate: Int): (Float, Float, Float)
+    scape.SetMusic(1.0)
+    scape.SetBeds(0.0)
+    Settle(scape)
+    Local music = RmsOf(Audio.Mix(rate))
+    scape.SetMusic(0.0)
+    scape.SetBeds(1.0)
+    Settle(scape)
+    Local beds = RmsOf(Audio.Mix(rate))
+    scape.SetBeds(0.0)
+    Settle(scape)
+    scape.Play(Cue.GULL, door)
+    Local gull = PeakOf(Audio.Mix(rate))
+    Return (music, beds, gull)
+End Function
+
+// A second of the soundscape at slack water, outside, so what's been set's heard as it is, and no gull's
+// left ringing.
+Function Settle(scape: Soundscape)
+    For step = 1 To 60
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Audio.Mix(44100 * 2)
+End Function
+
+// Whether a step of `during` stands out over `before`, the largest there was before it: a click.
+Function Clicks(during: Float, before: Float): Bool => during > 1.25 * before
+
+// The surf's loudness over a whole wave, 4 seconds, `clock` seconds in, once it's settled there.
+Function WaveOf(scape: Soundscape, clock: Float64, rate: Int): Float
+    scape.Surroundings(clock, False, 1.0)
+    Audio.Mix(rate)
+    Return RmsOf(Audio.Mix(rate * 4))
 End Function
 
 // The largest change from a sample to the next on the same channel.
@@ -2674,6 +2989,107 @@ Function Moved(game: Game, controls: Controls, seconds: Float): Bool
     Return True
 End Function
 
+// Crossing the mill's door ahead of Pip, out and in five times, with a second at each side for Pip to
+// come up: Pip says hello as often as it's said to catch up, not each time it's beside you again.
+Function HelloedAtTheDoor() Throws GraphicsError, IOError, AudioError
+    Local island = Try Opened()
+    Defer EndGraphics()
+    Defer Assets.StopWatching()
+    Defer island.Free()
+    Local caught: String[] = []
+    Local game = Game(island, Function(line: String)
+        If line.EndsWith("Pip catches up") Then caught.Add(line)
+    End Function)
+    Defer game.Free()
+    Try StartAudio(AudioDevice.MANUAL, 44100)
+    Defer Audio.Stop()
+    Local scape = Try Soundscape.Make(game, island)
+    Defer scape.Free()
+    Local controls = Controls()
+    Local stepped = Function()
+        Flip(False)
+        game.Step(controls, 0.1)
+        scape.Update(game, 0.1)
+        Audio.Mix(4410)
+    End Function
+    Local door = DoorSpot()
+    Local crossed = 0
+    // Each step, on the side of the door it's on, the first each way too.
+    Local stepsHeard = [0, 0]
+    Local wrongSide = 0
+    Local stepsPlayed = Function(): Int
+        Local count = 0
+        For number = 0 Until CUES
+            If IsStep(number As Cue) Then count += scape.Played(number As Cue)
+        End For
+        Return count
+    End Function
+    Local heardOnItsSide = Function()
+        Local before = stepsPlayed()
+        stepped()
+        If stepsPlayed() > before
+            Local inside = InMill(game.Location().x, game.Location().y)
+            stepsHeard[inside ? 1 : 0] += 1
+            If scape.LastStepInMill() != inside Then wrongSide += 1
+        End If
+    End Function
+    Local ringOpen = True
+    Local ringMuffled = True
+    For crossing = 1 To 5
+        For spot In [Vec2(door.x, door.y + 3.0), MillSpot()]
+            Local inside = Try WalkedOnTo(game, spot, heardOnItsSide)
+            If inside == InMill(spot.x, spot.y) Then crossed += 1
+            For step = 1 To 10
+                stepped()
+            End For
+            If inside Then ringOpen = ringOpen && scape.StepsRingNow() == OutsideCutoff(False)
+            If !inside Then ringMuffled = ringMuffled && scape.StepsRingNow() == OutsideCutoff(True)
+        End For
+    End For
+    // And just out of the door and straight back in, five times, Pip left inside: it's beside you
+    // again each time, with nothing new to say.
+    Local besideAgain = 0
+    For crossing = 1 To 5
+        Local out = Try WalkedOnTo(game, Vec2(door.x, door.y - 1.0), heardOnItsSide)
+        Local wasHere = game.Story().PipHere()
+        Local back = Try WalkedOnTo(game, MillSpot(), heardOnItsSide)
+        For step = 1 To 10
+            stepped()
+        End For
+        If !out && back && !wasHere && game.Story().PipHere() Then besideAgain += 1
+    End For
+    Print("just out and back in, Pip's beside you again {besideAgain} times")
+    Checks("just out of the door and back, Pip's beside you again", besideAgain > 0)
+    Local hellos = scape.Played(Cue.PIP_HELLO)
+    Print(
+        "across the door {crossed} times, Pip's said to catch up {caught.Count} times, and says " +
+        "hello {hellos}")
+    Checks("the door's crossed, out and in, five times", crossed == 10)
+    Print("steps heard outside {stepsHeard[0]}, inside {stepsHeard[1]}, on the wrong side {wrongSide}")
+    Checks("each step's heard on its side of the door, the first each way too",
+           wrongSide == 0 && stepsHeard[0] > 0 && stepsHeard[1] > 0)
+    Checks("your steps' ring is open inside, and muffled a second out",
+           ringOpen && ringMuffled)
+    Checks("Pip says hello as often as it's said to catch up", hellos == caught.Count &&
+           hellos == game.Story().CaughtUp())
+End Function
+
+// Walks you to `spot`, by W, within a meter, at most 100 steps, each `stepped`, and says whether you're
+// in the mill.
+Function WalkedOnTo(game: Game, spot: Vec2, stepped: Func()): Bool Throws GraphicsError
+    Try Simulate.KeyDown(Key.W)
+    For step = 1 To 100
+        Local here = game.Location()
+        If (spot.x - here.x) * (spot.x - here.x) + (spot.y - here.y) * (spot.y - here.y) < 1.0
+            Break
+        End If
+        game.Face(spot.x, spot.y)
+        stepped()
+    End For
+    Try Simulate.KeyUp(Key.W)
+    Return InMill(game.Location().x, game.Location().y)
+End Function
+
 // Walks you to (`toX`, `toZ`), by W, within a meter, at most `steps` steps.
 Function WalkedTo(game: Game, controls: Controls, toX: Float, toZ: Float,
                   steps: Int) Throws GraphicsError
@@ -2838,54 +3254,148 @@ Final Class Session
     Field last: String[]
     Field font: Font
     Field left: Bool = False
-    // Whether the mouse is free, to point at the end screen.
+    // Whether the mouse is free, to point at the end screen or a menu.
     Field pointing: Bool = False
-    // Whether it's drawn as a low GPU can.
+    // The title, pause, and options, and the HUD.
+    Field front: Frontend
+    Field hud: Hud
+    Field captions: Captions
+    // The window its options put, a player's or a test's, or Null for one they leave as it is; and
+    // the size it's framed at.
+    Field port: WindowLike? = Null
+    Field framed: (Int32, Int32)
+    // Whether it was paused at the last Step: the game stopped under the menus.
+    Field held: Bool = False
+
+    // Whether it's drawn as a low GPU can, whatever its options say.
     Field low: Bool
 
-    New(island: Island, last: String[], game: Game, scape: Soundscape, low: Bool)
+    New(island: Island, last: String[], game: Game, scape: Soundscape, front: Frontend,
+        low: Bool = False)
         Self.island = island
         Self.low = low
         Self.last = last
         controls = Controls()
         Self.game = game
         Self.scape = scape
+        Self.front = front
         ending = EndScreen()
         font = Font.BuiltIn(20.0)
+        hud = Hud()
+        captions = Captions()
+        framed = (1280, 720)
     End New
 
-    // One at its first moment, on `island`, with the audio started, drawn as a `low` GPU can, if it's one.
+    // One at its first moment, on `island`, with the audio started, being played, or `atTitle`, with
+    // the options kept in `file`, or the defaults for Null, drawn as a `low` GPU can, if it's one.
     @MainThread
-    Static Method Make(island: Island, low: Bool): Session Throws IOError, InputError
-        Try SetMouseRelative(True)
+    Static Method Make(island: Island, file: Path? = Null, atTitle: Bool = False,
+                       low: Bool = False): Session Throws IOError, InputError
+        Local front = Frontend(file)
+        If !atTitle Then front.Open(Page.PLAYING)
+        Try SetMouseRelative(!atTitle)
         Local last = [""]
         Local game = Game(island, Function(line: String)
             last[0] = line
         End Function, low)
-        Return Session(island, last, game, Try Soundscape.Make(game, island), low)
+        Local made = Session(island, last, game, Try Soundscape.Make(game, island), front,
+                             low)
+        made.pointing = atTitle
+        made.Applied()
+        Return made
+    End Method
+
+    // What the options say, put into what they're of: the volumes, the look, the picture, and, in a
+    // player's window, the window.
+    @MainThread
+    Method Applied()
+        Local options = front.Current()
+        // Paused, the effects stop, and the music and the wind and sea go on, quieter.
+        Local quieter = held ? PAUSED_LEVEL : 1.0
+        scape.SetLevel(Mix.MASTER, options.Master)
+        scape.SetLevel(Mix.MUSIC, options.Music * quieter)
+        scape.SetLevel(Mix.AMBIENCE, options.Ambience * quieter)
+        scape.SetLevel(Mix.EFFECTS, held ? 0.0 : options.Effects)
+        controls = Controls(options.Keys)
+        controls.SetLook(options.Look, options.InvertY)
+        hud.SetScale(options.TextScale())
+        captions.SetScale(options.TextScale())
+        ending.SetScale(options.TextScale())
+        game.SetMotion(!options.ReducedMotion)
+        game.SetHold(options.HoldToOpen)
+        Pictured(island, game.View(), low ? Quality.LOW : options.Picture)
+    End Method
+
+    // Puts the window as `choice` says, if it's one its options put.
+    @MainThread
+    Method Put(choice: WindowChoice)
+        Local window = port
+        If window == Null Then Return
+        Try
+            Try Switched(window, choice, framed)
+        Catch e As GraphicsError
+            PrintError("the window can't be {choice.Name()}: {e.Message}")
+        End Try
+    End Method
+
+    // Gives it `window` to put, at the choice its options say, framed at the size it is now.
+    @MainThread
+    Method Windowing(window: WindowLike, display: Display?)
+        port = window
+        If window.Mode() == WindowMode.WINDOWED Then framed = (window.Width(), window.Height())
+        Local choice = front.SetModes(display)
+        If choice.Shown != window.Mode() || choice.Shown == WindowMode.FULLSCREEN Then Put(choice)
+    End Method
+
+    // A game at its first moment, in place of the one there was.
+    @MainThread
+    Method Fresh() Throws IOError
+        scape.Free()
+        game.Free()
+        Local said = last
+        said[0] = ""
+        game = Game(island, Function(line: String)
+            said[0] = line
+        End Function, low)
+        scape = Try Soundscape.Make(game, island)
+        Applied()
+        Local heard = scape
+        captions.Reset(Function(cue: Cue) => heard.Played(cue))
+        ending.Update(game.Story(), 0.0)
     End Method
 
     // Moves it all on `seconds`, whether the window's in front or not. With the end screen shown, the
     // mouse and keys are its, not the game's. It plays again if that's been chosen.
     @MainThread
     Method Step(seconds: Float) Throws IOError, InputError
-        controls.Set.SetEnabled(!ending.Showing())
-        scape.Update(game, Moved(game, controls, seconds) ? seconds : 0.0)
-        ending.Update(game.Story(), seconds)
-        If ending.LeaveChosen() Then left = True
-        If ending.AgainChosen()
-            scape.Free()
-            game.Free()
-            Local said = last
-            said[0] = ""
-            game = Game(island, Function(line: String)
-                said[0] = line
-            End Function, low)
-            scape = Try Soundscape.Make(game, island)
-            ending.Update(game.Story(), 0.0)
+        front.Update(ending.Showing(), seconds)
+        If front.QuitChosen() Then left = True
+        If front.LeaveChosen() Then Try Fresh()
+        Local asked = front.WindowAsked()
+        If asked != Null Then Put(asked)
+        Local page = front.Showing()
+        Local holding = page != Page.PLAYING && front.OverGame()
+        If front.OptionsChanged() || holding != held
+            held = holding
+            Applied()
         End If
-        If ending.Showing() != pointing
-            pointing = ending.Showing()
+        controls.Set.SetEnabled(page == Page.PLAYING && !ending.Showing())
+        If page == Page.TITLE
+            front.Fly(game.View(), seconds)
+            scape.Update(game, 0.0)
+        ElseIf page == Page.PLAYING
+            scape.Update(game, Moved(game, controls, seconds) ? seconds : 0.0)
+            Local heard = scape
+            captions.Update(Function(cue: Cue) => heard.Played(cue), game.Story().Clock(), seconds)
+            ending.Update(game.Story(), seconds)
+            If ending.LeaveChosen() Then left = True
+            If ending.AgainChosen() Then Try Fresh()
+        Else
+            scape.Update(game, 0.0)
+        End If
+        Local free = page != Page.PLAYING || ending.Showing()
+        If free != pointing
+            pointing = free
             Try SetMouseRelative(!pointing)
         End If
     End Method
@@ -2893,12 +3403,14 @@ Final Class Session
     // Draws what it says over what's drawn.
     @MainThread
     Method Draw()
-        Local canvas = Screen.Canvas()
-        canvas.SetColor(Color32(236, 232, 220, 255))
-        canvas.DrawText(font, game.Story().ClockLine(), 24, 20)
-        canvas.DrawText(font, Untimed(last[0]), 24, 48)
-        canvas.DrawText(font, game.Prompt(), 24, 680)
+        Local options = front.Current()
+        If front.OverGame()
+            hud.Draw(game.Story().ClockLine(), options.Subtitles ? Untimed(last[0]) : "",
+                     ending.Showing() ? "" : game.Prompt(), front.Device(), game.Opening())
+            If options.SoundCaptions Then captions.Draw()
+        End If
         ending.Draw()
+        front.Draw()
     End Method
 
     @MainThread
@@ -2907,6 +3419,30 @@ Final Class Session
         game.Free()
     End Method
 End Class
+
+// How loud the music and the wind and sea are, paused, of what they'd be.
+Const PAUSED_LEVEL: Float = 0.5
+
+// Sets what `camera` and `island` spend on the picture for `quality`: everything, or, low, no bloom
+// and no sun's shadows.
+@MainThread
+Function Pictured(island: Island, camera: Camera, quality: Quality)
+    Local low = quality == Quality.LOW
+    Looked(camera, low)
+    If low Then camera.SetBloom(0.0, 1.0)
+    island.SetSunShadows(!low)
+End Function
+
+// The display the window's on, for its modes, or Null with none, as offscreen.
+@MainThread
+Function FirstDisplay(): Display?
+    Try
+        Local all = Try Displays()
+        Return all.Count > 0 ? all[0] : Null
+    Catch e As GraphicsError
+        Return Null
+    End Try
+End Function
 
 // Steps `session` on `steps` tenths of a second, offscreen, mixing what it plays.
 Function Stepped(session: Session, steps: Int) Throws IOError, InputError
@@ -2964,10 +3500,18 @@ Function EndAndAgain(session: Session, said: String, wheelAtFirst: Quat) Throws 
     Try Stepped(session, 1)
     Checks("under it, the mouse doesn't turn you", session.game.Yaw() == yaw)
     Checks("nor do keys walk you", session.game.Location() == at)
+    // The player's levels, set in the options, and kept as it begins again.
+    Local scapeWas = session.scape
+    Checks("its levels the player's", session.scape.Level(Mix.MUSIC) == 0.25 &&
+           session.scape.Level(Mix.EFFECTS) == 0.5)
     // E, with it: not a key the new game hears.
     Try Simulate.PressKey(Key.E)
     Try Simulate.PressKey(Key.SPACE)
     Checks("playing again begins again", Try SteppedToAgain(session, flow))
+    Checks("with the player's levels as they set them",
+           session.scape != scapeWas && session.scape.Level(Mix.MASTER) == 1.0 &&
+           session.scape.Level(Mix.MUSIC) == 0.25 && session.scape.Level(Mix.AMBIENCE) == 1.0 &&
+           session.scape.Level(Mix.EFFECTS) == 0.5)
     Checks("the sea's back as soon as it does", island.SeaDrawnAt() == SeaHeight(0.0))
     Checks("and the mouse is the game's", MouseRelative())
     Try Stepped(session, 1)
@@ -2987,13 +3531,19 @@ End Function
 // the keyboard, the mouse, and a gamepad.
 Function EndShown(folder: Path) Throws GraphicsError, IOError, AudioError, InputError
     Try Dir.CreateAll(folder)
+    Local kept = Try TempDir()
+    Local file = kept.Path / "options.ini"
+    Local options = Options()
+    options.Music = 0.25
+    options.Effects = 0.5
+    Try KeepOptions(options, file)
     Local island = Try Opened()
     Defer EndGraphics()
     Defer Assets.StopWatching()
     Defer island.Free()
-    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Try StartAudio(AudioDevice.MANUAL, 44100)
     Defer Audio.Stop()
-    Local session = Try Session.Make(island, False)
+    Local session = Try Session.Make(island, file)
     Defer session.Free()
     Try Simulate.FocusWindow()
     Flip(False)
@@ -3119,15 +3669,17 @@ Function Played(low: Bool) Throws GraphicsError, IOError, InputError, AudioError
     // A machine with no sound still plays it, in silence.
     Local device = AudioDevice.DEFAULT
     Try
-        Try Audio.Start(device)
+        Try StartAudio(device)
     Catch e As AudioError
         PrintError("no sound: {e.Message}")
-        Try Audio.Start(AudioDevice.SILENT)
+        Try StartAudio(AudioDevice.SILENT)
     End Try
     Defer Audio.Stop()
-    Local session = Try Session.Make(island, low)
+    Local session = Try Session.Make(island, OptionsFile(), True, low)
     Defer session.Free()
-    While !Window.Closed() && !KeyHit(Key.ESCAPE) && !session.left
+    session.Windowing(RealWindow(), FirstDisplay())
+    Defer session.front.KeepNow()
+    While !Window.Closed() && !session.left
         Flip()
         Try session.Step(FrameStep(Frame.Delta()) As Float)
         If Screen.Texture() == Null Then Continue
@@ -3136,11 +3688,592 @@ Function Played(low: Bool) Throws GraphicsError, IOError, InputError, AudioError
     End While
 End Function
 
+// How many of `image`'s pixels in `box` are near `color`, each channel within 40.
+Function NearIn(image: Image, box: Rect, color: Color32): Int
+    Local count = 0
+    For y = Max(box.Y As Int, 0) Until Min((box.Y + box.Height) As Int, image.Height)
+        For x = Max(box.X As Int, 0) Until Min((box.X + box.Width) As Int, image.Width)
+            Local one = image[x, y]
+            If Abs((one.r As Int) - (color.r As Int)) < 40 &&
+               Abs((one.g As Int) - (color.g As Int)) < 40 &&
+               Abs((one.b As Int) - (color.b As Int)) < 40
+                count += 1
+            End If
+        End For
+    End For
+    Return count
+End Function
+
+// The box of what's called `name` in the front end, in the screen's pixels, as its UI's units are
+// scaled by the text's size.
+Function BoxOf(session: Session, name: String): Rect
+    Local box = session.front.Find(name)?.Box() ?? Rect(0, 0, 0, 0)
+    Local by = session.front.Scale()
+    Return Rect(box.X * by, box.Y * by, box.Width * by, box.Height * by)
+End Function
+
+// The island drawn with what's over it, saved as `name` in `folder`, and given.
+Function Pictured(session: Session, folder: Path, name: String): Image Throws GraphicsError, IOError
+    session.island.Scene().Render()
+    session.Draw()
+    Try Screen.Save(folder / "{name}.png")
+    Return Try Screen.ToImage()
+End Function
+
+// Presses `key`, a step on each side.
+Function Pressed(session: Session, key: Key) Throws GraphicsError, IOError, InputError
+    Try Simulate.PressKey(key)
+    Try Stepped(session, 1)
+End Function
+
+// Presses `button` on `pad`, as a person does.
+Function PadPressed(session: Session, pad: VirtualGamepad,
+                    button: GamepadButton) Throws GraphicsError, IOError, InputError
+    pad.SetButton(button, True)
+    Try Stepped(session, 1)
+    pad.SetButton(button, False)
+    Try Stepped(session, 1)
+End Function
+
+// Clicks what's called `name` in the front end.
+Function Clicked(session: Session, name: String) Throws GraphicsError, IOError, InputError
+    Local at = BoxOf(session, name).Center
+    Try Simulate.MoveMouse(at.x, at.y)
+    Try Stepped(session, 1)
+    Try Simulate.Click(MouseButton.LEFT)
+    Try Stepped(session, 2)
+End Function
+
+// The title, the pause menu, and Options, a thing at a time, offscreen, by the keyboard, the mouse,
+// and a gamepad, with what each looks like saved in `folder`, and the options kept in a folder of
+// its own.
+Function MenusShown(folder: Path) Throws GraphicsError, IOError, AudioError, InputError
+    Try Dir.CreateAll(folder)
+    Local kept = Try TempDir()
+    Local file = kept.Path / "options.ini"
+    Local island = Try Opened()
+    Defer EndGraphics()
+    Defer Assets.StopWatching()
+    Defer island.Free()
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Defer Audio.Stop()
+    Local session = Try Session.Make(island, file, True)
+    Defer session.Free()
+    Try Simulate.FocusWindow()
+    Flip(False)
+
+    // The title, over the island, the clock not running, the mouse free.
+    Local clock = session.game.Story().Clock()
+    Try Stepped(session, 10)
+    Local from = session.game.View().Position(Space.WORLD)
+    Try Stepped(session, 10)
+    Checks("it starts at the title", session.front.Showing() == Page.TITLE)
+    Checks("the clock doesn't run there", session.game.Story().Clock() == clock)
+    Checks("the mouse is free there", !MouseRelative())
+    Local flight = Apart(from, session.game.View().Position(Space.WORLD))
+    Checks("its camera flies round the island", flight > 1.0)
+    Local title = Try Pictured(session, folder, "title")
+    Checks("its name's drawn in brass", NearIn(title, BoxOf(session, "title.name"), BRASS) > 200)
+    Checks("with no HUD", NearIn(title, Rect(24, 24, 4, 52), BRASS) < 20)
+
+    // Options, by the keyboard: down to it, Enter, and the master volume down by four steps.
+    Try Pressed(session, Key.DOWN)
+    Try Pressed(session, Key.RETURN)
+    Checks("Options, by the keyboard", session.front.Showing() == Page.OPTIONS)
+    Local seen = session.game.View().Position(Space.WORLD)
+    For step = 1 To 4
+        Try Pressed(session, Key.LEFT)
+    End For
+    Checks("the view stays where the title flew it",
+           Apart(seen, session.game.View().Position(Space.WORLD)) < 0.0001)
+    Checks("the master volume's 0.80, and heard so",
+           Abs(session.scape.Level(Mix.MASTER) - 0.8) < 0.001)
+    // Music, by the keyboard, down one row and four steps.
+    Try Pressed(session, Key.DOWN)
+    For step = 1 To 4
+        Try Pressed(session, Key.LEFT)
+    End For
+    Checks("the music's 0.80, and heard so", Abs(session.scape.Level(Mix.MUSIC) - 0.8) < 0.001)
+    Checks("and nothing else moved", session.scape.Level(Mix.AMBIENCE) == 1.0 &&
+           session.scape.Level(Mix.EFFECTS) == 1.0)
+    Local shown = Try Pictured(session, folder, "options")
+    Checks("its heading's drawn in brass",
+           NearIn(shown, BoxOf(session, "options.name"), BRASS) > 200)
+    Checks("with no HUD from the title", NearIn(shown, Rect(24, 24, 4, 52), BRASS) < 20)
+    Try Pressed(session, Key.ESCAPE)
+    Checks("Escape goes back to the title", session.front.Showing() == Page.TITLE)
+    Checks("and keeps them", KeptOptions(file).Master == 0.8 && KeptOptions(file).Music == 0.8)
+
+    // Play, by a gamepad, as the title's Play has the focus.
+    Local pad = Try Simulate.ConnectGamepad("Xbox Wireless Controller")
+    Defer pad.Unplug()
+    Flip(False)
+    Try PadPressed(session, pad, GamepadButton.SOUTH)
+    Checks("Play, by a gamepad", session.front.Showing() == Page.PLAYING)
+    Checks("the mouse is the game's", MouseRelative())
+    Try Stepped(session, 5)
+    Checks("and the clock runs", session.game.Story().Clock() > clock)
+    Checks("its prompts are the pad's", session.front.Device().Current() == Device.PAD)
+
+    // Paused by Escape, and resumed by it.
+    Try Pressed(session, Key.ESCAPE)
+    Checks("paused, by Escape", session.front.Showing() == Page.PAUSED)
+    Try Pressed(session, Key.ESCAPE)
+    Checks("resumed, by Escape", session.front.Showing() == Page.PLAYING)
+    Try Stepped(session, 3)
+
+    // Paused by Start: the clock stops, and Pip, and the effects, and the music and the wind and sea
+    // go on quieter; and the menu's over the game, with the HUD under it.
+    Local pip = island.PipEntity().Player()
+    Try PadPressed(session, pad, GamepadButton.START)
+    Checks("paused, by Start", session.front.Showing() == Page.PAUSED)
+    Local stopped = session.game.Story().Clock()
+    Local pipAt = pip.Time()
+    Try Stepped(session, 10)
+    Checks("its clock stops", session.game.Story().Clock() == stopped)
+    Checks("Pip's clip stops", pip.Time() == pipAt)
+    Checks("the effects stop", session.scape.Level(Mix.EFFECTS) == 0.0)
+    Checks("the music goes on, quieter", Abs(session.scape.Level(Mix.MUSIC) - 0.4) < 0.001 &&
+           Abs(session.scape.Level(Mix.AMBIENCE) - 0.5) < 0.001)
+    Checks("the mouse is free", !MouseRelative())
+    Local paused = Try Pictured(session, folder, "pause")
+    Checks("its heading's drawn in brass",
+           NearIn(paused, BoxOf(session, "pause.name"), BRASS) > 200)
+    Checks("over the HUD's brass edge", NearIn(paused, Rect(24, 24, 4, 52), BRASS) > 150)
+
+    // Options from it, by the mouse; Invert Y by a click; back by the pad's east.
+    Try Clicked(session, "pause.options")
+    Checks("Options, by the mouse", session.front.Showing() == Page.OPTIONS)
+    Checks("its prompts are the keys' now", session.front.Device().Current() == Device.KEYS)
+    Try Clicked(session, "options.invert")
+    Checks("Invert Y, by a click", session.front.Current().InvertY)
+    // Look, by a click three quarters along its slider.
+    Local track = BoxOf(session, "options.look")
+    Try Simulate.MoveMouse(track.X + track.Width * 0.75, track.Y + track.Height * 0.5)
+    Try Stepped(session, 1)
+    Try Simulate.Click(MouseButton.LEFT)
+    Try Stepped(session, 2)
+    Local look = session.front.Current().Look
+    Checks("Look, by a click", look > 2.0 && look < 2.6)
+    // Kept a second on, before Back, as closing the window then wouldn't lose it.
+    Try Stepped(session, 12)
+    Checks("kept a second on", Abs(KeptOptions(file).Look - look) < 0.01)
+    Try PadPressed(session, pad, GamepadButton.EAST)
+    Checks("back to the pause menu, by the pad", session.front.Showing() == Page.PAUSED)
+    Checks("and kept", KeptOptions(file).InvertY)
+    // Resumed by Escape, and the game's looking's inverted.
+    Try Pressed(session, Key.ESCAPE)
+    Checks("resumed, by Escape", session.front.Showing() == Page.PLAYING)
+    Checks("the effects back", session.scape.Level(Mix.EFFECTS) == 1.0 &&
+           Abs(session.scape.Level(Mix.MUSIC) - 0.8) < 0.001)
+    Local pitch = session.game.Pitch()
+    Try Simulate.MouseMotion(0.0, 100.0)
+    Try Stepped(session, 1)
+    Checks("the mouse down looks up, inverted", session.game.Pitch() > pitch)
+    // The mouse turns by the look's sensitivity: 100 pixels at 0.003 a pixel, by it.
+    Local yaw = session.game.Yaw()
+    Try Simulate.MouseMotion(100.0, 0.0)
+    Try Stepped(session, 1)
+    Checks("the mouse turns by the sensitivity",
+           Abs(Abs(session.game.Yaw() - yaw) - 0.3 * look) < 0.01)
+    // And the right stick, down, looks up too, inverted.
+    pitch = session.game.Pitch()
+    pad.SetAxis(GamepadAxis.RIGHT_Y, 0.5)
+    Try Stepped(session, 1)
+    pad.SetAxis(GamepadAxis.RIGHT_Y, 0.0)
+    Try Stepped(session, 1)
+    Checks("the stick down looks up, inverted", session.game.Pitch() > pitch)
+    // And leaves to the title, by the mouse, a new game waiting.
+    Try PadPressed(session, pad, GamepadButton.START)
+    Try Clicked(session, "pause.leave")
+    Checks("Leave goes to the title", session.front.Showing() == Page.TITLE)
+    Checks("with a game at its first moment", session.game.Story().Clock() == 0.0)
+    // Controls: Use to F by a click and a key, and Hand to F refused, as Use has it.
+    Try Clicked(session, "title.options")
+    Try Clicked(session, "options.keys")
+    Checks("Controls, by the mouse", session.front.Showing() == Page.KEYS)
+    Try Clicked(session, "keys.4")
+    Try Pressed(session, Key.F)
+    Checks("Use is F", session.front.Current().Keys.Of(Bound.USE) == Key.F)
+    Checks("and says so", (session.front.Find("keys.4") As? Button)?.Text() == "Use: F")
+    Checks("and kept", KeptOptions(file).Keys.Of(Bound.USE) == Key.F)
+    Checks("its prompts say F", PromptName(Device.KEYS, GamepadType.STANDARD, Prompted.USE,
+                                           session.front.Device().Keys()) == "F")
+    Try Clicked(session, "keys.5")
+    Try Pressed(session, Key.F)
+    Checks("Hand to F is refused", session.front.Current().Keys.Of(Bound.HAND) == Key.Q)
+    Checks("and says why",
+           (session.front.Find("keys.said") As? Label)?.Text() == "F is Use's already")
+    // Escape, waiting for one, leaves it as it was.
+    Try Clicked(session, "keys.0")
+    Try Pressed(session, Key.ESCAPE)
+    Checks("Escape leaves Forward as it was",
+           session.front.Current().Keys.Of(Bound.FORWARD) == Key.W)
+    Try Pressed(session, Key.ESCAPE)
+    Try Pressed(session, Key.ESCAPE)
+    Checks("back to the title", session.front.Showing() == Page.TITLE)
+    // Accessibility, by the mouse: larger text, by the keyboard, at once; reduced motion, by the pad.
+    Try Clicked(session, "title.options")
+    Try Clicked(session, "options.access")
+    Checks("Accessibility, by the mouse", session.front.Showing() == Page.ACCESS)
+    Try Pressed(session, Key.DOWN)
+    Try Pressed(session, Key.DOWN)
+    Try Pressed(session, Key.RIGHT)
+    Checks("larger text, by the keyboard", session.front.Current().TextSize == 1 &&
+           session.hud.Scale() == 1.25)
+    Local accessed = Try Pictured(session, folder, "access")
+    Checks("its heading's drawn in brass, larger",
+           NearIn(accessed, BoxOf(session, "access.name"), BRASS) > 300 &&
+           BoxOf(session, "access.name").Height > 50.0)
+    Try PadPressed(session, pad, GamepadButton.DPAD_DOWN)
+    Try PadPressed(session, pad, GamepadButton.SOUTH)
+    Checks("reduced motion, by the pad", session.front.Current().ReducedMotion)
+    Try PadPressed(session, pad, GamepadButton.DPAD_DOWN)
+    Try PadPressed(session, pad, GamepadButton.SOUTH)
+    Checks("the sluice opened by a press, by the pad", !session.front.Current().HoldToOpen)
+    Try Pressed(session, Key.ESCAPE)
+    Try Pressed(session, Key.ESCAPE)
+    Checks("and kept", KeptOptions(file).ReducedMotion && KeptOptions(file).TextSize == 1 &&
+           !KeptOptions(file).HoldToOpen)
+    // The title's flight, slower.
+    Local slowFrom = session.game.View().Position(Space.WORLD)
+    Try Stepped(session, 10)
+    Local slow = Apart(slowFrom, session.game.View().Position(Space.WORLD))
+    Checks("its flight's slower, with reduced motion", slow > 0.0 && slow < flight * 0.5)
+    // The game's Use is F now.
+    Local use = session.controls.Use.Bindings()
+    Checks("the game's Use is F", use.Count > 0 && use[0].Code == Key.F As Int32)
+    Try Clicked(session, "title.quit")
+    Checks("Quit, by the mouse", session.left)
+End Function
+
+// A window a test stands in for, framed at first, which can't be resized while it's fullscreen, as a
+// real one can't, and is fullscreen at the size it was set to.
+Final Class FakeWindow Implements WindowLike
+    Field mode: WindowMode = WindowMode.WINDOWED
+    Field width: Int32 = 1280
+    Field height: Int32 = 720
+    Public Field Calls: String[] = []
+
+    Public New()
+    End New
+
+    Public Method Mode(): WindowMode => mode
+
+    Public Method SetMode(to: WindowMode) Throws GraphicsError
+        Calls.Add("{to}")
+        mode = to
+    End Method
+
+    Public Method SetSize(across: Int32, down: Int32) Throws GraphicsError
+        If mode == WindowMode.FULLSCREEN Then Throw GraphicsError("a fullscreen window's size is its mode's")
+        Calls.Add("{across}x{down}")
+        width = across
+        height = down
+    End Method
+
+    Public Method Width(): Int32 => width
+
+    Public Method Height(): Int32 => height
+End Class
+
+// A display of two sizes, at two rates each.
+Function TwoSizes(): Display
+    Local modes = [DisplayMode(1920, 1080, 60.0, 1.0), DisplayMode(1920, 1080, 144.0, 1.0),
+                   DisplayMode(1280, 720, 60.0, 1.0), DisplayMode(1280, 720, 144.0, 1.0)]
+    Return Display("two sizes", modes[0], modes)
+End Function
+
+// The window's choices, a thing at a time, through a window the test stands in for: a size kept that
+// the display hasn't, the nearest taken and said; stepping changes nothing until it's confirmed; from
+// one fullscreen size to another; going back after ten seconds; and keeping it.
+Function WindowsShown() Throws GraphicsError, IOError, AudioError, InputError
+    Local kept = Try TempDir()
+    Local file = kept.Path / "options.ini"
+    Local options = Options()
+    options.Shown = WindowMode.FULLSCREEN
+    options.Width = 2560
+    options.Height = 1440
+    Try KeepOptions(options, file)
+    Local island = Try Opened()
+    Defer EndGraphics()
+    Defer Assets.StopWatching()
+    Defer island.Free()
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Defer Audio.Stop()
+    Local session = Try Session.Make(island, file, True)
+    Defer session.Free()
+    Local window = FakeWindow()
+    session.Windowing(window, TwoSizes())
+    Try Simulate.FocusWindow()
+    Flip(False)
+    Local chooser = session.front.Find("options.window") As? Chooser
+    If chooser == Null Then Panic("there's no window chooser")
+    Checks("a size it hasn't is the nearest, and says so",
+           chooser.Text() == "Window: Fullscreen 1920x1080 (nearest to 2560x1440)")
+    Checks("and the window's that",
+           window.Mode() == WindowMode.FULLSCREEN && window.Width() == 1920)
+    // Stepping to the other size changes nothing, until Enter.
+    Try Clicked(session, "title.options")
+    session.front.Open(Page.OPTIONS)
+    For step = 1 To 5
+        Try Pressed(session, Key.DOWN)
+    End For
+    Try Pressed(session, Key.RIGHT)
+    Checks("a step's only a step", chooser.Text() == "Window: Fullscreen 1280x720" &&
+           window.Width() == 1920)
+    window.Calls = []
+    Try Pressed(session, Key.RETURN)
+    Checks("Enter puts it, through windowed", window.Mode() == WindowMode.FULLSCREEN &&
+           window.Width() == 1280 && window.Calls.Join(" ") == "WINDOWED 1280x720 FULLSCREEN")
+    Checks("and asks to keep it", session.front.Keeping())
+    // Ten seconds go by, and it goes back.
+    Try Stepped(session, 105)
+    Checks("unkept, it goes back", !session.front.Keeping() && window.Width() == 1920 &&
+           chooser.Text().StartsWith("Window: Fullscreen 1920x1080"))
+    Checks("and isn't kept", KeptOptions(file).Width != 1280)
+    // Again, kept by the mouse.
+    Try Pressed(session, Key.RIGHT)
+    Try Pressed(session, Key.RETURN)
+    Try Clicked(session, "keep.keep")
+    Checks("kept, by the mouse", !session.front.Keeping() && window.Width() == 1280 &&
+           KeptOptions(file).Width == 1280)
+    // Windowed again: framed at the size it was.
+    Try Pressed(session, Key.LEFT)
+    Try Pressed(session, Key.LEFT)
+    Try Pressed(session, Key.LEFT)
+    Try Pressed(session, Key.RETURN)
+    Checks("windowed, at the size it was", window.Mode() == WindowMode.WINDOWED &&
+           window.Width() == 1280 && window.Height() == 720)
+    Try Clicked(session, "keep.keep")
+    Checks("and kept", KeptOptions(file).Shown == WindowMode.WINDOWED)
+End Function
+
+// Captions and subtitles, drawn: a sound's caption on its panel, and what's said shown or not.
+Function CaptionsDrawn(folder: Path) Throws GraphicsError, IOError, AudioError, InputError
+    Local kept = Try TempDir()
+    Local file = kept.Path / "options.ini"
+    Local options = Options()
+    options.SoundCaptions = True
+    Try KeepOptions(options, file)
+    Local island = Try Opened()
+    Defer EndGraphics()
+    Defer Assets.StopWatching()
+    Defer island.Free()
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Defer Audio.Stop()
+    Local session = Try Session.Make(island, file)
+    Defer session.Free()
+    Try Simulate.FocusWindow()
+    Flip(False)
+    Try Stepped(session, 2)
+    session.game.Story().Say("you reach the yard")
+    session.captions.Say("[a gull cries]")
+    Local shown = Try Pictured(session, folder, "captions")
+    Local box = Rect(400, 520, 480, 120)
+    Checks("a caption's drawn, on its panel", NearIn(shown, box, PAPER) > 100 &&
+           NearIn(shown, box, SEA_DARK) > 2000)
+    Checks("and what's said, in the HUD", NearIn(shown, Rect(40, 70, 400, 30), FAINT) > 50)
+    // Subtitles off: what's said isn't shown.
+    Local off = Options.Read(session.front.Current().Written())
+    off.Subtitles = False
+    Try KeepOptions(off, file)
+    Local quiet = Try Session.Make(island, file)
+    Defer quiet.Free()
+    Try Stepped(quiet, 2)
+    quiet.game.Story().Say("you reach the yard")
+    Try Stepped(quiet, 1)
+    Local hidden = Try Pictured(quiet, folder, "subtitles_off")
+    Checks("without subtitles, nothing said's shown",
+           NearIn(hidden, Rect(40, 70, 400, 30), FAINT) < 10)
+End Function
+
+// A walk to the ending `walk` names, its sound captions on, each captioned sound's caption shown in
+// the frame it starts, and, if the sea floods the road, the surf's.
+Function CaptionsWalked(walk: String) Throws GraphicsError, IOError, AudioError, InputError
+    Local kept = Try TempDir()
+    Local file = kept.Path / "options.ini"
+    Local options = Options()
+    options.SoundCaptions = True
+    Try KeepOptions(options, file)
+    Local island = Try Opened()
+    Defer EndGraphics()
+    Defer Assets.StopWatching()
+    Defer island.Free()
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Defer Audio.Stop()
+    Local session = Try Session.Make(island, file)
+    Defer session.Free()
+    Try Simulate.FocusWindow()
+    Flip(False)
+    Local walker = Walker(Walk3dOf(walk) ?? [])
+    Local heard = 0
+    Local said = 0
+    Local surfed = False
+    Local cues = CaptionedCues()
+    While session.game.Story().Ended() == Ending.NONE
+        Try walker.Next(session.game, session.island)
+        Local before: Int[] = []
+        For cue In cues
+            before.Add(session.scape.Played(cue))
+        End For
+        Try Stepped(session, 1)
+        Local shown = session.captions.Shown()
+        If shown.Contains("[surf crashes]") Then surfed = True
+        For at = 0 Until cues.Count
+            If session.scape.Played(cues[at]) > before[at]
+                heard += 1
+                If shown.Contains(CaptionOf(cues[at])) Then said += 1
+            End If
+        End For
+    End While
+    Try walker.Stop()
+    Local flooded = session.game.Story().Flooded()
+    Print("captioned sounds heard {heard}, each shown in its frame {said == heard && heard > 3}" +
+          (flooded ? ", flooded, the surf shown {surfed}" : ""))
+End Function
+
+// The walk's bob, under the footsteps, and the hold that opens the sluice, its ring filling, as they're
+// made; then, with reduced motion and the hold off, no bob, and a press that opens it.
+Function MotionHeld(folder: Path) Throws GraphicsError, IOError, AudioError, InputError
+    Local kept = Try TempDir()
+    Local file = kept.Path / "options.ini"
+    Try KeepOptions(Options(), file)
+    Local island = Try Opened()
+    Defer EndGraphics()
+    Defer Assets.StopWatching()
+    Defer island.Free()
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Defer Audio.Stop()
+    Local session = Try Session.Make(island, file)
+    Defer session.Free()
+    Try Simulate.FocusWindow()
+    Flip(False)
+    Local walked = Try ToTheSluice(session)
+    Checks("your eyes bob as you walk, lowest at each step, where you're seen from",
+           walked[0] < -BOB_HEIGHT * 0.9 && walked[1] > 5.0 && walked[2] == 0.0 && walked[3] == 0.0)
+    Local game = session.game
+    Checks("the sluice asks to be held", game.Prompt() == "E: hold to open the sluice")
+    Try Pressed(session, Key.E)
+    Try Stepped(session, 4)
+    Checks("a press doesn't open it", !game.Story().SluiceOpen() && game.Opening() == 0.0)
+    Try Simulate.KeyDown(Key.E)
+    Try Stepped(session, 5)
+    Local half = game.Opening()
+    Local ring = Try Pictured(session, folder, "hold")
+    Try Simulate.KeyUp(Key.E)
+    Try Stepped(session, 1)
+    Checks("half a second's half its ring, and letting go starts it again",
+           half > 0.4 && half < 0.6 && !game.Story().SluiceOpen() && game.Opening() == 0.0)
+    Checks("its ring's drawn in brass, about its key",
+           NearIn(ring, Rect(440, 620, 400, 100), BRASS) > 40)
+    Try Simulate.KeyDown(Key.E)
+    Try Stepped(session, 10)
+    Try Simulate.KeyUp(Key.E)
+    Try Stepped(session, 1)
+    Checks("a whole second's hold opens it", game.Story().SluiceOpen())
+    // Reduced motion, and a press.
+    Local other = Options()
+    other.ReducedMotion = True
+    other.HoldToOpen = False
+    Try KeepOptions(other, file)
+    Local still = Try Session.Make(island, file)
+    Defer still.Free()
+    Local calm = Try ToTheSluice(still)
+    Checks("with reduced motion, your eyes don't bob",
+           calm[0] == 0.0 && calm[1] > 5.0 && calm[3] == 0.0)
+    Checks("without the hold, a press is asked", still.game.Prompt() == "E: open the sluice")
+    Try Pressed(still, Key.E)
+    Checks("and opens it", still.game.Story().SluiceOpen())
+End Function
+
+// Walks `session` to the sluice, its gear and paddle fitted, and gives the lowest the bob went, how
+// many steps were heard, how many of those weren't low in the bob, and how many frames were seen from
+// elsewhere than your eyes.
+Function ToTheSluice(session: Session): Float[] Throws GraphicsError, IOError, InputError
+    Local walker = Walker(["door", "gear", "E", "Q", "crossing", "E", "door", "inside", "E", "Q",
+                           "E"])
+    Local lowest: Float = 0.0
+    Local steps = 0
+    Local high = 0
+    Local unseated = 0
+    Local frames = 0
+    Local game = session.game
+    While !game.Prompt().EndsWith("open the sluice") && frames < 3000
+        Try walker.Next(game, session.island)
+        Local heard = session.scape.Played(Cue.STEP_1) + session.scape.Played(Cue.STEP_2) +
+                      session.scape.Played(Cue.STEP_3)
+        Try Stepped(session, 1)
+        frames += 1
+        Local bob = game.Bob()
+        lowest = Min(lowest, bob)
+        Local seen = game.View().Position(Space.WORLD)
+        If Abs(seen.y - (game.EyeAt() + bob)) > 0.001 Then unseated += 1
+        If session.scape.Played(Cue.STEP_1) + session.scape.Played(Cue.STEP_2) +
+           session.scape.Played(Cue.STEP_3) > heard
+            steps += 1
+            If bob > -BOB_HEIGHT * 0.5 Then high += 1
+        End If
+    End While
+    Try walker.Stop()
+    Checks("walked to the sluice", game.Prompt().EndsWith("open the sluice"))
+    Return [lowest, steps As Float, high As Float, unseated As Float]
+End Function
+
+// Changes options on one run, by the mouse, the keyboard, and a gamepad, in the folder `kept`, or, on
+// a run after it, says what it finds kept there, and in what the game does.
+Function KeptAcross(stage: String, kept: Path) Throws GraphicsError, IOError, AudioError, InputError
+    Local file = kept / "options.ini"
+    Local island = Try Opened()
+    Defer EndGraphics()
+    Defer Assets.StopWatching()
+    Defer island.Free()
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Defer Audio.Stop()
+    Local session = Try Session.Make(island, file, True)
+    Defer session.Free()
+    Try Simulate.FocusWindow()
+    Flip(False)
+    Try Stepped(session, 2)
+    If stage == "set"
+        Try Dir.CreateAll(kept)
+        If File.Exists(file) Then Try File.Delete(file)
+        Try Clicked(session, "title.options")
+        // Quality, by a click: low.
+        Try Clicked(session, "options.quality")
+        // Look, by the keyboard: down to it from the master volume, and four steps up.
+        session.front.Open(Page.OPTIONS)
+        For step = 1 To 6
+            Try Pressed(session, Key.DOWN)
+        End For
+        For step = 1 To 4
+            Try Pressed(session, Key.RIGHT)
+        End For
+        // Invert Y, by a gamepad's south on it, and back by its east.
+        Local pad = Try Simulate.ConnectGamepad()
+        Defer pad.Unplug()
+        Flip(False)
+        Try PadPressed(session, pad, GamepadButton.DPAD_DOWN)
+        Try PadPressed(session, pad, GamepadButton.SOUTH)
+        Try PadPressed(session, pad, GamepadButton.EAST)
+        Local options = session.front.Current()
+        Print("set: quality {options.Picture}, look {options.Look:.2}, invert {options.InvertY}, back at the title {session.front.Showing() == Page.TITLE}")
+    Else
+        Local options = session.front.Current()
+        Print("after a restart: quality {options.Picture}, look {options.Look:.2}, invert {options.InvertY}")
+        Try Clicked(session, "title.options")
+        Local chooser = session.front.Find("options.quality") As? Chooser
+        Print("shown as {chooser?.Text() ?? "nothing"}")
+        Print("its bloom off {session.game.View().BloomIntensity() == 0.0}")
+    End If
+End Function
+
 Local arguments = Process.Arguments()
 Const USAGE = "usage: slack_water [--low | --walk <bright|dim|dark> [<kept>] | --walk3d " +
               "<bright|dim|dark|cut|swept|wing|far_end> [<kept>] | --feel | --hear | " +
               "--end <folder> | --cooked <kept> <folder> | " +
-              "--frames <folder> | --check <folder> | --match <made> <kept>]"
+              "--frames <folder> | --menus <folder> | --kept <set|check> <folder> | " +
+              "--check <folder> | --match <made> <kept>]"
 // What's for its tests only, so a game on a player's machine can't be made to write anywhere else.
 Local checking = Env.Get("SLACK_WATER_CHECKS") == "1"
 If PlaysLow(arguments) != Null
@@ -3201,6 +4334,7 @@ ElseIf arguments.Count == 1 && arguments[0] == "--hear"
         Print("no GPU here")
     Else
         Try Listened()
+        Try HelloedAtTheDoor()
     End If
 ElseIf arguments.Count == 1 && arguments[0] == "--feel"
     If Env.Get("FBENGINE_NO_GPU") == "1"
@@ -3222,6 +4356,28 @@ ElseIf arguments.Count == 2 && arguments[0] == "--frames"
         Try SaveWalk(Path(arguments[1]))
         Lap("the 3D walk's frames", framed)
         Lap("--frames", began)
+    End If
+ElseIf arguments.Count == 2 && arguments[0] == "--menus"
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+    Else
+        Try MenusShown(Path(arguments[1]))
+        Try WindowsShown()
+        Try CaptionsDrawn(Path(arguments[1]))
+        Try MotionHeld(Path(arguments[1]))
+    End If
+ElseIf arguments.Count == 2 && arguments[0] == "--captions"
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+    Else
+        Try CaptionsWalked(arguments[1])
+    End If
+ElseIf arguments.Count == 3 && arguments[0] == "--kept" &&
+       (arguments[1] == "set" || arguments[1] == "check")
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+    Else
+        Try KeptAcross(arguments[1], Path(arguments[2]))
     End If
 ElseIf arguments.Count == 4 && arguments[0] == "--alike"
     Try AlikeViews(Path(arguments[1]), Path(arguments[2]), Float.Parse(arguments[3]) ?? 100.0)

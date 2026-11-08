@@ -4,7 +4,7 @@
 // shape from its neighbors and how it's turned; the start and the exit by how far apart they are, the
 // rest by a table of chances for its shape; doors on the edges they share, open by chance; and each
 // placed as an entity, 8 units a cell, built of its shape turned. The same seed gives the same map,
-// drawn here as its rows, which seed "fb" must match; a tool apart from it, in Python, gives the same.
+// drawn here as its rows, which seed "fb" must match.
 // One stream, as the requirement says: it's given its generator, and what's next carries on from it.
 // It prints what it found of it; with --watch, a window of a map from above, a new seed every so often.
 //
@@ -488,7 +488,8 @@ Function Proved() Throws GraphicsError
     End For
 
     // Forty seeds, each one placed: its rooms all linked, its dead ends, its 4-way, its meshes apart and
-    // walkable through, both ways across each door, and how many of each kind for each shape.
+    // walkable through, both ways across each door, and how many of each kind for each shape; 29 of
+    // the 40 maps differ.
     Local good = 0
     Local fourWays = 0
     Local walkable = 0

@@ -1,0 +1,245 @@
+// What says how to do something: a key, or a gamepad's button by the pad's own name for it, whichever
+// was used last, drawn as a key's cap or a button's disc, by the canvas alone.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.text
+Import fbengine
+Import "./settings"
+
+/// Which a player's using: the keyboard and mouse, or a gamepad.
+Public Enum Device
+    KEYS = 0
+    PAD = 1
+End Enum
+
+/// What a prompt asks for.
+Public Enum Prompted
+    /// Take, fit, or open: E, or the pad's south button.
+    USE = 0
+    /// Hand to Pip, or take back: Q, or its west.
+    HAND = 1
+    /// Pause: Escape, or Start.
+    PAUSE = 2
+    /// Choose what's focused: Enter, or its south.
+    CHOOSE = 3
+    /// Go back: Escape, or its east.
+    BACK = 4
+End Enum
+
+// How far a stick goes over before it's taken as used.
+Const STICK_USED: Float32 = 0.5
+// How far the mouse moves in a frame before it's taken as used, in pixels.
+Const MOUSE_USED: Float32 = 2.0
+
+/// Which was used last, the keys and mouse or a gamepad, and which kind of gamepad; and which key does
+/// what, for the keys' prompts.
+Public Final Class LastDevice
+    Field device: Device = Device.KEYS
+    Field kind: GamepadType = GamepadType.STANDARD
+    Field keys: KeyMap
+
+    Public New()
+        keys = KeyMap()
+    End New
+
+    /// Which key does what, as the prompts say.
+    Public Method SetKeys(bound: KeyMap)
+        keys = bound.Clone()
+    End Method
+
+    /// Which key does what.
+    Public Method Keys(): KeyMap => keys
+
+    /// Looks at what's been pressed or moved since the last Flip.
+    @MainThread
+    Public Method Update()
+        For pad In Gamepads()
+            If PadUsed(pad)
+                device = Device.PAD
+                kind = pad.Type()
+                Return
+            End If
+        End For
+        If KeysHit().Count > 0 || MouseHit(MouseButton.LEFT) || MouseHit(MouseButton.RIGHT) ||
+           Abs(MouseXSpeed()) + Abs(MouseYSpeed()) > MOUSE_USED
+            device = Device.KEYS
+        End If
+    End Method
+
+    /// Which was used last.
+    @MainThread Public Method Current(): Device => device
+
+    /// What kind the gamepad used last is.
+    @MainThread Public Method PadKind(): GamepadType => kind
+End Class
+
+// Whether `pad`'s had a button pressed, or a stick pushed over.
+Function PadUsed(pad: Gamepad): Bool
+    For button = 0 To 14
+        If pad.Hit(button As GamepadButton) Then Return True
+    End For
+    For axis In [GamepadAxis.LEFT_X, GamepadAxis.LEFT_Y, GamepadAxis.RIGHT_X, GamepadAxis.RIGHT_Y]
+        If Abs(pad.Axis(axis)) > STICK_USED Then Return True
+    End For
+    Return False
+End Function
+
+/// What a key's cap says: "E", "Esc", "Enter", "Space", or its name's words, as "Left Shift".
+Public Function KeyLabel(key: Key): String
+    Select key
+        Case Key.ESCAPE
+            Return "Esc"
+        Case Key.RETURN
+            Return "Enter"
+        Default
+            Local named = "{key}"
+            If named.Length <= 1 Then Return named
+            Local words: String[] = []
+            For word In named.Split("_")
+                words.Add(word.Slice(0, 1) + word.Slice(1, word.Length).ToLower())
+            End For
+            Return words.Join(" ")
+    End Select
+End Function
+
+/// The key for `prompted`, as `keys` binds them.
+Public Function KeyFor(prompted: Prompted, keys: KeyMap): String
+    Select prompted
+        Case Prompted.USE
+            Return KeyLabel(keys.Of(Bound.USE))
+        Case Prompted.HAND
+            Return KeyLabel(keys.Of(Bound.HAND))
+        Case Prompted.PAUSE
+            Return KeyLabel(keys.Of(Bound.PAUSE))
+        Case Prompted.CHOOSE
+            Return "Enter"
+        Default
+            Return "Esc"
+    End Select
+End Function
+
+/// The gamepad's button for `prompted`.
+Public Function ButtonFor(prompted: Prompted): GamepadButton
+    Select prompted
+        Case Prompted.USE
+            Return GamepadButton.SOUTH
+        Case Prompted.HAND
+            Return GamepadButton.WEST
+        Case Prompted.PAUSE
+            Return GamepadButton.START
+        Case Prompted.CHOOSE
+            Return GamepadButton.SOUTH
+        Default
+            Return GamepadButton.EAST
+    End Select
+End Function
+
+// Whether `kind` is a PlayStation's, or a Nintendo's.
+Function PlayStation(kind: GamepadType): Bool
+    Return kind == GamepadType.PS3 || kind == GamepadType.PS4 || kind == GamepadType.PS5
+End Function
+
+Function Nintendo(kind: GamepadType): Bool
+    Return kind == GamepadType.SWITCH_PRO || kind == GamepadType.SWITCH_JOYCON_LEFT ||
+           kind == GamepadType.SWITCH_JOYCON_RIGHT || kind == GamepadType.SWITCH_JOYCON_PAIR ||
+           kind == GamepadType.GAMECUBE
+End Function
+
+/// What a pad of `kind` calls `button`: Xbox's letters, a PlayStation's shapes, or a Nintendo's
+/// letters, which are where Xbox's aren't.
+Public Function ButtonName(kind: GamepadType, button: GamepadButton): String
+    Local face = ["A", "B", "X", "Y"]
+    If PlayStation(kind) Then face = ["Cross", "Circle", "Square", "Triangle"]
+    If Nintendo(kind) Then face = ["B", "A", "Y", "X"]
+    Select button
+        Case GamepadButton.SOUTH
+            Return face[0]
+        Case GamepadButton.EAST
+            Return face[1]
+        Case GamepadButton.WEST
+            Return face[2]
+        Case GamepadButton.NORTH
+            Return face[3]
+        Case GamepadButton.START
+            If PlayStation(kind) Then Return "Options"
+            If Nintendo(kind) Then Return "+"
+            Return "Menu"
+        Default
+            Return "{button}"
+    End Select
+End Function
+
+/// What's drawn on `button`'s disc for a pad of `kind`: a letter, or a PlayStation's shape's initial.
+Public Function ButtonMark(kind: GamepadType, button: GamepadButton): String
+    Local name = ButtonName(kind, button)
+    If button == GamepadButton.START Then Return "="
+    Return PlayStation(kind) ? name.Slice(0, 1) : name
+End Function
+
+/// The color of `button`'s disc on a pad of `kind`: Xbox's green, red, blue, and yellow, a
+/// PlayStation's blue, red, pink, and green, or a Nintendo's grey.
+Public Function ButtonColor(kind: GamepadType, button: GamepadButton): Color32
+    If Nintendo(kind) || button == GamepadButton.START Then Return Color32(120, 124, 132, 255)
+    Local at = 0
+    If button == GamepadButton.EAST Then at = 1
+    If button == GamepadButton.WEST Then at = 2
+    If button == GamepadButton.NORTH Then at = 3
+    If PlayStation(kind)
+        Return [Color32(92, 140, 220, 255), Color32(214, 74, 74, 255), Color32(206, 120, 176, 255),
+                Color32(70, 176, 140, 255)][at]
+    End If
+    Return [Color32(96, 176, 64, 255), Color32(212, 64, 56, 255), Color32(64, 120, 214, 255),
+            Color32(226, 176, 40, 255)][at]
+End Function
+
+/// What `prompted` is called on `device`, as a person reads it: "E", or "A", "Cross".
+Public Function PromptName(device: Device, kind: GamepadType, prompted: Prompted,
+                           keys: KeyMap): String
+    Return device == Device.PAD ? ButtonName(kind, ButtonFor(prompted)) : KeyFor(prompted, keys)
+End Function
+
+/// How wide `prompted`'s mark is drawn, `size` high, by `last`'s device, as DrawPrompt draws it.
+@MainThread
+Public Function MarkWide(font: Font, last: LastDevice, prompted: Prompted, size: Int32): Int32
+    If last.Current() == Device.PAD Then Return size
+    Return Max(size, (font.Width(KeyFor(prompted, last.Keys())) As Int32) + size / 2)
+End Function
+
+/// Draws `prompted`'s key's cap, or its button's disc, at `x`, `y`, `size` high, and `text` after
+/// it, in `font`, in `color`; gives how wide that all was.
+@MainThread
+Public Function DrawPrompt(canvas: Canvas, font: Font, last: LastDevice, prompted: Prompted,
+                           text: String, x: Int32, y: Int32, size: Int32, color: Color32): Int32
+    Local was = canvas.Color()
+    Local device = last.Current()
+    Local kind = last.PadKind()
+    Local mark = device == Device.PAD ? ButtonMark(kind, ButtonFor(prompted)) : KeyFor(prompted,
+                                                                                       last.Keys())
+    Local markWide = font.Width(mark) As Int32
+    Local wide = size
+    If device == Device.PAD
+        canvas.SetColor(ButtonColor(kind, ButtonFor(prompted)))
+        canvas.DrawOval(x, y, size, size, True)
+        canvas.SetColor(Color32(250, 248, 240, 255))
+    Else
+        // A key's cap: wider for a word, its edge lighter than its face.
+        wide = Max(size, markWide + size / 2)
+        canvas.SetColor(Color32(232, 226, 210, 255))
+        canvas.DrawRect(x, y, wide, size, True)
+        canvas.SetColor(Color32(40, 44, 50, 255))
+        canvas.DrawRect(x + 2, y + 2, wide - 4, size - 5, True)
+        canvas.SetColor(Color32(236, 232, 220, 255))
+    End If
+    Local lineHigh = font.LineHeight() As Int32
+    canvas.DrawText(font, mark, x + (wide - markWide) / 2, y + (size - lineHigh) / 2)
+    Local after = wide
+    If text != ""
+        canvas.SetColor(color)
+        canvas.DrawText(font, text, x + wide + size / 3, y + (size - lineHigh) / 2)
+        after = wide + size / 3 + (font.Width(text) As Int32)
+    End If
+    canvas.SetColor(was)
+    Return after
+End Function

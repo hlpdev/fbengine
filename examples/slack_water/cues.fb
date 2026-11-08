@@ -19,19 +19,44 @@ Public Enum Cue
     FLOOR_2 = 7
     WADE_1 = 8
     WADE_2 = 9
+    SAND_1 = 10
+    SAND_2 = 11
+    TURF_1 = 12
+    TURF_2 = 13
+    /// A part fitted to the mill's works.
+    FIT = 14
+    /// The sluice opened, and the water let into the race.
+    SLUICE = 15
+    /// Pip: catching up with you, taking a part, giving one back, worried at the flood, and glad or
+    /// sad at how it ended.
+    PIP_HELLO = 16
+    PIP_TAKES = 17
+    PIP_GIVES = 18
+    PIP_WORRIES = 19
+    PIP_GLAD = 20
+    PIP_SAD = 21
 End Enum
 
-/// What you're walking on.
+/// How many cues there are.
+Public Const CUES: Int = 22
+
+// How long after it's ended Pip says how it feels, so it's after the sluice's rush, not over it.
+Const PIP_AFTER_ENDING: Float = 2.5
+
+/// What you're walking on: bare rock, the tidal road's stones, the mill's boards, the shallows, sand,
+/// and turf, which trodden ground sounds as.
 Public Enum Surface
     ROCK = 0
     ROAD = 1
     FLOOR = 2
     SHALLOWS = 3
+    SAND = 4
+    TURF = 5
 End Enum
 
 // How far you walk to a step, in meters, and how far a move can be before it's the water carrying you.
-Const STRIDE: Float = 1.8
-Const FARTHEST_MOVE: Float = 1.0
+Public Const STRIDE: Float = 1.8
+Public Const FARTHEST_MOVE: Float = 1.0
 // How long it is from one gull to the next, and one creak to the next, at least, and how much longer
 // it can be.
 Const GULL_AT_LEAST: Float = 5.0
@@ -46,13 +71,30 @@ Const GULL_TRIES: Int = 16
 
 // How much of the mix what's all around you takes, and the wheel, so that with everything at its
 // loudest at once, it doesn't clip.
-Const AMBIENCE: Float = 0.4
-Const WHEEL: Float = 0.25
+Const AMBIENCE: Float = 0.2
+Const WHEEL: Float = 0.15
+// The mill's works, running, heard from inside, where they are.
+Const WORKS: Float = 0.1
+// The music: how loud either theme is, at most, and what's left of it inside the mill.
+Const MUSIC: Float = 0.08
+Public Const MUSIC_INSIDE: Float = 0.7
+// Under a cue, the music's at DUCK, reached over DUCK_DOWN seconds, held until DUCK_HOLD after the
+// last cue ends, and back over DUCK_UP, each in a line, so there's no click.
+Const DUCK: Float = 0.5
+Const DUCK_DOWN: Float = 0.15
+Const DUCK_HOLD: Float = 1.0
+Const DUCK_UP: Float = 0.8
+// How far a gust takes the wind over its level, in the storm at its height, and how much higher the
+// wind's pitched then.
+Const GUSTS: Float = 0.3
+Const STORM_PITCH: Float = 0.2
+// How long the surf takes to come to its roar, from the flood.
+Const ROAR_SECONDS: Float64 = 20.0
 // How far a low-pass opens when it's as good as none, how low it goes from inside the mill, where the
 // wind's and sea's own are around 200 Hz, and how long it takes between.
 Const OPEN_CUTOFF: Float = 18000.0
 Const MUFFLED_CUTOFF: Float = 350.0
-Const CUTOFF_SECONDS: Float = 0.3
+Const CUTOFF_SECONDS: Float = 0.5
 
 /// How loud a cue plays.
 Public Function CueLevel(cue: Cue): Float
@@ -63,15 +105,55 @@ Public Function CueLevel(cue: Cue): Float
             Return 0.2
         Case Cue.SPLASH
             Return 0.3
-        Default
+        Case Cue.SLUICE
+            Return 0.15
+        Case Cue.FIT
             Return 0.25
+        Case Cue.PIP_GLAD, Cue.PIP_SAD
+            Return 0.15
+        Default
+            Return 0.2
     End Select
 End Function
 
-/// How loud the wind is, by the tide's clock: it rises with the storm; and less inside the mill.
+/// How loud the wind is, by the tide's clock: it rises with the storm, and gusts in it; and less inside
+/// the mill. The sea and surf have their own, below.
 Public Function WindLevel(clock: Float64, inside: Bool): Float
-    Return (0.35 + 0.5 * (Min(clock / TIDE_IN_AT, 1.0) As Float)) * (inside ? 0.5 : 1.0) * AMBIENCE
+    Return (0.35 + 0.5 * (Min(clock / TIDE_IN_AT, 1.0) As Float)) * Gust(clock) *
+           (inside ? 0.5 : 1.0) *
+           AMBIENCE
 End Function
+
+/// What the wind's level is multiplied by, `clock` seconds in: 1 until the storm, then swelling and
+/// falling, by up to GUSTS either way at its height, by its Swells.
+Public Function Gust(clock: Float64): Float => 1.0 + GUSTS * StormAt(clock) * Swells(clock)
+
+/// The rates of the wind's swells, in radians a second, slowest first.
+Public Function GustRates(): Float[] => [0.77, 2.17, 5.29]
+
+/// The wind's swells, from -1 to 1, `clock` seconds in: three slow waves at GustRates, which at no lag
+/// from a second to the ten minutes a game can last all come round together, to within 0.14 of where
+/// they were; and none is the wind sound's own swell, tools/sounds.fb's WIND_SWELL and WIND_SWELL_TOO.
+Public Function Swells(clock: Float64): Float
+    Local rates = GustRates()
+    Return 0.5 * (Sin(clock * rates[0]) As Float) + 0.3 * (Sin(clock * rates[1] + 1.0) As Float) +
+           0.2 * (Sin(clock * rates[2] + 2.0) As Float)
+End Function
+
+/// How high the wind's pitched, `clock` seconds in: as it was made until the storm, and up to
+/// STORM_PITCH higher at its height, as a harder wind whistles.
+Public Function WindPitch(clock: Float64): Float => 1.0 + STORM_PITCH * StormAt(clock)
+
+/// How loud the surf is, breaking on the rocks: a little at slack water, more as the storm comes, and
+/// its Roar; and less inside the mill.
+Public Function SurfLevel(clock: Float64, inside: Bool): Float
+    Return (0.2 + 0.4 * StormAt(clock) + 0.2 * Roar(clock)) * (inside ? 0.45 : 1.0) * AMBIENCE
+End Function
+
+/// How far the surf's come to its roar, from 0 to 1: none until the flood's over the road, then
+/// evenly, all of it ROAR_SECONDS on.
+Public Function Roar(clock: Float64): Float => Clamp(((clock - FLOOD_AT) / ROAR_SECONDS) As Float,
+                                                     0.0, 1.0)
 
 /// How loud the sea is, by the tide's clock, as it comes in, and less inside the mill.
 Public Function SeaLevel(clock: Float64, inside: Bool): Float
@@ -108,15 +190,82 @@ End Function
 /// How loud the wheel is, turning at `speed`.
 Public Function WheelLevel(speed: Float): Float => (0.3 + 0.7 * speed) * WHEEL
 
-/// What you're on at (`x`, `z`), `inside` the mill or not, with the sea at `sea`.
-Public Function SurfaceAt(x: Float, z: Float, inside: Bool, sea: Float): Surface
+/// How far the music's gone from the calm theme to the storm's, `clock` seconds in, from 0 to 1: with
+/// the storm, and more as the surf roars from the flood.
+Public Function Tension(clock: Float64): Float => Clamp(StormAt(clock) + 0.3 * Roar(clock), 0.0,
+                                                        1.0)
+
+/// How loud the calm theme and the storm's are, `clock` seconds in, heard from `inside` the mill or
+/// not: crossfaded by Tension at equal power, so together they're as loud all through; and quieter
+/// inside.
+Public Function MusicLevels(clock: Float64, inside: Bool): (Float, Float)
+    Local turn = Tension(clock) * 1.5707964
+    Local level = MUSIC * (inside ? MUSIC_INSIDE : 1.0)
+    // Never under 0, as a float's right angle leaves its cosine a hair below it, and a volume can't be.
+    Return (level * Max(Cos(turn As Float64) As Float, 0.0),
+            level * Max(Sin(turn As Float64) As Float, 0.0))
+End Function
+
+/// What the music's turned down to under the cues: DUCK under one, held until DUCK_HOLD after it
+/// ends, then back to 1, each change in a line, at most `seconds` / DUCK_DOWN of the way down, or
+/// / DUCK_UP up, a step.
+Public Final Class Ducking
+    Field level: Float = 1.0
+    Field held: Float = 0.0
+
+    /// Where it's at, `seconds` on, with a cue begun in them that sounds for `cued` seconds, the
+    /// longest if there were more, or 0 for none.
+    Public Method Step(seconds: Float, cued: Float): Float
+        If cued > 0.0 Then held = Max(held, cued + DUCK_HOLD)
+        Local target = held > 0.0 ? DUCK : 1.0
+        held = Max(held - seconds, 0.0)
+        Local down = seconds / DUCK_DOWN * (1.0 - DUCK)
+        Local up = seconds / DUCK_UP * (1.0 - DUCK)
+        level += Clamp(target - level, -down, up)
+        Return level
+    End Method
+
+    /// Where it's at.
+    Public Method Level(): Float => level
+End Class
+
+/// How loud the mill's works are, driven by the wheel turning at `speed`: nothing until it turns.
+Public Function WorksLevel(speed: Float): Float => speed > 0.0 ? (0.4 + 0.6 * speed) * WORKS : 0.0
+
+/// What you're on at (`x`, `z`), `inside` the mill or not, with the sea at `sea`: what the ground's
+/// painted with there, as the terrain's `heights` bake it.
+Public Function SurfaceAt(heights: Float[], x: Float, z: Float, inside: Bool, sea: Float): Surface
     If inside Then Return Surface.FLOOR
-    If GroundHeight(x, z) < sea Then Return Surface.SHALLOWS
-    Return OnRoad(x, z) ? Surface.ROAD : Surface.ROCK
+    Local half = (SIDE As Float) / 2.0
+    Local baked = BakedAt(heights, x + half, z + half)
+    If baked.0 < sea Then Return Surface.SHALLOWS
+    If OnRoad(x, z) Then Return Surface.ROAD
+    Return Underfoot(CoverParts(x, z, baked.0, baked.1))
+End Function
+
+/// What's most seen of the cover's `parts`, sand, turf, and trodden ground, as CoverAt paints turf,
+/// then trodden ground over it, then sand over both, over rock: trodden ground sounds as turf.
+Public Function Underfoot(parts: (Float, Float, Float)): Surface
+    Local sand = parts.0
+    Local trodden = parts.2 * (1.0 - sand)
+    Local turf = parts.1 * (1.0 - parts.2) * (1.0 - sand)
+    Local rock = (1.0 - parts.1) * (1.0 - parts.2) * (1.0 - sand)
+    If sand >= trodden && sand >= turf && sand >= rock Then Return Surface.SAND
+    If trodden >= rock || turf >= rock Then Return Surface.TURF
+    Return Surface.ROCK
 End Function
 
 /// How high a surface's steps play.
 Public Function StepPitch(surface: Surface): Float => surface == Surface.ROAD ? 0.85 : 1.0
+
+/// Whether `cue` is one of your steps.
+Public Function IsStep(cue: Cue): Bool => (cue As Int) <= (Cue.WADE_2 As Int) && cue != Cue.GULL &&
+                                          cue != Cue.CREAK && cue != Cue.SPLASH ||
+                                          cue == Cue.SAND_1 || cue == Cue.SAND_2 ||
+                                          cue == Cue.TURF_1 || cue == Cue.TURF_2
+
+/// Whether `cue` is Pip's voice.
+Public Function IsPip(cue: Cue): Bool => (cue As Int) >= (Cue.PIP_HELLO As Int)
 
 // The steps that a surface can be.
 Function StepsOn(surface: Surface): Cue[]
@@ -125,6 +274,10 @@ Function StepsOn(surface: Surface): Cue[]
             Return [Cue.FLOOR_1, Cue.FLOOR_2]
         Case Surface.SHALLOWS
             Return [Cue.WADE_1, Cue.WADE_2]
+        Case Surface.SAND
+            Return [Cue.SAND_1, Cue.SAND_2]
+        Case Surface.TURF
+            Return [Cue.TURF_1, Cue.TURF_2]
         Default
             Return [Cue.STEP_1, Cue.STEP_2, Cue.STEP_3]
     End Select
@@ -132,7 +285,7 @@ End Function
 
 /// What's to be played, as the game goes on: steps by how far you've walked, by what you're on, never
 /// the same one twice running; gulls until the flood; creaks inside the mill, or from the turning
-/// wheel; and the splash of the flood.
+/// wheel; the splash of the flood; a clank for each part fitted; and the sluice, once, as it opens.
 Public Final Class Cues
     Field state: UInt32 = 2463534242
     Field walked: Float = 0.0
@@ -140,6 +293,14 @@ Public Final Class Cues
     Field untilGull: Float
     Field untilCreak: Float
     Field flooded: Bool = False
+    Field fitted: Int = 0
+    Field opened: Bool = False
+    // What Pip was doing, as of the last Step: how many times it had caught up, what it held, and
+    // how long it's been since the end.
+    Field pipCaughtUp: Int = 0
+    Field pipHeld: Bool = False
+    Field pipWorried: Bool = False
+    Field sinceEnded: Float = -1.0
 
     Public New()
         untilGull = GULL_AT_LEAST + Random() * GULL_MORE
@@ -173,6 +334,39 @@ Public Final Class Cues
         If !flooded && flow.Flooded()
             flooded = True
             cues.Add(Cue.SPLASH)
+        End If
+        Local nowFitted = 0
+        For part In [Part.GEAR, Part.PADDLE, Part.BELT]
+            If flow.Fitted(part) Then nowFitted += 1
+        End For
+        While fitted < nowFitted
+            fitted += 1
+            cues.Add(Cue.FIT)
+        End While
+        If !opened && flow.SluiceOpen()
+            opened = True
+            cues.Add(Cue.SLUICE)
+        End If
+        // Pip: catching up, taking and giving back, worried as the flood comes, and how it feels,
+        // a while after it's ended.
+        While pipCaughtUp < flow.CaughtUp()
+            pipCaughtUp += 1
+            cues.Add(Cue.PIP_HELLO)
+        End While
+        Local holds = flow.PipHolds() != Null
+        If holds && !pipHeld Then cues.Add(Cue.PIP_TAKES)
+        If !holds && pipHeld Then cues.Add(Cue.PIP_GIVES)
+        pipHeld = holds
+        If !pipWorried && flow.Flooded()
+            pipWorried = True
+            cues.Add(Cue.PIP_WORRIES)
+        End If
+        If flow.Ended() != Ending.NONE
+            Local was = sinceEnded
+            sinceEnded = was < 0.0 ? 0.0 : was + seconds
+            If was < PIP_AFTER_ENDING && sinceEnded >= PIP_AFTER_ENDING
+                cues.Add(flow.Ended() == Ending.BRIGHT ? Cue.PIP_GLAD : Cue.PIP_SAD)
+            End If
         End If
         Return cues
     End Method
