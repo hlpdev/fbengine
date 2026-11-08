@@ -1,67 +1,28 @@
 // fbengine_physics soaked: thousands of shapes, bodies, characters, joints, and worlds made,
 // stepped, and freed, over and over, as a long game's would be, leave none of them behind, and what
-// the process has allocated grows by no more than its heap's fragments.
+// malloc holds after each round never more than a little over what it held once the first rounds
+// had warmed it.
 
 #include "fbengine_physics.h"
+#include "stability.hpp"
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <cstdint>
-#include <fstream>
 #include <vector>
 
-#ifdef _WIN32
-// psapi.h needs windows.h's types first.
-// clang-format off
-#include <windows.h>
-#include <psapi.h>
-// clang-format on
-#elifdef __APPLE__
-#include <malloc/malloc.h>
-#else
-#include <unistd.h>
-#endif
-
-#ifdef __SANITIZE_ADDRESS__
-#define FBE_UNDER_ASAN
-#elifdef __has_feature
-#if __has_feature(address_sanitizer)
-#define FBE_UNDER_ASAN
-#endif
-#endif
+using fbe::tests::allocated;
+using fbe::tests::sanitized;
 
 namespace {
 
 constexpr fbe_body_quat_t unturned{ .x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F };
 
-/// What the process has allocated: its committed memory on Windows, its malloc zones' bytes in use
-/// on macOS, and its virtual size on Linux, where a large malloc maps its own.
-std::uint64_t allocated() {
-#ifdef _WIN32
-    PROCESS_MEMORY_COUNTERS_EX counters{};
-    counters.cb = sizeof(counters);
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): psapi's way to the _EX fields.
-    GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters),
-                         sizeof(counters));
-    return counters.PrivateUsage;
-#elifdef __APPLE__
-    malloc_statistics_t statistics{};
-    malloc_zone_statistics(nullptr, &statistics);
-    return statistics.size_in_use;
-#else
-    std::ifstream statm("/proc/self/statm");
-    std::uint64_t pages = 0;
-    statm >> pages;
-    return pages * static_cast<std::uint64_t>(sysconf(_SC_PAGESIZE));
-#endif
-}
-
 // A world of 1000 bodies of their own shapes, on a floor, falling on each other, 200 joints
 // between them, and 50 characters walking among them, stepped a while, saved and restored, then
-// freed a piece at a time, or all at once with the world; giving how much it all held, made, more
-// than before it.
-std::uint64_t soak(bool piece_by_piece) {
-    const std::uint64_t start = allocated();
+// freed a piece at a time, or all at once with the world.
+void soak(bool piece_by_piece) {
     const std::uint64_t world = fbe_physics_new(1200);
     REQUIRE(world != 0);
     const fbe_shape_vec3_t floor_size{ .x = 200.0F, .y = 1.0F, .z = 200.0F };
@@ -128,7 +89,6 @@ std::uint64_t soak(bool piece_by_piece) {
     REQUIRE(fbe_physics_restore(world, state.data(), static_cast<std::int64_t>(state.size()),
                                 &carried));
     step();
-    const std::uint64_t full = allocated();
     if (piece_by_piece) {
         for (const std::uint64_t joint : joints) {
             REQUIRE(fbe_joint_free(joint));
@@ -146,7 +106,6 @@ std::uint64_t soak(bool piece_by_piece) {
     for (const std::uint64_t shape : shapes) {
         REQUIRE(fbe_shape_free(shape));
     }
-    return full > start ? full - start : 0;
 }
 
 } // namespace
@@ -160,20 +119,22 @@ TEST_CASE("thousands of bodies, characters, joints, and worlds made and freed le
         soak(i % 2 == 0);
     }
     const std::uint64_t before = allocated();
-    std::uint64_t held = 0;
-    for (int i = 0; i < 40; ++i) {
-        held = soak(i % 2 == 0);
+    std::uint64_t most = before;
+    constexpr int rounds = 40;
+    for (int i = 0; i < rounds; ++i) {
+        soak(i % 2 == 0);
+        most = std::max(most, allocated());
     }
     CHECK(fbe_shape_count() == shapes);
     CHECK(fbe_physics_worlds() == worlds);
-    // 40 rounds of about 1000 shapes, 1050 bodies, 200 joints, and 50 characters, and a world for
-    // them, leave less than two rounds hold: what's left is the heap's own, about 40 KB a round on
-    // Windows, which leak_tests' count of every allocation shows isn't a leak.
-    INFO("a round held " << held << " bytes");
-    CHECK(held > 0);
-    // ASan keeps what's freed a while before it's used again, so bytes grow under it; its leak
-    // check, and leak_tests' count, see a leak there.
-#ifndef FBE_UNDER_ASAN
-    CHECK(allocated() < before + (2 * held));
-#endif
+    // A round of about 1000 shapes, 1050 bodies, 200 joints, and 50 characters, and a world for
+    // them, holds about 2 MB, and leaves malloc holding no more than 32 KB more each round: none on
+    // glibc and macOS, and on MinGW about 18 KB, as winpthreads allocates a mutex as it's first
+    // locked, and libstdc++'s std::mutex and std::shared_mutex never destroy theirs, so each
+    // world's body mutexes, and each character's, stay. A sanitizer's allocator counts its own way,
+    // and LeakSanitizer and leak_tests' count of every allocation see a leak there.
+    INFO("before " << before << ", most after a round " << most);
+    if (!sanitized) {
+        CHECK(most <= before + (rounds * (std::uint64_t{ 32 } << 10U)));
+    }
 }

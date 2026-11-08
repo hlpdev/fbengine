@@ -1666,12 +1666,10 @@ catch_discover_tests(fbengine_physics_tests TEST_PREFIX "physics."
 # fbengine_physics' steps, through its DLL, which the tests find where CMake built it.
 add_executable(fbengine_physics_step_tests physics/step_tests.cpp physics/determinism_tests.cpp
                physics/casts_tests.cpp physics/state_fuzz_tests.cpp physics/input_fuzz_tests.cpp
-               physics/soak_tests.cpp)
+               physics/soak_tests.cpp stability.cpp)
 target_link_libraries(fbengine_physics_step_tests PRIVATE fbengine_physics_native
                       Catch2::Catch2WithMain)
-if(WIN32)
-  target_link_libraries(fbengine_physics_step_tests PRIVATE psapi)
-endif()
+target_include_directories(fbengine_physics_step_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 fbengine_set_warnings(fbengine_physics_step_tests)
 # A test tagged [stability], a fuzz, race, or soak, is labeled so, for sanitizers.yml.
 catch_discover_tests(fbengine_physics_step_tests TEST_PREFIX "physics." ADD_TAGS_AS_LABELS
