@@ -10,6 +10,21 @@ FetchContent_MakeAvailable(Catch2)
 list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 include(Catch)
 
+# What a test has before ctest stops it: a GPU test's 300 s, an out-of-memory test's 120 s, and a
+# fuzz's, race's, or soak's 300 s (its slowest takes 47 s on Windows in Debug). A sanitizer's build
+# gives every test an hour, as ThreadSanitizer's run of a GPU test is many times its own: these,
+# ctest's own default, which sanitizers.yml sets, and each add_test's at the end of this file.
+if(FBENGINE_SANITIZE)
+  set(fbengine_sanitized_timeout 3600)
+  set(fbengine_gpu_timeout 3600)
+  set(fbengine_oom_timeout 3600)
+  set(fbengine_stability_timeout 3600)
+else()
+  set(fbengine_gpu_timeout 300)
+  set(fbengine_oom_timeout 120)
+  set(fbengine_stability_timeout 300)
+endif()
+
 # ctest puts the toolchain's DLLs (MinGW's libstdc++ and friends) on PATH for the tests, so
 # they run from any terminal.
 set(fbengine_test_dll_paths "")
@@ -108,7 +123,7 @@ fbengine_add_shaders(TARGETS fbengine_gpu_tests NAMESPACE fbe::test_shaders
                      INCLUDES gpu/shaders/own)
 catch_discover_tests(fbengine_gpu_tests TEST_PREFIX "gpu." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}"
-                     PROPERTIES TIMEOUT 300)
+                     PROPERTIES TIMEOUT ${fbengine_gpu_timeout})
 
 # The scene's insides, built in from fbengine_internal: how moves are run, and their scratch.
 add_executable(fbengine_scene_internal_tests scene/moves_tests.cpp)
@@ -1843,7 +1858,7 @@ target_include_directories(fbengine_vfs_tests PRIVATE "${PROJECT_SOURCE_DIR}/nat
 target_link_libraries(fbengine_vfs_tests PRIVATE Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_vfs_tests)
 catch_discover_tests(fbengine_vfs_tests TEST_PREFIX "vfs." ADD_TAGS_AS_LABELS
-                     PROPERTIES TIMEOUT 300
+                     PROPERTIES TIMEOUT ${fbengine_gpu_timeout}
                      DL_PATHS "${fbengine_test_dll_paths}")
 
 # A program that awaits jobs before its first Flip, which the main scheduler's ticks hand over.
@@ -1883,7 +1898,7 @@ if(MINGW)
   target_link_options(fbengine_assets_tests PRIVATE -mcrtdll=ucrt)
 endif()
 catch_discover_tests(fbengine_assets_tests TEST_PREFIX "assets." ADD_TAGS_AS_LABELS
-                     PROPERTIES TIMEOUT 300
+                     PROPERTIES TIMEOUT ${fbengine_gpu_timeout}
                      DL_PATHS "${fbengine_test_dll_paths}")
 
 # What Assets' mounts panic for, each by a run of tests/assets/panics, which says it, at the line
@@ -1931,14 +1946,6 @@ endif()
 fbengine_set_warnings(fbengine_app_tests)
 catch_discover_tests(fbengine_app_tests TEST_PREFIX "app."
                      DL_PATHS "${fbengine_test_dll_paths}")
-
-# What a test of fuzzing, races, or soaks has before ctest stops it: its slowest takes 47 s on Windows
-# in Debug, and a sanitizer's build is many times slower.
-if(FBENGINE_SANITIZE)
-  set(fbengine_stability_timeout 3600)
-else()
-  set(fbengine_stability_timeout 300)
-endif()
 
 # fbengine_video, through its DLL, against its test videos with bytes changed at random, fuzzed,
 # and played a thousand times over.
@@ -2591,7 +2598,7 @@ target_include_directories(fbengine_effects_oom_tests PRIVATE "${CMAKE_CURRENT_S
 fbengine_set_warnings(fbengine_effects_oom_tests)
 # A deadlock is a failure too.
 catch_discover_tests(fbengine_effects_oom_tests TEST_PREFIX "scene." ADD_TAGS_AS_LABELS
-                     DL_PATHS "${fbengine_test_dll_paths}" PROPERTIES TIMEOUT 120)
+                     DL_PATHS "${fbengine_test_dll_paths}" PROPERTIES TIMEOUT ${fbengine_oom_timeout})
 
 add_executable(fbengine_anim_oom_tests anim/oom_tests.cpp own_new.cpp)
 target_link_libraries(fbengine_anim_oom_tests PRIVATE fbengine_internal Catch2::Catch2WithMain
@@ -2611,7 +2618,7 @@ endif()
 fbengine_set_warnings(fbengine_anim_oom_tests)
 # A deadlock is a failure too, as an allocation failing inside a layer's lock was.
 catch_discover_tests(fbengine_anim_oom_tests TEST_PREFIX "anim." ADD_TAGS_AS_LABELS
-                     DL_PATHS "${fbengine_test_dll_paths}" PROPERTIES TIMEOUT 120)
+                     DL_PATHS "${fbengine_test_dll_paths}" PROPERTIES TIMEOUT ${fbengine_oom_timeout})
 
 # The out-of-memory tests' operator new and delete themselves, every form of them.
 add_executable(fbengine_own_new_tests own_new_tests.cpp own_new.cpp)
@@ -2693,3 +2700,9 @@ foreach(test IN LISTS fbengine_all_tests)
   endif()
 endforeach()
 file(WRITE "${CMAKE_BINARY_DIR}/tests-vulkan-driver.txt" "${fbengine_vulkan_driver}")
+
+# A sanitizer's build's hour, for every add_test's, after the TIMEOUT each was given.
+if(FBENGINE_SANITIZE)
+  get_property(fbengine_all_tests DIRECTORY PROPERTY TESTS)
+  set_tests_properties(${fbengine_all_tests} PROPERTIES TIMEOUT ${fbengine_sanitized_timeout})
+endif()

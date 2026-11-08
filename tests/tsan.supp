@@ -1,0 +1,8 @@
+# ThreadSanitizer's suppressions for .github/workflows/sanitizers.yml: what it reports between two
+# threads inside a library built without it, which it sees only through the calls it intercepts,
+# as lavapipe's Mesa (its Vulkan driver, its gallium, and the LLVM it compiles with), where a mutex
+# destroyed against one locked, both inside it, is its own affair. Never the engine's own code, nor
+# a race with one side in it.
+called_from_lib:libvulkan_lvp.so
+called_from_lib:libgallium
+called_from_lib:libLLVM
