@@ -12241,7 +12241,8 @@ TEST_CASE("a pass no pipeline can be made of says so once, and is left out", "[g
     require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
     std::vector<std::uint32_t> words(fbe::test_shaders::game_pass.code.begin(),
                                      fbe::test_shaders::game_pass.code.end());
-    words.push_back(1U << 16U);
+    // Its generator's word, which nothing reads, so it's a code of its own.
+    words[2] = 0xFB11;
     const std::vector<std::uint8_t> bytes = cooked_shader(words);
     const std::uint64_t shader = fbe_shader_create(
         bytes.data(), static_cast<std::int64_t>(bytes.size()), "res://refused_pass.slang");
