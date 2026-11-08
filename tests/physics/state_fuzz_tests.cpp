@@ -487,7 +487,7 @@ TEST_CASE("a state resealed, of contacts out of order or twice, is refused", "[s
 TEST_CASE("a state resealed, of a hinge's motor to a far angle, or of a state it's never in, is "
           "refused",
           "[stability]") {
-    scene_t scene;
+    const scene_t scene;
     const std::vector<std::uint8_t> before = scene.save();
     const auto [start, end] = contacts_in(scene, before);
     // After the count of constraints, the fixed joint's index, whether it's on, and its rotation

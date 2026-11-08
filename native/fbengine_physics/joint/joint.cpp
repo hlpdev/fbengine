@@ -15,6 +15,7 @@
 #include <Jolt/Physics/Constraints/SliderConstraint.h>
 #include <Jolt/Physics/Constraints/SpringSettings.h>
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -150,6 +151,18 @@ void remove(std::uint64_t handle) {
 
 void wake(const joint_t& joint) {
     joint.world->system.GetBodyInterfaceNoLock().ActivateConstraint(joint.constraint);
+}
+
+// The most a motor's target goes either way, and as said: a speed's, a hinge's angle, or a
+// slider's position.
+std::pair<float, const char*> most_target(std::int32_t mode, bool hinge) {
+    if (mode == FBE_JOINT_MOTOR_SPEED) {
+        return { most_motion, "1e12" };
+    }
+    if (hinge) {
+        return { JPH::JPH_PI, "pi" };
+    }
+    return { most_position, "1e9" };
 }
 
 JPH::EMotorState motor_state(std::int32_t mode) {
@@ -375,18 +388,12 @@ FBE_PHYSICS_API bool fbe_joint_set_motor(uint64_t joint, int32_t mode, float tar
     // A hinge's angle is -pi to pi, which Jolt brings a target to a turn at a time, so one far off
     // hung a step; a slider's position is where a body can be; and speeds and strengths are what a
     // body can take.
-    const bool hinge = found->kind == FBE_JOINT_HINGE;
-    const float most = mode == FBE_JOINT_MOTOR_SPEED ? most_motion
-                       : hinge                       ? JPH::JPH_PI
-                                                     : most_position;
+    const auto [most, said] = most_target(mode, found->kind == FBE_JOINT_HINGE);
     if (mode != FBE_JOINT_MOTOR_OFF &&
         (!(std::abs(target) <= most) || !(strength > 0.0F) || !(strength <= most_motion))) {
         return fail(std::format("a motor's target is at most {} either way, and its strength more "
                                 "than 0 and at most 1e12, not {} and {}",
-                                mode == FBE_JOINT_MOTOR_SPEED ? "1e12"
-                                : hinge                       ? "pi"
-                                                              : "1e9",
-                                target, strength));
+                                said, target, strength));
     }
     const JPH::EMotorState state = motor_state(mode);
     if (found->kind == FBE_JOINT_HINGE) {

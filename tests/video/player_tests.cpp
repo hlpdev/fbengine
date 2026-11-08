@@ -31,9 +31,9 @@
 #include <unistd.h>
 #endif
 
-#if defined(__SANITIZE_ADDRESS__)
+#ifdef __SANITIZE_ADDRESS__
 #define FBE_UNDER_ASAN
-#elif defined(__has_feature)
+#elifdef __has_feature
 #if __has_feature(address_sanitizer)
 #define FBE_UNDER_ASAN
 #endif
