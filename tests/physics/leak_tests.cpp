@@ -178,7 +178,8 @@ void operator delete(void* block, std::size_t) noexcept {
     operator delete(block);
 }
 
-TEST_CASE("worlds of bodies, characters, and joints made and freed leave no allocation behind") {
+TEST_CASE("worlds of bodies, characters, and joints made and freed leave no allocation behind",
+          "[stability]") {
     // Jolt, its threads, and its types start with the first world.
     REQUIRE(fbe_physics_free(fbe_physics_new(1)));
     count_jolt();

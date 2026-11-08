@@ -1541,7 +1541,8 @@ if(WIN32)
   target_link_libraries(fbengine_physics_step_tests PRIVATE psapi)
 endif()
 fbengine_set_warnings(fbengine_physics_step_tests)
-catch_discover_tests(fbengine_physics_step_tests TEST_PREFIX "physics."
+# A test tagged [stability], a fuzz, race, or soak, is labeled so, for sanitizers.yml.
+catch_discover_tests(fbengine_physics_step_tests TEST_PREFIX "physics." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_physics_native>")
 
 # fbengine_physics' own C++, built into its test, for what only its insides show.
@@ -1555,7 +1556,8 @@ target_compile_definitions(fbengine_physics_internal_tests PRIVATE FBE_PHYSICS_B
                            FBE_VERSION="${PROJECT_VERSION}")
 target_link_libraries(fbengine_physics_internal_tests PRIVATE Jolt Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_physics_internal_tests)
-catch_discover_tests(fbengine_physics_internal_tests TEST_PREFIX "physics."
+# A test tagged [stability], a fuzz, race, or soak, is labeled so, for sanitizers.yml.
+catch_discover_tests(fbengine_physics_internal_tests TEST_PREFIX "physics." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}")
 
 # fbengine_physics' examples, checked against what they print.
@@ -1799,7 +1801,8 @@ endif()
 target_compile_definitions(fbengine_video_tests PRIVATE
                            FBE_VIDEO_MEDIA="${PROJECT_SOURCE_DIR}/packages/fbengine_video/tests/media")
 fbengine_set_warnings(fbengine_video_tests)
-catch_discover_tests(fbengine_video_tests TEST_PREFIX "video."
+# A test tagged [stability], a fuzz, race, or soak, is labeled so, for sanitizers.yml.
+catch_discover_tests(fbengine_video_tests TEST_PREFIX "video." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_video_native>")
 
 # A video's thread, built in with a decoder of the test's, for what only its timing shows.

@@ -187,7 +187,8 @@ std::size_t character_at(const std::vector<std::uint8_t>& state, std::uint64_t c
 
 } // namespace
 
-TEST_CASE("a state resealed, with a byte of it changed anywhere, restores soundly or is refused") {
+TEST_CASE("a state resealed, with a byte of it changed anywhere, restores soundly or is refused",
+          "[stability]") {
     scene_t scene;
     const std::vector<std::uint8_t> before = scene.save();
     REQUIRE(scene.sound());
@@ -211,7 +212,7 @@ TEST_CASE("a state resealed, with a byte of it changed anywhere, restores soundl
     CHECK(refused < tried);
 }
 
-TEST_CASE("a state resealed, with numbers of it not finite, is refused") {
+TEST_CASE("a state resealed, with numbers of it not finite, is refused", "[stability]") {
     scene_t scene;
     const std::vector<std::uint8_t> before = scene.save();
     for (std::size_t i = header_size; i + 4 <= before.size(); ++i) {
@@ -224,7 +225,8 @@ TEST_CASE("a state resealed, with numbers of it not finite, is refused") {
     }
 }
 
-TEST_CASE("a state resealed, cut short, made longer, or of random bytes, is refused") {
+TEST_CASE("a state resealed, cut short, made longer, or of random bytes, is refused",
+          "[stability]") {
     scene_t scene;
     const std::vector<std::uint8_t> before = scene.save();
     for (std::size_t length = header_size; length < before.size(); ++length) {
@@ -248,7 +250,8 @@ TEST_CASE("a state resealed, cut short, made longer, or of random bytes, is refu
 }
 
 TEST_CASE("a state resealed, with a few bytes of it changed at random, restores soundly or is "
-          "refused") {
+          "refused",
+          "[stability]") {
     scene_t scene;
     const std::vector<std::uint8_t> before = scene.save();
     std::mt19937 random(2);
@@ -265,7 +268,7 @@ TEST_CASE("a state resealed, with a few bytes of it changed at random, restores 
 
 // Jolt puts a body back as awake if its state says so, and a body that doesn't move has nowhere
 // to keep that: it was a crash.
-TEST_CASE("a state resealed, saying a body that doesn't move is awake, is refused") {
+TEST_CASE("a state resealed, saying a body that doesn't move is awake, is refused", "[stability]") {
     scene_t scene;
     const std::vector<std::uint8_t> before = scene.save();
     std::vector<std::uint8_t> changed = before;
@@ -277,7 +280,8 @@ TEST_CASE("a state resealed, saying a body that doesn't move is awake, is refuse
 }
 
 TEST_CASE("a state resealed, with a body somewhere not finite, or turned by a quat not of "
-          "length 1, is refused") {
+          "length 1, is refused",
+          "[stability]") {
     scene_t scene;
     const std::vector<std::uint8_t> before = scene.save();
     // The floor's position, after its id and whether it's awake, then its rotation.
@@ -294,7 +298,8 @@ TEST_CASE("a state resealed, with a body somewhere not finite, or turned by a qu
 
 // Jolt makes room for as many contacts as a character's state says it had, which could be all the
 // memory there is.
-TEST_CASE("a state resealed, saying a character had billions of contacts, is refused") {
+TEST_CASE("a state resealed, saying a character had billions of contacts, is refused",
+          "[stability]") {
     scene_t scene;
     const std::vector<std::uint8_t> before = scene.save();
     const std::size_t record = character_at(before, scene.character);
@@ -347,7 +352,8 @@ std::pair<std::size_t, std::size_t> contacts_in(const scene_t& scene,
 
 // Jolt keeps room for so many pairs of bodies touching, and would run out partway through a state
 // of more, with some of it put back.
-TEST_CASE("a state resealed, of more bodies touching than Jolt has room for, is refused") {
+TEST_CASE("a state resealed, of more bodies touching than Jolt has room for, is refused",
+          "[stability]") {
     scene_t scene;
     const std::vector<std::uint8_t> before = scene.save();
     const auto [start, end] = contacts_in(scene, before);
@@ -442,7 +448,7 @@ std::vector<std::uint8_t> with_contacts(const scene_t& scene,
 
 // Jolt keeps its pairs and manifolds in one hash map, which it asserts has no key twice; it saves
 // them in order, by their keys, and a state in another order, or of a key twice, is refused.
-TEST_CASE("a state resealed, of contacts out of order or twice, is refused") {
+TEST_CASE("a state resealed, of contacts out of order or twice, is refused", "[stability]") {
     scene_t scene;
     const std::vector<std::uint8_t> before = scene.save();
     const pair_t first{ .a = 0, .b = 1, .parts = { { 0, 0 }, { 0, 1 } } };

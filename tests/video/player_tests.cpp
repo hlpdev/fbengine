@@ -116,7 +116,8 @@ void in_the_video(std::uint64_t video, double duration) {
 
 } // namespace
 
-TEST_CASE("a video's calls, in any order, with the ends of a double, are refused or play on") {
+TEST_CASE("a video's calls, in any order, with the ends of a double, are refused or play on",
+          "[stability]") {
     const std::array<std::vector<std::uint8_t>, 4> videos{ read("count.mpg"), read("colors.mpg"),
                                                            read("longsound.mpg"),
                                                            read("cgop.mpg") };
@@ -190,7 +191,7 @@ TEST_CASE("a video's calls, in any order, with the ends of a double, are refused
     CHECK(fbe_video_count() == 0);
 }
 
-TEST_CASE("hundreds of videos opened, played, and freed leave nothing") {
+TEST_CASE("hundreds of videos opened, played, and freed leave nothing", "[stability]") {
     const std::vector<std::uint8_t> bytes = read("busy.mpg");
     REQUIRE(!bytes.empty());
     // How much the round's videos held, all open, more than before it.

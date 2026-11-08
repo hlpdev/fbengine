@@ -137,7 +137,8 @@ std::uint64_t soak(bool piece_by_piece) {
 
 } // namespace
 
-TEST_CASE("thousands of bodies, characters, joints, and worlds made and freed leave nothing") {
+TEST_CASE("thousands of bodies, characters, joints, and worlds made and freed leave nothing",
+          "[stability]") {
     const std::int32_t shapes = fbe_shape_count();
     const std::int32_t worlds = fbe_physics_worlds();
     // Jolt, its threads, and the allocator's pools start in the first rounds.

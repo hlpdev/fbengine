@@ -137,7 +137,7 @@ struct scene_t {
 
 } // namespace
 
-TEST_CASE("shapes of the ends of a float are refused, or step on soundly") {
+TEST_CASE("shapes of the ends of a float are refused, or step on soundly", "[stability]") {
     for (const float a : extremes) {
         scene_t scene;
         const fbe_shape_vec3_t cube{ .x = a, .y = a, .z = a };
@@ -174,7 +174,8 @@ TEST_CASE("shapes of the ends of a float are refused, or step on soundly") {
 }
 
 TEST_CASE("convex hulls and meshes of points all in one place, on a line, or in a plane are "
-          "refused, or step on soundly") {
+          "refused, or step on soundly",
+          "[stability]") {
     scene_t scene;
     const std::array<fbe_shape_vec3_t, 4> same{ {
         { .x = 1.0F, .y = 1.0F, .z = 1.0F },
@@ -204,7 +205,8 @@ TEST_CASE("convex hulls and meshes of points all in one place, on a line, or in 
     }
 }
 
-TEST_CASE("a convex hull of thousands of points, and a mesh of thousands of triangles, are made") {
+TEST_CASE("a convex hull of thousands of points, and a mesh of thousands of triangles, are made",
+          "[stability]") {
     scene_t scene;
     std::vector<fbe_shape_vec3_t> points;
     std::uint32_t seed = 1;
@@ -231,7 +233,8 @@ TEST_CASE("a convex hull of thousands of points, and a mesh of thousands of tria
 }
 
 TEST_CASE("compounds of compounds, deeper than a sub shape's id has bits for, are refused, or step "
-          "on soundly") {
+          "on soundly",
+          "[stability]") {
     scene_t scene;
     std::uint64_t shape = scene.shapes[1];
     for (int depth = 0; depth < 64; ++depth) {
@@ -253,7 +256,7 @@ TEST_CASE("compounds of compounds, deeper than a sub shape's id has bits for, ar
     scene.try_shape(shape, "a compound of compounds");
 }
 
-TEST_CASE("bodies given the ends of a float are refused, or step on soundly") {
+TEST_CASE("bodies given the ends of a float are refused, or step on soundly", "[stability]") {
     for (const float a : extremes) {
         const fbe_body_vec3_t v{ .x = a, .y = a, .z = a };
         const std::array<std::pair<const char*, std::function<void(std::uint64_t)>>, 13> calls{ {
@@ -301,7 +304,8 @@ TEST_CASE("bodies given the ends of a float are refused, or step on soundly") {
 }
 
 TEST_CASE("steps, characters, and joints given the ends of a float are refused, or step on "
-          "soundly") {
+          "soundly",
+          "[stability]") {
     for (const float a : extremes) {
         scene_t stepped;
         fbe_physics_step(stepped.world, a, 1);
@@ -332,7 +336,7 @@ TEST_CASE("steps, characters, and joints given the ends of a float are refused, 
 }
 
 // Each of fbengine_physics' limits takes what's at it and refuses what's just past it, saying so.
-TEST_CASE("each limit takes what's at it and refuses what's past it") {
+TEST_CASE("each limit takes what's at it and refuses what's past it", "[stability]") {
     scene_t scene;
     const auto said = [] { return std::string(fbe_physics_error()); };
     // A shape's size, to 1e5.
