@@ -1,7 +1,6 @@
 // fbengine_physics soaked: thousands of shapes, bodies, characters, joints, and worlds made,
 // stepped, and freed, over and over, as a long game's would be, leave none of them behind, and what
-// malloc holds after each round never more than a little over what it held once the first rounds
-// had warmed it.
+// malloc holds grows, once the first rounds have warmed it, by next to nothing a round.
 
 #include "fbengine_physics.h"
 #include "stability.hpp"
@@ -16,6 +15,32 @@ using fbe::tests::allocated;
 using fbe::tests::sanitized;
 
 namespace {
+
+/// The most what malloc holds grows a round, over a soak's second half, in bytes.
+constexpr double most_slope = 64.0;
+
+/// The least-squares slope of the second half of `held`, what malloc held after each round, in
+/// bytes a round.
+double late_slope(const std::vector<std::uint64_t>& held) {
+    const std::size_t from = held.size() / 2;
+    const auto count = static_cast<double>(held.size() - from);
+    double mean_x = 0.0;
+    double mean_y = 0.0;
+    for (std::size_t i = from; i < held.size(); ++i) {
+        mean_x += static_cast<double>(i);
+        mean_y += static_cast<double>(held[i]);
+    }
+    mean_x /= count;
+    mean_y /= count;
+    double across = 0.0;
+    double spread = 0.0;
+    for (std::size_t i = from; i < held.size(); ++i) {
+        const double x = static_cast<double>(i) - mean_x;
+        across += x * (static_cast<double>(held[i]) - mean_y);
+        spread += x * x;
+    }
+    return spread > 0.0 ? across / spread : 0.0;
+}
 
 constexpr fbe_body_quat_t unturned{ .x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F };
 
@@ -114,26 +139,44 @@ TEST_CASE("thousands of bodies, characters, joints, and worlds made and freed le
           "[stability]") {
     const std::int32_t shapes = fbe_shape_count();
     const std::int32_t worlds = fbe_physics_worlds();
-    // Jolt, its threads, and the allocator's pools start in the first rounds.
-    for (int i = 0; i < 4; ++i) {
+    // Jolt on the thread that asks alone, as malloc's caches for each thread (glibc's tcache,
+    // macOS's magazines) fill as its threads work, slowly, at their threads' pace; the caller's
+    // own fill in the warming rounds.
+    const std::int32_t threads = fbe_physics_threads();
+    REQUIRE(fbe_physics_set_threads(0));
+    for (int i = 0; i < 60; ++i) {
         soak(i % 2 == 0);
     }
-    const std::uint64_t before = allocated();
-    std::uint64_t most = before;
-    constexpr int rounds = 40;
-    for (int i = 0; i < rounds; ++i) {
+    std::vector<std::uint64_t> held;
+    for (int i = 0; i < 40; ++i) {
         soak(i % 2 == 0);
-        most = std::max(most, allocated());
+        held.push_back(allocated());
     }
+    REQUIRE(fbe_physics_set_threads(threads));
     CHECK(fbe_shape_count() == shapes);
     CHECK(fbe_physics_worlds() == worlds);
     // A round of about 1000 shapes, 1050 bodies, 200 joints, and 50 characters, and a world for
-    // them, holds about 2 MB, and leaves malloc holding no more than 16 KB over what it held, on
-    // MinGW too, where Jolt's mutexes are patched to slim reader/writer locks, as a std::mutex
-    // locked there stayed allocated: about 18 KB a world. A sanitizer's allocator counts its own
-    // way, and LeakSanitizer and leak_tests' count of every allocation see a leak there.
-    INFO("before " << before << ", most after a round " << most);
+    // them, holds about 2 MB: what malloc holds grows by no more than 64 bytes a round over the
+    // second half, as a cache that fills flattens and a leak keeps on, as about 18 KB a world did
+    // on MinGW. A sanitizer's allocator counts its own way, and LeakSanitizer and leak_tests'
+    // count of every allocation see a leak there.
+    const double slope = late_slope(held);
+    INFO("the second half's slope, " << slope << " bytes a round");
     if (!sanitized) {
-        CHECK(most <= before + (std::uint64_t{ 16 } << 10U));
+        CHECK(slope <= most_slope);
     }
+}
+
+// The slope's own check: a leak of 256 bytes a round is seen, and a fill that flattens isn't.
+TEST_CASE("the soak's slope sees a leak a round, and not a fill that flattens") {
+    std::vector<std::uint64_t> leaking;
+    std::vector<std::uint64_t> filling;
+    for (std::uint64_t round = 0; round < 40; ++round) {
+        leaking.push_back(std::uint64_t{ 19000000 } + (256 * round));
+        // Half of what's left to fill each round, as caches fill: 20 KB in all.
+        filling.push_back(std::uint64_t{ 19020480 } -
+                          (std::uint64_t{ 20480 } >> std::min<std::uint64_t>(round, 63)));
+    }
+    CHECK(late_slope(leaking) > most_slope);
+    CHECK(late_slope(filling) <= most_slope);
 }
