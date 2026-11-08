@@ -5,9 +5,11 @@
 // .github/workflows/sanitizers.yml: a file's bytes, random numbers from a seed, a file changed at
 // random, what the process has allocated, and whether a sanitizer's built in.
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -74,6 +76,37 @@ inline constexpr bool sanitized = false;
 #else
 inline constexpr bool sanitized = false;
 #endif
+
+/// A thread that runs `work` with a flag that says when to stop, stopped and joined when it goes,
+/// so a REQUIRE that fails on the thread that made it reports, never terminating with it joinable.
+/// std::jthread would be this, but Apple's libc++ has it only as an experimental library.
+class stopping_thread_t {
+public:
+    template <typename Work>
+    explicit stopping_thread_t(Work work) : m_thread([this, work] { work(m_stop); }) {}
+
+    stopping_thread_t(const stopping_thread_t&) = delete;
+    stopping_thread_t& operator=(const stopping_thread_t&) = delete;
+    stopping_thread_t(stopping_thread_t&&) = delete;
+    stopping_thread_t& operator=(stopping_thread_t&&) = delete;
+
+    ~stopping_thread_t() {
+        stop();
+    }
+
+    /// Tells the work to stop, and waits until it has.
+    void stop() {
+        m_stop = true;
+        if (m_thread.joinable()) {
+            m_thread.join();
+        }
+    }
+
+private:
+    // Made before the thread that reads it.
+    std::atomic<bool> m_stop = false;
+    std::thread m_thread;
+};
 
 } // namespace fbe::tests
 

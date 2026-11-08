@@ -16,7 +16,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <stop_token>
 #include <thread>
 #include <vector>
 
@@ -181,11 +180,10 @@ TEST_CASE("the game's calls while another thread mixes leave every sample finite
     REQUIRE(fbe_audio_start(2, 48000, 2, nullptr, 0.0));
     std::atomic<bool> finite = true;
     std::atomic<std::int64_t> mixes = 0;
-    // A jthread, which a REQUIRE's failure stops and joins on its way out.
-    std::jthread mixing([&](const std::stop_token& stop) {
+    fbe::tests::stopping_thread_t mixing([&](const std::atomic<bool>& stop) {
         std::vector<float> samples(2048);
         random_t sizes(7);
-        while (!stop.stop_requested()) {
+        while (!stop.load()) {
             const auto frames = static_cast<std::int32_t>(1 + sizes.below(1024));
             fbe_audio_mix(samples.data(), frames);
             for (std::size_t i = 0; i < static_cast<std::size_t>(frames) * 2; ++i) {
@@ -197,8 +195,7 @@ TEST_CASE("the game's calls while another thread mixes leave every sample finite
         }
     });
     hammered(0x9E3779B97F4A7C15ULL, 20000, false);
-    mixing.request_stop();
-    mixing.join();
+    mixing.stop();
     CHECK(finite.load());
     CHECK(mixes.load() > 0);
     // What's stopped and freed is gone once the mix has run again.
