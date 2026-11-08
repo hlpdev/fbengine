@@ -291,7 +291,7 @@ FBE_API int64_t fbe_assets_resident_bytes(void) {
 FBE_API bool fbe_assets_address_sanitized(void) {
 #ifdef __SANITIZE_ADDRESS__
     return true;
-#elif defined(__has_feature)
+#elifdef __has_feature
 #if __has_feature(address_sanitizer)
     return true;
 #else
