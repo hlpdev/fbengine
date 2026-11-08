@@ -21,26 +21,28 @@ constexpr fbe_body_quat_t unturned{ .x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F }
 
 // The ends of a float, either way: the least above 0, denormal, as small as a float is normal,
 // small, at and past each of fbengine_physics' limits, and as large as a float holds.
-const std::array<float, 20> extremes{ std::numeric_limits<float>::denorm_min(),
-                                      std::numeric_limits<float>::min(),
-                                      1.0e-20F,
-                                      1.0e-6F,
-                                      1.0e5F,
-                                      1.0e6F,
-                                      1.0e9F,
-                                      1.0e12F,
-                                      1.0e15F,
-                                      1.0e30F,
-                                      std::numeric_limits<float>::max(),
-                                      -std::numeric_limits<float>::denorm_min(),
-                                      -1.0e-6F,
-                                      -1.0e5F,
-                                      -1.0e6F,
-                                      -1.0e9F,
-                                      -1.0e12F,
-                                      -1.0e15F,
-                                      -1.0e30F,
-                                      -std::numeric_limits<float>::max() };
+const std::array<float, 20> extremes{
+    std::numeric_limits<float>::denorm_min(),
+    std::numeric_limits<float>::min(),
+    1.0e-20F,
+    1.0e-6F,
+    1.0e5F,
+    1.0e6F,
+    1.0e9F,
+    1.0e12F,
+    1.0e15F,
+    1.0e30F,
+    std::numeric_limits<float>::max(),
+    -std::numeric_limits<float>::denorm_min(),
+    -1.0e-6F,
+    -1.0e5F,
+    -1.0e6F,
+    -1.0e9F,
+    -1.0e12F,
+    -1.0e15F,
+    -1.0e30F,
+    -std::numeric_limits<float>::max(),
+};
 
 bool finite(float x, float y, float z) {
     return std::isfinite(x) && std::isfinite(y) && std::isfinite(z);
@@ -149,25 +151,33 @@ TEST_CASE("shapes of the ends of a float are refused, or step on soundly", "[sta
         scene.try_shape(fbe_shape_capsule(a * 2, a), std::format("a capsule of radius {}", a));
         scene.try_shape(fbe_shape_cylinder(a, 0.5F), std::format("a cylinder {} long", a));
         scene.try_shape(fbe_shape_cylinder(1.0F, a), std::format("a cylinder of radius {}", a));
-        const std::array<fbe_shape_vec3_t, 4> corners{ {
-            { .x = 0.0F, .y = 0.0F, .z = 0.0F },
-            { .x = a, .y = 0.0F, .z = 0.0F },
-            { .x = 0.0F, .y = a, .z = 0.0F },
-            { .x = 0.0F, .y = 0.0F, .z = a },
-        } };
+        const std::array<fbe_shape_vec3_t, 4> corners{
+            {
+                { .x = 0.0F, .y = 0.0F, .z = 0.0F },
+                { .x = a, .y = 0.0F, .z = 0.0F },
+                { .x = 0.0F, .y = a, .z = 0.0F },
+                { .x = 0.0F, .y = 0.0F, .z = a },
+            },
+        };
         scene.try_shape(fbe_shape_convex_hull(corners.data(), 4),
                         std::format("a convex hull {} across", a));
         const std::array<std::uint32_t, 12> faces{ 0, 1, 2, 0, 2, 3, 0, 3, 1, 1, 3, 2 };
         scene.try_shape(fbe_shape_mesh(corners.data(), 4, faces.data(), 12),
                         std::format("a mesh {} across", a));
-        const std::array<fbe_shape_part_t, 2> parts{ {
-            { .shape = scene.shapes[1],
-              .position = { .x = a, .y = 0.0F, .z = 0.0F },
-              .rotation = { .x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F } },
-            { .shape = scene.shapes[2],
-              .position = { .x = 0.0F, .y = 0.0F, .z = 0.0F },
-              .rotation = { .x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F } },
-        } };
+        const std::array<fbe_shape_part_t, 2> parts{
+            {
+                {
+                    .shape = scene.shapes[1],
+                    .position = { .x = a, .y = 0.0F, .z = 0.0F },
+                    .rotation = { .x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F },
+                },
+                {
+                    .shape = scene.shapes[2],
+                    .position = { .x = 0.0F, .y = 0.0F, .z = 0.0F },
+                    .rotation = { .x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F },
+                },
+            },
+        };
         scene.try_shape(fbe_shape_compound(parts.data(), 2),
                         std::format("a compound with a part {} away", a));
     }
@@ -177,24 +187,30 @@ TEST_CASE("convex hulls and meshes of points all in one place, on a line, or in 
           "refused, or step on soundly",
           "[stability]") {
     scene_t scene;
-    const std::array<fbe_shape_vec3_t, 4> same{ {
-        { .x = 1.0F, .y = 1.0F, .z = 1.0F },
-        { .x = 1.0F, .y = 1.0F, .z = 1.0F },
-        { .x = 1.0F, .y = 1.0F, .z = 1.0F },
-        { .x = 1.0F, .y = 1.0F, .z = 1.0F },
-    } };
-    const std::array<fbe_shape_vec3_t, 4> line{ {
-        { .x = 0.0F, .y = 0.0F, .z = 0.0F },
-        { .x = 1.0F, .y = 0.0F, .z = 0.0F },
-        { .x = 2.0F, .y = 0.0F, .z = 0.0F },
-        { .x = 3.0F, .y = 0.0F, .z = 0.0F },
-    } };
-    const std::array<fbe_shape_vec3_t, 4> plane{ {
-        { .x = 0.0F, .y = 0.0F, .z = 0.0F },
-        { .x = 1.0F, .y = 0.0F, .z = 0.0F },
-        { .x = 0.0F, .y = 0.0F, .z = 1.0F },
-        { .x = 1.0F, .y = 0.0F, .z = 1.0F },
-    } };
+    const std::array<fbe_shape_vec3_t, 4> same{
+        {
+            { .x = 1.0F, .y = 1.0F, .z = 1.0F },
+            { .x = 1.0F, .y = 1.0F, .z = 1.0F },
+            { .x = 1.0F, .y = 1.0F, .z = 1.0F },
+            { .x = 1.0F, .y = 1.0F, .z = 1.0F },
+        },
+    };
+    const std::array<fbe_shape_vec3_t, 4> line{
+        {
+            { .x = 0.0F, .y = 0.0F, .z = 0.0F },
+            { .x = 1.0F, .y = 0.0F, .z = 0.0F },
+            { .x = 2.0F, .y = 0.0F, .z = 0.0F },
+            { .x = 3.0F, .y = 0.0F, .z = 0.0F },
+        },
+    };
+    const std::array<fbe_shape_vec3_t, 4> plane{
+        {
+            { .x = 0.0F, .y = 0.0F, .z = 0.0F },
+            { .x = 1.0F, .y = 0.0F, .z = 0.0F },
+            { .x = 0.0F, .y = 0.0F, .z = 1.0F },
+            { .x = 1.0F, .y = 0.0F, .z = 1.0F },
+        },
+    };
     const std::array<std::uint32_t, 12> faces{ 0, 1, 2, 0, 2, 3, 0, 3, 1, 1, 3, 2 };
     const std::array<std::uint32_t, 6> twice{ 0, 0, 0, 1, 1, 1 };
     for (const auto* points : { &same, &line, &plane }) {
@@ -214,6 +230,7 @@ TEST_CASE("a convex hull of thousands of points, and a mesh of thousands of tria
         seed = (seed * 1664525U) + 1013904223U;
         return (static_cast<float>(seed >> 8U) / static_cast<float>(1U << 24U)) - 0.5F;
     };
+    points.reserve(20000);
     for (int i = 0; i < 20000; ++i) {
         points.push_back({ .x = next(), .y = next(), .z = next() });
     }
@@ -238,14 +255,20 @@ TEST_CASE("compounds of compounds, deeper than a sub shape's id has bits for, ar
     scene_t scene;
     std::uint64_t shape = scene.shapes[1];
     for (int depth = 0; depth < 64; ++depth) {
-        const std::array<fbe_shape_part_t, 2> parts{ {
-            { .shape = shape,
-              .position = { .x = 0.0F, .y = 0.0F, .z = 0.0F },
-              .rotation = { .x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F } },
-            { .shape = scene.shapes[2],
-              .position = { .x = 1.0F, .y = 0.0F, .z = 0.0F },
-              .rotation = { .x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F } },
-        } };
+        const std::array<fbe_shape_part_t, 2> parts{
+            {
+                {
+                    .shape = shape,
+                    .position = { .x = 0.0F, .y = 0.0F, .z = 0.0F },
+                    .rotation = { .x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F },
+                },
+                {
+                    .shape = scene.shapes[2],
+                    .position = { .x = 1.0F, .y = 0.0F, .z = 0.0F },
+                    .rotation = { .x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F },
+                },
+            },
+        };
         const std::uint64_t deeper = fbe_shape_compound(parts.data(), 2);
         if (deeper == 0) {
             break;
@@ -259,29 +282,35 @@ TEST_CASE("compounds of compounds, deeper than a sub shape's id has bits for, ar
 TEST_CASE("bodies given the ends of a float are refused, or step on soundly", "[stability]") {
     for (const float a : extremes) {
         const fbe_body_vec3_t v{ .x = a, .y = a, .z = a };
-        const std::array<std::pair<const char*, std::function<void(std::uint64_t)>>, 13> calls{ {
-            { "put", [&](std::uint64_t b) { fbe_body_set_position(b, &v); } },
-            { "sped", [&](std::uint64_t b) { fbe_body_set_velocity(b, &v); } },
-            { "spun", [&](std::uint64_t b) { fbe_body_set_angular_velocity(b, &v); } },
-            { "pushed", [&](std::uint64_t b) { fbe_body_add_force(b, &v); } },
-            { "pushed at", [&](std::uint64_t b) { fbe_body_add_force_at(b, &v, &v); } },
-            { "twisted", [&](std::uint64_t b) { fbe_body_add_torque(b, &v); } },
-            { "struck", [&](std::uint64_t b) { fbe_body_add_impulse(b, &v); } },
-            { "struck at", [&](std::uint64_t b) { fbe_body_add_impulse_at(b, &v, &v); } },
-            { "struck turning", [&](std::uint64_t b) { fbe_body_add_angular_impulse(b, &v); } },
-            { "weighed", [&](std::uint64_t b) { fbe_body_set_mass(b, a); } },
-            { "damped",
-              [&](std::uint64_t b) {
-                  fbe_body_set_linear_damping(b, a);
-                  fbe_body_set_angular_damping(b, a);
-              } },
-            { "made heavier", [&](std::uint64_t b) { fbe_body_set_gravity_factor(b, a); } },
-            { "rubbed",
-              [&](std::uint64_t b) {
-                  fbe_body_set_friction(b, a);
-                  fbe_body_set_restitution(b, a);
-              } },
-        } };
+        const std::array<std::pair<const char*, std::function<void(std::uint64_t)>>, 13> calls{
+            {
+                { "put", [&](std::uint64_t b) { fbe_body_set_position(b, &v); } },
+                { "sped", [&](std::uint64_t b) { fbe_body_set_velocity(b, &v); } },
+                { "spun", [&](std::uint64_t b) { fbe_body_set_angular_velocity(b, &v); } },
+                { "pushed", [&](std::uint64_t b) { fbe_body_add_force(b, &v); } },
+                { "pushed at", [&](std::uint64_t b) { fbe_body_add_force_at(b, &v, &v); } },
+                { "twisted", [&](std::uint64_t b) { fbe_body_add_torque(b, &v); } },
+                { "struck", [&](std::uint64_t b) { fbe_body_add_impulse(b, &v); } },
+                { "struck at", [&](std::uint64_t b) { fbe_body_add_impulse_at(b, &v, &v); } },
+                { "struck turning", [&](std::uint64_t b) { fbe_body_add_angular_impulse(b, &v); } },
+                { "weighed", [&](std::uint64_t b) { fbe_body_set_mass(b, a); } },
+                {
+                    "damped",
+                    [&](std::uint64_t b) {
+                        fbe_body_set_linear_damping(b, a);
+                        fbe_body_set_angular_damping(b, a);
+                    },
+                },
+                { "made heavier", [&](std::uint64_t b) { fbe_body_set_gravity_factor(b, a); } },
+                {
+                    "rubbed",
+                    [&](std::uint64_t b) {
+                        fbe_body_set_friction(b, a);
+                        fbe_body_set_restitution(b, a);
+                    },
+                },
+            },
+        };
         for (const auto& [what, call] : calls) {
             scene_t scene;
             for (std::size_t i = 1; i < scene.bodies.size(); ++i) {
@@ -321,12 +350,14 @@ TEST_CASE("steps, characters, and joints given the ends of a float are refused, 
         const fbe_joint_vec3_t axis{ .x = a, .y = 0.0F, .z = 0.0F };
         const std::uint64_t first = joined.bodies[1];
         const std::uint64_t second = joined.bodies[2];
-        for (const std::uint64_t joint :
-             { fbe_joint_point(first, second, &point), fbe_joint_hinge(first, 0, &point, &axis),
-               fbe_joint_slider(second, 0, &axis),
-               fbe_joint_distance(first, second, &point, &point),
-               fbe_joint_hinge(joined.bodies[3], 0, &point, &axis),
-               fbe_joint_slider(joined.bodies[4], 0, &axis) }) {
+        for (const std::uint64_t joint : {
+                 fbe_joint_point(first, second, &point),
+                 fbe_joint_hinge(first, 0, &point, &axis),
+                 fbe_joint_slider(second, 0, &axis),
+                 fbe_joint_distance(first, second, &point, &point),
+                 fbe_joint_hinge(joined.bodies[3], 0, &point, &axis),
+                 fbe_joint_slider(joined.bodies[4], 0, &axis),
+             }) {
             fbe_joint_set_limits(joint, -a, a);
             fbe_joint_set_spring(joint, a, a);
             fbe_joint_set_motor(joint, FBE_JOINT_MOTOR_SPEED, a, a);
@@ -347,11 +378,13 @@ TEST_CASE("each limit takes what's at it and refuses what's past it", "[stabilit
     fbe_shape_free(box);
     CHECK(fbe_shape_box(&larger) == 0);
     CHECK(said() == "a box's width is more than 0 and at most 1e5, not 101000");
-    const std::array<fbe_shape_vec3_t, 3> far{ {
-        { .x = 0.0F, .y = 0.0F, .z = 0.0F },
-        { .x = 1.01e5F, .y = 0.0F, .z = 0.0F },
-        { .x = 0.0F, .y = 1.0F, .z = 0.0F },
-    } };
+    const std::array<fbe_shape_vec3_t, 3> far{
+        {
+            { .x = 0.0F, .y = 0.0F, .z = 0.0F },
+            { .x = 1.01e5F, .y = 0.0F, .z = 0.0F },
+            { .x = 0.0F, .y = 1.0F, .z = 0.0F },
+        },
+    };
     CHECK(fbe_shape_convex_hull(far.data(), 3) == 0);
     CHECK(said() == "a convex hull's points are at most 1e5 from 0 each way");
     const std::array<std::uint32_t, 3> triangle{ 0, 1, 2 };

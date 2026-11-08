@@ -139,7 +139,8 @@ struct scene_t {
 
     // Restores `state`, and checks it was refused, the world left as `before`, or that the world
     // restored steps on soundly; then puts `before` back. True if it was refused.
-    bool tried(const std::vector<std::uint8_t>& state, const std::vector<std::uint8_t>& before) {
+    [[nodiscard]] bool tried(const std::vector<std::uint8_t>& state,
+                             const std::vector<std::uint8_t>& before) const {
         double carried = 0.0;
         const bool restored = fbe_physics_restore(
             world, state.data(), static_cast<std::int64_t>(state.size()), &carried);
@@ -170,7 +171,8 @@ std::size_t first_body(const scene_t& scene) {
     const std::size_t bodies = scene.bodies.size() + 2;
     const std::size_t joints = 5;
     const std::size_t characters = 1;
-    return header_size + (8 * 3) + (8 * (bodies + joints + characters)) + 1 + 4 + 12 + 4;
+    return header_size + (std::size_t{ 8 } * 3) +
+           (std::size_t{ 8 } * (bodies + joints + characters)) + 1 + 4 + 12 + 4;
 }
 
 // Where `character`'s record is in `state`: its handle, the last eight bytes that are.
@@ -189,7 +191,7 @@ std::size_t character_at(const std::vector<std::uint8_t>& state, std::uint64_t c
 
 TEST_CASE("a state resealed, with a byte of it changed anywhere, restores soundly or is refused",
           "[stability]") {
-    scene_t scene;
+    scene_t const scene;
     const std::vector<std::uint8_t> before = scene.save();
     REQUIRE(scene.sound());
     int refused = 0;
@@ -213,21 +215,21 @@ TEST_CASE("a state resealed, with a byte of it changed anywhere, restores soundl
 }
 
 TEST_CASE("a state resealed, with numbers of it not finite, is refused", "[stability]") {
-    scene_t scene;
+    scene_t const scene;
     const std::vector<std::uint8_t> before = scene.save();
     for (std::size_t i = header_size; i + 4 <= before.size(); ++i) {
         for (const float value :
              { std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity() }) {
             std::vector<std::uint8_t> changed = before;
             std::memcpy(changed.data() + i, &value, sizeof(value));
-            scene.tried(resealed(changed), before);
+            static_cast<void>(scene.tried(resealed(changed), before));
         }
     }
 }
 
 TEST_CASE("a state resealed, cut short, made longer, or of random bytes, is refused",
           "[stability]") {
-    scene_t scene;
+    scene_t const scene;
     const std::vector<std::uint8_t> before = scene.save();
     for (std::size_t length = header_size; length < before.size(); ++length) {
         const std::vector<std::uint8_t> cut(before.begin(),
@@ -239,6 +241,7 @@ TEST_CASE("a state resealed, cut short, made longer, or of random bytes, is refu
         longer.resize(before.size() + more, 0xAB);
         CHECK(scene.tried(resealed(longer), before));
     }
+    // NOLINTNEXTLINE(bugprone-random-generator-seed): a fuzz the same each run.
     std::mt19937 random(1);
     for (int i = 0; i < 200; ++i) {
         std::vector<std::uint8_t> noise = before;
@@ -252,8 +255,9 @@ TEST_CASE("a state resealed, cut short, made longer, or of random bytes, is refu
 TEST_CASE("a state resealed, with a few bytes of it changed at random, restores soundly or is "
           "refused",
           "[stability]") {
-    scene_t scene;
+    scene_t const scene;
     const std::vector<std::uint8_t> before = scene.save();
+    // NOLINTNEXTLINE(bugprone-random-generator-seed): a fuzz the same each run.
     std::mt19937 random(2);
     const auto held = before.size() - header_size;
     for (int i = 0; i < 3000; ++i) {
@@ -262,14 +266,14 @@ TEST_CASE("a state resealed, with a few bytes of it changed at random, restores 
         for (std::uint32_t j = 0; j < changes; ++j) {
             changed[header_size + (random() % held)] = static_cast<std::uint8_t>(random());
         }
-        scene.tried(resealed(changed), before);
+        static_cast<void>(scene.tried(resealed(changed), before));
     }
 }
 
 // Jolt puts a body back as awake if its state says so, and a body that doesn't move has nowhere
 // to keep that: it was a crash.
 TEST_CASE("a state resealed, saying a body that doesn't move is awake, is refused", "[stability]") {
-    scene_t scene;
+    scene_t const scene;
     const std::vector<std::uint8_t> before = scene.save();
     std::vector<std::uint8_t> changed = before;
     // The floor's id, then whether it's awake.
@@ -282,7 +286,7 @@ TEST_CASE("a state resealed, saying a body that doesn't move is awake, is refuse
 TEST_CASE("a state resealed, with a body somewhere not finite, or turned by a quat not of "
           "length 1, is refused",
           "[stability]") {
-    scene_t scene;
+    scene_t const scene;
     const std::vector<std::uint8_t> before = scene.save();
     // The floor's position, after its id and whether it's awake, then its rotation.
     const std::size_t position = first_body(scene) + 5;
@@ -300,7 +304,7 @@ TEST_CASE("a state resealed, with a body somewhere not finite, or turned by a qu
 // memory there is.
 TEST_CASE("a state resealed, saying a character had billions of contacts, is refused",
           "[stability]") {
-    scene_t scene;
+    scene_t const scene;
     const std::vector<std::uint8_t> before = scene.save();
     const std::size_t record = character_at(before, scene.character);
     REQUIRE(record > 0);
@@ -344,7 +348,7 @@ std::pair<std::size_t, std::size_t> contacts_in(const scene_t& scene,
             at += 12 + 8 + 4 + (points * (12 + 12 + 4));
         }
     }
-    at += 16 * take(4);
+    at += std::size_t{ 16 } * take(4);
     return { start, at };
 }
 
@@ -354,7 +358,7 @@ std::pair<std::size_t, std::size_t> contacts_in(const scene_t& scene,
 // of more, with some of it put back.
 TEST_CASE("a state resealed, of more bodies touching than Jolt has room for, is refused",
           "[stability]") {
-    scene_t scene;
+    scene_t const scene;
     const std::vector<std::uint8_t> before = scene.save();
     const auto [start, end] = contacts_in(scene, before);
     std::uint32_t had = 0;
@@ -449,7 +453,7 @@ std::vector<std::uint8_t> with_contacts(const scene_t& scene,
 // Jolt keeps its pairs and manifolds in one hash map, which it asserts has no key twice; it saves
 // them in order, by their keys, and a state in another order, or of a key twice, is refused.
 TEST_CASE("a state resealed, of contacts out of order or twice, is refused", "[stability]") {
-    scene_t scene;
+    scene_t const scene;
     const std::vector<std::uint8_t> before = scene.save();
     const pair_t first{ .a = 0, .b = 1, .parts = { { 0, 0 }, { 0, 1 } } };
     const pair_t second{ .a = 0, .b = 2, .parts = { { 0, 0 } } };

@@ -5,6 +5,7 @@
 #include "fbengine_physics.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <vector>
@@ -58,16 +59,19 @@ std::uint64_t soak(bool piece_by_piece) {
     const fbe_shape_vec3_t floor_size{ .x = 200.0F, .y = 1.0F, .z = 200.0F };
     const fbe_body_vec3_t floor_at{ .x = 0.0F, .y = -0.5F, .z = 0.0F };
     std::vector<std::uint64_t> shapes{ fbe_shape_box(&floor_size) };
-    std::vector<std::uint64_t> bodies{ fbe_body_add(world, shapes[0], FBE_BODY_STATIC, &floor_at,
-                                                    &unturned) };
+    std::vector<std::uint64_t> bodies{
+        fbe_body_add(world, shapes[0], FBE_BODY_STATIC, &floor_at, &unturned),
+    };
     for (int i = 0; i < 1000; ++i) {
         const float size = 0.5F + (static_cast<float>(i % 7) * 0.1F);
         const fbe_shape_vec3_t box{ .x = size, .y = size, .z = size };
         const std::uint64_t shape = i % 2 == 0 ? fbe_shape_box(&box) : fbe_shape_sphere(size);
         shapes.push_back(shape);
-        const fbe_body_vec3_t where{ .x = static_cast<float>(i % 20) * 2.0F - 20.0F,
-                                     .y = 1.0F + static_cast<float>(i / 400),
-                                     .z = static_cast<float>((i / 20) % 20) * 2.0F - 20.0F };
+        const fbe_body_vec3_t where{
+            .x = (static_cast<float>(i % 20) * 2.0F) - 20.0F,
+            .y = 1.0F + std::floor(static_cast<float>(i) / 400.0F),
+            .z = (static_cast<float>((i / 20) % 20) * 2.0F) - 20.0F,
+        };
         bodies.push_back(fbe_body_add(world, shape, FBE_BODY_DYNAMIC, &where, &unturned));
     }
     std::vector<std::uint64_t> joints;
@@ -80,9 +84,11 @@ std::uint64_t soak(bool piece_by_piece) {
     shapes.push_back(capsule);
     std::vector<std::uint64_t> characters;
     for (int i = 0; i < 50; ++i) {
-        const fbe_character_vec3_t where{ .x = static_cast<float>(i) - 25.0F,
-                                          .y = 1.0F,
-                                          .z = 30.0F };
+        const fbe_character_vec3_t where{
+            .x = static_cast<float>(i) - 25.0F,
+            .y = 1.0F,
+            .z = 30.0F,
+        };
         characters.push_back(fbe_character_new(world, capsule, &where));
     }
     for (const std::uint64_t made : shapes) {

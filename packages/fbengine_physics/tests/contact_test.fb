@@ -248,10 +248,12 @@ End Function
 Function Stacked(world: PhysicsWorld): Body[]
     Local all: Body[] = []
     For i = 0 To 5
-        all.Add(Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.DYNAMIC, Vec3(0, 0.5 + (i As Float32), 0)))
+        all.Add(Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.DYNAMIC,
+                     Vec3(0, 0.5 + (i As Float32), 0)))
     End For
     For i = 0 To 5
-        all.Add(Body(world, Shape.Sphere(0.4), Motion.DYNAMIC, Vec3((i As Float32) * 0.3 - 0.75, 8 + (i As Float32), 0)))
+        all.Add(Body(world, Shape.Sphere(0.4), Motion.DYNAMIC,
+                     Vec3((i As Float32) * 0.3 - 0.75, 8 + (i As Float32), 0)))
     End For
     Return all
 End Function

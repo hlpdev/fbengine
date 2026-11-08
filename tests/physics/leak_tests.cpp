@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -89,14 +90,17 @@ bool round(bool piece_by_piece) {
     const fbe_shape_vec3_t floor_size{ .x = 100.0F, .y = 1.0F, .z = 100.0F };
     const fbe_body_vec3_t floor_at{ .x = 0.0F, .y = -0.5F, .z = 0.0F };
     std::vector<std::uint64_t> shapes{ fbe_shape_box(&floor_size) };
-    std::vector<std::uint64_t> bodies{ fbe_body_add(world, shapes[0], FBE_BODY_STATIC, &floor_at,
-                                                    &unturned) };
+    std::vector<std::uint64_t> bodies{
+        fbe_body_add(world, shapes[0], FBE_BODY_STATIC, &floor_at, &unturned),
+    };
     for (int i = 0; i < 300; ++i) {
         const fbe_shape_vec3_t box{ .x = 0.5F, .y = 0.5F, .z = 0.5F };
         shapes.push_back(i % 2 == 0 ? fbe_shape_box(&box) : fbe_shape_sphere(0.4F));
-        const fbe_body_vec3_t where{ .x = static_cast<float>(i % 15) - 7.0F,
-                                     .y = 0.5F + static_cast<float>(i / 150),
-                                     .z = static_cast<float>((i / 15) % 10) - 5.0F };
+        const fbe_body_vec3_t where{
+            .x = static_cast<float>(i % 15) - 7.0F,
+            .y = 0.5F + std::floor(static_cast<float>(i) / 150.0F),
+            .z = static_cast<float>((i / 15) % 10) - 5.0F,
+        };
         bodies.push_back(fbe_body_add(world, shapes.back(), FBE_BODY_DYNAMIC, &where, &unturned));
     }
     std::vector<std::uint64_t> joints;
@@ -108,9 +112,11 @@ bool round(bool piece_by_piece) {
     shapes.push_back(fbe_shape_capsule(1.8F, 0.3F));
     std::vector<std::uint64_t> characters;
     for (int i = 0; i < 20; ++i) {
-        const fbe_character_vec3_t where{ .x = static_cast<float>(i) - 10.0F,
-                                          .y = 1.0F,
-                                          .z = 20.0F };
+        const fbe_character_vec3_t where{
+            .x = static_cast<float>(i) - 10.0F,
+            .y = 1.0F,
+            .z = 20.0F,
+        };
         characters.push_back(fbe_character_new(world, shapes.back(), &where));
     }
     bool made = world != 0;
@@ -174,7 +180,7 @@ void operator delete(void* block) noexcept {
     std::free(block);
 }
 
-void operator delete(void* block, std::size_t) noexcept {
+void operator delete(void* block, std::size_t /*unused*/) noexcept {
     operator delete(block);
 }
 

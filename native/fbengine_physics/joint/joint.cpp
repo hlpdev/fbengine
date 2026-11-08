@@ -253,7 +253,8 @@ FBE_PHYSICS_API uint64_t fbe_joint_distance(uint64_t a, uint64_t b, const fbe_jo
         return 0;
     }
     // Nearer, it's a point joint, whose direction Jolt can't find as they move.
-    if ((on_b - on_a).Length() < 1.0e-3F) {
+    const JPH::Vec3 between = on_b - on_a;
+    if (between.Length() < 1.0e-3F) {
         fail("a distance joint's points are 1e-3 or more apart");
         return 0;
     }

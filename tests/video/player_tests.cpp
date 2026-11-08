@@ -18,6 +18,8 @@
 #include <vector>
 
 #ifdef _WIN32
+// Without windows.h's min and max, which std::numeric_limits' are taken for.
+#define NOMINMAX
 // psapi.h needs windows.h's types first.
 // clang-format off
 #include <windows.h>
@@ -81,22 +83,24 @@ private:
 // A time a game might give, by mistake or not: the ends of a double, around 0, a billion seconds,
 // and around the video's length.
 double some_time(random_t& random, double duration) {
-    const std::array<double, 16> times{ std::numeric_limits<double>::quiet_NaN(),
-                                        std::numeric_limits<double>::infinity(),
-                                        -std::numeric_limits<double>::infinity(),
-                                        std::numeric_limits<double>::max(),
-                                        std::numeric_limits<double>::lowest(),
-                                        std::numeric_limits<double>::denorm_min(),
-                                        -0.0,
-                                        0.0,
-                                        -1.0,
-                                        1.0e9,
-                                        1.0e9 + 1.0,
-                                        duration,
-                                        std::nextafter(duration, 1.0e300),
-                                        std::nextafter(duration, 0.0),
-                                        1.0 / 60,
-                                        0.25 };
+    const std::array<double, 16> times{
+        std::numeric_limits<double>::quiet_NaN(),
+        std::numeric_limits<double>::infinity(),
+        -std::numeric_limits<double>::infinity(),
+        std::numeric_limits<double>::max(),
+        std::numeric_limits<double>::lowest(),
+        std::numeric_limits<double>::denorm_min(),
+        -0.0,
+        0.0,
+        -1.0,
+        1.0e9,
+        1.0e9 + 1.0,
+        duration,
+        std::nextafter(duration, 1.0e300),
+        std::nextafter(duration, 0.0),
+        1.0 / 60,
+        0.25,
+    };
     if (random.below(3) == 0) {
         return duration * static_cast<double>(random.below(1001)) / 1000.0;
     }
@@ -118,9 +122,12 @@ void in_the_video(std::uint64_t video, double duration) {
 
 TEST_CASE("a video's calls, in any order, with the ends of a double, are refused or play on",
           "[stability]") {
-    const std::array<std::vector<std::uint8_t>, 4> videos{ read("count.mpg"), read("colors.mpg"),
-                                                           read("longsound.mpg"),
-                                                           read("cgop.mpg") };
+    const std::array<std::vector<std::uint8_t>, 4> videos{
+        read("count.mpg"),
+        read("colors.mpg"),
+        read("longsound.mpg"),
+        read("cgop.mpg"),
+    };
     random_t random(0x9E3779B97F4A7C15ULL);
     for (const std::vector<std::uint8_t>& bytes : videos) {
         REQUIRE(!bytes.empty());
@@ -151,13 +158,14 @@ TEST_CASE("a video's calls, in any order, with the ends of a double, are refused
                 break;
             case 6: {
                 // The right size, or one off, or none.
-                const std::array<std::int64_t, 4> sizes{ static_cast<std::int64_t>(pixels),
-                                                         static_cast<std::int64_t>(pixels) - 1,
-                                                         static_cast<std::int64_t>(pixels) + 1,
-                                                         -1 };
+                const std::array<std::int64_t, 4> sizes{
+                    static_cast<std::int64_t>(pixels),
+                    static_cast<std::int64_t>(pixels) - 1,
+                    static_cast<std::int64_t>(pixels) + 1,
+                    -1,
+                };
                 const std::int64_t size = sizes[random.below(sizes.size())];
-                CHECK(fbe_video_frame(video, frame.data(), size) ==
-                      (size == static_cast<std::int64_t>(pixels)));
+                CHECK(fbe_video_frame(video, frame.data(), size) == (std::cmp_equal(size, pixels)));
                 break;
             }
             case 7: {
