@@ -175,12 +175,20 @@ bool submit_frame(VkSemaphore wait, VkSemaphore signal);
 /// fbe_error's why, if it couldn't.
 bool finish_frame();
 
-/// The samplers' binding in the bindless set, and the textures'. A shader reads a texture by its
-/// index in the textures' and a sampler's in the samplers', as bindless.slang does.
+/// The samplers' binding in the bindless set, multisampled images', and the textures', which is
+/// last as how many it has varies. A shader reads a texture by its index in the textures' and a
+/// sampler's in the samplers', as bindless.slang does.
 constexpr std::uint32_t sampler_binding = 0;
-constexpr std::uint32_t texture_binding = 1;
+constexpr std::uint32_t samples_binding = 1;
+constexpr std::uint32_t texture_binding = 2;
 /// How many samplers the set has: one for each filter and wrap in U and V, and room.
 constexpr std::uint32_t sampler_slots = 32;
+/// How many multisampled images the set has, the engine's own whose samples a shader reads: one for
+/// each size of an HDR camera's image at once, but for one with temporal antialiasing; what's past
+/// that reads its average.
+constexpr std::uint32_t samples_slots = 64;
+/// A multisampled image with no slot.
+constexpr std::uint32_t no_samples_slot = UINT32_MAX;
 
 /// The bindless set's layout, which every pipeline's layout has as its set 0, and the set.
 VkDescriptorSetLayout bindless_layout();
@@ -188,9 +196,27 @@ VkDescriptorSet bindless_set();
 
 /// How many textures the set holds, which is how many there can be.
 std::uint32_t texture_capacity();
+/// How many images the set's pool was made for: as many as the set has, or allocating it may fail
+/// on a GPU that, unlike lavapipe, holds a pool to its sizes.
+std::uint32_t pool_images();
 
 /// Points the set's texture `index` at `view`, sampled in SHADER_READ_ONLY_OPTIMAL.
 void write_texture(std::uint32_t index, VkImageView view);
+
+/// A slot in the set for a multisampled image, with its view, for a shader to read its samples by;
+/// no_samples_slot if they're all taken. A slot given back is for another image, once the GPU's
+/// done with what it was.
+std::uint32_t take_samples_slot(VkImageView view);
+void give_samples_slot(std::uint32_t slot);
+/// How many of the set's slots for samples are free.
+std::uint32_t free_samples_slot_count();
+/// Points every free slot for samples at `view`, and those given back from now on, a multisampled
+/// image in SHADER_READ_ONLY_OPTIMAL that's there as long as it is; VK_NULL_HANDLE, before it goes,
+/// for none.
+void point_free_samples_at(VkImageView view);
+/// What a slot for samples points at, and what a free one does: for tests.
+VkImageView samples_slot_view(std::uint32_t slot);
+VkImageView free_samples_view();
 
 /// The screen, for a window `window` pixels big: made again if the size it should be, its own or
 /// the window's, or its samples changed, its handle, or the old one's, or 0, if it can't be made.
@@ -251,6 +277,8 @@ enum class fault_t : std::uint8_t {
     NO_COMPRESSED,
     /// Making a texture of a file's image, as if the device couldn't sample its format.
     NO_FILE_FORMAT,
+    /// Making a multisampled image of the engine's, as if the device couldn't read its samples.
+    NO_READ_SAMPLES,
 };
 
 /// Makes the next `fault` happen.

@@ -1,0 +1,97 @@
+name: Sanitizers
+
+# Each night, the engine's native tests built with AddressSanitizer and UndefinedBehaviorSanitizer,
+# and again with ThreadSanitizer, each running the tests a stability pass keeps: a fuzz, a race, or
+# a soak, which a lane tags [stability] in Catch2, and catch_discover_tests' ADD_TAGS_AS_LABELS
+# labels so (a test of add_test's has LABELS stability). Never on a push, so CI's own time doesn't
+# grow. A finding stops its test, and the sanitizer's report is kept with the run.
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: sanitizers-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sanitizer:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: asan-ubsan
+            sanitize: address,undefined
+          - name: tsan
+            sanitize: thread
+    steps:
+      - uses: actions/checkout@v7
+
+      # SDL's headers, which configuring the project needs, and lavapipe, for a GPU test that's a
+      # stability test, as ci.yml's gpu job has them.
+      - name: Install
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libvulkan1 mesa-vulkan-drivers
+          sudo apt-get install -y libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
+            libxfixes-dev libxss-dev libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols \
+            libegl-dev libdrm-dev libgbm-dev libdbus-1-dev libudev-dev libibus-1.0-dev
+          echo "VK_DRIVER_FILES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | paste -sd: -)" >> "$GITHUB_ENV"
+          # The runner's kernel randomizes mmap with more bits than the sanitizers' shadow memory
+          # leaves room for, which stops a test as it starts.
+          sudo sysctl -w vm.mmap_rnd_bits=28
+
+      # The packages' tests and the examples run in fb, which isn't built with a sanitizer, so only
+      # the C++ tests are here.
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DFBENGINE_FB_TESTS=OFF
+          -DFBENGINE_SANITIZE=${{ matrix.sanitize }}
+
+      # Every target, as what the label finds is only known once each test's built. A tool the
+      # build runs is built with the sanitizer too, and what it leaks on its way out isn't a test's.
+      - name: Build
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+        run: cmake --build build --parallel
+
+      # Each sanitizer writes its report to reports/, named by the process: a finding stops the
+      # test, which fails it.
+      - name: Test
+        env:
+          SDL_VIDEO_DRIVER: offscreen
+          FBENGINE_ENDS_AT_ONCE: '8'
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/reports"
+          reports="$GITHUB_WORKSPACE/reports"
+          export ASAN_OPTIONS="log_path=$reports/asan:detect_leaks=1:strict_string_checks=1"
+          export UBSAN_OPTIONS="log_path=$reports/ubsan:print_stacktrace=1"
+          export TSAN_OPTIONS="log_path=$reports/tsan:halt_on_error=1:second_deadlock_stack=1"
+          ctest --test-dir build -L '^stability$' --no-tests=error --output-on-failure -j 2 \
+            --timeout 3600
+
+      - name: Show the reports
+        if: failure()
+        run: |
+          for report in reports/*; do
+            [ -f "$report" ] || continue
+            echo "== $report"
+            cat "$report"
+          done
+
+      - name: Keep the reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sanitizer-reports-${{ matrix.name }}
+          path: |
+            reports/
+            build/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore

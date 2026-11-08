@@ -344,6 +344,28 @@ Public Final Class Texture Implements Asset
         If !written Then Panic(LastError())
     End Method
 
+    /// Writes `image` into the whole of its level `level`, which it's the size of, in turn as Write
+    /// does, so a game can make its own mipmaps, as a coverage-keeping one for what's cut by its
+    /// alpha. It does nothing to the other levels, which are the game's: until Write, WritePixels,
+    /// CopyFrom, or a write of its pixels makes them all again from the first, or Clear clears
+    /// them. It panics unless the texture is RGBA8 or RGBA8_LINEAR, it has that level, and the
+    /// image is its size.
+    @MainThread @PanicsAtCaller
+    Public Method WriteLevel(level: Int32, image: Image)
+        Local texture = Live("WriteLevel")
+        Local format = Format()
+        If format != TextureFormat.RGBA8 && format != TextureFormat.RGBA8_LINEAR
+            Panic("an Image is written into an RGBA8 or RGBA8_LINEAR texture, not {format}")
+        End If
+        Local written = False
+        Unsafe
+            written = fbe_texture_write_level(texture, level, image.Width As Int32,
+                                              image.Height As Int32, image.Pixels.Pointer(),
+                                              (image.Width * 4) As Int32)
+        End Unsafe
+        If !written Then Panic(LastError())
+    End Method
+
     /// Writes `width` by `height` pixels at `x`, `y` from `bytes`, rows packed top first, in its
     /// format's bytes: 4 a pixel for RGBA8, 1 for R8, and 8 for RGBA16F, half floats, little end
     /// first; and makes its mipmaps again, in turn, as Write does. It panics unless there are that

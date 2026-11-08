@@ -275,6 +275,67 @@ TEST_CASE("textures sampled at rest need no barriers", "[gpu]") {
     stop_gpu();
 }
 
+TEST_CASE("only a multisampled transient target's samples are read", "[gpu]") {
+    start();
+    const auto reads = [](resource_t resource) {
+        return fbe::gpu::add_pass({
+            .name = "reads",
+            .uses = { { resource, fbe::gpu::use_t::SAMPLES_READ } },
+        });
+    };
+    const std::uint64_t own = fbe_texture_create_target(8, 8, FBE_TEXTURE_RGBA8, 4, false);
+    require(own != 0);
+    CHECK(!reads(fbe::gpu::texture_resource(own)));
+    CHECK(fbe_error() ==
+          std::string("what has samples to read is a multisampled transient target"));
+    CHECK(!reads(fbe::gpu::transient_resource({
+        .width = 8,
+        .height = 8,
+        .format = FBE_TEXTURE_RGBA16F,
+    })));
+    CHECK(reads(fbe::gpu::transient_resource({
+        .width = 8,
+        .height = 8,
+        .format = FBE_TEXTURE_RGBA16F,
+        .samples = 4,
+        .reads_samples = true,
+    })));
+    fbe::gpu::drop_passes();
+    fbe_texture_release(own);
+    stop_gpu();
+}
+
+// F6's review: one the graph makes, not one reserved before, takes a slot for its samples as it
+// says.
+TEST_CASE("a transient the graph makes takes a slot for its samples if they're read", "[gpu]") {
+    start();
+    const std::uint32_t free = fbe::gpu::free_samples_slot_count();
+    const auto drawn = [](bool reads_samples) {
+        const resource_t image = fbe::gpu::transient_resource({
+            .width = 8,
+            .height = 8,
+            .format = FBE_TEXTURE_RGBA16F,
+            .samples = 4,
+            .reads_samples = reads_samples,
+        });
+        require(image != fbe::gpu::no_resource);
+        require(fbe::gpu::add_pass(
+            { .name = "drawn", .colors = { { .target = image, .clear = true } } }));
+        // Read, as a pass nothing needs is dropped, and its target with it.
+        require(fbe::gpu::add_pass({
+            .name = "reads",
+            .uses = { { image, reads_samples ? use_t::SAMPLES_READ : use_t::SAMPLED } },
+            .record = [](VkCommandBuffer /*commands*/) {},
+        }));
+        require(fbe::gpu::finish_frame());
+    };
+    drawn(false);
+    CHECK(fbe::gpu::free_samples_slot_count() == free);
+    drawn(true);
+    CHECK(fbe::gpu::free_samples_slot_count() == free - 1);
+    stop_gpu();
+}
+
 TEST_CASE("what's done to a texture is done in the order it's asked for", "[gpu]") {
     begin_test();
     const std::uint64_t made = target(8, 8);
@@ -815,5 +876,24 @@ TEST_CASE("a write comes in turn with what the frame does with the texture", "[g
     quad("drawn", fbe::gpu::texture_resource(shown), fbe::gpu::texture_resource(texture));
     CHECK(pixel(read(shown), 1, 1) == blue8);
     CHECK(fbe::gpu::last_recorded().passes == std::vector<std::string_view>{ "drawn" });
+    stop_gpu();
+}
+
+// A level's write is in turn too: after a clear that came before, as a pass of its own, leaving the
+// other levels as the clear had them.
+TEST_CASE("a level's write comes in turn with what the frame does with the texture", "[gpu]") {
+    begin_test();
+    const std::uint64_t texture = fbe_texture_create(2, 2, FBE_TEXTURE_RGBA8_LINEAR, true);
+    REQUIRE(texture != 0);
+    require(fbe_texture_clear(texture, 1.0F, 0.0F, 0.0F, 1.0F));
+    const std::vector<std::uint8_t> blue{ 0, 0, 255, 255 };
+    require(fbe_texture_write_level(texture, 1, 1, 1, blue.data(), 4));
+    CHECK(fbe::texture::read(texture, 1) == blue);
+    CHECK(fbe::gpu::last_recorded().passes ==
+          std::vector<std::string_view>{ "clear", "write a level" });
+    const std::vector<std::uint8_t> red{
+        255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255,
+    };
+    CHECK(fbe::texture::read(texture, 0) == red);
     stop_gpu();
 }

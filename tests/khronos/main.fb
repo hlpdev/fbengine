@@ -634,6 +634,10 @@ Function Run(arguments: String[]) Throws GraphicsError, IOError
     tally.AtLeast("Effects: bloom's pixels", glows As Float, 200)
     tally.AtLeast("Effects: Neutral against none, at its brightest cube",
                   Abs(At(raw, SIZE, 403, 231, 1) - At(plainly, SIZE, 403, 231, 1)), 3)
+    // A shadow and bloom at once, which no reference of Khronos's has: its golden image holds it.
+    Local both = Effect(True, True, Tonemap.NEUTRAL)
+    Try File.WriteBytes(Path("{frames}/frame_Effects.png"),
+                        Png.Encode(Image.FromBytes(SIZE, SIZE, both)))
     // Each cube past the first brighter, by the file's emissive strength.
     Local emissive = Draw("EmissiveStrengthTest", 0, 0)
     Local cubes = [108, 182, 256, 330, 403]

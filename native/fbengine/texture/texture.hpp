@@ -67,6 +67,8 @@ struct texture_t {
     /// stored values; nothing for any other texture.
     VkImageView stored_view = VK_NULL_HANDLE;
     VkImageView stored_msaa_view = VK_NULL_HANDLE;
+    /// Where a shader reads those samples, one by one, if it can: the engine's own only.
+    std::uint32_t samples_slot = fbe::gpu::no_samples_slot;
     /// A target's depth, if it has one: 32-bit floats, reversed, 1 nearest and 0 farthest, as
     /// many samples as it draws.
     VkImage depth = VK_NULL_HANDLE;
@@ -110,9 +112,11 @@ std::uint32_t pixel_size(std::int32_t format);
 
 /// A target the engine makes for itself, `width` by `height` of an FBE_TEXTURE_ format, drawing
 /// `samples` a pixel, with depth if it says, which Texture.Count doesn't count and
-/// fbe_texture_release lets go of; its handle, or 0, with fbe_error's why, if it can't be made.
+/// fbe_texture_release lets go of, with a slot for its samples if a shader `reads_samples`; its
+/// handle, or 0, with fbe_error's why, if it can't be made.
 std::uint64_t create_engine_target(std::uint32_t width, std::uint32_t height, std::int32_t format,
-                                   VkSampleCountFlagBits samples, bool depth);
+                                   VkSampleCountFlagBits samples, bool depth,
+                                   bool reads_samples = false);
 
 /// A texture the engine makes for itself, `width` by `height` of an FBE_TEXTURE_ format, with room
 /// for mipmaps if it says, as create_engine_target's are; 0, with fbe_error's why, without a

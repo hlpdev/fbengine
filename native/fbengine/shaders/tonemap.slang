@@ -1,6 +1,8 @@
 // What a camera's HDR image comes to in its target: its light, with its bloom, through its exposure,
 // a tonemap, its color grade, and its gamma, by a triangle over its viewport, which the scissor is. A
-// target stored as sRGB encodes what it's given, so all that's here is linear.
+// target stored as sRGB encodes what it's given, so all that's here is linear. A multisampled image
+// goes through a sample at a time and is averaged after: light averaged first is so far up a curve
+// that a bright edge's pixel with a little of it is nearly all of it, as if it had no samples.
 
 import bindless;
 
@@ -18,7 +20,9 @@ struct Tonemap
     uint bloom;
     uint bloomSampler;
     float bloomIntensity;
-    float2 spare;
+    /// How many samples of `samplesImage` it reads one by one: under 2, it samples `image`.
+    uint samples;
+    uint samplesImage;
     /// The American Society of Cinematographers' color decision list: slope, with saturation in its
     /// w, offset, and power.
     float4 slope;
@@ -108,19 +112,11 @@ float3 added(float3 light)
     return wholeLight(pow(lifted, 1.0 / tonemap.gamma));
 }
 
-[shader("fragment")]
-float4 fragmentMain(float4 position : SV_Position) : SV_Target
+/// What comes of a pixel's or a sample's texel and the glow there.
+float4 toned(float4 texel, float3 glow)
 {
-    const float2 uv = position.xy / tonemap.size;
-    const float4 texel = sampleTextureLevel(tonemap.image, tonemap.sampler, uv, 0.0);
     const float alpha = isNotANumber(texel.a) ? 0.0 : saturate(texel.a);
     const float3 light = wholeLight(texel.rgb);
-    float3 glow = float3(0.0);
-    if (tonemap.bloomIntensity > 0.0)
-    {
-        const float2 across = (position.xy - tonemap.bloomRect.xy) / tonemap.bloomRect.zw;
-        glow = sampleTextureLevel(tonemap.bloom, tonemap.bloomSampler, across, 0.0).rgb * tonemap.bloomIntensity;
-    }
     // None of a surface, it's light added over what's under it, as what adds is.
     if (alpha <= 0.0)
     {
@@ -134,4 +130,26 @@ float4 fragmentMain(float4 position : SV_Position) : SV_Target
     // what's under the alpha that goes through it; and bloom's a layer of its own over it all, that's
     // the same on the surface as off it.
     return float4((whole((light / alpha) + glow) * alpha) + (added(glow) * (1.0 - alpha)), alpha);
+}
+
+[shader("fragment")]
+float4 fragmentMain(float4 position : SV_Position) : SV_Target
+{
+    float3 glow = float3(0.0);
+    if (tonemap.bloomIntensity > 0.0)
+    {
+        const float2 across = (position.xy - tonemap.bloomRect.xy) / tonemap.bloomRect.zw;
+        glow = sampleTextureLevel(tonemap.bloom, tonemap.bloomSampler, across, 0.0).rgb * tonemap.bloomIntensity;
+    }
+    if (tonemap.samples > 1)
+    {
+        float4 all = float4(0.0);
+        for (uint sample = 0; sample < tonemap.samples; ++sample)
+        {
+            all += toned(loadSample(tonemap.samplesImage, int2(position.xy), int(sample)), glow);
+        }
+        return all / float(tonemap.samples);
+    }
+    const float2 uv = position.xy / tonemap.size;
+    return toned(sampleTextureLevel(tonemap.image, tonemap.sampler, uv, 0.0), glow);
 }

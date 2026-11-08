@@ -274,6 +274,64 @@ TEST_CASE("mipmaps average the level above, in linear light for sRGB", "[gpu]") 
     stop_gpu();
 }
 
+TEST_CASE("a level written is read back as written, and the others are left as they were",
+          "[gpu]") {
+    start();
+    const std::uint64_t texture = make(4, 4, FBE_TEXTURE_RGBA8_LINEAR, true);
+    REQUIRE(fbe_texture_levels(texture) == 3);
+    require(fbe_texture_write(texture, 0, 0, 4, 4, std::vector<std::uint8_t>(64, 255).data(), 16));
+    const std::vector<std::uint8_t> dim{
+        10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160,
+    };
+    require(fbe_texture_write_level(texture, 1, 2, 2, dim.data(), 8));
+    std::vector<std::uint8_t> read(16);
+    REQUIRE(fbe_texture_read(texture, 1, read.data(), 16));
+    CHECK(read == dim);
+    CHECK(fbe::texture::read(texture, 0) == std::vector<std::uint8_t>(64, 255));
+    CHECK(fbe::texture::read(texture, 2) == std::vector<std::uint8_t>(4, 255));
+    // The last, a pixel, with its rows further apart than they need be.
+    const std::vector<std::uint8_t> last{ 1, 2, 3, 4, 0, 0, 0, 0 };
+    require(fbe_texture_write_level(texture, 2, 1, 1, last.data(), 8));
+    CHECK(fbe::texture::read(texture, 2) == std::vector<std::uint8_t>{ 1, 2, 3, 4 });
+    CHECK(fbe::texture::read(texture, 1) == dim);
+    // The first, written whole, makes the others again from it.
+    require(fbe_texture_write(texture, 0, 0, 4, 4, std::vector<std::uint8_t>(64, 255).data(), 16));
+    CHECK(fbe::texture::read(texture, 1) == std::vector<std::uint8_t>(16, 255));
+    CHECK(fbe::texture::read(texture, 2) == std::vector<std::uint8_t>(4, 255));
+    // And the first by itself is only itself.
+    require(fbe_texture_write_level(texture, 0, 4, 4, std::vector<std::uint8_t>(64, 0).data(), 16));
+    CHECK(fbe::texture::read(texture, 0) == std::vector<std::uint8_t>(64, 0));
+    CHECK(fbe::texture::read(texture, 1) == std::vector<std::uint8_t>(16, 255));
+    stop_gpu();
+}
+
+TEST_CASE("a level that isn't there, of another size, or with a short pitch, is refused", "[gpu]") {
+    start();
+    const std::uint64_t texture = make(4, 2, FBE_TEXTURE_RGBA8, true);
+    REQUIRE(fbe_texture_levels(texture) == 3);
+    const std::vector<std::uint8_t> pixels(64, 255);
+    CHECK(!fbe_texture_write_level(texture, 3, 1, 1, pixels.data(), 4));
+    CHECK(std::string(fbe_error()) == "the texture has 3 levels, and no level 3");
+    CHECK(!fbe_texture_write_level(texture, -1, 4, 2, pixels.data(), 16));
+    CHECK(!fbe_texture_write_level(texture, 1, 2, 2, pixels.data(), 8));
+    CHECK(std::string(fbe_error()) == "level 1 of a 4x2 texture is 2x1, not 2x2");
+    // Its last level is a pixel, not none, along the side that's run out.
+    CHECK(!fbe_texture_write_level(texture, 2, 1, 0, pixels.data(), 4));
+    CHECK(!fbe_texture_write_level(texture, 1, 2, 1, pixels.data(), 7));
+    CHECK(!fbe_texture_write_level(texture, 1, 2, 1, nullptr, 8));
+    CHECK(std::string(fbe_error()) == "there are no pixels to write into level 1");
+    CHECK(!fbe_texture_write_level(0, 0, 4, 2, pixels.data(), 16));
+    CHECK(fbe::texture::read(texture, 0) == std::vector<std::uint8_t>(32, 0));
+    CHECK(fbe::texture::read(texture, 1) == std::vector<std::uint8_t>(8, 0));
+    // A multisampled target is drawn into, its one level too.
+    const std::uint64_t multisampled = fbe_texture_create_target(4, 2, FBE_TEXTURE_RGBA8, 4, false);
+    REQUIRE(multisampled != 0);
+    CHECK(!fbe_texture_write_level(multisampled, 0, 4, 2, pixels.data(), 16));
+    CHECK(std::string(fbe_error()) == "a multisampled target is drawn into, not written");
+    CHECK(fbe_texture_release(multisampled));
+    stop_gpu();
+}
+
 TEST_CASE("a handle that isn't a live texture's is refused", "[gpu]") {
     start();
     const std::uint64_t texture = make(2, 2, FBE_TEXTURE_RGBA8, false);
@@ -412,7 +470,8 @@ TEST_CASE("a GPU with no LOD bias draws with none", "[gpu]") {
 TEST_CASE("the textures are as many as the device's set holds", "[gpu]") {
     fbe::gpu::inject(fbe::gpu::fault_t::PROMISED_DESCRIPTORS);
     start();
-    CHECK(fbe::gpu::texture_capacity() == 1212 - fbe::gpu::sampler_slots);
+    CHECK(fbe::gpu::texture_capacity() == 1212 - fbe::gpu::sampler_slots - fbe::gpu::samples_slots);
+    CHECK(fbe::gpu::pool_images() == fbe::gpu::texture_capacity() + fbe::gpu::samples_slots);
     const std::vector<std::uint8_t> pixels = card();
     const std::uint64_t texture = make(8, 8, FBE_TEXTURE_RGBA8_LINEAR, false);
     require(fbe_texture_write(texture, 0, 0, 8, 8, pixels.data(), 32));
@@ -421,6 +480,7 @@ TEST_CASE("the textures are as many as the device's set holds", "[gpu]") {
     // A device that isn't asked to pretend holds at least what fbengine needs.
     start();
     CHECK(fbe::gpu::texture_capacity() >= 1024);
+    CHECK(fbe::gpu::pool_images() == fbe::gpu::texture_capacity() + fbe::gpu::samples_slots);
     stop_gpu();
 }
 
@@ -599,6 +659,9 @@ TEST_CASE("a file's BC7 is sampled, and nothing else", "[gpu]") {
     CHECK(fbe_texture_pixels(texture, nullptr) == nullptr);
     std::array<std::uint8_t, 16> read{};
     CHECK(!fbe_texture_read(texture, 0, read.data(), 16));
+    const std::array<std::uint8_t, 64> level{};
+    CHECK(!fbe_texture_write_level(texture, 0, 4, 4, level.data(), 16));
+    CHECK(std::string(fbe_error()).starts_with("a texture of a file's own format is only sampled"));
     const std::uint64_t other = make(4, 4, FBE_TEXTURE_RGBA8, false);
     CHECK(!fbe_texture_copy(other, 0, 0, texture, 0, 0, 4, 4));
     CHECK(!fbe_texture_copy(texture, 0, 0, other, 0, 0, 4, 4));
