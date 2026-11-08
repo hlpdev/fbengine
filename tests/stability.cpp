@@ -110,7 +110,7 @@ std::vector<std::uint8_t> changed(const seed_t& seed, random_t& random) {
     return bytes;
 }
 
-std::uint64_t allocated() {
+std::uint64_t malloc_bytes() {
 #ifdef _WIN32
     HEAP_SUMMARY summary{};
     summary.cb = sizeof(summary);

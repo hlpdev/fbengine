@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <new>
+#include <vector>
 
 namespace {
 
@@ -162,4 +163,23 @@ TEST_CASE("every form of operator new and delete is the out-of-memory tests' own
     delete[] new wide_t[3]{};
     delete new int{ 4 };
     CHECK(freed == before + 3);
+}
+
+// What a soak checks after each round: a new left each round is still live after it, and what's
+// freed isn't.
+TEST_CASE("a new left each round is counted live after it, and what's freed isn't") {
+    using fbe::tests::live;
+    std::vector<int*> left;
+    left.reserve(5);
+    const long before = live;
+    for (int round = 0; round < 5; ++round) {
+        const std::vector<int> freed_by_its_end(100, round);
+        left.push_back(
+            new int{ round }); // NOLINT(cppcoreguidelines-owning-memory): left on purpose.
+    }
+    CHECK(live == before + 5);
+    for (const int* leaked : left) {
+        delete leaked; // NOLINT(cppcoreguidelines-owning-memory)
+    }
+    CHECK(live == before);
 }

@@ -15,8 +15,8 @@
 #include <memory>
 #include <vector>
 
-using fbe::tests::allocated;
 using fbe::tests::live_allocations;
+using fbe::tests::malloc_bytes;
 
 namespace {
 
@@ -137,12 +137,12 @@ TEST_CASE("thousands of bodies, characters, joints, and worlds made and freed le
     fbe::tests::count_jolt();
     const std::int32_t shapes = fbe_shape_count();
     const std::int32_t worlds = fbe_physics_worlds();
-    const std::uint64_t start = allocated();
+    const std::uint64_t start = malloc_bytes();
     const std::vector<std::int64_t> left = left_by([](int i) { soak(i % 2 == 0); }, 4, 40);
     CHECK(fbe_shape_count() == shapes);
     CHECK(fbe_physics_worlds() == worlds);
     WARN("what malloc holds moved by "
-         << (static_cast<double>(allocated()) - static_cast<double>(start))
+         << (static_cast<double>(malloc_bytes()) - static_cast<double>(start))
          << " bytes over the rounds");
     for (std::size_t i = 0; i < left.size(); ++i) {
         INFO("after round " << i);

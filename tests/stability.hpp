@@ -61,10 +61,10 @@ std::vector<std::uint8_t> changed(const seed_t& seed, random_t& random);
 
 /// The bytes the process's malloc holds now: glibc's mallinfo2, macOS's malloc zones, and the
 /// Windows process heap's, which UCRT's malloc allocates from.
-std::uint64_t allocated();
+std::uint64_t malloc_bytes();
 
 /// Whether a sanitizer's allocator is built in, which keeps what's freed a while and counts it
-/// its own way, so allocated() says nothing of a leak: LeakSanitizer says that there.
+/// its own way, so malloc_bytes() says nothing of a leak: LeakSanitizer says that there.
 #if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
 inline constexpr bool sanitized = true;
 #elifdef __has_feature

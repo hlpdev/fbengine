@@ -1,11 +1,14 @@
 // A soak: each test video opened, played to its end, sought, looped, its frame and sound taken,
-// and freed, a thousand times over, leaves nothing open, and what malloc holds after each round
-// never more than 16 KB over what it held once the first rounds had warmed it.
+// and freed, a thousand times over, leaves nothing open, and as many allocations live after each
+// round, once the first rounds have warmed it, as there were: fbengine_video's sources are built in
+// here with tests/own_new.cpp, which counts each of theirs, on every thread, exactly, on any
+// platform. Bytes, which other threads' malloc moves, are only shown; LeakSanitizer's nightly run
+// has what malloc itself, pl_mpeg's, leaks.
 
 #include "fbengine_video.h"
+#include "own_new.hpp"
 #include "stability.hpp"
 
-#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
@@ -13,9 +16,6 @@
 #include <filesystem>
 #include <string>
 #include <vector>
-
-using fbe::tests::allocated;
-using fbe::tests::sanitized;
 
 namespace {
 
@@ -64,15 +64,21 @@ TEST_CASE("a thousand videos played and freed leave nothing open, and the memory
     for (int round = 0; round < 20; ++round) {
         played(videos[static_cast<std::size_t>(round) % videos.size()]);
     }
-    const std::uint64_t before = allocated();
-    std::uint64_t most = before;
+    const long before = fbe::tests::live;
+    const std::uint64_t bytes = fbe::tests::malloc_bytes();
+    // Nothing of Catch's in the rounds, whose first INFO or failure allocates for good.
+    int first_off = -1;
+    long off_by = 0;
     for (int round = 20; round < 1000; ++round) {
         played(videos[static_cast<std::size_t>(round) % videos.size()]);
-        most = std::max(most, allocated());
+        if (first_off < 0 && fbe::tests::live != before) {
+            first_off = round;
+            off_by = fbe::tests::live - before;
+        }
     }
-    INFO("before " << before << ", most after a round " << most);
-    if (!sanitized) {
-        CHECK(most <= before + (std::uint64_t{ 16 } << 10U));
-    }
+    INFO("round " << first_off << " left " << off_by << " allocations live");
+    CHECK(first_off == -1);
+    WARN("bytes allocated over the warmed rounds: "
+         << static_cast<std::int64_t>(fbe::tests::malloc_bytes() - bytes));
     CHECK(fbe_video_count() == 0);
 }
