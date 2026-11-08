@@ -550,6 +550,25 @@ TEST_CASE("a KTX2's data format descriptor's blocks fill it as they say", "[asse
     bytes_t total = ktx;
     put_u32(total, dfd, u32_of(ktx, dfd) + 4);
     REQUIRE(message(total).contains("data format descriptor of the wrong size"));
+    // 2f8a4c0's review: a DFD of 13 bytes, its block's header not all there, refused before the
+    // block's size, past it, is read.
+    bytes_t short_block = ktx;
+    put_u32(short_block, dfd, 13);
+    put_u32(short_block, 52, 13);
+    REQUIRE(message(short_block).contains("data format descriptor of the wrong size"));
+}
+
+// 2f8a4c0's review: a level that's fewer bytes than its images take, its last image's end still
+// within the texels, in the next level's, isn't loaded.
+TEST_CASE("a KTX2 level has the bytes its images take", "[assets]") {
+    bytes_t ktx = ktx2(8, 4, 3, 1, 1, false, pattern, [](ktxTexture2*) {});
+    REQUIRE(decoded(ktx).levels.size() == 3);
+    // Level 1, 4 by 2 of 4 bytes, 32, said to be 28, its byte length and what it inflates to.
+    const std::size_t at = 80 + 24;
+    REQUIRE(u32_of(ktx, at + 8) == 32);
+    put_u64(ktx, at + 8, 28);
+    put_u64(ktx, at + 16, 28);
+    REQUIRE(message(ktx).contains("has level 1 of fewer bytes than its images take"));
 }
 
 TEST_CASE("a KTX2 supercompressed but by Zstd isn't loaded", "[assets]") {

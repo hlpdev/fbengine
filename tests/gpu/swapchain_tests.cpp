@@ -301,6 +301,8 @@ VKAPI_ATTR void VKAPI_CALL destroy_surface(VkInstance /*instance*/, VkSurfaceKHR
 struct shown_t {
     shown_t() {
         fake = {};
+        // Offscreen, as ctest has it, so a run by hand opens no window either.
+        fbe::tests::set_variable("SDL_VIDEO_DRIVER", "offscreen");
         REQUIRE(fbe_window_set_headless(false));
         fbe_gpu_set_pipeline_cache("");
         require(fbe_gpu_start());

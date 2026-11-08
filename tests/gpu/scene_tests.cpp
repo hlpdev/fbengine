@@ -5951,7 +5951,8 @@ TEST_CASE("the light a shader's told of is linear, whatever its material's shadi
 // A game's shader's SPIR-V mutated: words flipped, set, their counts set to none or past the end,
 // and the end cut. Each is checked, and made where it's taken, reading nothing past what it has,
 // which ASan checks where it runs. FBE_FUZZ_ROUNDS asks for more than CI's 2000.
-TEST_CASE("a game's shader's mutants are checked without reading past them", "[gpu][scene]") {
+TEST_CASE("a game's shader's mutants are checked without reading past them",
+          "[gpu][scene][stability]") {
     const int rounds = asked_for("FBE_FUZZ_ROUNDS", 2000);
     const std::span<const std::uint32_t> seed = fbe::test_shaders::game_shader.code;
     REQUIRE(seed.size() > 5);
@@ -11994,7 +11995,8 @@ std::uint64_t shader_of_generation(std::uint32_t generation) {
 // A game's shader cooked again, as a game's hot reload does, each time of new code, drawn with,
 // then freed or replaced: once nothing draws with an old one, its pipelines go, and its code with
 // them, so there's no more of either after many than after one.
-TEST_CASE("a game's shaders made again and freed leave no pipelines of them", "[gpu][scene]") {
+TEST_CASE("a game's shaders made again and freed leave no pipelines of them",
+          "[gpu][scene][stability]") {
     const scene_t scene;
     const auto drawn = [&](std::uint64_t material) {
         const std::uint64_t mesh = cube(scene.world, 0.0F, 0.0F, -6.0F, material);
@@ -12050,9 +12052,60 @@ TEST_CASE("a game's shaders made again and freed leave no pipelines of them", "[
     CHECK(fbe_gpu_validation_errors() == 0);
 }
 
+// 2f8a4c0's review: a shader made, drawn, and freed, of the same code, frame after frame with no
+// readback to wait, and replaced by another and back: a free from an earlier release mustn't free
+// pipelines a later frame still draws with, which validation says, nor make them again each frame.
+TEST_CASE("a game's shader freed and had again, frame after frame, keeps its pipelines",
+          "[gpu][scene][stability]") {
+    const scene_t scene;
+    const std::uint64_t mesh = cube(scene.world, 0.0F, 0.0F, -6.0F);
+    const auto flip = [&scene] {
+        require(fbe_render_world(scene.world, 1.0F));
+        fbe_frame_flip(false);
+    };
+    SECTION("made and freed") {
+        std::int32_t first = 0;
+        for (int frame = 0; frame < 8; ++frame) {
+            const std::uint64_t shader = shader_of_generation(1);
+            require(shader != 0);
+            const std::uint64_t material = fbe_material_create();
+            require(fbe_material_set_shader(material, shader));
+            require(fbe_shader_release(shader));
+            require(fbe_mesh_set_material(mesh, material));
+            flip();
+            // Let go of by everything as soon as it's drawn.
+            require(fbe_mesh_set_material(mesh, 0));
+            fbe_material_release(material);
+            if (frame == 0) {
+                first = fbe_gpu_pipelines();
+            }
+            CHECK(fbe_gpu_pipelines() == first);
+        }
+    }
+    SECTION("replaced, A to B to A") {
+        const std::uint64_t shader = shader_of_generation(1);
+        require(shader != 0);
+        const std::uint64_t material = fbe_material_create();
+        require(fbe_material_set_shader(material, shader));
+        require(fbe_mesh_set_material(mesh, material));
+        const std::vector<std::uint8_t> a = generation_of(1);
+        const std::vector<std::uint8_t> b = generation_of(2);
+        for (int frame = 0; frame < 8; ++frame) {
+            const std::vector<std::uint8_t>& next = frame % 2 == 0 ? b : a;
+            require(fbe_shader_replace(shader, next.data(), static_cast<std::int64_t>(next.size()),
+                                       "reloaded"));
+            flip();
+        }
+        fbe_material_release(material);
+        require(fbe_shader_release(shader));
+    }
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
 // As many different shaders at once as a pipeline's key numbers, 4095: one more is refused, and
 // once one's freed, and its frames done, there's room for another.
-TEST_CASE("as many shaders as a pipeline's key numbers are kept at once", "[gpu][scene]") {
+TEST_CASE("as many shaders as a pipeline's key numbers are kept at once",
+          "[gpu][scene][stability]") {
     const scene_t scene;
     std::vector<std::uint64_t> made;
     for (std::uint32_t generation = 1; generation <= 4095; ++generation) {
@@ -12080,7 +12133,8 @@ TEST_CASE("as many shaders as a pipeline's key numbers are kept at once", "[gpu]
     }
 }
 
-TEST_CASE("frames of making and freeing leave the GPU holding what it did", "[gpu][scene]") {
+TEST_CASE("frames of making and freeing leave the GPU holding what it did",
+          "[gpu][scene][stability]") {
     const int frames = asked_for("FBE_SOAK_FRAMES", 600);
     REQUIRE(frames >= 100);
     const scene_t scene;

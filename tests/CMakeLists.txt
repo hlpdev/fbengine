@@ -1721,7 +1721,7 @@ fbengine_set_warnings(fbengine_assets_tests)
 if(MINGW)
   target_link_options(fbengine_assets_tests PRIVATE -mcrtdll=ucrt)
 endif()
-catch_discover_tests(fbengine_assets_tests TEST_PREFIX "assets."
+catch_discover_tests(fbengine_assets_tests TEST_PREFIX "assets." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}")
 
 # What Assets' mounts panic for, each by a run of tests/assets/panics, which says it, at the line

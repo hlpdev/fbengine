@@ -87,6 +87,9 @@ struct kept_code_t {
     /// goes, its pipelines with it, and its number is another's.
     std::uint32_t users = 0;
     bool free = false;
+    /// How many times it's been let go of by every shader, which a free waits for the last of: one
+    /// from before it was had and let go of again would free it while that one's frames are drawn.
+    std::uint64_t released = 0;
 };
 
 struct shader_t {
@@ -311,10 +314,11 @@ std::uint32_t keep(std::vector<std::uint32_t> words, const char* name) {
 /// Frees a code no shader has, its pipelines and module with it, once the frames that could have
 /// drawn with it are done, unless a shader's had it again by then.
 void forget(std::uint32_t code) {
-    const auto gone = [code] {
+    const std::uint64_t release = ++all().codes[code - 1].released;
+    const auto gone = [code, release] {
         shaders_t& shaders = all();
         kept_code_t& kept = shaders.codes[code - 1];
-        if (kept.users != 0 || kept.free) {
+        if (kept.users != 0 || kept.free || kept.released != release) {
             return;
         }
         gpu::forget_pipelines_of(&kept.shader);

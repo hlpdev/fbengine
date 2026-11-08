@@ -174,13 +174,16 @@ result_t<void> check_dfd(std::span<const std::uint8_t> bytes, std::uint32_t offs
     // Its total size is what the header says it is, and its blocks fill it, each a block's header
     // or more of whole words, as libktx walks them by their sizes: one of none has it loop forever,
     // and one past the rest read past it.
-    if (length < block + block_header || u32(bytes, offset) != length) {
+    if (length < block + block_header || length % 4 != 0 || u32(bytes, offset) != length) {
         return std::unexpected(invalid(name, "has a data format descriptor of the wrong size"));
     }
     for (std::uint32_t at = block; at < length;) {
+        if (length - at < block_header) {
+            return std::unexpected(
+                invalid(name, "has a data format descriptor block of the wrong size"));
+        }
         const std::uint32_t size = u32(bytes, offset + at + 4) >> 16U;
-        if (length - at < block_header || size < block_header || size % 4 != 0 ||
-            size > length - at) {
+        if (size < block_header || size % 4 != 0 || size > length - at) {
             return std::unexpected(
                 invalid(name, "has a data format descriptor block of the wrong size"));
         }
@@ -357,7 +360,9 @@ result_t<image_t> decode_ktx2(std::span<const std::uint8_t> bytes, const image_o
     }
     // The texture is kept as the image's texels, which are its.
     const std::shared_ptr<ktxTexture2> texture(loaded, &ktxTexture2_Destroy);
-    if (ktxTexture2_NeedsTranscoding(texture.get())) {
+    // A transcoded one's texels are libktx's own, not the file's.
+    const bool transcoded = ktxTexture2_NeedsTranscoding(texture.get());
+    if (transcoded) {
         code = transcode(texture.get(), transcode_format(options.transcode));
         if (code != KTX_SUCCESS) {
             return std::unexpected(
@@ -395,6 +400,14 @@ result_t<image_t> decode_ktx2(std::span<const std::uint8_t> bytes, const image_o
             !within(last, size, texture->dataSize)) {
             return std::unexpected(invalid(
                 name, std::format("has level {} past its texels, of more than it has", level)));
+        }
+        // And the level has the bytes its images take, inflated, so one's images don't run into
+        // the next level's, where they're the file's.
+        const std::uint64_t images =
+            std::uint64_t{ std::max(texture->numLayers, 1U) } * slices * size;
+        if (!transcoded && images > u64(bytes, 80 + (std::size_t{ level } * 24) + 16)) {
+            return std::unexpected(invalid(
+                name, std::format("has level {} of fewer bytes than its images take", level)));
         }
         image.levels.push_back({
             .width = std::max(texture->baseWidth >> level, 1U),
