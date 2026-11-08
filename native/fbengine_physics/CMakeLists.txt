@@ -63,7 +63,7 @@ if(MINGW)
     message(FATAL_ERROR "Jolt/Core/Mutex.h doesn't have, once, what its patch expects")
   endif()
   string(CONCAT fbengine_jolt_mutex_to
-         "#elif defined(__MINGW32__)\n\n"
+         "#elif defined(FBE_JOLT_SRWLOCK)\n\n"
          "// fbengine's patch: a slim reader/writer lock each, which allocates nothing, as\n"
          "// cmake/jolt/mutex_mingw.cpp defines them.\n"
          "class MutexBase : public NonCopyable\n{\npublic:\n"
@@ -82,6 +82,8 @@ if(MINGW)
   configure_file("${fbengine_jolt_patched}/Jolt/Core/Mutex.h.in"
                  "${fbengine_jolt_patched}/Jolt/Core/Mutex.h" COPYONLY)
   target_include_directories(Jolt BEFORE PUBLIC "$<BUILD_INTERFACE:${fbengine_jolt_patched}>")
+  # What the patch is by, so clang-tidy, which isn't MinGW, reads it as GCC does.
+  target_compile_definitions(Jolt PUBLIC FBE_JOLT_SRWLOCK)
   target_sources(Jolt PRIVATE "${PROJECT_SOURCE_DIR}/cmake/jolt/mutex_mingw.cpp")
   # It includes Jolt.h itself, so it's read by clang-tidy as it's built, without GCC's
   # precompiled header of Jolt's.
