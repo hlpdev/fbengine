@@ -232,24 +232,28 @@ namespace {
 using entry_t = std::pair<std::uint32_t, std::string_view>;
 
 /// The scene's entry points, as a material's shader has them.
-constexpr std::array<entry_t, 10> scene_entries{ {
-    { 0, "vertexMain" },
-    { 4, "fragmentMain" },
-    { 0, "particleVertex" },
-    { 0, "shadowVertex" },
-    { 4, "shadowFragment" },
-    { 0, "instanceVertex" },
-    { 0, "shadowInstanceVertex" },
-    { 0, "prepassVertex" },
-    { 0, "prepassInstanceVertex" },
-    { 4, "prepassFragment" },
-} };
+constexpr std::array<entry_t, 10> scene_entries{
+    {
+        { 0, "vertexMain" },
+        { 4, "fragmentMain" },
+        { 0, "particleVertex" },
+        { 0, "shadowVertex" },
+        { 4, "shadowFragment" },
+        { 0, "instanceVertex" },
+        { 0, "shadowInstanceVertex" },
+        { 0, "prepassVertex" },
+        { 0, "prepassInstanceVertex" },
+        { 4, "prepassFragment" },
+    },
+};
 
 /// A full-screen pass's.
-constexpr std::array<entry_t, 2> pass_entries{ {
-    { 0, "passVertex" },
-    { 4, "passFragment" },
-} };
+constexpr std::array<entry_t, 2> pass_entries{
+    {
+        { 0, "passVertex" },
+        { 4, "passFragment" },
+    },
+};
 
 /// A cooked shader of `entries`, which a pipeline's never made of here.
 std::vector<std::uint8_t> cooked(std::span<const entry_t> entries) {
