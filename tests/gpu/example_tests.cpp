@@ -81,6 +81,7 @@ TEST_CASE("Khronos's sample models' frames match their golden images", "[.exampl
                  .share_on_x64 = 0.006,
                  .share_on_arm64 = 0.025,
              },
+             model_frame_t{ .frame = "Effects" },
              model_frame_t{ .frame = "EmissiveStrengthTest" },
              model_frame_t{ .frame = "MetalRoughSpheres" },
              model_frame_t{ .frame = "MetalRoughSpheresNoTextures" },
@@ -176,6 +177,7 @@ TEST_CASE("the sample models' frames match their golden images", "[.example]") {
              std::pair{ "RiggedSimple", 5 },
              std::pair{ "MorphPrimitivesTest", 3 },
              std::pair{ "AnimatedMorphCube", 4 },
+             std::pair{ "Fox", 7 },
          }) {
         for (int frame = 0; frame < frames; ++frame) {
             const std::string file = std::format("model_{}_{}", name, frame);

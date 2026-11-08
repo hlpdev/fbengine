@@ -1,10 +1,25 @@
 // What's asked of it is its first parameter: its x picks what it draws; its second parameter is how
-// far it moves its vertices, and its fourth's x how far along their normals.
+// far it moves its vertices, and its fourth's x how far along their normals; its sixth, with a w,
+// the normal it bends a PBR one to, in tangent space, and with none, the one it has.
 #define FBE_MOVES_VERTICES
+#define FBE_BENDS_NORMALS
+
+float3 bend(Surface surface)
+{
+    const float4 to = surface.parameter(5);
+    // With a w of 2, toward +x where what it's given faces the camera, and -x where it doesn't.
+    if (to.w == 2.0)
+    {
+        return surface.normal.z > 0.0 ? to.xyz : float3(-to.x, to.y, to.z);
+    }
+    return to.w != 0.0 ? to.xyz : float3(0.0, 0.0, 1.0);
+}
 
 void move(inout float3 position, inout float3 normal, MovingVertex vertex)
 {
-    position += vertex.parameter(1).xyz + normal * vertex.parameter(3).x;
+    // Up by its fifth parameter's x times how far across its instance is.
+    position += vertex.parameter(1).xyz + normal * vertex.parameter(3).x +
+                float3(0.0, vertex.place.x * vertex.parameter(4).x, 0.0);
 }
 
 float4 shade(Surface surface)

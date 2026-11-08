@@ -31,6 +31,7 @@ Function FileOf(folder: String): UInt8[]
     If folder == "SimpleMorph" Then Return Embed("SimpleMorph/SimpleMorph.gltf")
     If folder == "RiggedSimple" Then Return Embed("RiggedSimple/RiggedSimple.glb")
     If folder == "AnimatedMorphCube" Then Return Embed("AnimatedMorphCube/AnimatedMorphCube.glb")
+    If folder == "Fox" Then Return Embed("Fox/Fox.glb")
     Return Embed("MorphPrimitivesTest/MorphPrimitivesTest.glb")
 End Function
 
@@ -67,12 +68,13 @@ Function Corners(mesh: Mesh): Vec3[]
 End Function
 
 // How many of a frame's pixels differ from its mask in whether they're the clear's color, and how
-// many it covers.
+// many it covers: all but those on an edge, which a rasterizer's rounding could cover or not.
 Function MaskDifference(frame: Worked, pixels: UInt8[], masks: UInt8[]): (Int, Int)
     Local differing = 0
     Local covered = 0
     Local at = 0
     Local value = False
+    Local edge = 0
     For run = 0 Until frame.RunCount
         Local here = frame.Runs + run * 2
         Local count = (masks[here] As Int) | ((masks[here + 1] As Int) << 8)
@@ -80,7 +82,9 @@ Function MaskDifference(frame: Worked, pixels: UInt8[], masks: UInt8[]): (Int, I
             Local byte = at * 4
             Local drawn = pixels[byte] != pixels[0] || pixels[byte + 1] != pixels[1] ||
                           pixels[byte + 2] != pixels[2]
-            If drawn != value Then differing += 1
+            Local onEdge = edge < frame.Edges.Count && frame.Edges[edge] == at
+            If onEdge Then edge += 1
+            If drawn != value && !onEdge Then differing += 1
             If value Then covered += 1
             at += 1
         End For
@@ -165,7 +169,8 @@ Function Run(saving: String?) Throws GraphicsError, IOError
         If found == Null Then Panic("{frame.Folder} has no node {frame.Node}")
         Local mesh = found As Mesh
         If frame.Time >= 0
-            root.Player().Play(model.Clips()[0], PlayMode.ONCE)
+            // The file's clips in its order, as reference.py takes them.
+            root.Player().Play(model.Clips()[frame.Clip], PlayMode.ONCE)
             root.Player().SetTime(frame.Time)
         End If
         If frame.Weight >= 0 Then mesh.SetMorphWeights([frame.Weight])
@@ -177,7 +182,7 @@ Function Run(saving: String?) Throws GraphicsError, IOError
         camera.PointAt(frame.Look)
         Local light = Light(LightType.POINT)
         light.SetPosition(frame.Camera + Vec3(3, 4, 0))
-        light.SetRange(100)
+        light.SetRange(frame.Range)
         light.SetIntensity(frame.Intensity)
         RenderWorld()
         exact = Try OnLavapipe()

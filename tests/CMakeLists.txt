@@ -208,7 +208,7 @@ if(FBENGINE_FB_TESTS)
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        FIXTURES_SETUP model_frames TIMEOUT 300
                        PASS_REGULAR_EXPRESSION "
-25 of 25 frames as worked out\r?\n$")
+32 of 32 frames as worked out\r?\n$")
   # What masks.bin and worked_out.fb were worked out from, and that it refuses what it can't work out.
   find_program(FBENGINE_PYTHON NAMES python3 python)
   if(FBENGINE_PYTHON)
@@ -224,6 +224,41 @@ if(FBENGINE_FB_TESTS)
              COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_simdjson.py" "${PROJECT_BINARY_DIR}")
     set_tests_properties(tools.check_simdjson PROPERTIES
                          PASS_REGULAR_EXPRESSION "targets read the simdjson fastgltf fetched")
+    # Each DLL's notices name every library it links, as the build links it, and that check fails as
+    # it should. The build's link graph is CMake's file API's codemodel, which this asks for, and
+    # CMake answers as it generates.
+    cmake_file_api(QUERY API_VERSION 1 CODEMODEL 2)
+    add_test(NAME tools.check_notices
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_notices.py" "${PROJECT_BINARY_DIR}"
+                     "${PROJECT_SOURCE_DIR}")
+    set_tests_properties(tools.check_notices PROPERTIES
+                         PASS_REGULAR_EXPRESSION "name every library they link")
+    add_test(NAME tools.check_notices_test
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_notices_test.py")
+    set_tests_properties(tools.check_notices_test PROPERTIES PASS_REGULAR_EXPRESSION "cases hold")
+    # Each library's `fb publish --dry-run` passes, in publish.yml's order, with a folder of its own
+    # for the registry, so nothing's uploaded.
+    add_test(NAME tools.check_publish
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_publish.py" "${FBENGINE_FB}"
+                     "${PROJECT_SOURCE_DIR}")
+    set_tests_properties(tools.check_publish PROPERTIES
+                         PASS_REGULAR_EXPRESSION "libraries' dry runs passed, in publish.yml's order"
+                         TIMEOUT 900)
+    add_test(NAME tools.check_publish_test
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_publish_test.py")
+    set_tests_properties(tools.check_publish_test PROPERTIES PASS_REGULAR_EXPRESSION "cases hold")
+    # The editor packed for this target as publish.yml packs it for the release: its program by
+    # this OS's name, its DLLs, and the notices of what fb build bundled and of each DLL's package.
+    add_test(NAME tools.pack_editor
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/pack_editor.py" "${FBENGINE_FB}"
+                     "${PROJECT_VERSION}" "${FBENGINE_TARGET}" "${CMAKE_CURRENT_BINARY_DIR}/packed_editor"
+                     "${PROJECT_SOURCE_DIR}")
+    set_tests_properties(tools.pack_editor PROPERTIES
+                         PASS_REGULAR_EXPRESSION "packed the editor, its DLLs, and the notices"
+                         TIMEOUT 900)
+    add_test(NAME tools.pack_editor_test
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/pack_editor_test.py")
+    set_tests_properties(tools.pack_editor_test PROPERTIES PASS_REGULAR_EXPRESSION "cases hold")
   endif()
   add_test(NAME models.golden
            COMMAND fbengine_gpu_tests "the sample models' frames match their golden images")
@@ -674,6 +709,14 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(examples.slack_water.assets_match PROPERTIES RESOURCE_LOCK slack_water
                        FIXTURES_REQUIRED slack_water_made
                        ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen" TIMEOUT 300)
+  # The sea's shader is cooked by the game's build step, which every one of its tests runs, by the
+  # Slang release the engine's own are.
+  get_directory_property(fbengine_tests_here TESTS)
+  foreach(test IN LISTS fbengine_tests_here)
+    if(test MATCHES "^examples[.]slack_water[.]")
+      set_property(TEST "${test}" APPEND PROPERTY ENVIRONMENT "FBENGINE_SLANGC=${FBENGINE_SLANGC}")
+    endif()
+  endforeach()
   foreach(name IN ITEMS sprites_over_a_scene pixels_of_images_and_textures
           textures_by_their_settings)
     add_test(NAME proof.${name}_no_gpu
@@ -2165,7 +2208,8 @@ if(WIN32)
   target_link_libraries(fbengine_audio_native_tests PRIVATE ole32 psapi)
 endif()
 fbengine_set_warnings(fbengine_audio_native_tests)
-catch_discover_tests(fbengine_audio_native_tests TEST_PREFIX "audio."
+# A test tagged [stability], a fuzz, race, or soak, is labeled so, for sanitizers.yml.
+catch_discover_tests(fbengine_audio_native_tests TEST_PREFIX "audio." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_audio_native>")
 
 # fbengine_audio_native's C API with each of a call's allocations failing in turn: its sources built
