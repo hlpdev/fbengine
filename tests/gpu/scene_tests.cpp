@@ -24,15 +24,19 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
+#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <functional>
 #include <limits>
 #include <memory>
 #include <numbers>
+#include <random>
+#include <SDL3/SDL.h>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -105,6 +109,16 @@ struct scene_t {
 };
 
 using rgba_t = std::array<std::uint8_t, 4>;
+
+/// The count `variable` asks for, as a longer run does, or `otherwise`.
+int asked_for(const char* variable, int otherwise) {
+    const char* asked = SDL_getenv(variable);
+    int count = otherwise;
+    if (asked != nullptr) {
+        std::from_chars(asked, asked + std::strlen(asked), count);
+    }
+    return count;
+}
 
 /// A part of a test, by its name, and what it does in a scene of its own.
 template <typename Scene>
@@ -686,7 +700,7 @@ TEST_CASE("a VERTEX material's highlight is at its vertices, as its shininess sa
     fbe_material_release(material);
 }
 
-TEST_CASE("a layer's UVs turn and scale as Blitz's did", "[gpu][scene]") {
+TEST_CASE("a layer's UVs turn and scale with its angle and scale", "[gpu][scene]") {
     const scene_t scene;
     const std::uint64_t material = unlit(1.0F, 1.0F, 1.0F);
     // Across: red then green. Down: red then blue.
@@ -5934,6 +5948,157 @@ TEST_CASE("the light a shader's told of is linear, whatever its material's shadi
     fbe_material_release(material);
 }
 
+// A game's shader's SPIR-V mutated: words flipped, set, their counts set to none or past the end,
+// and the end cut. Each is checked, and made where it's taken, reading nothing past what it has,
+// which ASan checks where it runs. FBE_FUZZ_ROUNDS asks for more than CI's 2000.
+namespace {
+
+/// SPIRV-Tools' validator off while it lives, as FBE_SPIRV_VALIDATION=0 has it.
+struct unvalidated_t {
+    unvalidated_t() {
+        fbe::tests::set_variable("FBE_SPIRV_VALIDATION", "0");
+    }
+    unvalidated_t(const unvalidated_t&) = delete;
+    unvalidated_t& operator=(const unvalidated_t&) = delete;
+    unvalidated_t(unvalidated_t&&) = delete;
+    unvalidated_t& operator=(unvalidated_t&&) = delete;
+    ~unvalidated_t() {
+        fbe::tests::set_variable("FBE_SPIRV_VALIDATION", "1");
+    }
+};
+
+} // namespace
+
+// The checks before the validator, which it takes a Debug build a quarter of a second to run on
+// each: so they're tried on their own here, as many times as there are rounds.
+TEST_CASE("a game's shader's mutants are checked without reading past them",
+          "[gpu][scene][stability]") {
+    const unvalidated_t unvalidated;
+    const int rounds = asked_for("FBE_FUZZ_ROUNDS", 2000);
+    const std::span<const std::uint32_t> seed = fbe::test_shaders::game_shader.code;
+    REQUIRE(seed.size() > 5);
+    // Seeds that repeat, so what a run finds is found again.
+    std::mt19937 random(20261106); // NOLINT(bugprone-random-generator-seed)
+    const auto at = [&](std::size_t size) {
+        return std::uniform_int_distribution<std::size_t>(0, size - 1)(random);
+    };
+    int taken = 0;
+    for (int round = 0; round < rounds; ++round) {
+        CAPTURE(round);
+        std::vector<std::uint32_t> words(seed.begin(), seed.end());
+        const int changes = std::uniform_int_distribution<int>(1, 3)(random);
+        for (int change = 0; change < changes && words.size() > 5; ++change) {
+            // Past the header's five words, which say it's SPIR-V.
+            const std::size_t where = 5 + at(words.size() - 5);
+            switch (at(5)) {
+            case 0:
+                words[where] ^= 1U << at(32);
+                break;
+            case 1:
+                words[where] = static_cast<std::uint32_t>(random());
+                break;
+            case 2:
+                // An instruction's count: none, or more words than there are.
+                words[where] = (words[where] & 0xFFFFU) | (at(2) == 0 ? 0U : 0xFFFFU << 16U);
+                break;
+            case 3:
+                words[where] = std::array<std::uint32_t, 4>{ 0, 1, 2, 0xFFFFFFFF }.at(at(4));
+                break;
+            default:
+                words.resize(where);
+                break;
+            }
+        }
+        const std::vector<std::uint8_t> bytes = cooked_shader(words);
+        if (fbe_shader_check(bytes.data(), static_cast<std::int64_t>(bytes.size()))) {
+            ++taken;
+        }
+    }
+    // Some are taken, and some refused, or it's not the check that's tried.
+    CAPTURE(taken);
+    CHECK(taken > 0);
+    CHECK(taken < rounds);
+}
+
+// Mutants SPIRV-Tools' validator takes are drawn, as a game would draw them: some are refused,
+// saying what the validator says, and what's taken draws, with no validation errors. The first
+// three taken are drawn, as each makes pipelines, seconds each on lavapipe.
+TEST_CASE("a game's shader's mutants the validator takes are drawn", "[gpu][scene][stability]") {
+    const scene_t scene;
+    const int rounds = asked_for("FBE_FUZZ_VALIDATED_ROUNDS", 40);
+    const std::span<const std::uint32_t> seed = fbe::test_shaders::game_shader.code;
+    // Seeds that repeat, so what a run finds is found again.
+    std::mt19937 random(20261108); // NOLINT(bugprone-random-generator-seed)
+    const auto at = [&](std::size_t size) {
+        return std::uniform_int_distribution<std::size_t>(0, size - 1)(random);
+    };
+    // Where its constants' values are, OpConstant's last word, which changed is still valid SPIR-V,
+    // if not the shader it was.
+    constexpr std::uint32_t op_constant = 43;
+    std::vector<std::size_t> values;
+    for (std::size_t word = 5; word < seed.size();) {
+        const std::uint32_t count = seed[word] >> 16U;
+        if ((seed[word] & 0xFFFFU) == op_constant && count == 4) {
+            values.push_back(word + 3);
+        }
+        word += std::max(count, 1U);
+    }
+    REQUIRE(!values.empty());
+    int refused_by_validator = 0;
+    int drawn = 0;
+    for (int round = 0; round < rounds; ++round) {
+        CAPTURE(round);
+        std::vector<std::uint32_t> words(seed.begin(), seed.end());
+        // A bit flipped past the header, which the validator mostly refuses, or in a constant's
+        // value, which it mostly takes.
+        const std::size_t where =
+            round % 2 == 0 ? 5 + at(words.size() - 5) : values.at(at(values.size()));
+        words[where] ^= 1U << at(32);
+        const std::vector<std::uint8_t> bytes = cooked_shader(words);
+        const std::uint64_t shader =
+            fbe_shader_create(bytes.data(), static_cast<std::int64_t>(bytes.size()), "a mutant");
+        if (shader == 0) {
+            refused_by_validator +=
+                std::string_view(fbe_error()).contains("SPIRV-Tools' validator says") ? 1 : 0;
+            continue;
+        }
+        if (drawn < 3) {
+            const std::uint64_t material = fbe_material_create();
+            require(fbe_material_set_shader(material, shader));
+            const std::uint64_t mesh = cube(scene.world, 0.0F, 0.0F, -6.0F, material);
+            static_cast<void>(scene.drawn());
+            require(fbe_entity_free(mesh));
+            fbe_material_release(material);
+            ++drawn;
+        }
+        require(fbe_shader_release(shader));
+    }
+    CAPTURE(refused_by_validator, drawn);
+    CHECK(refused_by_validator > 0);
+    CHECK(drawn > 0);
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+// A pak's shader whose bytes are broken past what the checks before the validator see, its SPIR-V's
+// bound on its ids less than its ids, is refused as it's made, saying what the validator says,
+// before any driver's handed it.
+TEST_CASE("a pak's shader that isn't valid SPIR-V is refused with the validator's message",
+          "[gpu][scene]") {
+    std::vector<std::uint32_t> words(fbe::test_shaders::game_shader.code.begin(),
+                                     fbe::test_shaders::game_shader.code.end());
+    words[3] = 2;
+    const std::vector<std::uint8_t> bytes = cooked_shader(words);
+    CHECK(fbe_shader_create(bytes.data(), static_cast<std::int64_t>(bytes.size()),
+                            "res://broken.slang") == 0);
+    const std::string_view why = fbe_error();
+    CAPTURE(why);
+    CHECK(why.starts_with("the shader isn't valid SPIR-V, as SPIRV-Tools' validator says: "));
+    CHECK(why.size() > std::string_view("the shader isn't valid SPIR-V, as SPIRV-Tools' "
+                                        "validator says: ")
+                           .size());
+    CHECK(!fbe_shader_check(bytes.data(), static_cast<std::int64_t>(bytes.size())));
+}
+
 TEST_CASE("a shader no pipeline can be made of draws as the scene's own, and isn't tried again",
           "[gpu][scene]") {
     const scene_t scene;
@@ -5941,7 +6106,8 @@ TEST_CASE("a shader no pipeline can be made of draws as the scene's own, and isn
     // Bytes of its own, so it's a code of its own, by its name.
     std::vector<std::uint32_t> words(fbe::test_shaders::game_shader.code.begin(),
                                      fbe::test_shaders::game_shader.code.end());
-    words.push_back(1U << 16U);
+    // Its generator's word, which nothing reads.
+    words[2] = 0xFB01;
     const std::vector<std::uint8_t> bytes = cooked_shader(words);
     const std::uint64_t shader = fbe_shader_create(
         bytes.data(), static_cast<std::int64_t>(bytes.size()), "res://refused.slang");
@@ -11600,13 +11766,13 @@ struct prepass_scene_t : scene_t {
 
 TEST_CASE("a scene that keeps the GPU started leaves the next the pipelines it made",
           "[gpu][scene]") {
-    std::size_t made = 0;
+    std::int32_t made = 0;
     {
         const scene_t first(false);
         const std::uint64_t material = by_game_shader();
         cube(first.world, 0.0F, 0.0F, -9.0F, material);
         static_cast<void>(first.drawn());
-        made = fbe::gpu::pipelines_made();
+        made = fbe_gpu_pipelines();
         CHECK(made > 0);
         fbe_material_release(material);
     }
@@ -11616,7 +11782,7 @@ TEST_CASE("a scene that keeps the GPU started leaves the next the pipelines it m
         const std::uint64_t material = by_game_shader();
         cube(second.world, 0.0F, 0.0F, -9.0F, material);
         static_cast<void>(second.drawn());
-        CHECK(fbe::gpu::pipelines_made() == made);
+        CHECK(fbe_gpu_pipelines() == made);
         fbe_material_release(material);
     }
     CHECK_FALSE(fbe_gpu_started());
@@ -11880,6 +12046,247 @@ TEST_CASE("a shader of its own reaches the prepass: what it moves, and what it c
             fbe_skin_release(skinned.skin);
         });
     on_one_gpu(parts);
+}
+
+namespace {
+
+/// What the GPU holds that a frame's making and freeing could leave: VMA's allocations, the
+/// pipelines, and the set's free slots. Not fbe_gpu_memory_usage, which is the driver's, and
+/// lavapipe's is the machine's.
+struct held_t {
+    fbe::gpu::allocations_t allocations;
+    std::int32_t pipelines = 0;
+    std::uint32_t free_samples = 0;
+    bool operator==(const held_t&) const = default;
+};
+
+held_t held() {
+    return {
+        .allocations = fbe::gpu::allocations(),
+        .pipelines = fbe_gpu_pipelines(),
+        .free_samples = fbe::gpu::free_samples_slot_count(),
+    };
+}
+
+} // namespace
+
+// Each frame makes and frees a texture with mipmaps, a material of it and one of a game's shader,
+// a mesh of each, and a camera drawing them into a target of its own, of 1 or 4 samples, in HDR or
+// not, besides the scene's: once the first frames have made the pipelines and pools there are,
+// what the GPU holds is the same, frame after frame, and nothing's left once it stops. CI runs 600
+// frames, and FBE_SOAK_FRAMES asks for more.
+namespace {
+
+/// The game's shader but for the generator's word of its header, which SPIR-V's own tools say and
+/// nothing reads, so it's new code for each `generation`.
+std::vector<std::uint8_t> generation_of(std::uint32_t generation) {
+    const std::span<const std::uint32_t> seed = fbe::test_shaders::game_shader.code;
+    std::vector<std::uint32_t> words(seed.begin(), seed.end());
+    words[2] = generation;
+    return cooked_shader(words);
+}
+
+std::uint64_t shader_of_generation(std::uint32_t generation) {
+    const std::vector<std::uint8_t> bytes = generation_of(generation);
+    return fbe_shader_create(bytes.data(), static_cast<std::int64_t>(bytes.size()), "reloaded");
+}
+
+} // namespace
+
+// A game's shader cooked again, as a game's hot reload does, each time of new code, drawn with,
+// then freed or replaced: once nothing draws with an old one, its pipelines go, and its code with
+// them, so there's no more of either after many than after one.
+TEST_CASE("a game's shaders made again and freed leave no pipelines of them",
+          "[gpu][scene][stability]") {
+    const scene_t scene;
+    const auto drawn = [&](std::uint64_t material) {
+        const std::uint64_t mesh = cube(scene.world, 0.0F, 0.0F, -6.0F, material);
+        static_cast<void>(scene.drawn());
+        require(fbe_entity_free(mesh));
+        // Frames on, as what's freed waits for those in flight.
+        for (int frame = 0; frame < 4; ++frame) {
+            static_cast<void>(scene.drawn());
+        }
+    };
+    SECTION("made again") {
+        const auto drawn_with = [&](std::uint32_t generation) {
+            const std::uint64_t shader = shader_of_generation(generation);
+            require(shader != 0);
+            const std::uint64_t material = fbe_material_create();
+            require(fbe_material_set_shader(material, shader));
+            require(fbe_shader_release(shader));
+            drawn(material);
+            fbe_material_release(material);
+        };
+        drawn_with(1);
+        drawn_with(1);
+        const std::int32_t one = fbe_gpu_pipelines();
+        CHECK(one > 0);
+        for (std::uint32_t generation = 2; generation < 40; ++generation) {
+            drawn_with(generation);
+        }
+        CHECK(fbe_gpu_pipelines() == one);
+    }
+    SECTION("replaced, as a reload replaces it") {
+        const std::uint64_t shader = shader_of_generation(1);
+        require(shader != 0);
+        const std::uint64_t material = fbe_material_create();
+        require(fbe_material_set_shader(material, shader));
+        drawn(material);
+        const std::int32_t one = fbe_gpu_pipelines();
+        for (std::uint32_t generation = 2; generation < 40; ++generation) {
+            const std::vector<std::uint8_t> bytes = generation_of(generation);
+            require(fbe_shader_replace(shader, bytes.data(),
+                                       static_cast<std::int64_t>(bytes.size()), "reloaded"));
+            drawn(material);
+        }
+        CHECK(fbe_gpu_pipelines() == one);
+        // Replaced by itself, it's kept.
+        const std::vector<std::uint8_t> same = generation_of(39);
+        require(fbe_shader_replace(shader, same.data(), static_cast<std::int64_t>(same.size()),
+                                   "reloaded"));
+        drawn(material);
+        CHECK(fbe_gpu_pipelines() == one);
+        fbe_material_release(material);
+        require(fbe_shader_release(shader));
+    }
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+// 2f8a4c0's review: a shader made, drawn, and freed, of the same code, frame after frame with no
+// readback to wait, and replaced by another and back: a free from an earlier release mustn't free
+// pipelines a later frame still draws with, which validation says, nor make them again each frame.
+TEST_CASE("a game's shader freed and had again, frame after frame, keeps its pipelines",
+          "[gpu][scene][stability]") {
+    const scene_t scene;
+    const std::uint64_t mesh = cube(scene.world, 0.0F, 0.0F, -6.0F);
+    const auto flip = [&scene] {
+        require(fbe_render_world(scene.world, 1.0F));
+        fbe_frame_flip(false);
+    };
+    SECTION("made and freed") {
+        std::int32_t first = 0;
+        for (int frame = 0; frame < 8; ++frame) {
+            const std::uint64_t shader = shader_of_generation(1);
+            require(shader != 0);
+            const std::uint64_t material = fbe_material_create();
+            require(fbe_material_set_shader(material, shader));
+            require(fbe_shader_release(shader));
+            require(fbe_mesh_set_material(mesh, material));
+            flip();
+            // Let go of by everything as soon as it's drawn.
+            require(fbe_mesh_set_material(mesh, 0));
+            fbe_material_release(material);
+            if (frame == 0) {
+                first = fbe_gpu_pipelines();
+            }
+            CHECK(fbe_gpu_pipelines() == first);
+        }
+    }
+    SECTION("replaced, A to B to A") {
+        const std::uint64_t shader = shader_of_generation(1);
+        require(shader != 0);
+        const std::uint64_t material = fbe_material_create();
+        require(fbe_material_set_shader(material, shader));
+        require(fbe_mesh_set_material(mesh, material));
+        const std::vector<std::uint8_t> a = generation_of(1);
+        const std::vector<std::uint8_t> b = generation_of(2);
+        for (int frame = 0; frame < 8; ++frame) {
+            const std::vector<std::uint8_t>& next = frame % 2 == 0 ? b : a;
+            require(fbe_shader_replace(shader, next.data(), static_cast<std::int64_t>(next.size()),
+                                       "reloaded"));
+            flip();
+        }
+        fbe_material_release(material);
+        require(fbe_shader_release(shader));
+    }
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+// As many different shaders at once as a pipeline's key numbers, 4095: one more is refused, and
+// once one's freed, and its frames done, there's room for another.
+TEST_CASE("as many shaders as a pipeline's key numbers are kept at once",
+          "[gpu][scene][stability]") {
+    // Validated, 4095 would take a Debug build a quarter of a second each.
+    const unvalidated_t unvalidated;
+    const scene_t scene;
+    std::vector<std::uint64_t> made;
+    for (std::uint32_t generation = 1; generation <= 4095; ++generation) {
+        const std::uint64_t shader = shader_of_generation(generation);
+        if (shader == 0) {
+            break;
+        }
+        made.push_back(shader);
+    }
+    // Some may be the test program's own, made already.
+    CHECK(made.size() > 4000);
+    CHECK(shader_of_generation(5000) == 0);
+    CHECK(std::string(fbe_error()) ==
+          "there are more different shaders than a pipeline's key can number");
+    require(fbe_shader_release(made.back()));
+    made.pop_back();
+    for (int frame = 0; frame < 4; ++frame) {
+        static_cast<void>(scene.drawn());
+    }
+    const std::uint64_t another = shader_of_generation(5000);
+    CHECK(another != 0);
+    made.push_back(another);
+    for (const std::uint64_t shader : made) {
+        require(fbe_shader_release(shader));
+    }
+}
+
+TEST_CASE("frames of making and freeing leave the GPU holding what it did",
+          "[gpu][scene][stability]") {
+    const int frames = asked_for("FBE_SOAK_FRAMES", 600);
+    REQUIRE(frames >= 100);
+    const scene_t scene;
+    const std::vector<std::uint8_t> pixels(std::size_t{ 16 } * 16 * 4, 200);
+    const auto frame = [&](int at) {
+        const std::uint64_t texture = fbe_texture_create(16, 16, FBE_TEXTURE_RGBA8, true);
+        require(texture != 0);
+        require(fbe_texture_write(texture, 0, 0, 16, 16, pixels.data(), 16 * 4));
+        const std::uint64_t painted = fbe_material_create();
+        require(fbe_material_set_texture(painted, 0, texture));
+        const std::uint64_t shaded = by_game_shader();
+        const std::uint64_t first = wall(scene.world, -5.0F, 1.0F, painted);
+        const std::uint64_t second = cube(scene.world, 1.0F, 0.0F, -6.0F, shaded);
+        const std::uint64_t target =
+            fbe_texture_create_target(32, 32, FBE_TEXTURE_RGBA8, at % 2 == 0 ? 1 : 4, true);
+        require(target != 0);
+        const std::uint64_t camera = fbe_entity_create(scene.world, 0, FBE_ENTITY_CAMERA);
+        require(fbe_camera_set_target(camera, target));
+        require(fbe_camera_set_hdr(camera, at % 3 == 0));
+        static_cast<void>(scene.drawn());
+        require(fbe_entity_free(camera));
+        require(fbe_entity_free(first));
+        require(fbe_entity_free(second));
+        fbe_material_release(painted);
+        fbe_material_release(shaded);
+        fbe_texture_release(texture);
+        fbe_texture_release(target);
+    };
+    // What the first frames make, of each kind, and what's kept while they're in flight.
+    for (int at = 0; at < 12; ++at) {
+        frame(at);
+    }
+    const held_t settled = held();
+    CAPTURE(settled.allocations.count, settled.allocations.bytes, settled.pipelines);
+    CHECK(settled.allocations.count > 0);
+    int differed = 0;
+    for (int at = 12; at < frames; ++at) {
+        frame(at);
+        // At the same place in the cycle of samples and HDR.
+        if (at % 6 == 5 && held() != settled) {
+            ++differed;
+            const held_t now = held();
+            CAPTURE(at, now.allocations.count, now.allocations.bytes, now.pipelines,
+                    now.free_samples);
+            CHECK(now == settled);
+        }
+    }
+    CHECK(differed == 0);
+    CHECK(fbe_gpu_validation_errors() == 0);
 }
 
 TEST_CASE("a camera in stored values blends with what's stored, as DirectX 7 did", "[gpu][scene]") {
@@ -12286,7 +12693,8 @@ TEST_CASE("a shader no pipeline can be made of draws as the scene's own, in stor
     // Bytes of its own, so it's a code of its own, by its name.
     std::vector<std::uint32_t> words(fbe::test_shaders::game_shader.code.begin(),
                                      fbe::test_shaders::game_shader.code.end());
-    words.push_back(2U << 16U);
+    // Its generator's word, which nothing reads.
+    words[2] = 0xFB02;
     const std::vector<std::uint8_t> bytes = cooked_shader(words);
     const std::uint64_t shader = fbe_shader_create(
         bytes.data(), static_cast<std::int64_t>(bytes.size()), "res://refused_stored.slang");

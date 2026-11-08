@@ -124,6 +124,15 @@ void stop();
 /// wasn't freed.
 std::uint32_t allocations_left();
 
+/// VMA's allocations now, and their bytes, as its statistics count them; none before the GPU
+/// starts.
+struct allocations_t {
+    std::uint32_t count = 0;
+    std::uint64_t bytes = 0;
+    bool operator==(const allocations_t&) const = default;
+};
+allocations_t allocations();
+
 /// Makes a frame a command pool of its own and its three command buffers, uploads, its own, and
 /// its first timestamp's; false,
 /// with fbe_error's why, if they can't be, and then it's left as it was.
@@ -202,6 +211,9 @@ std::uint32_t pool_images();
 
 /// Points the set's texture `index` at `view`, sampled in SHADER_READ_ONLY_OPTIMAL.
 void write_texture(std::uint32_t index, VkImageView view);
+/// Points every one of the set's textures at `view`, as write_texture does, so an index no texture
+/// has samples it, not whatever a descriptor never written holds, which a real device faults on.
+void write_every_texture(VkImageView view);
 
 /// A slot in the set for a multisampled image, with its view, for a shader to read its samples by;
 /// no_samples_slot if they're all taken. A slot given back is for another image, once the GPU's
@@ -233,6 +245,9 @@ void stop_screen();
 std::vector<std::uint8_t> read_window();
 /// Whether a window's open, which the GPU draws the screen for.
 bool window_open();
+/// For a test: what makes a shown window's surface in SDL's place, so its swapchain's made even on
+/// SDL's offscreen video, which shows none; nullptr for SDL's.
+void make_surfaces_by(VkSurfaceKHR (*make)());
 
 /// The index of the sampler for a filter and a wrap in U and V, fbe_texture.h's.
 std::uint32_t sampler_index(std::int32_t filter, std::int32_t wrap_u, std::int32_t wrap_v);
@@ -279,6 +294,8 @@ enum class fault_t : std::uint8_t {
     NO_FILE_FORMAT,
     /// Making a multisampled image of the engine's, as if the device couldn't read its samples.
     NO_READ_SAMPLES,
+    /// Running work now, as a read or a buffer's upload does, as the device is lost.
+    LOST_NOW,
 };
 
 /// Makes the next `fault` happen.
@@ -297,6 +314,9 @@ bool fail_vulkan(std::string_view doing, VkResult result);
 /// Whether the GPU was lost, as a driver's crash or reset loses it: nothing runs on it from then
 /// on, and what needs it fails, saying so, until it's stopped and started again.
 bool lost();
+/// Whether the validation layer checks the GPU's synchronization too, as it does wherever it
+/// validates and can.
+bool validating_synchronization();
 /// Keeps that the GPU was lost if `result` says it was; whether it was.
 bool lose(VkResult result);
 /// Keeps for fbe_error() that the GPU was lost, and returns false.

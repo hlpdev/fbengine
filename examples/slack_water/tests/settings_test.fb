@@ -1,0 +1,374 @@
+// The options as kept, with no window: each read back as it was written, what's missing or wrong its
+// default, numbers kept to their ranges, a file that's gone or isn't one; and the prompts' names and
+// colors by the pad.
+
+Import std.collections
+Import std.core
+Import std.io
+Import std.math
+Import std.os
+Import std.test
+Import std.text
+Import fbengine
+Import slack_water.captions
+Import slack_water.cues
+Import slack_water.flow
+Import slack_water.game
+Import slack_water.hud
+Import slack_water.prompts
+Import slack_water.screenmode
+Import slack_water.settings
+
+@Test
+Function TheDefaultsAreAsMade()
+    Local options = Options()
+    Expect(options.Master == 1.0 && options.Music == 1.0 && options.Ambience == 1.0 &&
+           options.Effects == 1.0)
+    Expect(options.Picture == Quality.HIGH && options.Shown == WindowMode.WINDOWED)
+    Expect(options.Width == 0 && options.Height == 0)
+    Expect(options.Look == 1.0 && !options.InvertY)
+End Function
+
+@Test
+Function EachIsReadBackAsWritten()
+    Local options = Options()
+    options.Master = 0.25
+    options.Music = 0.4
+    options.Ambience = 0.5
+    options.Effects = 0.75
+    options.Picture = Quality.LOW
+    options.Shown = WindowMode.FULLSCREEN
+    options.Width = 1920
+    options.Height = 1080
+    options.Look = 2.5
+    options.InvertY = True
+    Local read = Options.Read(options.Written())
+    Expect(read.Same(options), read.Written())
+    Expect(read.Master == 0.25 && read.Music == 0.4 && read.Ambience == 0.5 && read.Effects == 0.75)
+    Expect(read.Picture == Quality.LOW && read.Shown == WindowMode.FULLSCREEN)
+    Expect(read.Width == 1920 && read.Height == 1080 && read.Look == 2.5 && read.InvertY)
+    // Borderless, as well.
+    options.Shown = WindowMode.BORDERLESS
+    Expect(Options.Read(options.Written()).Shown == WindowMode.BORDERLESS)
+End Function
+
+@Test
+Function WhatsWrongIsItsDefault()
+    Local read = Options.Read("[audio]\nmaster = loud\nambience = 7\neffects = -2\n" +
+                              "[video]\nquality = ultra\nwindow = sideways\nwidth = 800\n" +
+                              "[controls]\nlook = 0\ninvert_y = maybe\n")
+    Expect(read.Master == 1.0, "{read.Master}")
+    // Numbers are kept to their ranges.
+    Expect(read.Ambience == 1.0 && read.Effects == 0.0, "{read.Ambience} {read.Effects}")
+    Expect(read.Picture == Quality.HIGH && read.Shown == WindowMode.WINDOWED)
+    // A size needs both.
+    Expect(read.Width == 0 && read.Height == 0)
+    Expect(read.Look == LEAST_LOOK && !read.InvertY, "{read.Look}")
+    Expect(Options.Read("this isn't [an ini\n= =").Same(Options()))
+    Expect(Options.Read("").Same(Options()))
+    // Words in any case, with spaces round them.
+    Expect(Options.Read("[video]\nquality =  LOW \n").Picture == Quality.LOW)
+End Function
+
+@Test
+Function TheyreKeptInTheirFileAndFoundAgain() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Local file = folder.Path / "deeper" / "options.ini"
+    Expect(KeptOptions(file).Same(Options()), "none kept is the defaults")
+    Expect(KeptOptions(Null).Same(Options()))
+    Local options = Options()
+    options.Look = 1.5
+    Try KeepOptions(options, file)
+    Expect(KeptOptions(file).Look == 1.5)
+    // A test's folder, by SLACK_WATER_SETTINGS, only in a test, with SLACK_WATER_CHECKS.
+    Local checking = Env.Get("SLACK_WATER_CHECKS")
+    Env.Set("SLACK_WATER_SETTINGS", folder.Path.Text)
+    Env.Unset("SLACK_WATER_CHECKS")
+    Expect(OptionsFile() != folder.Path / "options.ini", "a player's build took a test's folder")
+    Env.Set("SLACK_WATER_CHECKS", "1")
+    Expect(OptionsFile() == folder.Path / "options.ini")
+    If checking != Null Then Env.Set("SLACK_WATER_CHECKS",
+                                     checking) Else Env.Unset("SLACK_WATER_CHECKS")
+    Env.Unset("SLACK_WATER_SETTINGS")
+    Local mine = OptionsFile()
+    Expect(mine == Null || mine.Text.EndsWith("options.ini") && mine.Text.Contains("Slack Water"))
+End Function
+
+@Test
+Function APadsButtonsAreItsOwn()
+    Expect(ButtonName(GamepadType.XBOX_ONE, GamepadButton.SOUTH) == "A")
+    Expect(ButtonName(GamepadType.XBOX_ONE, GamepadButton.WEST) == "X")
+    Expect(ButtonName(GamepadType.PS5, GamepadButton.SOUTH) == "Cross")
+    Expect(ButtonName(GamepadType.PS4, GamepadButton.EAST) == "Circle")
+    Expect(ButtonName(GamepadType.SWITCH_PRO, GamepadButton.SOUTH) == "B")
+    Expect(ButtonName(GamepadType.SWITCH_PRO, GamepadButton.EAST) == "A")
+    Expect(ButtonName(GamepadType.XBOX_ONE, GamepadButton.START) == "Menu")
+    Expect(ButtonName(GamepadType.PS5, GamepadButton.START) == "Options")
+    Expect(ButtonName(GamepadType.SWITCH_PRO, GamepadButton.START) == "+")
+    Expect(ButtonMark(GamepadType.PS5, GamepadButton.NORTH) == "T")
+    Expect(ButtonColor(GamepadType.XBOX_ONE, GamepadButton.SOUTH) == Color32(96, 176, 64, 255))
+    Expect(ButtonColor(GamepadType.PS5, GamepadButton.SOUTH) == Color32(92, 140, 220, 255))
+    Expect(PromptName(Device.KEYS, GamepadType.XBOX_ONE, Prompted.USE, KeyMap()) == "E")
+    Expect(PromptName(Device.PAD, GamepadType.XBOX_ONE, Prompted.USE, KeyMap()) == "A")
+    Expect(PromptName(Device.KEYS, GamepadType.STANDARD, Prompted.HAND, KeyMap()) == "Q")
+    Expect(PromptName(Device.PAD, GamepadType.PS5, Prompted.HAND, KeyMap()) == "Square")
+    Expect(PromptName(Device.KEYS, GamepadType.STANDARD, Prompted.PAUSE, KeyMap()) == "Esc")
+End Function
+
+@Test
+Function AGamesPromptIsReadForItsKey()
+    Local use = PromptOf("E: pick up the gear")
+    Expect(use != Null && use.0 == Prompted.USE && use.1 == "pick up the gear")
+    Local hand = PromptOf("Q: hand Pip the belt")
+    Expect(hand != Null && hand.0 == Prompted.HAND && hand.1 == "hand Pip the belt")
+    Expect(PromptOf("") == Null)
+    Expect(PromptOf("nothing here") == Null)
+End Function
+
+@Test
+Function KeysAreBoundOnceEach()
+    Local keys = KeyMap()
+    Expect(keys.Of(Bound.FORWARD) == Key.W && keys.Of(Bound.USE) == Key.E &&
+           keys.Of(Bound.PAUSE) == Key.ESCAPE)
+    Expect(keys.BoundTo(Key.Q) == Bound.HAND && keys.BoundTo(Key.F) == Null)
+    Expect(keys.Bind(Bound.USE, Key.F) == Null && keys.Of(Bound.USE) == Key.F)
+    // What another has is refused, changing nothing; its own again is fine.
+    Expect(keys.Bind(Bound.HAND, Key.F) == Bound.USE && keys.Of(Bound.HAND) == Key.Q)
+    Expect(keys.Bind(Bound.USE, Key.F) == Null)
+    // A copy's its own.
+    Local copy = keys.Clone()
+    copy.Bind(Bound.USE, Key.G)
+    Expect(keys.Of(Bound.USE) == Key.F)
+End Function
+
+@Test
+Function KeysAreKeptByName()
+    Expect(KeyNamed("W") == Key.W && KeyNamed("ESCAPE") == Key.ESCAPE &&
+           KeyNamed("SPACE") == Key.SPACE)
+    Expect(KeyNamed("") == Null && KeyNamed("NOT_A_KEY") == Null && KeyNamed("UNKNOWN") == Null)
+    Local options = Options()
+    options.Keys.Bind(Bound.USE, Key.F)
+    options.Keys.Bind(Bound.PAUSE, Key.P)
+    Local read = Options.Read(options.Written())
+    Expect(read.Keys.Of(Bound.USE) == Key.F && read.Keys.Of(Bound.PAUSE) == Key.P, read.Written())
+    // A swap's read whole, though each alone would clash.
+    Local swapped = Options.Read("[keys]\nuse = Q\nhand = e\n")
+    Expect(swapped.Keys.Of(Bound.USE) == Key.Q && swapped.Keys.Of(Bound.HAND) == Key.E)
+    // Two the same, or what isn't a key, and it's the defaults.
+    Local clash = Options.Read("[keys]\nuse = W\n")
+    Expect(clash.Keys.Of(Bound.USE) == Key.E && clash.Keys.Of(Bound.FORWARD) == Key.W)
+    Expect(Options.Read("[keys]\nuse = nonsense\n").Keys.Of(Bound.USE) == Key.E)
+    Expect(KeyLabel(Key.ESCAPE) == "Esc" && KeyLabel(Key.RETURN) == "Enter" &&
+           KeyLabel(Key.F) == "F")
+    Expect(KeyLabel(Key.LEFT_SHIFT) == "Left Shift", KeyLabel(Key.LEFT_SHIFT))
+    Expect(PromptName(Device.KEYS, GamepadType.STANDARD, Prompted.USE, options.Keys) == "F")
+End Function
+
+// A window a test stands in for, which can't be resized while fullscreen, as a real one can't.
+Final Class Stand Implements WindowLike
+    Field mode: WindowMode = WindowMode.WINDOWED
+    Field width: Int32 = 1280
+    Field height: Int32 = 720
+    Public Field Calls: String[] = []
+
+    Public New()
+    End New
+
+    Public Method Mode(): WindowMode => mode
+
+    Public Method SetMode(to: WindowMode) Throws GraphicsError
+        Calls.Add("{to}")
+        mode = to
+    End Method
+
+    Public Method SetSize(across: Int32, down: Int32) Throws GraphicsError
+        If mode == WindowMode.FULLSCREEN Then Throw GraphicsError("fullscreen")
+        Calls.Add("{across}x{down}")
+        width = across
+        height = down
+    End Method
+
+    Public Method Width(): Int32 => width
+
+    Public Method Height(): Int32 => height
+End Class
+
+@Test
+Function AWindowGoesFromOneWayToAnother() Throws GraphicsError
+    Local modes = [DisplayMode(1920, 1080, 60.0, 1.0), DisplayMode(1920, 1080, 144.0, 1.0),
+                   DisplayMode(1280, 720, 60.0, 1.0)]
+    Local choices = ChoicesOf(Display("two", modes[0], modes))
+    Local names: String[] = []
+    For each In choices
+        names.Add(each.Name())
+    End For
+    Expect(names.Join(", ") == "Windowed, Borderless, Fullscreen 1920x1080, Fullscreen 1280x720",
+           names.Join(", "))
+    Expect(ChoicesOf(Null).Count == 2)
+    // What's there, and the nearest to what isn't.
+    Expect(ChoiceFor(choices, WindowChoice(WindowMode.FULLSCREEN, 1280, 720)) == (3, False))
+    Expect(ChoiceFor(choices, WindowChoice(WindowMode.FULLSCREEN, 2560, 1440)) == (2, True))
+    Expect(ChoiceFor(choices, WindowChoice(WindowMode.FULLSCREEN, 1366, 768)) == (3, True))
+    Expect(ChoiceFor(choices, WindowChoice(WindowMode.BORDERLESS)) == (1, False))
+    Expect(ChoiceFor(ChoicesOf(Null), WindowChoice(WindowMode.FULLSCREEN, 800, 600)) == (0, False))
+    // From fullscreen to another size, through windowed, as a fullscreen size can't change.
+    Local stand = Stand()
+    Try Switched(stand, choices[2], (1280, 720))
+    Expect(stand.Mode() == WindowMode.FULLSCREEN && stand.Width() == 1920)
+    stand.Calls = []
+    Try Switched(stand, choices[3], (1280, 720))
+    Expect(stand.Calls.Join(" ") == "WINDOWED 1280x720 FULLSCREEN" && stand.Width() == 1280,
+           stand.Calls.Join(" "))
+    // Back to windowed, framed at what it was.
+    Try Switched(stand, choices[2], (1280, 720))
+    Try Switched(stand, choices[0], (1000, 600))
+    Expect(stand.Mode() == WindowMode.WINDOWED && stand.Width() == 1000 && stand.Height() == 600)
+    // Borderless from fullscreen, through windowed.
+    Try Switched(stand, choices[2], (1280, 720))
+    stand.Calls = []
+    Try Switched(stand, choices[1], (1280, 720))
+    Expect(stand.Calls.Join(" ") == "WINDOWED BORDERLESS", stand.Calls.Join(" "))
+End Function
+
+@Test
+Function AccessibilityIsKept()
+    Local options = Options()
+    Expect(options.Subtitles && !options.SoundCaptions && options.TextSize == 0 &&
+           !options.ReducedMotion)
+    Expect(options.HoldToOpen)
+    Expect(options.TextScale() == 1.0)
+    options.Subtitles = False
+    options.SoundCaptions = True
+    options.TextSize = 2
+    options.ReducedMotion = True
+    options.HoldToOpen = False
+    Local read = Options.Read(options.Written())
+    Expect(!read.Subtitles && read.SoundCaptions && read.TextSize == 2 && read.ReducedMotion,
+           read.Written())
+    Expect(read.TextScale() == 1.5)
+    Expect(!read.HoldToOpen, read.Written())
+    Expect(Options.Read("[access]\nhold_to_open = maybe\n").HoldToOpen)
+    Expect(Options.Read("[access]\ntext_size = 9\n").TextSize == 2)
+    Expect(Options.Read("[access]\ntext_size = -3\n").TextSize == 0)
+    Expect(Options.Read("[access]\nsubtitles = maybe\n").Subtitles)
+End Function
+
+@Test
+Function ASoundsCaptionIsSaidAsItStarts()
+    Local counts = Map<Int, Int>()
+    Local played = Function(cue: Cue) => counts.Get(cue As Int) ?? 0
+    Local captions = Captions()
+    captions.Reset(played)
+    // Nothing's played: nothing's said, at slack water.
+    captions.Update(played, 0.0, 0.1)
+    Expect(captions.Shown().Count == 0, "{captions.Shown()}")
+    counts[Cue.GULL As Int] = 1
+    captions.Update(played, 0.0, 0.1)
+    Expect(captions.Shown() == ["[a gull cries]"], "{captions.Shown()}")
+    // Steps say nothing; Pip and the sluice do.
+    counts[Cue.STEP_1 As Int] = 4
+    counts[Cue.PIP_HELLO As Int] = 1
+    captions.Update(played, 0.0, 0.1)
+    Expect(captions.Shown() == ["[a gull cries]", "[Pip chirps]"], "{captions.Shown()}")
+    // Three at most, the oldest going.
+    counts[Cue.SLUICE As Int] = 1
+    captions.Update(played, 0.0, 0.1)
+    Expect(captions.Shown() == ["[a gull cries]", "[Pip chirps]", "[the sluice groans open]"],
+           "{captions.Shown()}")
+    counts[Cue.CREAK As Int] = 1
+    captions.Update(played, 0.0, 0.1)
+    Expect(captions.Shown() == ["[Pip chirps]", "[the sluice groans open]", "[the mill creaks]"],
+           "{captions.Shown()}")
+    // Fading at its end, then gone.
+    Expect(captions.Shade(2) == 1.0)
+    captions.Update(played, 0.0, CAPTION_SECONDS - 0.4)
+    Expect(captions.Shade(2) > 0.0 && captions.Shade(2) < 1.0, "{captions.Shade(2)}")
+    captions.Update(played, 0.0, 0.5)
+    Expect(captions.Shown().Count == 0, "{captions.Shown()}")
+    // A new game forgets what was said, and what had played.
+    captions.Say("[the mill creaks]")
+    captions.Reset(played)
+    Expect(captions.Shown().Count == 0)
+    captions.Update(played, 0.0, 0.1)
+    Expect(captions.Shown().Count == 0, "what had played was said again")
+    // Each cue that means something has words; the steps don't.
+    For cue In [Cue.GULL, Cue.CREAK, Cue.SPLASH, Cue.FIT, Cue.SLUICE, Cue.PIP_HELLO, Cue.PIP_TAKES,
+                Cue.PIP_GIVES, Cue.PIP_WORRIES, Cue.PIP_GLAD, Cue.PIP_SAD]
+        Expect(CaptionOf(cue).StartsWith("["), "{cue}")
+    End For
+    Expect(CaptionOf(Cue.STEP_1) == "" && CaptionOf(Cue.SAND_2) == "")
+End Function
+
+@Test
+Function TheWeatherIsCaptionedAsItTurns()
+    Local played = Function(cue: Cue) => 0
+    Local captions = Captions()
+    captions.Reset(played)
+    Local rises = 0
+    Local crashes = 0
+    Local clock: Float64 = 0.0
+    While clock < TIDE_IN_AT
+        captions.Update(played, clock, 0.05)
+        For each In captions.Shown()
+            If each == "[the wind rises]" Then rises += 1
+            If each == "[surf crashes]" Then crashes += 1
+        End For
+        // Each said once, as it's shown, till it's gone.
+        captions.Update(played, clock, CAPTION_SECONDS)
+        clock += 0.05
+    End While
+    // The wind rises in the storm, now and then, not at slack water or every moment; the surf once.
+    Expect(rises >= 2 && rises < 200, "the wind rose {rises} times")
+    Expect(crashes == 1, "the surf crashed {crashes} times")
+    captions.Reset(played)
+    captions.Update(played, 1.0, 0.05)
+    Expect(captions.Shown().Count == 0, "the wind rose at slack water")
+End Function
+
+@Test
+Function WhatsSaidInOneFrameIsAllShown()
+    Local counts = Map<Int, Int>()
+    Local played = Function(cue: Cue) => counts.Get(cue As Int) ?? 0
+    Local captions = Captions()
+    captions.Reset(played)
+    captions.Update(played, 0.0, 0.1)
+    // Four at once: none goes till the next frame.
+    For cue In [Cue.GULL, Cue.CREAK, Cue.FIT, Cue.PIP_GLAD]
+        counts[cue As Int] = 1
+    End For
+    captions.Update(played, 0.0, 0.1)
+    Expect(captions.Shown().Count == 4, "{captions.Shown()}")
+    counts[Cue.SLUICE As Int] = 1
+    captions.Update(played, 0.0, 0.1)
+    Expect(captions.Shown() == ["[a part clanks into place]", "[Pip trills]",
+                                "[the sluice groans open]"], "{captions.Shown()}")
+End Function
+
+@Test
+Function TheSurfIsShownAtTheFlood()
+    Local counts = Map<Int, Int>()
+    Local played = Function(cue: Cue) => counts.Get(cue As Int) ?? 0
+    Local captions = Captions()
+    captions.Reset(played)
+    captions.Update(played, FLOOD_AT - 0.05, 0.05)
+    // The flood's frame: the sea over the road, Pip worried, and the surf.
+    counts[Cue.SPLASH As Int] = 1
+    counts[Cue.PIP_WORRIES As Int] = 1
+    captions.Update(played, FLOOD_AT + 0.05, 0.05)
+    Local shown = captions.Shown()
+    Expect(shown.Contains("[surf crashes]") && shown.Contains("[the sea breaks over the road]") &&
+           shown.Contains("[Pip whimpers]"), "{shown}")
+End Function
+
+@Test
+Function TheBobEasesAlikeAtAnyRate()
+    For rate In [30.0, 144.0]
+        Local bobbing: Float = 0.0
+        Local steps = rate As Int
+        For step = 1 To steps
+            bobbing = Eased(bobbing, 1.0, 1.0 / (rate As Float))
+        End For
+        Expect(Abs(bobbing - (1.0 - Exp(-6.0))) < 0.0001, "at {rate} a second, {bobbing}")
+    End For
+End Function

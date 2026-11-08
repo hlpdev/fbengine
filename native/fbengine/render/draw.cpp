@@ -256,7 +256,7 @@ layer_data_t layer_data(const scene::layer_t& layer, std::uint64_t target,
     out.luminance_scale = layer.bump_scale;
     out.luminance_offset = layer.bump_offset;
     out.bump = layer.bump;
-    // As Blitz's: scaled down by its scale, so 2 looks twice as big, turned back by its angle,
+    // Scaled down by its scale, so 2 looks twice as big, turned back by its angle,
     // and moved back by its offset.
     const float across = 1.0F / layer.uv_scale[0];
     const float down = 1.0F / layer.uv_scale[1];
@@ -980,7 +980,7 @@ bool draw_camera(std::uint32_t slot, float tween) {
     if (pass->scissor.extent.width == 0 || pass->scissor.extent.height == 0) {
         return true;
     }
-    // Blitz's order: every mirror's reflection of the scene, into the same viewport and depth, then
+    // First every mirror's reflection of the scene, into the same viewport and depth, then
     // the scene, which covers it unless what's on the mirror's plane lets it through.
     const std::uint32_t world = s.entities.world[slot];
     std::vector<scene::view_t> views;

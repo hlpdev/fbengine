@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <unordered_map>
 #include <vector>
 
 namespace fbe::scene {
@@ -635,6 +636,51 @@ FBE_API bool fbe_material_set_map(uint64_t material, int32_t map, uint64_t textu
     fbe::scene::release_texture(found->texture);
     found->texture = texture;
     found->uv_set = uv_set;
+    return true;
+}
+
+FBE_API bool fbe_material_replace_textures(const uint64_t* from, const uint64_t* to,
+                                           int32_t count) {
+    if (count < 0) {
+        return fbe::fail(std::format("a count of textures is 0 or more, not {}", count));
+    }
+    std::unordered_map<std::uint64_t, std::uint64_t> replacing;
+    for (std::int32_t at = 0; at < count; ++at) {
+        if (from[at] == 0) {
+            return fbe::fail("a texture replaced is one, not none");
+        }
+        if (fbe_texture_format(to[at]) < 0) {
+            return fbe::fail("a material can't read what isn't a texture");
+        }
+        replacing[from[at]] = to[at];
+    }
+    if (replacing.empty()) {
+        return true;
+    }
+    const auto replaced = [](layer_t& layer, std::uint64_t now) {
+        fbe_texture_retain(now);
+        fbe::scene::release_texture(layer.texture);
+        layer.texture = now;
+    };
+    for (material_t& material : fbe::scene::scene().materials) {
+        if (material.references == 0) {
+            continue;
+        }
+        for (layer_t& layer : material.layers) {
+            const auto found = replacing.find(layer.texture);
+            if (found != replacing.end() &&
+                fbe_texture_format(found->second) == fbe_texture_format(layer.texture)) {
+                replaced(layer, found->second);
+            }
+        }
+        for (std::size_t map = 0; map < material.maps.size(); ++map) {
+            const auto found = replacing.find(material.maps[map].texture);
+            if (found != replacing.end() &&
+                fbe::scene::map_takes(static_cast<std::int32_t>(map), found->second)) {
+                replaced(material.maps[map], found->second);
+            }
+        }
+    }
     return true;
 }
 

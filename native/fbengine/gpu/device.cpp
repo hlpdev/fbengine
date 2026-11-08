@@ -52,6 +52,9 @@ std::int32_t wanted = -1;
 std::int32_t picked = -1;
 fbe::gpu::device_t current;
 bool started = false;
+/// Whether a program's said there's to be no GPU, as a dedicated server does: then Vulkan's never
+/// loaded, and nothing starts it.
+bool disabled = false;
 /// Whether starting failed, which it then does every time, and why.
 bool failed = false;
 std::string why_failed;
@@ -63,6 +66,8 @@ fbe::gpu::fault_t injected = fbe::gpu::fault_t::NONE;
 std::uint64_t stops = 0;
 
 bool validating = false;
+/// Whether the validation layer checks synchronization too.
+bool synchronizing = false;
 std::int32_t validation_errors = 0;
 /// Whether the GPU was lost, until it's stopped.
 bool gpu_lost = false;
@@ -175,6 +180,7 @@ bool make_instance() {
     validating = wants_validation() && has_validation_layer() &&
                  has_extension(extensions, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     const bool sync = validating && has_sync_validation();
+    synchronizing = sync;
     if (validating) {
         layers.push_back(validation_layer);
         enabled.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
@@ -693,6 +699,10 @@ bool fail_vulkan(std::string_view doing, VkResult result) {
 }
 
 VkInstance instance() {
+    if (disabled) {
+        fail("the GPU is disabled");
+        return VK_NULL_HANDLE;
+    }
     if (!tried) {
         tried = true;
         if (!make_instance()) {
@@ -711,6 +721,9 @@ device_t* device() {
 bool start(VkSurfaceKHR surface) {
     if (started) {
         return true;
+    }
+    if (disabled) {
+        return fail("the GPU is disabled");
     }
     if (failed) {
         return fail(why_failed);
@@ -785,6 +798,18 @@ std::uint32_t allocations_left() {
     return leftovers;
 }
 
+allocations_t allocations() {
+    if (!started || current.allocator == VK_NULL_HANDLE) {
+        return {};
+    }
+    VmaTotalStatistics statistics{};
+    vmaCalculateStatistics(current.allocator, &statistics);
+    return {
+        .count = statistics.total.statistics.allocationCount,
+        .bytes = statistics.total.statistics.allocationBytes,
+    };
+}
+
 bool remake_frame(const device_t& gpu, frame_t& frame) {
     vkDestroyFence(gpu.device, frame.done, nullptr);
     vkDestroySemaphore(gpu.device, frame.acquired, nullptr);
@@ -808,6 +833,10 @@ bool remake_frame(const device_t& gpu, frame_t& frame) {
 
 bool lost() {
     return gpu_lost;
+}
+
+bool validating_synchronization() {
+    return synchronizing;
 }
 
 bool lose(VkResult result) {
@@ -885,6 +914,18 @@ FBE_API bool fbe_gpu_start(void) {
 
 FBE_API bool fbe_gpu_started(void) {
     return started;
+}
+
+FBE_API bool fbe_gpu_set_disabled(bool disable) {
+    if (disable && (started || vulkan != VK_NULL_HANDLE)) {
+        return fbe::fail("the GPU's started; stop it before disabling it");
+    }
+    disabled = disable;
+    return true;
+}
+
+FBE_API bool fbe_gpu_disabled(void) {
+    return disabled;
 }
 
 FBE_API uint64_t fbe_gpu_stops(void) {

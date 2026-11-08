@@ -8,6 +8,8 @@
 #include <array>
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <charconv>
+#include <climits>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -16,6 +18,7 @@
 #include <iterator>
 #include <ktx.h>
 #include <memory>
+#include <random>
 #include <stb_image_write.h>
 #include <string>
 #include <thread>
@@ -329,6 +332,14 @@ void put_u32(bytes_t& bytes, std::size_t at, std::uint32_t value) {
     }
 }
 
+std::uint32_t u32_of(const bytes_t& bytes, std::size_t at) {
+    std::uint32_t value = 0;
+    for (std::size_t i = 0; i < 4; ++i) {
+        value |= std::uint32_t{ bytes.at(at + i) } << (8U * i);
+    }
+    return value;
+}
+
 void put_u64(bytes_t& bytes, std::size_t at, std::uint64_t value) {
     put_u32(bytes, at, static_cast<std::uint32_t>(value));
     put_u32(bytes, at + 4, static_cast<std::uint32_t>(value >> 32U));
@@ -429,6 +440,137 @@ TEST_CASE("a KTX2's levels and parts are within it, as many as its sizes have", 
     }
 }
 
+// The fuzz test's: a level's images are as big as its data format says a texel's bytes are, which
+// libktx doesn't hold to what the level has, so one saying more than its level has isn't loaded.
+TEST_CASE("a KTX2 whose texels take more than its levels have isn't loaded", "[assets]") {
+    for (const std::uint32_t faces : { 1U, 6U }) {
+        INFO(faces);
+        bytes_t ktx = ktx2(4, 4, 1, 1, faces, false, pattern, [](ktxTexture2*) {});
+        REQUIRE(decoded(ktx).levels.size() == 1);
+        // The basic block's bytesPlane0: past its total size, its header, and its texel block's
+        // dimensions.
+        const std::size_t planes = u32_of(ktx, 48) + 4 + 16;
+        REQUIRE(ktx.at(planes) == 4);
+        // A cube's first face of 8 bytes a texel is within its 384, and its sixth is past them.
+        ktx.at(planes) = faces == 6 ? 8 : 223;
+        REQUIRE(message(ktx).contains("has level 0 past its texels"));
+    }
+}
+
+// The fuzz test's: libktx's offsets are from where the first level in the file starts, the
+// smallest, so a level that says it starts before that has one that wraps round, which isn't
+// loaded, as it's out of a KTX2's order.
+TEST_CASE("a KTX2 level before its texels isn't loaded", "[assets]") {
+    const bytes_t ktx = ktx2(8, 4, 3, 2, 1, true, pattern, [](ktxTexture2*) {});
+    REQUIRE(decoded(ktx).levels.size() == 3);
+    const auto offset_at = [](std::size_t level) { return 80 + (level * 24); };
+    // Level 2 is first in the file, then 1, then 0.
+    REQUIRE(u32_of(ktx, offset_at(2)) < u32_of(ktx, offset_at(1)));
+    bytes_t before = ktx;
+    put_u64(before, offset_at(1), u32_of(ktx, offset_at(2)) - 14);
+    REQUIRE(message(before).contains("has level 1 out of the order"));
+}
+
+// ASan's, in the fuzz test: libktx allocates what a KTX2's levels say they inflate to before it
+// reads them, so what they say is held to what they are, uncompressed, and to what its texels could
+// be, of 16 bytes each, Zstd's or not.
+TEST_CASE("a KTX2's levels inflate to no more than its texels could be", "[assets]") {
+    for (const bool zstd : { false, true }) {
+        INFO(zstd);
+        const bytes_t ktx = ktx2(4, 4, 2, 1, 1, false, pattern, [zstd](ktxTexture2* texture) {
+            if (zstd) {
+                REQUIRE(ktxTexture2_DeflateZstd(texture, 3) == KTX_SUCCESS);
+            }
+        });
+        REQUIRE(decoded(ktx).levels.size() == 2);
+        // A level's uncompressedByteLength: as a wrapped sum's, a terabyte, and one byte past an
+        // image of 4 by 4 of 16 bytes a texel, mips and all, with the other level's 16.
+        const std::uint64_t first = 80 + 16;
+        const std::array<std::uint64_t, 3> lengths{
+            ~std::uint64_t{ 0 } - 34,
+            std::uint64_t{ 1 } << 40U,
+            std::uint64_t{ (16 * 16 * 2) - 16 + 1 },
+        };
+        for (const std::uint64_t length : lengths) {
+            INFO(length);
+            bytes_t inflating = ktx;
+            put_u64(inflating, first, length);
+            REQUIRE(message(inflating).contains("more than its texels could be"));
+        }
+        // Two levels each of half of what wraps round.
+        bytes_t halves = ktx;
+        put_u64(halves, first, std::uint64_t{ 1 } << 63U);
+        put_u64(halves, first + 24, std::uint64_t{ 1 } << 63U);
+        REQUIRE(message(halves).contains("more than its texels could be"));
+    }
+    // Uncompressed, a level's is what it is.
+    bytes_t raw = ktx2(4, 4, 1, 1, 1, false, pattern, [](ktxTexture2*) {});
+    put_u64(raw, 80 + 16, 63);
+    REQUIRE(message(raw).contains("level 0 inflating to 63 bytes"));
+}
+
+// ASan's, in the fuzz test: libktx's texels are from where the last level starts to where level 0
+// ends, so a level before the one or past the other has it allocate what wraps round.
+TEST_CASE("a KTX2's levels are in the order a KTX2's are", "[assets]") {
+    const bytes_t ktx = ktx2(8, 4, 3, 1, 1, false, pattern, [](ktxTexture2*) {});
+    REQUIRE(decoded(ktx).levels.size() == 3);
+    const auto offset_at = [](std::size_t level) { return 80 + (level * 24); };
+    // Level 0 at the file's start, before the others, and level 2, the first, past level 0's end.
+    bytes_t first_first = ktx;
+    put_u64(first_first, offset_at(0), 0);
+    REQUIRE(message(first_first).contains("has level 0 out of the order"));
+    bytes_t last_last = ktx;
+    put_u64(last_last, offset_at(2), u32_of(ktx, offset_at(0)) + u32_of(ktx, offset_at(0) + 8));
+    put_u64(last_last, offset_at(2) + 8, 0);
+    REQUIRE(message(last_last).contains("out of the order"));
+    // Level 0 over level 1, a byte long, so level 1 ends past it: libktx would copy level 1 past
+    // the texels it allocated.
+    bytes_t past_last = ktx;
+    put_u64(past_last, offset_at(0), u32_of(ktx, offset_at(1)));
+    put_u64(past_last, offset_at(0) + 8, 1);
+    put_u64(past_last, offset_at(0) + 16, 1);
+    REQUIRE(message(past_last).contains("has level 1 out of the order"));
+}
+
+// The fuzz test's, which hung: libktx walks a data format descriptor's blocks by their sizes, so
+// one of no size, as the words past a block cut short read, has it loop forever; one past the rest
+// would have it read past them.
+TEST_CASE("a KTX2's data format descriptor's blocks fill it as they say", "[assets]") {
+    const bytes_t ktx = ktx2(8, 4, 3, 2, 1, true, pattern, [](ktxTexture2*) {});
+    const std::size_t dfd = u32_of(ktx, 48);
+    // Its total size, its block's size, and 4 samples, of 16 bytes each.
+    REQUIRE(u32_of(ktx, dfd) == u32_of(ktx, 52));
+    REQUIRE(ktx.at(dfd + 10) == 88);
+    for (const std::uint8_t size : std::array<std::uint8_t, 4>{ 72, 0, 90, 92 }) {
+        INFO(int{ size });
+        bytes_t block = ktx;
+        block.at(dfd + 10) = size;
+        REQUIRE(message(block).contains("data format descriptor block of the wrong size"));
+    }
+    bytes_t total = ktx;
+    put_u32(total, dfd, u32_of(ktx, dfd) + 4);
+    REQUIRE(message(total).contains("data format descriptor of the wrong size"));
+    // 2f8a4c0's review: a DFD of 13 bytes, its block's header not all there, refused before the
+    // block's size, past it, is read.
+    bytes_t short_block = ktx;
+    put_u32(short_block, dfd, 13);
+    put_u32(short_block, 52, 13);
+    REQUIRE(message(short_block).contains("data format descriptor of the wrong size"));
+}
+
+// 2f8a4c0's review: a level that's fewer bytes than its images take, its last image's end still
+// within the texels, in the next level's, isn't loaded.
+TEST_CASE("a KTX2 level has the bytes its images take", "[assets]") {
+    bytes_t ktx = ktx2(8, 4, 3, 1, 1, false, pattern, [](ktxTexture2*) {});
+    REQUIRE(decoded(ktx).levels.size() == 3);
+    // Level 1, 4 by 2 of 4 bytes, 32, said to be 28, its byte length and what it inflates to.
+    const std::size_t at = 80 + 24;
+    REQUIRE(u32_of(ktx, at + 8) == 32);
+    put_u64(ktx, at + 8, 28);
+    put_u64(ktx, at + 16, 28);
+    REQUIRE(message(ktx).contains("has level 1 of fewer bytes than its images take"));
+}
+
 TEST_CASE("a KTX2 supercompressed but by Zstd isn't loaded", "[assets]") {
     bytes_t zlib = ktx2(4, 4, 1, 1, 1, false, pattern, [](ktxTexture2*) {});
     put_u32(zlib, 44, 3);
@@ -489,4 +631,152 @@ TEST_CASE("a BMP decodes, whatever it's called, and a DDS is refused, saying so"
     const bytes_t dds{ 'D', 'D', 'S', ' ', 0, 0, 0, 0 };
     REQUIRE(message(dds).contains("DDS"));
     REQUIRE(failure(dds) == assets::failure_t::INVALID_DATA);
+    // The fuzz test's: one of no width, which stb_image decodes, isn't an image.
+    bmp[18] = 0;
+    REQUIRE(failure(bmp) == assets::failure_t::INVALID_DATA);
+    REQUIRE(message(bmp).contains("0 by 1, which has no texels"));
+}
+
+namespace {
+
+/// The count `variable` asks for, as a longer run does, or `otherwise`.
+int asked_for(const char* variable, int otherwise) {
+    // MSVC calls it unsafe, which a variable read once by a test thread isn't.
+    const char* asked = std::getenv(variable); // NOLINT(clang-diagnostic-deprecated-declarations)
+    int count = otherwise;
+    if (asked != nullptr) {
+        std::from_chars(asked, asked + std::strlen(asked), count);
+    }
+    return count;
+}
+
+/// A copy of `seed` mutated by `random`: bits flipped, bytes set, a word of 32 bits set to a size
+/// that's nearly too big or none, a stretch copied over another, or the end cut.
+bytes_t mutated(const bytes_t& seed, std::mt19937& random) {
+    bytes_t bytes = seed;
+    const auto at = [&](std::size_t size) {
+        return std::uniform_int_distribution<std::size_t>(0, size - 1)(random);
+    };
+    const int changes = std::uniform_int_distribution<int>(1, 4)(random);
+    for (int change = 0; change < changes && !bytes.empty(); ++change) {
+        switch (std::uniform_int_distribution<int>(0, 4)(random)) {
+        case 0:
+            bytes[at(bytes.size())] ^= static_cast<std::uint8_t>(1U << at(8));
+            break;
+        case 1:
+            bytes[at(bytes.size())] = static_cast<std::uint8_t>(at(256));
+            break;
+        case 2: {
+            constexpr std::array<std::uint32_t, 5> small{ 0, 1, 2, 0x7FFF, 0xFFFF };
+            constexpr std::array<std::uint32_t, 3> big{ 0x7FFFFFFF, 0x80000000, 0xFFFFFFFF };
+            const std::uint32_t value = at(2) == 0 ? small.at(at(5)) : big.at(at(3));
+            const std::size_t where = at(bytes.size());
+            for (std::size_t byte = 0; byte < 4 && where + byte < bytes.size(); ++byte) {
+                bytes[where + byte] = static_cast<std::uint8_t>(value >> (8 * byte));
+            }
+            break;
+        }
+        case 3: {
+            const std::size_t from = at(bytes.size());
+            const std::size_t to = at(bytes.size());
+            const std::size_t length = std::min(at(16) + 1, bytes.size() - std::max(from, to));
+            std::copy_n(seed.begin() + static_cast<std::ptrdiff_t>(from), length,
+                        bytes.begin() + static_cast<std::ptrdiff_t>(to));
+            break;
+        }
+        default:
+            bytes.resize(at(bytes.size()));
+            break;
+        }
+    }
+    return bytes;
+}
+
+/// That a decoded image is what it says: its sizes within the most an image can be, and each of
+/// its levels within its texels, each byte of which is read.
+void whole(const assets::image_t& image) {
+    REQUIRE(image.width >= 1);
+    REQUIRE(image.height >= 1);
+    REQUIRE(image.width <= assets::most_side);
+    REQUIRE(image.height <= assets::most_side);
+    REQUIRE(image.layers <= assets::most_layers);
+    REQUIRE(!image.levels.empty());
+    // Each image of each level, one a layer and a face or a slice.
+    for (const assets::level_t& level : image.levels) {
+        const std::uint64_t parts =
+            std::uint64_t{ std::max(image.layers, 1U) } * image.faces * level.depth;
+        REQUIRE(level.offset <= image.texels.size());
+        REQUIRE(level.size * parts <= image.texels.size() - level.offset);
+    }
+    unsigned sum = 0;
+    for (const std::uint8_t texel : image.texels.bytes()) {
+        sum += texel;
+    }
+    CHECK(sum < UINT_MAX);
+}
+
+} // namespace
+
+// Each kind of file decoded, mutated: each mutant is refused as invalid data, or decodes to an
+// image that's what it says, and nothing reads or writes past what it has, which ASan checks where
+// it runs. FBE_FUZZ_ROUNDS asks for more than the 400 a seed CI runs.
+TEST_CASE("an image's mutants are refused or decode whole", "[assets][stability]") {
+    const int rounds = asked_for("FBE_FUZZ_ROUNDS", 400);
+    bytes_t bmp(58, 0);
+    bmp[0] = 'B';
+    bmp[1] = 'M';
+    bmp[2] = 58;
+    bmp[10] = 54;
+    bmp[14] = 40;
+    bmp[18] = 1;
+    bmp[22] = 1;
+    bmp[26] = 1;
+    bmp[28] = 24;
+    bmp[34] = 4;
+    const auto basis = [](ktxTexture2* texture) {
+        ktxBasisParams params{};
+        params.structSize = sizeof(params);
+        params.uastc = KTX_TRUE;
+        params.threadCount = 1;
+        REQUIRE(ktxTexture2_CompressBasisEx(texture, &params) == KTX_SUCCESS);
+    };
+    const auto zstd = [](ktxTexture2* texture) {
+        REQUIRE(ktxTexture2_DeflateZstd(texture, 3) == KTX_SUCCESS);
+    };
+    const std::vector<std::pair<std::string_view, bytes_t>> seeds{
+        { "PNG", test::png(8, 8, 4, std::vector<std::uint8_t>(256, 77)) },
+        { "gray PNG", test::png(5, 3, 1, std::vector<std::uint8_t>(15, 30)) },
+        { "16-bit PNG", test::png16(2, 2, std::vector<std::uint16_t>(16, 0x1234)) },
+        { "JPEG", test::jpeg(16, 16, { 200, 100, 50 }) },
+        { "BMP", bmp },
+        { "KTX2", ktx2(8, 4, 3, 2, 1, true, pattern, [](ktxTexture2*) {}) },
+        { "cube KTX2", ktx2(4, 4, 1, 1, 6, false, pattern, [](ktxTexture2*) {}) },
+        { "Zstd KTX2", ktx2(8, 8, 2, 1, 1, false, pattern, zstd) },
+        { "UASTC KTX2", ktx2(8, 8, 1, 1, 1, false, pattern, basis) },
+    };
+    // Seeds that repeat, so what a run finds is found again.
+    std::mt19937 random(20261106); // NOLINT(bugprone-random-generator-seed)
+    for (const auto& [kind, seed] : seeds) {
+        CAPTURE(kind);
+        // The seed itself decodes.
+        whole(decoded(seed));
+        int refused = 0;
+        for (int round = 0; round < rounds; ++round) {
+            const bytes_t bytes = mutated(seed, random);
+            CAPTURE(round);
+            const auto transcode = static_cast<assets::transcode_t>(round % 3);
+            const assets::result_t<assets::image_t> image = assets::decode_image(
+                bytes, { .srgb = round % 2 == 0, .transcode = transcode }, "a mutant");
+            if (image) {
+                whole(*image);
+            } else {
+                REQUIRE(image.error().failure == assets::failure_t::INVALID_DATA);
+                ++refused;
+            }
+        }
+        // Not every mutant's refused, nor every one taken, or it's not the decoder that's tried.
+        CAPTURE(refused);
+        CHECK(refused > 0);
+        CHECK(refused < rounds);
+    }
 }

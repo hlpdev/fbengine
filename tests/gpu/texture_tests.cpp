@@ -46,7 +46,7 @@ std::uint64_t make(std::int32_t width, std::int32_t height, std::int32_t format,
 }
 
 /// What the textured shader's push constants are.
-struct quad_t {
+struct textured_quad_t {
     std::array<float, 4> rect;
     std::array<float, 4> uv;
     std::uint32_t texture;
@@ -55,7 +55,7 @@ struct quad_t {
 
 /// Draws `quads` over a dark grey clear into an sRGB image `size` big, the frame's own, in a pass,
 /// and reads it back.
-fbe::golden::frame_t draw(VkExtent2D size, const std::vector<quad_t>& quads) {
+fbe::golden::frame_t draw(VkExtent2D size, const std::vector<textured_quad_t>& quads) {
     constexpr VkFormat srgb = VK_FORMAT_R8G8B8A8_SRGB;
     fbe::gpu::image_t image = fbe::gpu::make_color_image(srgb, size);
     REQUIRE(image.image != VK_NULL_HANDLE);
@@ -77,16 +77,16 @@ fbe::golden::frame_t draw(VkExtent2D size, const std::vector<quad_t>& quads) {
         .name = "quads",
         .colors = { { .target = into, .clear = true, .rgba = { 0.01F, 0.01F, 0.01F, 1.0F } } },
         .record =
-            [pipeline,
-             drawn = std::make_shared<const std::vector<quad_t>>(quads)](VkCommandBuffer commands) {
+            [pipeline, drawn = std::make_shared<const std::vector<textured_quad_t>>(quads)](
+                VkCommandBuffer commands) {
                 vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
                 VkDescriptorSet set = fbe::gpu::bindless_set();
                 vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                         fbe::gpu::pipeline_layout(), 0, 1, &set, 0, nullptr);
-                for (const quad_t& quad : *drawn) {
+                for (const textured_quad_t& quad : *drawn) {
                     vkCmdPushConstants(commands, fbe::gpu::pipeline_layout(),
                                        flag<VkShaderStageFlags>(VK_SHADER_STAGE_ALL), 0,
-                                       sizeof(quad_t), &quad);
+                                       sizeof(textured_quad_t), &quad);
                     vkCmdDraw(commands, 6, 1, 0, 0);
                 }
             },
@@ -102,7 +102,7 @@ fbe::golden::frame_t draw(VkExtent2D size, const std::vector<quad_t>& quads) {
 }
 
 /// A quad of `texture` through the sampler for its own filter and wraps.
-quad_t quad_of(std::uint64_t texture, std::array<float, 4> rect, std::array<float, 4> uv) {
+textured_quad_t quad_of(std::uint64_t texture, std::array<float, 4> rect, std::array<float, 4> uv) {
     const fbe::texture::texture_t* found = fbe::texture::find(texture);
     REQUIRE(found != nullptr);
     return {
@@ -378,6 +378,44 @@ TEST_CASE("a freed texture's slot waits for the frames that could draw it", "[gp
     CHECK(fbe::texture::index_of(third) == slot);
     // The old handle stays freed, though its slot's a new texture's.
     CHECK(fbe_texture_width(first) == -1);
+    stop_gpu();
+}
+
+// An index no texture has had, past those made, samples white, as a draw with no texture does: a
+// descriptor never written is what a real device faults on, where lavapipe reads it as nothing.
+TEST_CASE("a slot no texture has had samples white", "[gpu]") {
+    start();
+    const std::uint64_t made = make(1, 1, FBE_TEXTURE_RGBA8, false);
+    const std::uint32_t past = fbe::gpu::texture_capacity() - 1;
+    REQUIRE(fbe::texture::index_of(made) < past);
+    const textured_quad_t quad{
+        .rect = { -1.0F, -1.0F, 1.0F, 1.0F },
+        .uv = { 0.0F, 0.0F, 1.0F, 1.0F },
+        .texture = past,
+        .sampler =
+            fbe::gpu::sampler_index(FBE_TEXTURE_NEAREST, FBE_TEXTURE_CLAMP, FBE_TEXTURE_CLAMP),
+    };
+    const fbe::golden::frame_t frame = draw({ .width = 4, .height = 4 }, { quad });
+    for (std::uint32_t channel = 0; channel < 4; ++channel) {
+        CHECK(at(frame, 2, 2, channel) == 255);
+    }
+    stop_gpu();
+}
+
+// Not a check, a measure: pointing every one of the set's textures at a view, as starting does,
+// shown on every run.
+TEST_CASE("pointing every texture slot at one view, timed", "[gpu]") {
+    start();
+    const std::uint64_t texture = make(1, 1, FBE_TEXTURE_RGBA8, false);
+    const fbe::texture::texture_t* found = fbe::texture::find(texture);
+    REQUIRE(found != nullptr);
+    const auto started = std::chrono::steady_clock::now();
+    fbe::gpu::write_every_texture(found->view);
+    const std::chrono::duration<double, std::milli> took =
+        std::chrono::steady_clock::now() - started;
+    WARN(fbe::gpu::texture_capacity() << " texture slots pointed at one view: " << took.count()
+                                      << " ms, on " << fbe_gpu_device_name(fbe_gpu_device()));
+    // Nothing draws before stopping frees every texture, and the next start points them at white.
     stop_gpu();
 }
 
@@ -1141,5 +1179,50 @@ TEST_CASE("a file's own format says how to keep its pixels", "[gpu]") {
     CHECK(std::string(fbe_error()).contains("compression = \"none\""));
     CHECK(fbe_texture_release(texture));
     CHECK(fbe_assets_free(load));
+    stop_gpu();
+}
+
+// What Model's reload does to what reads its textures: each material's layers and maps of one take
+// the other, a layer only of the same format and a map only what it can read, held by what reads it
+// as any it's given is; and a texture of none, or what isn't one, is refused, changing nothing.
+TEST_CASE("textures replaced in every material are held as given, and none is refused", "[gpu]") {
+    start();
+    const std::uint64_t old = make(1, 1, FBE_TEXTURE_RGBA8, false);
+    const std::uint64_t now = make(1, 1, FBE_TEXTURE_RGBA8, false);
+    const std::uint64_t numbers = make(1, 1, FBE_TEXTURE_RGBA8_LINEAR, false);
+    const std::uint64_t material = fbe_material_create();
+    REQUIRE(fbe_material_set_texture(material, 0, old));
+    REQUIRE(fbe_material_set_map(material, FBE_MAP_NORMAL, numbers, 0));
+
+    // None, or what isn't a texture, changes nothing, the empty layers included.
+    const std::uint64_t none = 0;
+    CHECK_FALSE(fbe_material_replace_textures(&none, &now, 1));
+    CHECK(std::string(fbe_error()) == "a texture replaced is one, not none");
+    CHECK(fbe_material_texture(material, 1) == 0);
+    CHECK_FALSE(fbe_material_replace_textures(&old, &none, 1));
+    CHECK_FALSE(fbe_material_replace_textures(&old, &now, -1));
+    CHECK(fbe_material_texture(material, 0) == old);
+    CHECK(fbe_material_replace_textures(nullptr, nullptr, 0));
+
+    // Replaced, what was there is let go of by the material, and what's given held.
+    CHECK(fbe_material_replace_textures(&old, &now, 1));
+    CHECK(fbe_material_texture(material, 0) == now);
+    const std::int32_t held = fbe_texture_count();
+    CHECK(fbe_texture_release(old));
+    CHECK(fbe_texture_count() == held - 1);
+    CHECK(fbe_texture_release(now));
+    CHECK(fbe_texture_format(now) == FBE_TEXTURE_RGBA8);
+
+    // A layer takes only its own format, and a map only what it can read.
+    CHECK(fbe_material_replace_textures(&now, &numbers, 1));
+    CHECK(fbe_material_texture(material, 0) == now);
+    const std::uint64_t color = make(1, 1, FBE_TEXTURE_RGBA8, false);
+    CHECK(fbe_material_replace_textures(&numbers, &color, 1));
+    CHECK(fbe_material_map(material, FBE_MAP_NORMAL) == numbers);
+
+    CHECK(fbe_material_release(material));
+    CHECK(fbe_texture_release(numbers));
+    CHECK(fbe_texture_release(color));
+    CHECK(fbe_texture_count() == 0);
     stop_gpu();
 }

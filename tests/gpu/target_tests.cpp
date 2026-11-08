@@ -285,7 +285,7 @@ TEST_CASE("a copy between textures is exact, and refuses what can't be copied", 
 }
 
 // Within one texture, a region copied onto one it overlaps copies as it was, through a transient
-// target, as Blitz's buffers' CopyRect did.
+// target.
 TEST_CASE("a region copied within a texture copies as it was, overlapping", "[gpu]") {
     start();
     const std::uint64_t texture = fbe_texture_create(8, 1, FBE_TEXTURE_R8, false);

@@ -28,7 +28,7 @@ the time a demo takes.
 | Skinned characters (E7) | Pip: walk, idle, carry, a head that turns toward you by a bone under the game's control, and a blinking eyelid by a morph target |
 | Physics (E10) | the three parts are bodies, as are crates and barrels you push out of the way; the belt's a chain of bodies; the wheel's a motor on a hinge, driven by the sluice |
 | Sound (E9, E12) | streamed wind and sea, positional gulls and creaks, the wheel by its speed, footsteps by surface, and a low-pass when you're inside |
-| UI (E11) | the title, settings (volume, fullscreen, keys rebound), the tide clock, a prompt for what you can do, pause, and the end screen |
+| UI (E11) | the title over a flight round the island; Options (master, music, ambience, and effects volumes, quality, windowed or fullscreen at the display's sizes, look sensitivity and Invert Y, and keys rebound), kept in an INI; the tide clock; a prompt for what you can do, by the keys or the pad used last; pause; and the end screen |
 | Pak and hot reload (E8) | a release runs from its pak; development reloads a texture or model as it's saved |
 | Input (E1) | keyboard and mouse or a gamepad, by actions |
 | Saves (std, E14's saves sample) | one, at the mill's door, so a player can stop |
@@ -50,8 +50,10 @@ what your hands and Pip carry, or dialogue beyond a few signs.
 - In glTF files we make: Pip and its clips, from a small script of ours in the game's `tools/`, which
   builds its mesh, skin, and keyframes and writes a .gltf, so its source is code too.
 - Sound: synthesized by a tool in the game's folder, wind and sea from filtered noise, creaks and
-  gulls from small synth patches, written as WAV, and cooked as they are. Music is left out unless
-  it's wanted.
+  gulls from small synth patches, written as WAV, and cooked as they are. Music too, decided for the
+  showcase: a calm theme for slack water, a slow pad in D dorian with a few plucked notes, and a storm's,
+  a pulsing low drone with a rubbing minor second and a drum at each bar. Each is a 16-second loop
+  that meets its start, crossfaded by the weather and tide, under the cues, and quieter inside.
 - One built-in font, as the engine's Font.BuiltIn is licensed already.
 - If that looks too plain once E6 draws, the fallback is CC0 only, each listed in a NOTICES file. That
   question is open.

@@ -16,7 +16,9 @@
 #include <SDL3/SDL.h>
 #include <string>
 #include <string_view>
+#include <texture/texture.hpp>
 
+using fbe::gpu::flag;
 using fbe::tests::require;
 using fbe::tests::set_variable;
 using fbe::tests::stop_gpu;
@@ -78,8 +80,60 @@ TEST_CASE("the GPU validates when FBE_GPU_VALIDATION is 1", "[gpu]") {
     require(fbe_gpu_start());
     if (setting != nullptr && std::string_view(setting) == "1") {
         CHECK(fbe_gpu_validating());
+        // And its synchronization, which the frame graph's barriers are checked by.
+        CHECK(fbe::gpu::validating_synchronization());
     }
     stop_gpu();
+}
+
+// Synchronization's checked, so a barrier left out is an error: two clears of one image, the second
+// with no barrier after the first.
+TEST_CASE("validation catches a barrier left out", "[gpu]") {
+    REQUIRE(fbe_window_set_headless(true));
+    require(fbe_gpu_start());
+    if (!fbe::gpu::validating_synchronization()) {
+        fbe_gpu_stop();
+        SKIP("the validation layers here don't check synchronization");
+    }
+    const std::uint64_t texture = fbe_texture_create(4, 4, FBE_TEXTURE_RGBA8, false);
+    REQUIRE(texture != 0);
+    VkImage image = fbe::texture::find(texture)->image;
+    const std::int32_t before = fbe_gpu_validation_errors();
+    const auto everything = flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+    const VkImageSubresourceRange whole{
+        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .levelCount = 1,
+        .layerCount = 1,
+    };
+    const auto moved = [&](VkImageLayout from, VkImageLayout to) {
+        return VkImageMemoryBarrier2{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .srcStageMask = everything,
+            .srcAccessMask = flag<VkAccessFlags2>(VK_ACCESS_2_MEMORY_WRITE_BIT),
+            .dstStageMask = everything,
+            .dstAccessMask = flag<VkAccessFlags2>(VK_ACCESS_2_MEMORY_READ_BIT) |
+                             flag<VkAccessFlags2>(VK_ACCESS_2_MEMORY_WRITE_BIT),
+            .oldLayout = from,
+            .newLayout = to,
+            .image = image,
+            .subresourceRange = whole,
+        };
+    };
+    require(fbe::gpu::run_now([&](VkCommandBuffer commands) {
+        const VkClearColorValue red{ .float32 = { 1.0F, 0.0F, 0.0F, 1.0F } };
+        fbe::gpu::barrier(commands, moved(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL));
+        vkCmdClearColorImage(commands, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &red, 1,
+                             &whole);
+        vkCmdClearColorImage(commands, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &red, 1,
+                             &whole);
+        fbe::gpu::barrier(commands, moved(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
+    }));
+    CHECK(fbe_gpu_validation_errors() > before);
+    fbe_texture_release(texture);
+    // Stopped as it is, as stop_gpu requires no errors.
+    fbe_gpu_stop();
 }
 
 // As the loader's filter says, where it takes it, which CI's for an administrator doesn't, and as a
@@ -354,6 +408,33 @@ TEST_CASE("a lost GPU runs nothing, says so, and starts again", "[gpu]") {
     stop_gpu();
 }
 
+// The GPU's lost as work run now is, as a read's is: the read fails saying so, nothing runs from
+// then on, and stopping and starting it makes it again.
+TEST_CASE("a GPU lost running work now says so, and starts again", "[gpu]") {
+    REQUIRE(fbe_window_set_headless(true));
+    require(fbe_gpu_start());
+    const std::uint64_t texture = fbe_texture_create(4, 4, FBE_TEXTURE_RGBA8, false);
+    REQUIRE(texture != 0);
+    std::array<std::uint8_t, 64> pixels{};
+    fbe::gpu::inject(fbe::gpu::fault_t::LOST_NOW);
+    CHECK(!fbe_texture_read(texture, 0, pixels.data(), 64));
+    CHECK(fbe_gpu_lost());
+    CHECK(std::string(fbe_error()).starts_with("the GPU was lost"));
+    const std::int64_t presented = fbe_gpu_presented();
+    fbe_frame_flip(false);
+    CHECK(fbe_gpu_presented() == presented);
+    CHECK(fbe_texture_create(4, 4, FBE_TEXTURE_RGBA8, false) == 0);
+    fbe_texture_release(texture);
+    stop_gpu();
+    CHECK(!fbe_gpu_lost());
+    require(fbe_gpu_start());
+    const std::uint64_t again = fbe_texture_create(4, 4, FBE_TEXTURE_RGBA8, false);
+    CHECK(again != 0);
+    CHECK(fbe_texture_read(again, 0, pixels.data(), 64));
+    fbe_texture_release(again);
+    stop_gpu();
+}
+
 // Every device lacks dynamic rendering, as a GPU from before Vulkan 1.3 can: the GPU doesn't start,
 // and says which lacks what, as each device does.
 TEST_CASE("a GPU that lacks what fbengine needs says what it lacks", "[gpu]") {
@@ -411,4 +492,28 @@ TEST_CASE("a lost GPU is caught on a Flip with nothing to run", "[gpu]") {
     CHECK(fbe_gpu_lost());
     CHECK(std::string(fbe_error()).starts_with("the GPU was lost"));
     stop_gpu();
+}
+
+TEST_CASE("a GPU disabled loads no Vulkan and starts for nothing, until it's enabled again",
+          "[gpu]") {
+    REQUIRE(fbe_window_set_headless(true));
+    REQUIRE(!fbe_gpu_started());
+    REQUIRE(fbe_gpu_set_disabled(true));
+    CHECK(fbe_gpu_disabled());
+    CHECK_FALSE(fbe_gpu_start());
+    CHECK(std::string_view(fbe_error()) == "the GPU is disabled");
+    CHECK(fbe_texture_create(4, 4, FBE_TEXTURE_RGBA8, false) == 0);
+    CHECK(std::string_view(fbe_error()) == "the GPU is disabled");
+    CHECK(fbe_gpu_device_count() == -1);
+    CHECK_FALSE(fbe_gpu_started());
+    // Enabled again, it starts, and then it can't be disabled until it's stopped.
+    REQUIRE(fbe_gpu_set_disabled(false));
+    require(fbe_gpu_start());
+    CHECK_FALSE(fbe_gpu_set_disabled(true));
+    CHECK(std::string_view(fbe_error()).contains("stop it before disabling it"));
+    CHECK_FALSE(fbe_gpu_disabled());
+    fbe_gpu_stop();
+    CHECK(fbe_gpu_set_disabled(true));
+    CHECK_FALSE(fbe_gpu_start());
+    CHECK(fbe_gpu_set_disabled(false));
 }

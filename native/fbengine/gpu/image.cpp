@@ -154,7 +154,8 @@ bool run_now(const std::function<void(VkCommandBuffer)>& record) {
         .commandBufferInfoCount = 1,
         .pCommandBufferInfos = &submitted,
     };
-    VkResult result = gpu->queue_submit(gpu->queue, 1, &submit, done);
+    VkResult result = faulted(fault_t::LOST_NOW) ? VK_ERROR_DEVICE_LOST
+                                                 : gpu->queue_submit(gpu->queue, 1, &submit, done);
     if (result == VK_SUCCESS) {
         result = vkWaitForFences(gpu->device, 1, &done, VK_TRUE, UINT64_MAX);
     }
