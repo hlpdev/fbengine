@@ -328,8 +328,8 @@ std::optional<std::vector<std::uint32_t>> words_of(const std::uint8_t* bytes, st
         return std::nullopt;
     }
     // Once a code: words a shader has already were valid when it was made.
-    const bool kept = std::ranges::any_of(all().codes, [&words](const kept_code_t& code) {
-        return !code.free && code.words == words;
+    const bool kept = std::ranges::any_of(all().codes, [&words](const kept_code_t& other) {
+        return !other.free && other.words == words;
     });
     if (!kept && validates() && !valid(words)) {
         return std::nullopt;
