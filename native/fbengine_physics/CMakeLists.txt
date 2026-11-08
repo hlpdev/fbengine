@@ -83,6 +83,10 @@ if(MINGW)
                  "${fbengine_jolt_patched}/Jolt/Core/Mutex.h" COPYONLY)
   target_include_directories(Jolt BEFORE PUBLIC "$<BUILD_INTERFACE:${fbengine_jolt_patched}>")
   target_sources(Jolt PRIVATE "${PROJECT_SOURCE_DIR}/cmake/jolt/mutex_mingw.cpp")
+  # It includes Jolt.h itself, so it's read by clang-tidy as it's built, without GCC's
+  # precompiled header of Jolt's.
+  set_source_files_properties("${PROJECT_SOURCE_DIR}/cmake/jolt/mutex_mingw.cpp" TARGET_DIRECTORY Jolt
+                              PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 endif()
 
 file(GLOB fbengine_physics_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*/*.cpp")
