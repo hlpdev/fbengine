@@ -88,6 +88,10 @@ jobs:
       - name: Publish
         env:
           INDEX: ${{ needs.version.outputs.index }}
+          # A package's first version can't come by trusted publishing, which the registry takes only
+          # for a package that exists: that one comes by a token scoped to these packages, set for
+          # the day of the first release and removed after. Unset, trusted publishing alone is used.
+          FB_REGISTRY_TOKEN: ${{ secrets.FB_REGISTRY_TOKEN }}
         run: |
           for archive in native-*.tar; do tar -xf "$archive"; done
           # Every package with a DLL has it for every target.
