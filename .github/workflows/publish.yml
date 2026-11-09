@@ -94,11 +94,15 @@ jobs:
           FB_REGISTRY_TOKEN: ${{ secrets.FB_REGISTRY_TOKEN }}
         run: |
           for archive in native-*.tar; do tar -xf "$archive"; done
-          # Every package with a DLL has it for every target.
+          # Every package with a DLL has it for every target. native/common is no package's.
           for native in native/*/; do
             package="$(basename "$native")"
+            [ -d "packages/$package" ] || continue
             for target in windows-x64 linux-x64 linux-arm64 macos-arm64 macos-x64; do
-              test -d "packages/$package/native/$target"
+              if [ ! -d "packages/$package/native/$target" ]; then
+                echo "::error::$package has no DLLs for $target"
+                exit 1
+              fi
             done
           done
           # In the order they depend on each other, as the registry refuses a dependency it hasn't
