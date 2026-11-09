@@ -109,9 +109,30 @@ jobs:
           # got: fbengine; then what needs only it; then fbengine_video, which needs fbengine_audio
           # too. A package's first version is published from the user's `fb login`, as trusted
           # publishing only publishes packages already on the registry that trust this workflow.
+          # A version the index has already is passed over, so a run that stopped part way can go
+          # on; after each one, the next waits until the index shows it, as the registry checks a
+          # dependency against the index, which takes a moment to show a new version.
+          case "$INDEX" in
+            futureblitz) url=https://index.futureblitz.dev/ ;;
+            *) url="$INDEX" ;;
+          esac
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' packages/fbengine/project.toml)"
+          indexed() {
+            curl -fsS -H "Cache-Control: no-cache" "$url$1" 2>/dev/null |
+              grep -qF "\"version\":\"$version\""
+          }
           for package in fbengine fbengine_audio fbengine_physics fbengine_ui fbengine_tools \
                          fbengine_video; do
+            if indexed "$package"; then
+              echo "$package $version is published already"
+              continue
+            fi
             fb publish "packages/$package" --registry "$INDEX"
+            for _ in $(seq 60); do indexed "$package" && break; sleep 5; done
+            if ! indexed "$package"; then
+              echo "::error::The index doesn't show $package $version five minutes after it was published"
+              exit 1
+            fi
           done
 
   # The editor, built for each target as a release's programs are, with the DLLs it loads beside it
