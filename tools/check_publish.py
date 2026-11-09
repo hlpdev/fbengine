@@ -22,7 +22,10 @@ import tomllib
 def order(root):
     """The packages publish.yml publishes, in its order."""
     workflow = (root / ".github" / "workflows" / "publish.yml").read_text(encoding="utf-8")
-    found = re.search(r"for package in ((?:[\w ]|\\\n)+); do\s*\n\s*fb publish \"packages/\$package\"", workflow)
+    # The loop's other lines, as one passing over what's published already, may come before it.
+    found = re.search(
+        r"for package in ((?:[\w ]|\\\n)+); do\n(?:(?!\s*done\b).*\n)*?\s*fb publish \"packages/\$package\"",
+        workflow)
     if found is None:
         raise SystemExit("publish.yml has no `for package in ...; do fb publish \"packages/$package\"` loop")
     return found.group(1).replace("\\\n", " ").split()
