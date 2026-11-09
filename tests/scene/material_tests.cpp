@@ -202,7 +202,9 @@ std::vector<std::uint8_t> cooked(std::string_view version, const std::vector<std
     bytes.insert(bytes.end(), stamp.begin(), stamp.end());
     const std::size_t at = bytes.size();
     bytes.resize(at + (words.size() * sizeof(std::uint32_t)));
-    std::memcpy(bytes.data() + at, words.data(), words.size() * sizeof(std::uint32_t));
+    if (!words.empty()) {
+        std::memcpy(bytes.data() + at, words.data(), words.size() * sizeof(std::uint32_t));
+    }
     return bytes;
 }
 
@@ -315,19 +317,71 @@ TEST_CASE("a shader binds only what the scene's pipelines have") {
         words.insert(words.end(), { (4U << 16U) | 71U, 9, kind, value });
         return cooked(fbe_version(), words);
     };
-    const std::vector<std::uint8_t> good = decorated(33, 1);
+    // The bindless set's bindings, as gpu/vulkan.hpp has them: its samplers, 0, its multisampled
+    // images, 1, and its textures, 2.
+    const std::vector<std::uint8_t> good = decorated(33, 2);
     const std::uint64_t made = shader_of(good);
     CHECK(made != 0);
     fbe_shader_release(made);
     CHECK(fbe_shader_check(good.data(), static_cast<std::int64_t>(good.size())));
     CHECK(shader_of(decorated(33, 0)) != 0);
     CHECK(shader_of(decorated(34, 0)) != 0);
-    // A global's, as Slang gives one, a texture's, and a set of its own.
-    CHECK(shader_of(decorated(33, 2)) == 0);
+    // At 1, an array of 2D multisampled images of floats, to be sampled, as the set's is, and
+    // nothing else there.
+    struct image_t {
+        std::uint32_t multisampled = 1;
+        /// 1 to be sampled, 2 a storage image.
+        std::uint32_t sampled = 1;
+        /// What it's of: the float, 20, or the int, 25.
+        std::uint32_t of = 20;
+        bool sized = true;
+        /// How many of its 9 words there are, as the last instruction.
+        std::size_t there = 9;
+    };
+    const auto at_samples = [](const image_t& image) {
+        std::vector<std::uint32_t> words = good_spirv();
+        // A float, an int, and 64 of it.
+        words.insert(words.end(), { (3U << 16U) | 22U, 20, 32 });
+        words.insert(words.end(), { (4U << 16U) | 21U, 25, 32, 0 });
+        words.insert(words.end(), { (4U << 16U) | 43U, 25, 26, 64 });
+        if (image.sized) {
+            words.insert(words.end(), { (4U << 16U) | 28U, 22, 21, 26 });
+        } else {
+            words.insert(words.end(), { (3U << 16U) | 29U, 22, 21 });
+        }
+        // A pointer to them, a variable of it, at binding 1, and the images last.
+        words.insert(words.end(), { (4U << 16U) | 32U, 23, 0, 22 });
+        words.insert(words.end(), { (4U << 16U) | 59U, 23, 24, 0 });
+        words.insert(words.end(), { (4U << 16U) | 71U, 24, 33, 1 });
+        std::vector<std::uint32_t> type{ (9U << 16U) | 25U, 21, image.of, 1, 0, 0 };
+        type.insert(type.end(), { image.multisampled, image.sampled, 0 });
+        words.insert(words.end(), type.begin(),
+                     type.begin() + static_cast<std::ptrdiff_t>(image.there));
+        return cooked(fbe_version(), words);
+    };
+    const std::uint64_t samples = shader_of(at_samples({}));
+    CHECK(samples != 0);
+    fbe_shader_release(samples);
+    const std::uint64_t unsized = shader_of(at_samples({ .sized = false }));
+    CHECK(unsized != 0);
+    fbe_shader_release(unsized);
+    CHECK(shader_of(at_samples({ .multisampled = 0 })) == 0);
     CHECK(error_says("don't bind"));
+    // The review's: a storage image, one of ints, and one whose last words aren't there, as far
+    // as what it's checked by is there.
+    CHECK(shader_of(at_samples({ .sampled = 2 })) == 0);
+    CHECK(error_says("don't bind"));
+    CHECK(shader_of(at_samples({ .of = 25 })) == 0);
+    CHECK(error_says("don't bind"));
+    CHECK(shader_of(at_samples({ .there = 8 })) == 0);
+    CHECK(error_says("don't bind"));
+    CHECK(shader_of(decorated(33, 1)) == 0);
+    // A global's, as Slang gives one, past the set's, a texture's, and a set of its own.
     CHECK(shader_of(decorated(33, 3)) == 0);
+    CHECK(error_says("don't bind"));
+    CHECK(shader_of(decorated(33, 4)) == 0);
     CHECK(shader_of(decorated(34, 1)) == 0);
-    const std::vector<std::uint8_t> bad = decorated(33, 2);
+    const std::vector<std::uint8_t> bad = decorated(33, 3);
     CHECK_FALSE(fbe_shader_check(bad.data(), static_cast<std::int64_t>(bad.size())));
     CHECK(error_says("don't bind"));
     // A check keeps nothing, and refuses what creating it does.

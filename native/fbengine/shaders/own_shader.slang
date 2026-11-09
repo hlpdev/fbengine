@@ -17,6 +17,17 @@
 // Instances is culled by where each of its instances is, moved in its own space before its matrix,
 // so the same.
 //
+// For normals of its own, it says `#define FBE_BENDS_NORMALS` first and writes
+//
+//     float3 bend(Surface surface)
+//
+// which gives a PBR material's normal, -1 to 1 and +Z out, in tangent space as a normal map holds
+// it, in place of its map's: through the tangents a map would go by, or those its first UVs make if
+// it has none, and its normal scale. What it's given has the surface's own normal, facing the
+// camera on a two-sided material's back as `shade`'s does, and no color.
+// The lights, the environment, and `surface.color` take what it gives; `surface.normal` in `shade`
+// is the surface's own, and the shadow and the prepass's normals are too.
+//
 // Whatever `shade` returns goes on as the scene's own color does: its alpha to the material's cutoff,
 // then fog and blend. Colors are in linear light, whatever the material's shading and whichever way
 // its camera draws: one in stored values stores what they encode to. A material's blend
@@ -67,6 +78,21 @@ struct Surface
         return sampleTextureBiased(layer.texture, layer.sampler, uv, push.camera.lodBias);
     }
 
+    // Where it is in the world.
+    float3 world()
+    {
+        const float4 rows[3] = push.camera.worldRows;
+        return float3(dot(rows[0].xyz, place) + rows[0].w, dot(rows[1].xyz, place) + rows[1].w,
+                      dot(rows[2].xyz, place) + rows[2].w);
+    }
+
+    // Its normal, in the world.
+    float3 worldNormal()
+    {
+        const float4 rows[3] = push.camera.worldRows;
+        return float3(dot(rows[0].xyz, normal), dot(rows[1].xyz, normal), dot(rows[2].xyz, normal));
+    }
+
     // The light that reaches here on a normal, per pixel and in linear light, whatever the material's
     // shading.
     float3 light(float3 toward, float shininess)
@@ -82,6 +108,10 @@ struct MovingVertex
     float2 uv1;
     float4 color;
     uint material;
+    // Where its instance is in its Instances' space, its matrix's translation, so each can move as
+    // its own, as grass in the wind; the world's place for an Instances at the world's origin, and 0
+    // for what isn't an instance.
+    float3 place;
 
     // A parameter Material.SetParameter set, the last for an index past them.
     float4 parameter(uint index)

@@ -11,7 +11,7 @@ Import std.os
 // The DLL is the package's own build: its version is project.toml's, which is fbengine's.
 @Test
 Function TheDllIsThePackagesVersion()
-    Expect(Physics.Version() == "0.1.1")
+    Expect(Physics.Version() == "1.0.0-rc.2")
 End Function
 
 // The threads Jolt's pool has, which C counts, are those std counts.
@@ -181,7 +181,7 @@ Function TheCApiRefusesWhatItDoesntTake()
         ok = fbe_physics_set_gravity(world, AddressOf(nan))
     End Unsafe
     Expect(!ok)
-    Expect(Error() == "gravity is a finite vector")
+    Expect(Error() == "gravity is at most 1e6 each way, not (0, nan, 0)")
 
     Expect(fbe_physics_free(world))
     Expect(!fbe_physics_free(world))

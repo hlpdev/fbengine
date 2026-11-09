@@ -1,6 +1,6 @@
 // The screen: the target each frame's drawn into, its size its own or the window's, multisampled
-// if asked, with depth; kept across Flip, as Blitz's windowed buffer was; and the part of the
-// window Flip shows it in, stretched, fitted, or by whole pixels.
+// if asked, with depth; kept across Flip, so what's drawn stays until it's drawn over; and the part
+// of the window Flip shows it in, stretched, fitted, or by whole pixels.
 
 #include "core/engine.hpp"
 #include "fbengine.h"

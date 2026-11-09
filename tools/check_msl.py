@@ -146,6 +146,8 @@ def main():
     build = pathlib.Path(sys.argv[1])
     # A game's shader too, whose draws read through the same addresses.
     shaders = sorted((build / "native").rglob("*.spv")) + sorted((build / "tests").rglob("game_shader.spv"))
+    # And a game's full-screen pass, whose passFragment reads through its own address.
+    shaders += sorted((build / "tests").rglob("game_pass.spv"))
     for shader in shaders:
         listed = subprocess.run([tool, str(shader), "--reflect"], capture_output=True, text=True, check=True)
         entries = re.findall(r'"name" : "(\w+)",\s*"mode" : "(\w+)"', listed.stdout)

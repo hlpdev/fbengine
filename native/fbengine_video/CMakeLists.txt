@@ -80,5 +80,5 @@ file(GLOB fbengine_video_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/
 fbengine_add_native(fbengine_video_native fbengine_video fbe_ ${fbengine_video_sources})
 target_include_directories(fbengine_video_native PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(fbengine_video_native PRIVATE FBE_VIDEO_BUILDING
-                           FBE_VERSION="${PROJECT_VERSION}")
+                           FBE_VERSION="${FBENGINE_VERSION}")
 target_link_libraries(fbengine_video_native PRIVATE pl_mpeg Threads::Threads)

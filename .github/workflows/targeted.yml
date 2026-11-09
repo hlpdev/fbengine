@@ -204,3 +204,19 @@ jobs:
           if [ "$RUNNER_OS" = Linux ]; then tar -xf native-${{ matrix.target }}.tar; fi
           DYLD_FALLBACK_LIBRARY_PATH="${VULKAN_LIBRARIES:-}" ctest --test-dir build --output-on-failure \
             --no-tests=error -R "$TESTS"
+
+      # A golden image's failure and its difference, to look at.
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: golden-failures-${{ matrix.target }}
+          path: build/golden-failures
+          if-no-files-found: ignore
+      # The examples' --frames output, each test's own folder under build/example-frames, as Slack
+      # Water's frames test writes its stills, to look at where a check of what's drawn failed.
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: example-frames-${{ matrix.target }}
+          path: build/example-frames
+          if-no-files-found: ignore

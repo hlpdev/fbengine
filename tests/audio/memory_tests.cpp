@@ -2,55 +2,22 @@
 // over and over, as a game's retries would, add nothing.
 
 #include "fbengine_audio.h"
+#include "stability.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
-#include <fstream>
-#include <iterator>
+#include <filesystem>
 #include <string>
 #include <vector>
 
-#ifdef _WIN32
-// psapi.h needs windows.h's types first.
-// clang-format off
-#include <windows.h>
-#include <psapi.h>
-// clang-format on
-#elifdef __APPLE__
-#include <malloc/malloc.h>
-#else
-#include <unistd.h>
-#endif
+using fbe::tests::malloc_bytes;
+using fbe::tests::sanitized;
 
 namespace {
 
 /// The bytes of the test data file `name`, or none.
 std::vector<std::uint8_t> read(const std::string& name) {
-    std::ifstream file(std::string(FBE_AUDIO_TEST_DATA) + "/" + name, std::ios::binary);
-    return { std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>() };
-}
-
-/// What the process has allocated: its committed memory on Windows, its malloc zones' bytes in use
-/// on macOS, and its virtual size on Linux, where a large malloc maps its own. Each counts a block
-/// that's allocated and never touched.
-std::uint64_t allocated() {
-#ifdef _WIN32
-    PROCESS_MEMORY_COUNTERS_EX counters{};
-    counters.cb = sizeof(counters);
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): psapi's way to the _EX fields.
-    GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters),
-                         sizeof(counters));
-    return counters.PrivateUsage;
-#elifdef __APPLE__
-    malloc_statistics_t statistics{};
-    malloc_zone_statistics(nullptr, &statistics);
-    return statistics.size_in_use;
-#else
-    std::ifstream statm("/proc/self/statm");
-    std::uint64_t pages = 0;
-    statm >> pages;
-    return pages * static_cast<std::uint64_t>(sysconf(_SC_PAGESIZE));
-#endif
+    return fbe::tests::read(std::filesystem::path(FBE_AUDIO_TEST_DATA) / name);
 }
 
 } // namespace
@@ -66,10 +33,12 @@ TEST_CASE("ACorruptOggsFailedLoadsLeakNothing") {
         CHECK(fbe_sound_stream(bytes.data(), size) == 0);
     };
     fail();
-    const std::uint64_t before = allocated();
+    const std::uint64_t before = malloc_bytes();
     for (int i = 0; i < 20; ++i) {
         fail();
     }
     // The 40 calls leaked 1.25 GB before.
-    CHECK(allocated() < before + (std::uint64_t{ 64 } << 20U));
+    if (!sanitized) {
+        CHECK(malloc_bytes() < before + (std::uint64_t{ 64 } << 20U));
+    }
 }

@@ -169,7 +169,8 @@ Function Proved() Throws GraphicsError
 
     // A point light 4 in front of its middle, per vertex: every corner's sqrt(18) from it, so range 2
     // falls 2 / sqrt(18) and faces 4 / sqrt(18), 4 / 9 of 255 all over; per pixel its middle'd be
-    // half. Within range, it doesn't fall: 4 / sqrt(18) of 255.
+    // half. Within range it's past 1, as DirectX 7's was, which only the sum's clamp keeps to white:
+    // 10 / sqrt(18) by 4 / sqrt(18) is 2.2.
     Local lamp = Light()
     lamp.SetPosition(Vec3(0, 0, -1))
     lamp.SetRange(2)
@@ -179,7 +180,7 @@ Function Proved() Throws GraphicsError
     Check("per vertex, range over distance, its middle", gouraud[16, 16], Gray(113))
     Check("and its corner", gouraud[1, 1], Gray(113))
     lamp.SetRange(10)
-    Check("within its range", Drawn(camera, shaded)[16, 16], Gray(240))
+    Check("within its range", Drawn(camera, shaded)[16, 16], Gray(255))
     lamp.Free()
 
     // The ambient light, 0.214 in linear light being half of what's stored.
@@ -187,17 +188,17 @@ Function Proved() Throws GraphicsError
     Check("the ambient light", Drawn(camera, shaded)[16, 16], Gray(128))
     world.SetAmbientLight(Color(0, 0, 0))
 
-    // Eight lights at most: each adds 0.01 in linear light, 0.09985 stored, by 4 / sqrt(18); 8 of
-    // them come to 192, where nine would 216.
+    // Eight lights at most: each adds 0.1 in linear light, 0.34919 stored, by range 1 over sqrt(18)
+    // and 4 / sqrt(18), 2 / 9; 8 of them come to 158, under white, where nine would 178.
     Local lights: Light[] = []
     For i = 1 To 9
         Local each = Light()
         each.SetPosition(Vec3(0, 0, -1))
-        each.SetRange(100)
-        each.SetColor(Color(0.01, 0.01, 0.01))
+        each.SetRange(1)
+        each.SetColor(Color(0.1, 0.1, 0.1))
         lights.Add(each)
     End For
-    Check("nine lights, eight lighting", Drawn(camera, shaded)[16, 16], Gray(192))
+    Check("nine lights, eight lighting", Drawn(camera, shaded)[16, 16], Gray(158))
     For each In lights
         each.Free()
     End For

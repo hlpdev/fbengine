@@ -1,0 +1,177 @@
+// The shapes built in code, by their numbers: each face facing out, as far as it says across, and
+// its UVs in meters.
+
+Import std.core
+Import std.math
+Import std.test
+Import fbengine
+Import slack_water.ground
+Import slack_water.landmarks
+Import slack_water.map
+Import slack_water.shapes
+
+// Whether each of `geometry`'s triangles faces away from its middle, by the order of its corners.
+Function FacesOut(geometry: Geometry, middle: Vec3): Bool
+    Local positions = geometry.Positions()
+    Local indices = geometry.Indices()
+    For at = 0 Until indices.Count / 3
+        Local a = positions[indices[at * 3]]
+        Local b = positions[indices[at * 3 + 1]]
+        Local c = positions[indices[at * 3 + 2]]
+        Local turning = Cross(b - a, c - a)
+        Local center = (a + b + c) * (1.0 / 3.0) - middle
+        // One at the axis has no area, and no way it faces.
+        If Dot(turning, turning) < 0.000001 Then Continue
+        If Dot(turning, center) <= 0.0 Then Return False
+    End For
+    Return True
+End Function
+
+@Test
+Function ABeveledBoxIsItsSizeWithItsEdgesAndCornersCut()
+    Local box = Beveled(Vec3(2.0, 1.0, 0.5), 0.1)
+    Defer box.Free()
+    Local bounds = box.Bounds()
+    Expect(bounds.Min == Vec3(-2.0, -1.0, -0.5), "{bounds.Min}")
+    Expect(bounds.Max == Vec3(2.0, 1.0, 0.5), "{bounds.Max}")
+    // Six faces of two triangles, twelve edges of two, and eight corners of one.
+    Expect(box.Surface(0).TriangleCount() == 6 * 2 + 12 * 2 + 8, "{box.Surface(0).TriangleCount()}")
+    Expect(FacesOut(box, Vec3(0.0, 0.0, 0.0)))
+    // No corner of it is the box's corner: each is cut.
+    For point In box.Positions()
+        Expect(Abs(point.x) < 2.0 || Abs(point.y) < 1.0 || Abs(point.z) < 0.5)
+        Local onAll = Abs(point.x) > 1.95 && Abs(point.y) > 0.95 && Abs(point.z) > 0.45
+        Expect(!onAll, "{point}")
+    End For
+End Function
+
+@Test
+Function WhatsTurnedIsItsOutlineAllAround()
+    Local barrel = Turned([Vec2(0.0, 0.0), Vec2(0.3, 0.0), Vec2(0.4, 0.5), Vec2(0.3, 1.0),
+                           Vec2(0.0, 1.0)], 12)
+    Defer barrel.Free()
+    Local bounds = barrel.Bounds()
+    Expect(Abs(bounds.Max.x - 0.4) < 0.001 && Abs(bounds.Min.z + 0.4) < 0.02,
+           "{bounds.Min} {bounds.Max}")
+    Expect(bounds.Min.y == 0.0 && bounds.Max.y == 1.0)
+    Expect(FacesOut(barrel, Vec3(0.0, 0.5, 0.0)))
+End Function
+
+@Test
+Function AGableIsATriangleOnItsBottom()
+    Local gable = Gable(5.0, 2.6, 0.3)
+    Defer gable.Free()
+    Local bounds = gable.Bounds()
+    Expect(Abs(bounds.Min.y) < 0.001 && Abs(bounds.Max.y - 2.6) < 0.001,
+           "{bounds.Min} {bounds.Max}")
+    Expect(bounds.Max.z == 5.0 && bounds.Max.x == 0.3)
+    Expect(FacesOut(gable, Vec3(0.0, 2.6 / 3.0, 0.0)))
+End Function
+
+@Test
+Function WhatsStackedByTheMillIsSolid()
+    // The millstone and the bench. The barrels and crates between the wheel and the door are bodies,
+    // which you knock over, not walls.
+    For place In [Vec2(MAIN_X - 5.4, -2.6), Vec2(MAIN_X - 1.5, -4.25)]
+        Expect(Blocked(place.x, place.y), "{place}")
+    End For
+    For place In [Vec2(MAIN_X + 7.0, 4.0), Vec2(MAIN_X + 8.6, 4.3)]
+        Expect(!Blocked(place.x, place.y), "{place}")
+    End For
+    // And not past them.
+    Expect(!Blocked(MAIN_X + 9.6, 4.5))
+    Expect(!Blocked(MAIN_X - 4.4, -2.6))
+    Expect(!Blocked(MAIN_X - 1.5, -3.4))
+End Function
+
+@Test
+Function ARockIsLumpyAboutItsRadiusAndFacesOut()
+    Local rock = Lumpy(0.5, 7)
+    Defer rock.Free()
+    Expect(FacesOut(rock, Vec3(0.0, 0.0, 0.0)))
+    Local nearest = 1000.0
+    Local furthest = 0.0
+    For point In rock.Positions()
+        Local away = Sqrt(Dot(point, point))
+        nearest = Min(nearest, away)
+        furthest = Max(furthest, away)
+    End For
+    Expect(nearest >= 0.5 * 0.78 - 0.001 && furthest <= 0.5 * 1.22 + 0.001)
+    // Lumpy, not round, and another seed another rock.
+    Expect(furthest - nearest > 0.1)
+    Local other = Lumpy(0.5, 8)
+    Defer other.Free()
+    Expect(other.Positions()[20] != rock.Positions()[20])
+End Function
+
+@Test
+Function ARingTurnedHasNoCapsAcrossIt()
+    Local coil = Turned([Vec2(0.12, 0.0), Vec2(0.32, 0.0), Vec2(0.34, 0.06), Vec2(0.32, 0.12),
+                         Vec2(0.12, 0.12), Vec2(0.1, 0.06), Vec2(0.12, 0.0)], 14)
+    Defer coil.Free()
+    For point In coil.Positions()
+        Expect(point.x * point.x + point.z * point.z > 0.0081, "{point}")
+    End For
+    // Round its seam, where its outline closes, it's as smooth as anywhere: its first ring's normals are
+    // its last's.
+    Local vertices = coil.Surface(0).Vertices()
+    Local row = 15
+    Local last = vertices.Count - row
+    For step = 0 Until row
+        Local first = vertices[step].Normal
+        Local closing = vertices[last + step].Normal
+        Expect(Dot(first, closing) > 0.999, "{first} {closing}")
+    End For
+    // And what's left open has no lid.
+    Local bowl = Turned([Vec2(0.0, 0.0), Vec2(0.5, 0.1), Vec2(0.8, 0.5)], 12, False)
+    Defer bowl.Free()
+    For point In bowl.Positions()
+        Expect(point.y < 0.2 || point.x * point.x + point.z * point.z > 0.01, "{point}")
+    End For
+End Function
+
+@Test
+Function TheBoatsHullIsOpenAtItsTop()
+    Local hull = BoatHull()
+    Defer hull.Free()
+    For point In hull.Positions()
+        Expect(!(point.x * point.x + point.z * point.z < 0.01 && point.y > 0.4), "{point}")
+    End For
+    Local bounds = hull.Bounds()
+    Expect(Abs(bounds.Max.y - 0.5) < 0.001 && bounds.Max.z > 1.8 && bounds.Max.x > 0.55)
+End Function
+
+@Test
+Function GatheredPiecesKeepTheirNormalsAcrossTheirFaces()
+    Local material = Material(Color(1.0, 1.0, 1.0))
+    Local gathered = Gathered()
+    gathered.PutAt(material, Lumpy(0.5, 3), Vec3(1.0, 2.0, 3.0), Quat.FromEuler(0.3, 0.7, 0.1),
+                   Vec3(1.2, 0.7, 1.0))
+    Local rock = gathered.Of(material)
+    Expect(rock != Null)
+    If rock == Null Then Return
+    Local surface = rock.Surface(0)
+    Local vertices = surface.Vertices()
+    Local indices = surface.Triangles()
+    For at = 0 Until indices.Count / 3
+        Local a = vertices[indices[at * 3]]
+        Local b = vertices[indices[at * 3 + 1]]
+        Local c = vertices[indices[at * 3 + 2]]
+        For edge In [b.Position - a.Position, c.Position - a.Position]
+            Local across = Normalize(edge)
+            Expect(Abs(Dot(a.Normal, across)) < 0.001, "{a.Normal} {across}")
+        End For
+    End For
+End Function
+
+@Test
+Function ALogsUndersideIsOnItsGroundAtItsEnds()
+    Local log = Log()
+    Defer log.Free()
+    // Its ends, underneath, on y 0, a little either way.
+    For point In log.Positions()
+        If Abs(Abs(point.x) - 0.95) < 0.06 Then Expect(point.y > -0.02, "{point}")
+    End For
+    Local bounds = log.Bounds()
+    Expect(Abs(bounds.Max.x - 1.0) < 0.001 && bounds.Min.y > -0.06)
+End Function

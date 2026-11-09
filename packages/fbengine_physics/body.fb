@@ -21,8 +21,10 @@ Public Enum Motion
 End Enum
 
 /// A Shape at a place in a PhysicsWorld, which the world's steps move as its Motion says. Its
-/// position is its shape's origin's, in the world's space, in std.math's axes and meters, and its
-/// velocities are meters, and radians, a second. A body that's rested a while sleeps, costing
+/// position is its shape's origin's, in the world's space, in std.math's axes and meters, at most
+/// 1e9 from 0, and its velocities are meters, and radians, a second; they, forces, torques, and
+/// impulses are at most 1e12 each way, as is what they add up to change its velocities by in a
+/// second, and a call past them panics. A body that's rested a while sleeps, costing
 /// nothing, until something touches it, or a call that moves it wakes it. It's in one of its
 /// world's 32 layers, 0 at first, which say what it collides with. A sensor is a body that collides
 /// with nothing, but notices what comes into it and leaves it, as a trigger does. Free, or freeing
@@ -308,6 +310,12 @@ Public Final Class Body
     /// Where the body is: its shape's origin, in the world.
     @MainThread Public Method Position(): Vec3 => GetVec3(Live("Body.Position"), fbe_body_position)
 
+    /// Where its center of mass is, in the world: its Position for a shape centered on its origin,
+    /// and elsewhere for one that isn't, as a compound's part off its origin is. What it turns about,
+    /// and what a point on it moves by, with its Velocity and AngularVelocity.
+    @MainThread Public Method CenterOfMass(): Vec3 =>
+        GetVec3(Live("Body.CenterOfMass"), fbe_body_center_of_mass)
+
     /// Puts the body at `position` at once, waking it, as a teleport does: it doesn't pass
     /// through what's between. A kinematic body moved by its velocity pushes what it meets.
     @MainThread Public Method SetPosition(position: Vec3)
@@ -407,7 +415,7 @@ Public Final Class Body
     /// water's, unless SetMass has set it; 0 for a static body, or a mesh.
     @MainThread Public Method Mass(): Float => fbe_body_mass(Live("Body.Mass"))
 
-    /// Sets the body's mass, in kilograms, more than 0, which how hard it is to turn follows; a
+    /// Sets the body's mass, in kilograms, 1e-6 or more, which how hard it is to turn follows; a
     /// static body or a mesh has none to set.
     @MainThread Public Method SetMass(kilograms: Float)
         If !fbe_body_set_mass(Live("Body.SetMass"), kilograms) Then Panic("Body.SetMass: {LastError()}")

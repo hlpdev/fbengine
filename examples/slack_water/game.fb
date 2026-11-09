@@ -21,6 +21,17 @@ Const REACH: Float = 3.5
 // second, at full speed.
 Const LOOK_SPEED: Float = 0.003
 Const WHEEL_TURNS: Float = 1.2
+// How far the walk's bob takes your eyes down, at each step, and how fast it comes and goes as you
+// start and stop.
+Public Const BOB_HEIGHT: Float = 0.035
+Const BOB_EASE: Float = 6.0
+// How long Use's held to open the sluice.
+Public Const HOLD_SECONDS: Float = 1.0
+
+/// The bob's `from` eased toward `to` over `seconds`, alike however the seconds are cut.
+Public Function Eased(from: Float, to: Float, seconds: Float): Float
+    Return from + (to - from) * (1.0 - Exp(-BOB_EASE * seconds))
+End Function
 
 /// The game: its flow, its island, you, and Pip.
 Public Final Class Game
@@ -37,17 +48,27 @@ Public Final Class Game
     Field pipClip: Int = -1
     Field wheelTurn: Float = 0.0
     Field blinking: Float = 0.0
+    // The walk's bob: whether it's on, how far into a step you are, counted as the footsteps are,
+    // and how much of it there is, from 0, standing, to 1, walking.
+    Field bobs: Bool = True
+    Field strode: Float = 0.0
+    Field bobbing: Float = 0.0
+    // Whether the sluice opens by a hold of Use, and how long it's been held since it was pressed.
+    Field holdToOpen: Bool = True
+    Field pressing: Bool = False
+    Field opening: Float = 0.0
     // Which parts it's said lie here, by their numbers.
     Field told: Bool[]
 
-    /// A game from its first moment, inside the mill, saying what happens through `say`.
+    /// A game from its first moment, inside the mill, saying what happens through `say`, drawn as a
+    /// `low` GPU can, if it's one.
     @MainThread
-    Public New(island: Island, say: Func(String))
+    Public New(island: Island, say: Func(String), low: Bool = False)
         Self.island = island
         flow = Flow(say)
         told = [False, False, False]
         camera = Camera()
-        Looked(camera)
+        Looked(camera, low)
         Local start = island.PlaceOf(Spot.INSIDE)
         x = start.x
         z = start.y
@@ -72,6 +93,33 @@ Public Final Class Game
 
     /// How far Pip went in its last step.
     @MainThread Public Method PipMoved(): Float => pip.Moved()
+
+    /// How far the walk's bob has your eyes from where they'd be: 0, or below, lowest at each step.
+    @MainThread
+    Public Method Bob(): Float
+        If !bobs Then Return 0.0
+        Return -BOB_HEIGHT * bobbing * (1.0 + Cos(6.28318 * strode / STRIDE)) / 2.0
+    End Method
+
+    /// Sets whether your eyes bob as you walk, as reduced motion says they don't.
+    @MainThread
+    Public Method SetMotion(on: Bool)
+        bobs = on
+    End Method
+
+    /// Sets whether the sluice opens by holding Use HOLD_SECONDS, or, off, by a press.
+    @MainThread
+    Public Method SetHold(on: Bool)
+        holdToOpen = on
+        pressing = False
+        opening = 0.0
+    End Method
+
+    /// Whether Use, here, is to be held to open the sluice.
+    @MainThread Public Method HoldsToOpen(): Bool => holdToOpen && AtSluice()
+
+    /// How far the hold that opens the sluice has got, from 0 to 1.
+    @MainThread Public Method Opening(): Float => Clamp(opening / HOLD_SECONDS, 0.0, 1.0)
 
     /// How high your eyes should be, on what you stand on.
     @MainThread Public Method EyeAt(): Float => island.FloorAt(x, z) + EYE_HEIGHT
@@ -112,9 +160,11 @@ Public Final Class Game
         Local turn = controls.Turning()
         yaw -= look.x * LOOK_SPEED + StickTurn(turn.x, seconds)
         pitch = Clamp(pitch - look.y * LOOK_SPEED - StickTurn(turn.y, seconds), -1.4, 1.4)
+        Local fromX = x
+        Local fromZ = z
         Local moving = controls.Walking()
         Walk(moving.x, moving.y, seconds)
-        If controls.UseHit() Then Use()
+        Used(controls, seconds)
         If controls.HandHit() && flow.Ended() == Ending.NONE Then flow.Hand()
         Local flooded = flow.Flooded()
         flow.Step(seconds As Float64)
@@ -138,9 +188,15 @@ Public Final Class Game
                 pipPlace = PlaceAt(side.x, side.y)
             End If
         End If
+        Strode(fromX, fromZ, seconds)
         Seat()
         PlacePip(seconds)
         island.Update(flow.Clock())
+        // What moves on its own goes by real time, as the flow's clock runs ahead while it waits.
+        island.SetWalker(Vec3(x, island.FloorAt(x, z), z))
+        island.Animate(seconds)
+        // The wind's beat is real seconds, however fast the flow's clock goes.
+        island.Sway(seconds As Float64)
         camera.SetGrade(StormGrade(StormAt(flow.Clock())))
         Sync()
         TellWhatLies()
@@ -164,7 +220,7 @@ Public Final Class Game
         If flow.At() == Area.INSIDE
             If holding != Null Then Return "E: fit {PartName(holding)}"
             If !flow.SluiceOpen() && flow.Fitted(Part.GEAR) && flow.Fitted(Part.PADDLE)
-                Return "E: open the sluice"
+                Return holdToOpen ? "E: hold to open the sluice" : "E: open the sluice"
             End If
         End If
         If flow.PipHere() && holding != Null && flow.PipHolds() == Null
@@ -202,6 +258,51 @@ Public Final Class Game
         End If
         place = PlaceHeld(place, x, z)
         flow.Arrive(place, NearerFar(x, z))
+    End Method
+
+    // Uses what's here as Use says: the sluice opening once Use's been held HOLD_SECONDS from a press
+    // there, if it's held to open; anything else, or the sluice when it's not, at a press.
+    @MainThread
+    Method Used(controls: Controls, seconds: Float)
+        If !holdToOpen || !AtSluice()
+            pressing = False
+            opening = 0.0
+            If controls.UseHit() Then Use()
+            Return
+        End If
+        If controls.UseHit() Then pressing = True
+        If !controls.UseDown() Then pressing = False
+        opening = pressing ? opening + seconds : 0.0
+        // A whole HOLD_SECONDS, in steps whose sum can fall a little short.
+        If opening >= HOLD_SECONDS - 0.001
+            pressing = False
+            opening = 0.0
+            Use()
+        End If
+    End Method
+
+    // Whether what Use does here is open the sluice.
+    @MainThread
+    Method AtSluice(): Bool
+        Return flow.Ended() == Ending.NONE && flow.At() == Area.INSIDE && flow.Held() == Null &&
+               NearPart() == Null && !flow.SluiceOpen() && flow.Fitted(Part.GEAR) &&
+               flow.Fitted(Part.PADDLE)
+    End Method
+
+    // Counts how far into a step you are, from where you were, as the footsteps do, the water carrying
+    // you being no step; and eases the bob in as you walk, and out as you stop.
+    @MainThread
+    Method Strode(fromX: Float, fromZ: Float, seconds: Float)
+        Local dx = x - fromX
+        Local dz = z - fromZ
+        Local moved = Sqrt(dx * dx + dz * dz)
+        Local walking: Float = 0.0
+        If moved <= FARTHEST_MOVE
+            strode += moved
+            If moved > 0.0001 Then walking = 1.0
+        End If
+        If strode >= STRIDE Then strode -= STRIDE
+        bobbing = Eased(bobbing, walking, seconds)
     End Method
 
     // Takes what's within reach, or does what the mill's inside lets, as E does, or says why not.
@@ -242,10 +343,10 @@ Public Final Class Game
         End If
     End Method
 
-    // Puts the camera where your eyes are.
+    // Puts the camera where your eyes are, bobbing as you walk.
     @MainThread
     Method Seat()
-        camera.SetPosition(Vec3(x, EyeAt(), z))
+        camera.SetPosition(Vec3(x, EyeAt() + Bob(), z))
         camera.SetRotation(pitch, yaw, 0.0)
     End Method
 

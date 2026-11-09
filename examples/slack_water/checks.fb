@@ -47,9 +47,8 @@ Public Function Share(image: Image, test: Func(Color32): Bool): Float
 End Function
 
 /// How much of the pixels from (`left`, `top`) up to (`right`, `bottom`) `test` holds for, from 0 to 1.
-Public Function ShareWithin(image: Image, test: Func(Color32): Bool, left: Int, top: Int,
-                            right: Int,
-                            bottom: Int): Float
+Public Function ShareWithin(image: Image, test: Func(Color32): Bool,
+                            left: Int, top: Int, right: Int, bottom: Int): Float
     Local count = 0
     For y = top Until bottom
         For x = left Until right
@@ -90,7 +89,8 @@ Public Function CostWasRead(lost: Bool, cost: Float): Bool => !lost && cost >= 0
 /// Whether `arguments` are a mode that draws with no person there, which ctest runs and a window never shows.
 Public Function DrawsWithoutAPerson(arguments: String[]): Bool
     If arguments.Count == 0 Then Return False
-    Return ["--cooked", "--walk3d", "--end", "--hear", "--feel", "--frames"].Contains(arguments[0])
+    Return ["--cooked", "--walk3d", "--end", "--hear", "--feel", "--frames", "--menus",
+            "--kept", "--captions"].Contains(arguments[0])
 End Function
 
 /// Whether such a mode may draw, with `devices` shown: not when it would pick one of several for itself.
@@ -109,4 +109,38 @@ Public Function DiffersAround(with: Image, without: Image, x: Int, y: Int): Bool
         End For
     End For
     Return False
+End Function
+
+/// Whether `arguments` play the game, as a person does, drawn as a low GPU can or not; Null for any other
+/// mode.
+Public Function PlaysLow(arguments: String[]): Bool?
+    If arguments.Count == 0 Then Return False
+    If arguments.Count == 1 && arguments[0] == "--low" Then Return True
+    Return Null
+End Function
+
+/// How bright `image` is, the mean of its pixels' channels, from 0 to 255.
+Public Function MeanBrightness(image: Image): Float
+    Local sum = 0.0
+    For y = 0 Until image.Height
+        For x = 0 Until image.Width
+            Local pixel = image[x, y]
+            sum += ((pixel.r As Int) + (pixel.g As Int) + (pixel.b As Int)) As Float
+        End For
+    End For
+    Return sum / (3.0 * ((image.Width * image.Height) As Float))
+End Function
+
+/// How many pixels of `image` within 6 of (`x`, `y`) are white: bright, and about as blue as they're red.
+Public Function WhiteAround(image: Image, x: Int, y: Int): Int
+    Local count = 0
+    For row = Max(y - 6, 0) To Min(y + 6, image.Height - 1)
+        For column = Max(x - 6, 0) To Min(x + 6, image.Width - 1)
+            Local pixel = image[column, row]
+            Local least = Min(pixel.r As Int, Min(pixel.g As Int, pixel.b As Int))
+            Local most = Max(pixel.r As Int, Max(pixel.g As Int, pixel.b As Int))
+            If least > 170 && most - least < 40 Then count += 1
+        End For
+    End For
+    Return count
 End Function

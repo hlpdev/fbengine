@@ -1390,6 +1390,48 @@ Function GameOf(games: TempDir, packages: Path, program: String): Path Throws IO
     Return folder
 End Function
 
+// A game with bodies: fbengine_physics adds Body as a kind of component, as a game's own are added, and
+// it's shown, added, edited, saved, and opened again, as theirs are.
+@Test
+Function APackagesKindIsTheEditorsToo() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local packages = Try Packages()
+    If packages == Null Then Skip("the packages aren't under here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local folder = Try GameOf(games, packages,
+                              "Import fbengine\nImport fbengine_physics\n\nAddBodyComponent()\nTry Components.Describe()\n")
+    Local engine = (packages / "fbengine").Text.Replace("\\", "/")
+    Local physics = (packages / "fbengine_physics").Text.Replace("\\", "/")
+    Try File.WriteText(folder / "project.toml",
+                       "[project]\nname = \"game\"\nversion = \"0.0.1\"\ntype = \"executable\"\n\n" +
+                       "[dependencies]\nfbengine = {{ path = \"{engine}\" }}\n" +
+                       "fbengine_physics = {{ path = \"{physics}\" }}\n")
+    Local editor = Try Trusting(settings, folder)
+    Finishing(editor)
+    Expect(editor.ShowingDialog() == Null, "it failed")
+    Local kinds = editor.Kinds.Kinds()
+    Expect(kinds.Count == 1 && kinds[0].Name == "Body", "it has {kinds.Count}")
+    editor.Actions.Run("add.cube")
+    Selecting(editor, editor.Edited.Entities()[0])
+    Try Adding(editor, "Body")
+    Expect(FieldOf(editor, "Friction").Text() == "0.2", FieldOf(editor, "Friction").Text())
+    Local moves = RowCalled(editor, "Moves") As? ChoiceRow<String>
+    If moves == Null Then Panic("Moves isn't a list")
+    Expect(moves.Chooser().Text() == "DYNAMIC", moves.Chooser().Text())
+    Try Entered(editor, "Mass", "3")
+    editor.SaveScene("res://bodies.scene")
+    editor.Step()
+    Local text = Try File.ReadText(folder / "assets" / "bodies.scene")
+    Expect(text.Contains("[entity.components.Body]") && text.Contains("Mass = 3.0"), text)
+    editor.OpenScene("res://bodies.scene")
+    editor.Step()
+    Selecting(editor, editor.Edited.Entities()[0])
+    Expect(FieldOf(editor, "Mass").Text() == "3", text)
+    Expect(FieldOf(editor, "Friction").Text() == "0.2", text)
+    editor.Finish()
+End Function
+
 Const SAYS_A_DOOR = "Import fbengine\nImport \"../door\"\n\nComponents.Add<Door>(\"Door\")\nTry Components.Describe()\n"
 
 // An editor on `folder`, whose code it's been told may run.
@@ -2013,4 +2055,43 @@ Function WhatsASceneFilesOwnIsntShown() Throws IOError, GraphicsError
     Expect(titles.Contains("PickMode") && !titles.Contains("FileNode") &&
            !titles.Contains("SceneId"), titles)
     editor.Finish()
+End Function
+
+// What a note row says.
+Function NoteOf(editor: Editor, title: String): String
+    Local note = RowCalled(editor, title).Find("inspector.note") As? Label
+    Return note?.Text() ?? "no note"
+End Function
+
+// A camera's passes and a material's own shader, by their files, as ctest's cooked them.
+@Test
+Function PassesAndShadersAreListedByTheirFiles() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local cooked = Env.Get("FBENGINE_COOKED_SHADERS")
+    If cooked == Null Then Skip("no cooked shaders here")
+    Assets.MountFolder("res://cooked-shaders", Path(cooked))
+    Defer Assets.Unmount("res://cooked-shaders")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local camera = Camera()
+    Selecting(editor, camera)
+    Expect(!Shows(editor, "Passes"), "a camera with no passes says it has")
+    Local inverts = Try Assets.Load<Shader>("res://cooked-shaders/inverts.slang")
+    camera.AddPass(inverts)
+    camera.AddPass(inverts)
+    Selecting(editor, Pivot())
+    Selecting(editor, camera)
+    Expect(NoteOf(editor, "Passes") ==
+           "res://cooked-shaders/inverts.slang, res://cooked-shaders/inverts.slang",
+           NoteOf(editor, "Passes"))
+    Local mesh = Mesh(Geometry.Cube())
+    Local own = Material()
+    mesh.SetMaterial(own)
+    Selecting(editor, mesh)
+    Expect(!Shows(editor, "Shader"), "a material with no shader of its own says it has")
+    own.SetShader(Try Assets.Load<Shader>("res://cooked-shaders/flat.slang"))
+    Selecting(editor, Pivot())
+    Selecting(editor, mesh)
+    Expect(NoteOf(editor, "Shader") == "res://cooked-shaders/flat.slang", NoteOf(editor, "Shader"))
 End Function

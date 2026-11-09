@@ -48,8 +48,9 @@ character_t* find(std::uint64_t handle) {
     return character;
 }
 
-bool finite(const fbe_character_vec3_t& v) {
-    return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+// Whether `v`, where a character is, is within most_position.
+bool placed(const fbe_character_vec3_t& v) {
+    return within(v.x, v.y, v.z, most_position);
 }
 
 JPH::Vec3 vec3(const fbe_character_vec3_t& v) {
@@ -177,8 +178,8 @@ FBE_PHYSICS_API uint64_t fbe_character_new(uint64_t world, uint64_t shape,
     if (of == nullptr) {
         return 0;
     }
-    if (!finite(*position)) {
-        fail("a character's position is finite");
+    if (!placed(*position)) {
+        fail("a character's position is at most 1e9 from 0 each way");
         return 0;
     }
     if (in->bodies.size() >= in->system.GetMaxBodies()) {
@@ -232,8 +233,8 @@ FBE_PHYSICS_API bool fbe_character_move(uint64_t character, const fbe_character_
     if (found == nullptr) {
         return false;
     }
-    if (!finite(*velocity)) {
-        return fail("a character moves at a finite velocity");
+    if (!within(velocity->x, velocity->y, velocity->z, most_speed)) {
+        return fail("a character's velocity is at most 1e6 each way");
     }
     if (!std::isfinite(seconds) || seconds <= 0.0F || seconds > 1.0F) {
         return fail(std::format("a character moves for more than 0 seconds and at most 1, not {}",
@@ -268,8 +269,8 @@ FBE_PHYSICS_API bool fbe_character_set_position(uint64_t character,
     if (found == nullptr) {
         return false;
     }
-    if (!finite(*position)) {
-        return fail("a character's position is finite");
+    if (!placed(*position)) {
+        return fail("a character's position is at most 1e9 from 0 each way");
     }
     found->character->SetPosition(vec3(*position));
     ++found->world->moves;

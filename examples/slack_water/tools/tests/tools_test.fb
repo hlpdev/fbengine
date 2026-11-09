@@ -1,10 +1,15 @@
 // What the tools make, by its numbers: sounds each their own, that loop without a click, around 0,
-// and under clipping; a fade that holds its power; and materials that tile.
+// and under clipping, and that end at nothing if they're played once; a fade that holds its power; and
+// materials that tile.
 
 Import std.collections
+Import std.data.json
 Import std.core
+Import std.io
 Import std.math
 Import std.test
+Import std.text
+Import slack_water_tools.pip
 Import slack_water_tools.sounds
 Import slack_water_tools.textures
 
@@ -15,6 +20,23 @@ Function LargestStep(samples: Float[]): Float
         largest = Max(largest, Abs(samples[at] - samples[at - 1]))
     End For
     Return largest
+End Function
+
+// Every sound the tools make.
+Function AllSounds(): Float[][]
+    Return [Wind(), Sea(), Surf(), Calm(), Storm(), Gull(), Creak(), Wheel(), Works(), Step(5),
+            Step(6), Step(7),
+            FloorStep(9), FloorStep(10), Wade(11), Wade(12), SandStep(13), SandStep(14),
+            TurfStep(15), TurfStep(16), Splash(), Fit(), Sluice(), PipHello(), PipTakes(),
+            PipGives(),
+            PipWorries(), PipGlad(), PipSad()]
+End Function
+
+// What's played once, not looped.
+Function OneShots(): Float[][]
+    Return [Gull(), Creak(), Step(5), Step(6), Step(7), FloorStep(9), FloorStep(10), Wade(11),
+            Wade(12), SandStep(13), SandStep(14), TurfStep(15), TurfStep(16), Splash(), Fit(),
+            Sluice(), PipHello(), PipTakes(), PipGives(), PipWorries(), PipGlad(), PipSad()]
 End Function
 
 // The samples' root mean square.
@@ -28,9 +50,7 @@ End Function
 
 @Test
 Function EverySoundIsItsOwn()
-    Local sounds = [Wind(), Sea(), Gull(), Creak(), Wheel(), Step(5), Step(6), Step(7),
-                    FloorStep(9),
-                    FloorStep(10), Wade(11), Wade(12), Splash()]
+    Local sounds = AllSounds()
     For one = 0 Until sounds.Count
         For two = one + 1 Until sounds.Count
             Expect(sounds[one] != sounds[two])
@@ -40,7 +60,7 @@ End Function
 
 @Test
 Function WhatLoopsDoesntClick()
-    For sound In [Wind(), Sea(), Wheel()]
+    For sound In [Wind(), Sea(), Surf(), Wheel(), Works(), Calm(), Storm()]
         Expect(Abs(sound[sound.Count - 1] - sound[0]) <= LargestStep(sound))
         Local mean = 0.0
         For sample In sound
@@ -52,11 +72,93 @@ End Function
 
 @Test
 Function NothingClips()
-    For sound In [Wind(), Sea(), Gull(), Creak(), Wheel(), Step(5), Step(6), Step(7), FloorStep(9),
-                  FloorStep(10), Wade(11), Wade(12), Splash()]
+    For sound In AllSounds()
         For sample In sound
             Expect(Abs(sample) < 1.0)
         End For
+    End For
+End Function
+
+// The music's loops meet their starts as if they went on: their last sample's step to their first is no
+// more than half again the largest of the steps either side of it, it bends no more there than beside,
+// and they're sixteen seconds long.
+@Test
+Function TheMusicLoopsWhereItStarted()
+    For theme In [Calm(), Storm()]
+        Expect(theme.Count == 16 * 22050)
+        Local last = theme.Count - 1
+        Local beside = 0.0
+        For at = 1 Until 9
+            beside = Max(beside, Abs(theme[at] - theme[at - 1]))
+            beside = Max(beside, Abs(theme[last - at + 1] - theme[last - at]))
+        End For
+        Expect(Abs(theme[0] - theme[last]) <= 1.5 * beside)
+        // As a step as large as its own can be where it doesn't go on, what it bends, its second
+        // difference, either side of the seam, is no more than it is beside.
+        Local bend = Function(at: Int): Float
+            Local n = theme.Count
+            Return Abs(theme[(at + 1) % n] - 2.0 * theme[at % n] + theme[(at - 1 + n) % n])
+        End Function
+        Local near = 0.0
+        For at = 2 Until 40
+            near = Max(near, Max(bend(at), bend(last - at)))
+        End For
+        Expect(Max(bend(0), bend(last)) <= near)
+    End For
+End Function
+
+// The storm's drum dies away to nothing where it stops, each bar, so there's no tick: what it bends
+// there, its second difference, is no more than half again what it is around.
+@Test
+Function TheStormsDrumDoesntTick()
+    Local storm = Storm()
+    Local bends = Function(from: Int, until: Int): Float
+        Local most = 0.0
+        For at = from Until until
+            most = Max(most, Abs(storm[at + 1] - 2.0 * storm[at] + storm[at - 1]))
+        End For
+        Return most
+    End Function
+    For bar = 0 Until 4
+        Local stop = bar * 4 * 22050 + ((DRUM * 22050.0) As Int)
+        Local around = Max(bends(stop - 2205, stop - 441), bends(stop + 441, stop + 2205))
+        Expect(bends(stop - 3, stop + 3) <= 1.5 * around)
+    End For
+End Function
+
+// A tone of whole cycles, looped on itself in a line, doesn't swell where its ends are crossfaded, as
+// equal power would, by up to 1.41.
+@Test
+Function ALoopOfATonesEndsDoesntSwell()
+    Local tone: Float[] = []
+    For at = 0 Until 22050 * 2
+        tone.Add(Sin(((at As Float) / 22050.0 * 45.0 * 6.283185307179586) As Float64) As Float)
+    End For
+    Local loudest = 0.0
+    For sample In Looped(tone, 0.25, True)
+        loudest = Max(loudest, Abs(sample))
+    End For
+    Expect(loudest <= 1.01)
+End Function
+
+// What's played once ends at nothing, so it doesn't click as it stops.
+@Test
+Function WhatsPlayedOnceEndsAtNothing()
+    For sound In OneShots()
+        Expect(Abs(sound[sound.Count - 1]) < 0.005)
+    End For
+End Function
+
+// What's played once starts at nothing, so it doesn't click as it starts, and Pip's rests are silent,
+// not a thump.
+@Test
+Function WhatsPlayedOnceStartsAtNothing()
+    For sound In OneShots()
+        Expect(Abs(sound[0]) < 0.005)
+    End For
+    Local hello = PipHello()
+    For at = 2646 Until 3748
+        Expect(Abs(hello[at]) < 0.005)
     End For
 End Function
 
@@ -98,5 +200,172 @@ Function EveryMaterialTiles()
             End For
         End For
         Expect(wrap <= inside)
+    End For
+End Function
+
+@Test
+Function PipsPartsAreRoundAndItsEyesShutToTheirBottoms()
+    Local shape = Shape()
+    // Its lid at its own bottom.
+    shape.Ellipsoid(1.0, 2.0, 3.0, 0.1, 0.2, 0.3, 4, 0.9, 1.8)
+    Local count = shape.Joints.Count
+    Expect(count > 0)
+    For at = 0 Until count
+        Local dx = (shape.Positions[at * 3] - 1.0) / 0.1
+        Local dy = (shape.Positions[at * 3 + 1] - 2.0) / 0.2
+        Local dz = (shape.Positions[at * 3 + 2] - 3.0) / 0.3
+        // On its surface, its normal out from its middle, and by its joint.
+        Expect(Abs(dx * dx + dy * dy + dz * dz - 1.0) < 0.001)
+        // Its normal is across the surface there: along its point over its radii, squared.
+        Local gx = dx / 0.1
+        Local gy = dy / 0.2
+        Local gz = dz / 0.3
+        Local length = Sqrt(gx * gx + gy * gy + gz * gz)
+        Expect(Abs(shape.Normals[at * 3] - gx / length) < 0.0001 &&
+               Abs(shape.Normals[at * 3 + 1] - gy / length) < 0.0001 &&
+               Abs(shape.Normals[at * 3 + 2] - gz / length) < 0.0001)
+        Expect(shape.Joints[at] == 4)
+        // Shut, everything's at its bottom, but for a tenth of how far over it it was.
+        Local shut = shape.Positions[at * 3 + 1] + shape.Shut[at]
+        Local over = (dy + 1.0) * 0.2
+        Expect(Abs(shut - (1.8 + over * 0.1)) < 0.0001)
+    End For
+    // Its triangles face out.
+    Local indices = shape.Indices
+    For at = 0 Until indices.Count / 3
+        Local points: Vec3[] = []
+        For corner = 0 To 2
+            Local index = indices[at * 3 + corner]
+            Expect(index < count)
+            points.Add(Vec3(shape.Positions[index * 3] - 1.0, shape.Positions[index * 3 + 1] - 2.0,
+                            shape.Positions[index * 3 + 2] - 3.0))
+        End For
+        Local turning = Cross(points[1] - points[0], points[2] - points[0])
+        // None of no size, at a pole either.
+        Expect(Dot(turning, turning) >= 0.0000000001)
+        Expect(Dot(turning, points[0] + points[1] + points[2]) > 0.0)
+    End For
+End Function
+
+// Each of a glTF's primitives: its material's name, its positions' greatest z, and its blink's
+// least y, and how many targets it has.
+Function Primitives(gltf: Value): (String, Double, Double, Int)[]
+    Local found: (String, Double, Double, Int)[] = []
+    Local accessors = gltf["accessors"]?.AsArray() ?? []
+    Local materials = gltf["materials"]?.AsArray() ?? []
+    For primitive In gltf.Path("meshes[0].primitives")?.AsArray() ?? []
+        Local material = primitive["material"]?.AsInt() ?? -1
+        Local name = material >= 0 ? (materials[material]["name"]?.AsString() ?? "") : ""
+        Local position = accessors[primitive.Path("attributes.POSITION")?.AsInt() ?? 0]
+        Local targets = primitive["targets"]?.AsArray() ?? []
+        Local least = 0.0 As Double
+        If targets.Count > 0
+            least = accessors[targets[0]["POSITION"]?.AsInt() ?? 0].Path("min[1]")?.AsDouble() ??
+                    0.0
+        End If
+        found.Add((name, position.Path("max[2]")?.AsDouble() ?? 0.0, least, targets.Count))
+    End For
+    Return found
+End Function
+
+@Test
+Function PipsEyesAreWhiteWithDarkPupilsInFrontAndBothShut() Throws IOError, ParseError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Expect((Try WritePip(folder.Path)) == 8)
+    Local gltf = Try Json.Read(Try File.ReadText(folder.Path / "pip.gltf"))
+    Local primitives = Primitives(gltf)
+    Expect(primitives.Count == 3)
+    // Brass, the pupils, and the whites, each with the blink.
+    Expect(primitives[0].0 == "brass" && primitives[1].0 == "eye" && primitives[2].0 == "white")
+    For primitive In primitives
+        Expect(primitive.3 == 1, "{primitive.0}")
+    End For
+    // The pupils are in front of the whites, and the eyes are what the blink moves.
+    Expect(primitives[1].1 > primitives[2].1)
+    Expect(primitives[1].2 < 0.0 && primitives[2].2 < 0.0)
+    Expect(primitives[0].2 == 0.0)
+    Local materials = gltf["materials"]?.AsArray() ?? []
+    Expect(Abs((materials[1].Path("pbrMetallicRoughness.baseColorFactor[0]")?.AsDouble() ?? 1.0) -
+               0.02) < 0.0001)
+    Expect(Abs((materials[2].Path("pbrMetallicRoughness.baseColorFactor[0]")?.AsDouble() ?? 0.0) -
+               0.9) < 0.0001)
+End Function
+
+@Test
+Function APipsEyeShutsToOneLine()
+    Local shapes = PipShapes()
+    Local whitesTop = -1000.0
+    Local pupilsTop = -1000.0
+    For at = 0 Until shapes[2].Joints.Count
+        whitesTop = Max(whitesTop, shapes[2].Positions[at * 3 + 1] + shapes[2].Shut[at])
+    End For
+    For at = 0 Until shapes[1].Joints.Count
+        pupilsTop = Max(pupilsTop, shapes[1].Positions[at * 3 + 1] + shapes[1].Shut[at])
+    End For
+    Expect(pupilsTop <= whitesTop, "{pupilsTop} {whitesTop}")
+End Function
+
+@Test
+Function PipsShouldersAreWhereItsArmsTurn()
+    Local joints = PipJoints()
+    Local brass = PipShapes()[0]
+    For arm In [4, 5]
+        Local x, y, z = JointAt(joints, arm)
+        // Some part of it is a ball about the joint: its middle, the mean of a part's vertices.
+        Local nearest = 1000.0
+        Local at = 0
+        While at < brass.Joints.Count
+            // Each part's vertices, until its joint changes or its count of 11 rings of 17 runs
+            // out.
+            Local count = 11 * 17
+            If brass.Joints[at] == arm
+                Local sx = 0.0
+                Local sy = 0.0
+                Local sz = 0.0
+                For vertex = at Until at + count
+                    sx += brass.Positions[vertex * 3]
+                    sy += brass.Positions[vertex * 3 + 1]
+                    sz += brass.Positions[vertex * 3 + 2]
+                End For
+                Local n = count As Float
+                Local dx = sx / n - x
+                Local dy = sy / n - y
+                Local dz = sz / n - z
+                nearest = Min(nearest, Sqrt(dx * dx + dy * dy + dz * dz))
+            End If
+            at += count
+        End While
+        Expect(nearest < 0.005, "{nearest}")
+    End For
+End Function
+
+@Test
+Function MoreVerticesThan16BitsHoldAreIndexedIn32()
+    For many In [65536, 65537]
+        Local shape = Shape()
+        For at = 0 Until many
+            For value = 1 To 3
+                shape.Positions.Add(0.0)
+                shape.Normals.Add(0.0)
+            End For
+            shape.Uvs.Add(0.0)
+            shape.Uvs.Add(0.0)
+            shape.Joints.Add(0)
+            shape.Shut.Add(0.0)
+        End For
+        For index In [0, 1, many - 1]
+            shape.Indices.Add(index)
+        End For
+        Local parts = Parts()
+        shape.Primitive(parts, 0)
+        Local wide = many > 65536
+        Expect(parts.Accessors[parts.Accessors.Count - 1].Contains(wide ? "5125" : "5123"))
+        // The last index, as it's read back.
+        Local bytes = parts.Bytes
+        Local last =
+            wide ? (bytes[bytes.Count - 4] As Int) | ((bytes[bytes.Count - 3] As Int) << 8) |
+            ((bytes[bytes.Count - 2] As Int) << 16) : -1
+        If wide Then Expect(last == many - 1, "{last}")
     End For
 End Function

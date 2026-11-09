@@ -123,7 +123,7 @@ Function TheHorizontalFieldOfViewFollowsTheViewport()
     Local world = Fresh()
     Defer world.Free()
     Local camera = Camera()
-    // A field of view that sees 90 degrees across at 16:9, as Blitz's zoom 1 did at any shape.
+    // A field of view that sees 90 degrees across at 16:9, as a zoom of 1 does at any shape.
     camera.SetViewport(Rect(0, 0, 1600, 900))
     camera.SetFieldOfView(2 * Atan(Tan(Deg(45)) * 9 / 16.0))
     Expect(Near(camera.HorizontalFieldOfView(), Deg(90)))

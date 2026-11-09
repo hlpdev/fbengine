@@ -68,6 +68,47 @@ def check_vulkan_driver(verify):
         assert verify.vulkan_driver(folder) == "lavapipe.json", "verify doesn't read CMake's driver"
 
 
+def check_device_entries(verify):
+    """A call of Vulkan 1.3's own entry is found anywhere in native code but device.cpp, and not in a
+    comment or where it's only named."""
+    with tempfile.TemporaryDirectory() as folder:
+        root = pathlib.Path(folder)
+        (root / "native" / "a" / "gpu").mkdir(parents=True)
+        (root / "native" / "a" / "x.cpp").write_text(
+            "void f() {\n    // vkCmdBeginRendering(commands, &info);\n    vkCmdEndRendering (commands);\n}\n")
+        (root / "native" / "a" / "y.hpp").write_text("auto g = vkCmdBeginRenderingKHR(commands, &info);\n")
+        (root / "native" / "a" / "gpu" / "device.cpp").write_text(
+            "begin = core13 ? vkCmdBeginRendering : vkCmdBeginRenderingKHR;\nvkCmdBeginRendering(c, &i);\n")
+        (root / "native" / "a" / "z.cpp").write_text("gpu.begin_rendering(commands, &info);\n")
+        found = verify.direct_entries(root)
+        assert found == ["native/a/x.cpp:3", "native/a/y.hpp:1"], found
+    assert verify.direct_entries(verify.ROOT) == [], verify.direct_entries(verify.ROOT)
+def check_fb_versions(verify):
+    """The fb the tests run is CI's, by its version, and one that isn't is refused, saying which."""
+    assert verify.required_fb("env:\n  FB_VERSION: 1.2.3\n") == "1.2.3"
+    assert verify.required_fb("env:\n  OTHER: 1\n") is None
+    assert verify.fb_version_of("fb 1.2.3 (c77a32a, windows-x64)\n") == "1.2.3"
+    assert verify.fb_version_of("") is None
+    assert verify.fb_problem("fb", "1.2.3", "1.2.3") is None
+    older = verify.fb_problem("the build's fb", "1.2.2", "1.2.3")
+    assert older is not None and "1.2.2" in older and "1.2.3" in older, older
+    assert verify.fb_problem("fb", None, "1.2.3") is not None
+    assert verify.fb_problem("fb", "1.2.3", None) is not None
+    with tempfile.TemporaryDirectory() as folder:
+        assert verify.cached_fb(folder) is None, "a folder CMake hasn't written has no fb"
+        (pathlib.Path(folder) / "CMakeCache.txt").write_text(
+            "FBENGINE_FB_TESTS:BOOL=ON\nFBENGINE_FB:FILEPATH=C:/fb-1.2.2/bin/fb.exe\n")
+        assert verify.cached_fb(folder) == "C:/fb-1.2.2/bin/fb.exe", verify.cached_fb(folder)
+    ci = (TOOLS.parent / ".github" / "workflows" / "ci.yml").read_text()
+    assert verify.required_fb(ci) is not None, "ci.yml says no FB_VERSION this can find"
+    # A cached fb that's been taken off the disk is said, not run.
+    with tempfile.TemporaryDirectory() as folder:
+        gone = pathlib.Path(folder) / "fb-gone" / "fb.exe"
+        (pathlib.Path(folder) / "CMakeCache.txt").write_text(f"FBENGINE_FB:FILEPATH={gone.as_posix()}\n")
+        said = [problem for problem in verify.fb_problems(folder, "1.2.3") if problem.startswith("the build's")]
+        assert len(said) == 1 and "isn't there" in said[0] and "-DFBENGINE_FB" in said[0], said
+
+
 def main():
     show_finds_what_has_a_watch()
     verify = load()
@@ -80,6 +121,8 @@ def main():
     assert len(set(verify.TURNS)) == 4, "four verifies at a time take four locks"
     check_no_error_dialogs(verify)
     check_vulkan_driver(verify)
+    check_device_entries(verify)
+    check_fb_versions(verify)
     print("verify's locks hold")
 
 

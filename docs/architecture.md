@@ -90,7 +90,8 @@ good modern engine on its own. Every structural choice is checked against both.
 
 - **The game's view is a tree of entities**: `Pivot`, `Camera`, `Light`, `Mesh`, `Sprite`,
   `Terrain`, each with a parent, a local transform, a name, and its render, pick, and collision
-  settings.
+  settings. A Terrain's UVs are in its squares, u along x and v its size less z, so a map over it
+  has its first row at the far edge, the reverse of its heights' order.
 - **Inside, it's data-oriented**: transforms in arrays with dirty flags, world matrices updated
   once a frame for what moved, components (mesh renderer, light, camera, collider) in pools
   indexed by entity. No ECS is exposed; a game never sees the arrays.
@@ -135,6 +136,16 @@ good modern engine on its own. Every structural choice is checked against both.
 
 ## The renderer
 
+- **No GPU, for a dedicated server** (2026-11-08): nothing loads Vulkan until something draws, makes
+  a Texture, or shows a window, so World, entities, picks, scene files, physics, audio on MANUAL,
+  Flip with no window, and an untextured Model all run with no driver, loader, or display. A Model
+  makes its Textures as it loads, which would start the GPU, so a server calls
+  `Gpu.SetDisabled(True)` (`fbe_gpu_set_disabled`) before anything else: Vulkan's instance and
+  device are refused ("the GPU is disabled"), so a Model loads without its images (its materials
+  keep their factors, TextureOf is Null), and a Texture or a draw throws. It's explicit, not a
+  fallback when the GPU can't start, so a player's broken driver still says so, and a server on a
+  machine with a GPU never makes a device. It's refused while the GPU's started. examples/
+  dedicated_server runs so in ctest, with no Vulkan driver given.
 - **Vulkan 1.2** with dynamic rendering, synchronization2, descriptor indexing (bindless
   textures), and buffer device addresses (shaders read buffers through addresses in push
   constants), through volk and VMA; MoltenVK on macOS supports that set. Two frames in flight.
@@ -169,7 +180,18 @@ good modern engine on its own. Every structural choice is checked against both.
   only; resolved before bloom, by motion at the nearest depth of 3 by 3, Catmull-Rom, clamped to 3
   by 3 in YCoCg, 0.1 of what's now once settled. What has no motion of its own: particles, what
   blends, other orders, morphs, an Instances' own instances, reflections. +0.14 ms and +6.7 ms.
-- **FXAA**: after the tonemap, from the picture alone, +0.02 ms and +0.94 ms.
+- **FXAA**: after the tonemap and a game's own passes, from the picture alone, +0.02 ms and +0.94 ms.
+- **A game's own passes**: `Camera.AddPass` runs a Shader whose file says `#define FBE_PASS` as a
+  full-screen pass, cooked as a game's other shaders are. Its `pass(uv, color, depth)` gets what's
+  drawn so far, the camera's depth in meters (its first sample's, if the camera has samples), and
+  its UV across the camera's viewport, plus the parameters and layers of the Material AddPass gives
+  back, each layer at its own index. Colors in and out are premultiplied by their alpha, and in
+  stored values they're the bytes. Passes run in the order they were added, after the tonemap and
+  grade and before FXAA, on any camera, into a target or the screen. Each but the last goes into an
+  image of its own, as near the target's format as there is, at one sample a pixel. A pass no
+  pipeline can be made of, last or between two, is reported once by name and left out, and so is
+  one reloaded as no pass. With none added, nothing more is drawn. A scene file keeps them by their
+  shaders' files.
 - **Extract, then draw**: after UpdateWorld, the scene is read into render lists (visible
   objects, sorted), so drawing never reads the live scene; a render thread can take drawing over
   later without changing the API.
@@ -198,10 +220,14 @@ good modern engine on its own. Every structural choice is checked against both.
   constants, so any mix of them draws in the same pass.
   UNLIT and VERTEX are the fixed-function look, so they work in encoded values: layers, ADD, ×2,
   and fog on what's stored, with only the final color converted to linear for the target; PBR is
-  linear throughout. VERTEX's light is `min(range / distance, 1)` with no end, clamped per vertex
+  linear throughout. VERTEX's light is `range / distance` with no end, past 1 within its range, as
+  DirectX 7's attenuation of `1 / range` alone is, and only the lights' sum is clamped, per vertex
   before texturing, from the first 8 shown lights in the tree's order; PBR keeps
   KHR_lights_punctual's window, which clusters need. Range means each in its model. A Texture has
-  an alpha flag, which AUTO blending honors.
+  an alpha flag, which AUTO blending honors. A Texture's mipmaps are made from its first level by
+  the GPU, or a game writes a level of its own (`WriteLevel`), which leaves the others as they are,
+  as for mipmaps that keep what an alpha cutoff keeps; a write of the first level makes them all
+  again (2026-11-05).
 - **Lights**: clustered forward, so the many small lights of a facility work, per pixel or per
   vertex. A point or spot light ends at its range, as clustering needs, and falls off inside it as
   glTF's KHR_lights_punctual says, the inverse square windowed to 0 at the range, in every shading
@@ -229,6 +255,10 @@ good modern engine on its own. Every structural choice is checked against both.
 - **Shaders** are Slang, compiled to SPIR-V when the engine's built and embedded in the DLL
   (the user, 2026-10-31).
   Games' own shaders (E6) come with the asset pipeline's build step.
+  A shader of its own sees, as it moves a vertex, where that vertex's instance is in its Instances'
+  space (`MovingVertex.place`, 0 for what isn't an instance), so each of a field of instances moves
+  on its own beat with no parameter of its own; an Instances culls each instance by its geometry's
+  cull box, as a Mesh does, for what its shader moves out of its bounds (2026-11-05).
 
 ## Assets
 

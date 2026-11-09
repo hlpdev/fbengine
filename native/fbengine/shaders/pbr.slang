@@ -171,9 +171,9 @@ public float3 directionOfOctahedral(float2 at)
 }
 
 /// How far across an equirectangular image `direction`, a unit vector, is, y up, 0 to 1, -Z at its
-/// middle, as a sky has it, so one image is both, the same way round. At a pole there's no angle: a direction a float's rounding away from one has one that's
-/// anything, as a map's corners do on a driver that divides by a reciprocal, so all of them across
-/// it read its one middle column.
+/// middle, as a sky has it, so one image is both, the same way round. At a pole there's no angle: a
+/// direction a float's rounding away from one has one that's anything, as a map's corners do on a
+/// driver that divides by a reciprocal, so all of them across it read its one middle column.
 public float equirectangularAcross(float3 direction)
 {
     if (dot(direction.xz, direction.xz) < POLE)

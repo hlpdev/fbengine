@@ -67,11 +67,15 @@ struct texture_t {
     /// stored values; nothing for any other texture.
     VkImageView stored_view = VK_NULL_HANDLE;
     VkImageView stored_msaa_view = VK_NULL_HANDLE;
+    /// Where a shader reads those samples, one by one, if it can: the engine's own only.
+    std::uint32_t samples_slot = fbe::gpu::no_samples_slot;
     /// A target's depth, if it has one: 32-bit floats, reversed, 1 nearest and 0 farthest, as
     /// many samples as it draws.
     VkImage depth = VK_NULL_HANDLE;
     VmaAllocation depth_memory = VK_NULL_HANDLE;
     VkImageView depth_view = VK_NULL_HANDLE;
+    /// A texture of its depth to read, made when a full-screen pass first asks, which it holds.
+    std::uint64_t depth_read = 0;
 };
 
 /// A target's depth's format.
@@ -110,15 +114,26 @@ std::uint32_t pixel_size(std::int32_t format);
 
 /// A target the engine makes for itself, `width` by `height` of an FBE_TEXTURE_ format, drawing
 /// `samples` a pixel, with depth if it says, which Texture.Count doesn't count and
-/// fbe_texture_release lets go of; its handle, or 0, with fbe_error's why, if it can't be made.
+/// fbe_texture_release lets go of, with a slot for its samples if a shader `reads_samples`; its
+/// handle, or 0, with fbe_error's why, if it can't be made.
 std::uint64_t create_engine_target(std::uint32_t width, std::uint32_t height, std::int32_t format,
-                                   VkSampleCountFlagBits samples, bool depth);
+                                   VkSampleCountFlagBits samples, bool depth,
+                                   bool reads_samples = false);
 
 /// A texture the engine makes for itself, `width` by `height` of an FBE_TEXTURE_ format, with room
 /// for mipmaps if it says, as create_engine_target's are; 0, with fbe_error's why, without a
 /// started GPU.
 std::uint64_t create_engine_texture(std::uint32_t width, std::uint32_t height, std::int32_t format,
                                     bool mipmaps = false);
+
+/// A target's depth's copy, for a shader to read, of one sample each, made the first time it's
+/// asked for and let go of with it; 0, with fbe_error's why, if it can't be made.
+std::uint64_t depth_read_of(std::uint64_t target);
+
+/// Records a target's depth into `read`, its copy, leaving its depth as it was and the copy to be
+/// sampled: by a copy, or for one of many samples, its first sample, by a resolve. Both are as they
+/// were when what records it was added, as a pass's are, whatever's let go of them since.
+void record_depth_read(VkCommandBuffer commands, const texture_t& target, const texture_t& read);
 
 /// Writes `width` by `height` pixels at `x`, `y` into level 0 of a texture without mipmaps, rows
 /// `pitch` bytes apart, in the frame's uploads, before its commands, even where a pass of the

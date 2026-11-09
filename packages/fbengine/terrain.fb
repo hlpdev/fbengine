@@ -12,7 +12,9 @@ Import "./transform"
 
 /// A grid of `size` by `size` squares, in its own space from (0, 0) to (size, size) across X and
 /// Z, each corner at its own height up Y, two triangles a square facing up. Movers touch its
-/// triangles, and picks of PickMode.MESH hit them, from above.
+/// triangles, and picks of PickMode.MESH hit them, from above. Both its UV sets are in its
+/// squares: u is x, and v is its size less z, so a texture's first row lies along its far edge,
+/// z = size, and an image made row by row along z, as its heights are, is upside down on it.
 Public Final Class Terrain Extends Entity
     /// A new Terrain of `size` squares a side, 1 to 4096, every corner at 0, the last child of
     /// `parent`, or at the top of the current World when `parent` is Null.

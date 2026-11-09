@@ -476,6 +476,10 @@ Function ThePaneShowsOnlyWhatsNewAndTheMostItKeeps() Throws IOError, GraphicsErr
     Local shown = editor.Output.ShownLines()
     Expect(shown == log.Lines() && shown.Count == 1000 && shown[0] == "line 1501" &&
            shown[999] == "line 2500")
+    // It makes only the rows in view, however many it holds: a window's height of them, and two.
+    Local fits = (Window.Height() / 22) + 3
+    Expect(editor.Output.RowsMade() <= fits,
+           "it made {editor.Output.RowsMade()} of what fit in {fits}")
     For at = 1 To 3
         log.Say("more {at}")
     End For
@@ -483,6 +487,55 @@ Function ThePaneShowsOnlyWhatsNewAndTheMostItKeeps() Throws IOError, GraphicsErr
     shown = editor.Output.ShownLines()
     Expect(shown == log.Lines() && shown.Count == 1000 && shown[0] == "line 1504" &&
            shown[999] == "more 3")
+End Function
+
+// A very long line shows only its start, with a marker, as much as a pane can, its whole text kept:
+// one of 1 MB, said, and fed, which the log cuts into lines of 64 KB, each shown cut.
+@Test
+Function AVeryLongLineIsShownCut() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local folder = Try Game(games.Path, "long", PLAIN)
+    Local editor = Try Started(settings.Path, folder)
+    Defer editor.Finish()
+    editor.Docked.Show("output")
+    Local megabyte = ""
+    Local ten = "0123456789"
+    For at = 1 To 100
+        megabyte += ten
+    End For
+    Local thousand = megabyte
+    megabyte = ""
+    For at = 1 To 1024
+        megabyte += thousand
+    End For
+    editor.Run.Log.Say(megabyte)
+    editor.Step()
+    editor.Step()
+    Local row = Found(editor, "output.line") As? Label
+    If row == Null Then Panic("its row")
+    Expect(row.Text() == ShownOf(megabyte) && row.Text().Length == 300 + " …".Length &&
+           row.Text().EndsWith(" …"), "{row.Text().Length}")
+    Expect(editor.Output.ShownLines()[0].Length == 1024000, "its whole text isn't kept")
+    // Fed, as a game says it: lines of 64 KB, each shown cut.
+    editor.Run.Log.Clear()
+    Local bytes = Buffer<UInt8>(65536)
+    For at = 0 Until 65536
+        bytes[at] = 48 + (at % 10) As UInt8
+    End For
+    For chunk = 1 To 16
+        editor.Run.Log.Feed(bytes, 65536)
+    End For
+    editor.Run.Log.Flush()
+    editor.Step()
+    editor.Step()
+    Expect(editor.Output.ShownLines().Count == 16, "{editor.Output.ShownLines().Count} lines")
+    Expect(editor.Output.ShownLines()[0].Length == 65536)
+    row = Found(editor, "output.line") As? Label
+    Expect(row != Null && row.Text().Length == 300 + " …".Length)
+    // A short one's whole.
+    Expect(ShownOf("short") == "short" && ShownOf("") == "")
 End Function
 
 // The mouse on `node`, and a click.
@@ -781,9 +834,12 @@ Function AGameSayingALotIsntKeptWaiting() Throws IOError, GraphicsError
         frames += 1
     End While
     Expect(editor.Run.State() == PlayState.ENDED, Said(editor))
-    // Here, 35 frames for 124 reads of 64 KB, each that long to take in, 18 s in all: more than
-    // three a frame. One a frame would be as many frames as reads.
+    // Here, about 35 frames for 124 reads of 64 KB, more than three a frame, the pane making only the
+    // rows in view. One a frame would be as many frames as reads.
     Local reads = editor.Run.Reads() - readsBefore
+    Local fits = (Window.Height() / 22) + 3
+    Expect(editor.Output.RowsMade() <= fits,
+           "it made {editor.Output.RowsMade()} of what fit in {fits}")
     Expect(frames * 3 < reads * 2, "{frames} frames for {reads} reads, in {Instant.Now() - since}")
 End Function
 

@@ -1,12 +1,15 @@
 // Materials' own shaders: Slang a game writes, compiled by its build step, drawn in the scene's
 // pipelines. fbengine_tools has what compiles one, and how to write one.
 
+Import std.collections
 Import std.core
 Import std.ffi
 Import std.io
 Import std.math
 Import "./assets"
+Import "./c/fbe_scene"
 Import "./c/fbe_shader"
+Import "./camera"
 Import "./loads"
 Import "./material"
 Import "./window"
@@ -14,6 +17,9 @@ Import "./window"
 // One wrapper for each shader the game holds, by its handle's slot; it goes when the game lets go
 // of it, and a Material's Shader gets a new one.
 Global shaders: Weak<Shader>[] = []
+// The file each material, by its handle, has a shader from that couldn't be loaded, as a scene opened
+// in spite of it says, so a save keeps it.
+Global lostShaders: Map<UInt64, String> = {}
 
 /// A shader of a game's own, for Materials to draw with: a `.slang` file in its assets, which its
 /// build step compiles (fbengine_tools' CookShader), so `Assets.Load<Shader>("res://water.slang")`
@@ -64,6 +70,16 @@ Public Final Class Shader Implements Asset
         Return Shader(made)
     End Method
 
+    /// The file it's from, as Assets loaded it, or Null for one that wasn't, as a scene names it by.
+    @MainThread @PanicsAtCaller
+    Public Method Path(): String?
+        Local found = ""
+        Unsafe
+            found = fbe_shader_path(Live("Path")).ToString()
+        End Unsafe
+        Return found != "" ? found : Null
+    End Method
+
     /// Takes the file `load` read in its place, for what draws with it from the next frame on, and
     /// gives True. One that isn't a shader throws as FromLoad does, which leaves it as it was.
     @MainThread
@@ -91,6 +107,10 @@ Public Final Class Shader Implements Asset
         shaders[Slot(handle)] = gone
         handle = 0
     End Method
+
+    /// Whether it's a full-screen pass's, whose file says `#define FBE_PASS`, for Camera.AddPass; a
+    /// Material with one draws as one with none does.
+    @MainThread Public Method IsPass(): Bool => fbe_shader_is_pass(Live("IsPass"))
 
     /// Whether Free let go of it.
     @MainThread Public Method Freed(): Bool => handle == 0
@@ -133,6 +153,16 @@ Extend Material
     Public Method SetShader(shader: Shader?)
         Local drawn: UInt64 = shader != Null ? shader.Live("SetShader") : 0
         If !fbe_material_set_shader(Live("SetShader"), drawn) Then Failed("SetShader")
+        lostShaders.Remove(Live("SetShader"))
+    End Method
+
+    // The file of the shader it has that couldn't be loaded, which it draws without, or Null.
+    Package Method LostShader(): String? => lostShaders.Get(Live("LostShader"))
+
+    // That its shader is the file at `path`, which couldn't be loaded, so it draws without one.
+    Package Method SetLostShader(path: String)
+        If !fbe_material_set_shader(Live("SetLostShader"), 0) Then Failed("SetLostShader")
+        lostShaders[Live("SetLostShader")] = path
     End Method
 
     /// The shader it draws with, Null for the scene's own.
@@ -159,5 +189,42 @@ Extend Material
         End Unsafe
         If !done Then Failed("Parameter")
         Return Vec4(floats[0], floats[1], floats[2], floats[3])
+    End Method
+End Extend
+
+/// A Camera's full-screen passes.
+Extend Camera
+    /// Runs a full-screen pass after what it draws: after its tonemap and its grade, if it's HDR, and
+    /// after those before it, on its own target. `shader` is one whose file says `#define FBE_PASS`,
+    /// and it gives back the Material it holds it by, whose SetParameter and layers' SetTexture are
+    /// what that reads: `parameter(index)` and `layer(index, uv)` there. In stored values, the color
+    /// it reads and writes is what's stored, not light. One no pipeline can be made of says so once,
+    /// on the error stream, and is left out. Any other shader panics.
+    @MainThread @PanicsAtCaller
+    Public Method AddPass(shader: Shader): Material
+        Local pass = Material()
+        pass.SetShader(shader)
+        If !fbe_camera_add_pass(Live("AddPass"), pass.Live("AddPass")) Then Failed("AddPass")
+        Return pass
+    End Method
+
+    /// Stops running a pass AddPass gave. One that isn't this camera's panics.
+    @MainThread @PanicsAtCaller
+    Public Method RemovePass(pass: Material)
+        If !fbe_camera_remove_pass(Live("RemovePass"), pass.Live("RemovePass"))
+            Failed("RemovePass")
+        End If
+    End Method
+
+    /// Its passes, in the order they run.
+    @MainThread @PanicsAtCaller
+    Public Method Passes(): Material[]
+        Local camera = Live("Passes")
+        Local all: Material[] = []
+        For at = 0 Until fbe_camera_pass_count(camera)
+            Local pass = MaterialOf(fbe_camera_pass(camera, at))
+            If pass != Null Then all.Add(pass)
+        End For
+        Return all
     End Method
 End Extend

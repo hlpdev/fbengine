@@ -5,14 +5,14 @@ file(GLOB fbengine_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*/*.cp
 fbengine_add_native(fbengine_native fbengine fbe_ ${fbengine_sources})
 target_include_directories(fbengine_native PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(fbengine_native PRIVATE FBE_BUILDING
-                           FBE_VERSION="${PROJECT_VERSION}")
+                           FBE_VERSION="${FBENGINE_VERSION}")
 # What it links, which the tests' static library of its sources links too: SDL; FreeType,
 # HarfBuzz, and SheenBidi for text; stb, KTX, and fastgltf for assets; and the GPU's Vulkan,
-# through volk and VMA.
+# through volk and VMA, and SPIRV-Tools, which validates a game's shader.
 set(fbengine_links SDL3::SDL3-static freetype fbengine_harfbuzz fbengine_sheenbidi fbengine_stb
-    ktx_read fastgltf::fastgltf volk Vulkan::Headers fbengine_vma)
+    ktx_read fastgltf::fastgltf volk Vulkan::Headers fbengine_vma SPIRV-Tools-static)
 target_link_libraries(fbengine_native PRIVATE ${fbengine_links})
-# fastgltf's own simdjson, before any other a folder of the rest has (cmake/assets.cmake).
+# The simdjson fastgltf fetched, whatever else is installed (cmake/assets.cmake).
 fbengine_use_fetched_simdjson(fbengine_native)
 # Its float arithmetic as written, never fused, so it rounds alike on every target, but for what
 # a target's own libm gives: arm64's compilers fuse multiply-adds, which rounded a terrain pick
@@ -28,7 +28,7 @@ if(FBENGINE_BUILD_TESTS)
   fbengine_set_warnings(fbengine_internal)
   target_include_directories(fbengine_internal PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
   target_compile_definitions(fbengine_internal PUBLIC FBE_BUILDING
-                             FBE_VERSION="${PROJECT_VERSION}")
+                             FBE_VERSION="${FBENGINE_VERSION}")
   target_link_libraries(fbengine_internal PUBLIC ${fbengine_links})
   fbengine_use_fetched_simdjson(fbengine_internal)
   if(NOT MSVC)

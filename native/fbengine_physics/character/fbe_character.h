@@ -32,8 +32,8 @@ typedef struct fbe_character_vec3_t {
 // NOLINTEND(modernize-macro-to-enum, modernize-use-using)
 
 // A new character of `shape`, a capsule as a rule, in `world` at `position`, unturned, with a body
-// in layer 0; 0 if the world or the shape isn't one, the shape has a mesh in it, the position isn't
-// finite, or the world has all the bodies it has room for.
+// in layer 0; 0 if the world or the shape isn't one, the shape has a mesh in it, the position's
+// more than 1e9 from 0, or the world has all the bodies it has room for.
 FBE_PHYSICS_API uint64_t fbe_character_new(uint64_t world, uint64_t shape,
                                            const fbe_character_vec3_t* position);
 
@@ -43,8 +43,9 @@ FBE_PHYSICS_API bool fbe_character_free(uint64_t character);
 // The handle of `character`'s body, 0 if it isn't a character.
 FBE_PHYSICS_API uint64_t fbe_character_body(uint64_t character);
 
-// Moves `character` at `velocity` for `seconds`, more than 0 and at most 1, as far as what's in its
-// way lets it, between steps; false if it isn't a character or a number's out of range. The game
+// Moves `character` at `velocity`, at most 1e6 each way, for `seconds`, more than 0 and at most 1,
+// as far as what's in its way lets it, between steps; false if it isn't a character or a number's
+// out of range. The game
 // gives it its velocity each time, adding gravity's itself, as fbe_character_ground tells it to.
 FBE_PHYSICS_API bool fbe_character_move(uint64_t character, const fbe_character_vec3_t* velocity,
                                         float seconds);
@@ -53,7 +54,7 @@ FBE_PHYSICS_API bool fbe_character_move(uint64_t character, const fbe_character_
 FBE_PHYSICS_API bool fbe_character_position(uint64_t character, fbe_character_vec3_t* position);
 
 // Puts `character` at `position` at once, as a teleport does; false if it isn't a character or the
-// position isn't finite.
+// position's more than 1e9 from 0.
 FBE_PHYSICS_API bool fbe_character_set_position(uint64_t character,
                                                 const fbe_character_vec3_t* position);
 

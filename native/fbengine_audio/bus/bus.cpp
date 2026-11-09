@@ -87,6 +87,9 @@ constexpr ma_uint32 most_reverb_channels = 2;
 /// A group at the mix's rate needs no resampler, which would hold a frame, nor a place.
 constexpr ma_uint32 group_flags = static_cast<ma_uint32>(MA_SOUND_FLAG_NO_PITCH) |
                                   static_cast<ma_uint32>(MA_SOUND_FLAG_NO_SPATIALIZATION);
+/// How long a change of a bus's volume is ramped over, as a channel's gains are. As a channel's,
+/// it's taken at once until the bus is first mixed: miniaudio's gainer ramps only once it's mixed.
+constexpr double volume_ramp_seconds = 0.005;
 
 /// Every bus something has, by handle or as a channel's or another bus's, and the handles: made
 /// once and never let go, as a program can end with the audio started.
@@ -177,8 +180,13 @@ bool build(bus_t& bus) {
     if (bus.parent != nullptr && !build(*bus.parent)) {
         return false;
     }
-    const ma_result result =
-        ma_sound_group_init(fbe::audio::engine(), group_flags, nullptr, &bus.group);
+    ma_engine* mix = fbe::audio::engine();
+    ma_sound_group_config config = ma_sound_group_config_init_2(mix);
+    config.flags = group_flags;
+    config.volumeSmoothTimeInPCMFrames = std::max<ma_uint32>(
+        1,
+        static_cast<ma_uint32>(std::lround(volume_ramp_seconds * ma_engine_get_sample_rate(mix))));
+    const ma_result result = ma_sound_group_init_ex(mix, &config, &bus.group);
     if (result != MA_SUCCESS) {
         return fbe::audio::fail_ma("couldn't make the bus", result);
     }

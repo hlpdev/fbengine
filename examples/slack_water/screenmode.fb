@@ -1,0 +1,122 @@
+// How the window shows, as Options chooses it: framed, borderless at the desktop's size, or fullscreen
+// at one of the display's sizes; the nearest of them to a size kept from a display that's gone; and
+// how to go from one to another, through what a window can do, which a test can stand in for.
+
+Import std.collections
+Import std.core
+Import std.math
+Import fbengine
+
+/// What Options does to a window: the engine's Window, or a test's.
+Public Interface WindowLike
+    Method Mode(): WindowMode
+    Method SetMode(mode: WindowMode) Throws GraphicsError
+    Method SetSize(width: Int32, height: Int32) Throws GraphicsError
+    Method Width(): Int32
+    Method Height(): Int32
+End Interface
+
+/// The engine's Window.
+Public Final Class RealWindow Implements WindowLike
+    Public New()
+    End New
+
+    @MainThread Public Method Mode(): WindowMode => Window.Mode()
+
+    @MainThread
+    Public Method SetMode(mode: WindowMode) Throws GraphicsError
+        Try Window.SetMode(mode)
+    End Method
+
+    @MainThread
+    Public Method SetSize(width: Int32, height: Int32) Throws GraphicsError
+        Try Window.SetSize(width, height)
+    End Method
+
+    @MainThread Public Method Width(): Int32 => Window.Width()
+
+    @MainThread Public Method Height(): Int32 => Window.Height()
+End Class
+
+/// One way the window can show: windowed, borderless, or fullscreen at a size.
+Public Struct WindowChoice
+    Public Field Shown: WindowMode
+    Public Field Width: Int
+    Public Field Height: Int
+
+    Public New(shown: WindowMode, width: Int = 0, height: Int = 0)
+        Shown = shown
+        Width = width
+        Height = height
+    End New
+
+    /// What Options calls it.
+    Public Method Name(): String
+        Select Shown
+            Case WindowMode.FULLSCREEN
+                Return "Fullscreen {Width}x{Height}"
+            Case WindowMode.BORDERLESS
+                Return "Borderless"
+            Default
+                Return "Windowed"
+        End Select
+    End Method
+
+    /// Whether it's `other`, a fullscreen one by its size too.
+    Public Method Same(other: WindowChoice): Bool
+        Return Shown == other.Shown &&
+               (Shown != WindowMode.FULLSCREEN || Width == other.Width && Height == other.Height)
+    End Method
+End Struct
+
+/// Windowed, borderless, and fullscreen at each of `display`'s sizes, each once, as a display has a
+/// mode for each rate, largest first as the display lists them.
+Public Function ChoicesOf(display: Display?): WindowChoice[]
+    Local choices = [WindowChoice(WindowMode.WINDOWED), WindowChoice(WindowMode.BORDERLESS)]
+    If display == Null Then Return choices
+    For mode In display.Modes
+        Local choice = WindowChoice(WindowMode.FULLSCREEN, mode.Width As Int, mode.Height As Int)
+        If !choices.Any(Function(each: WindowChoice) => each.Same(choice)) Then choices.Add(choice)
+    End For
+    Return choices
+End Function
+
+/// Which of `choices` is `kept`, or, for a fullscreen size there isn't, the fullscreen one nearest to
+/// it by how many pixels apart they are each way, or windowed for none; and whether it was nearest.
+Public Function ChoiceFor(choices: WindowChoice[], kept: WindowChoice): (Int, Bool)
+    For at = 0 Until choices.Count
+        If choices[at].Same(kept) Then Return (at, False)
+    End For
+    If kept.Shown != WindowMode.FULLSCREEN Then Return (0, False)
+    Local best = -1
+    Local apart = 0
+    For at = 0 Until choices.Count
+        Local one = choices[at]
+        If one.Shown != WindowMode.FULLSCREEN Then Continue
+        Local off = Abs(one.Width - kept.Width) + Abs(one.Height - kept.Height)
+        If best < 0 || off < apart
+            best = at
+            apart = off
+        End If
+    End For
+    Return best < 0 ? (0, False) : (best, True)
+End Function
+
+/// Puts `window` as `choice` says: a framed window of `framed`'s size, borderless, or fullscreen at
+/// its size, through windowed first from fullscreen, as a fullscreen window's size can't change.
+Public Function Switched(window: WindowLike, choice: WindowChoice,
+                         framed: (Int32, Int32)) Throws GraphicsError
+    Select choice.Shown
+        Case WindowMode.FULLSCREEN
+            If window.Mode() != WindowMode.WINDOWED Then Try window.SetMode(WindowMode.WINDOWED)
+            Try window.SetSize(choice.Width As Int32, choice.Height As Int32)
+            Try window.SetMode(WindowMode.FULLSCREEN)
+        Case WindowMode.BORDERLESS
+            If window.Mode() == WindowMode.FULLSCREEN Then Try window.SetMode(WindowMode.WINDOWED)
+            Try window.SetMode(WindowMode.BORDERLESS)
+        Default
+            If window.Mode() != WindowMode.WINDOWED Then Try window.SetMode(WindowMode.WINDOWED)
+            Local width, height = framed
+            Try window.SetSize(width, height)
+    End Select
+End Function

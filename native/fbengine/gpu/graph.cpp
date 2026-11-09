@@ -84,6 +84,7 @@ constexpr state_t resting{
 state_t state_of(use_t use) {
     switch (use) {
     case use_t::SAMPLED:
+    case use_t::SAMPLES_READ:
         return sampled;
     case use_t::COPY_FROM:
         return copied_from;
@@ -351,8 +352,14 @@ bool expand(const fbe::gpu::pass_t& pass) {
         if (resources[resource].kind == kind_t::EXTERNAL) {
             return fbe::fail("an image of the frame's own is only drawn into");
         }
+        const bool reads_samples = use == use_t::SAMPLES_READ;
+        if (reads_samples && (resources[resource].kind != kind_t::TRANSIENT ||
+                              samples_of(resources[resource]) == 1)) {
+            return fbe::fail("what has samples to read is a multisampled transient target");
+        }
         accesses.push_back({
             .resource = resource,
+            .part = reads_samples ? part_t::SAMPLES : part_t::IMAGE,
             .state = state_of(use),
             .mipmaps = use == use_t::MIPMAPPED,
         });
@@ -517,7 +524,7 @@ bool give_images() {
             const std::uint64_t handle = fbe::texture::create_engine_target(
                 resource.transient.width, resource.transient.height, resource.transient.format,
                 static_cast<VkSampleCountFlagBits>(resource.transient.samples),
-                resource.transient.depth);
+                resource.transient.depth, resource.transient.reads_samples);
             if (handle == 0) {
                 resource.failed = true;
                 made_all = false;
@@ -673,6 +680,11 @@ void record_levels(std::int32_t levels) {
             for (const access_t& use : uses_of(*order[which])) {
                 const resource_record_t& resource = resources[use.resource];
                 const std::uint32_t key = key_of(use.resource, use.part);
+                // Samples with no slot aren't read, and may not be readable.
+                if (use.part == part_t::SAMPLES && !use.state.writes &&
+                    resource.texture.samples_slot == fbe::gpu::no_samples_slot) {
+                    continue;
+                }
                 const bool discard = !begun[key] && resource.kind != kind_t::TEXTURE;
                 begun[key] = true;
                 transition(images[resource.images[static_cast<std::size_t>(use.part)]], use.state,
@@ -860,7 +872,7 @@ bool reserve_transient(const transient_t& target, std::uint32_t count) {
     for (; have < count; ++have) {
         const std::uint64_t handle = fbe::texture::create_engine_target(
             target.width, target.height, target.format,
-            static_cast<VkSampleCountFlagBits>(target.samples), target.depth);
+            static_cast<VkSampleCountFlagBits>(target.samples), target.depth, target.reads_samples);
         if (handle == 0) {
             return false;
         }
@@ -918,6 +930,14 @@ bool add_pass(pass_t pass) {
 
 std::uint32_t resource_index(resource_t resource) {
     return resource < resources.size() ? resources[resource].slot : fbe::texture::white;
+}
+
+std::uint32_t resource_samples(resource_t resource) {
+    return resource < resources.size() ? samples_of(resources[resource]) : 1;
+}
+
+std::uint32_t resource_samples_index(resource_t resource) {
+    return resource < resources.size() ? resources[resource].texture.samples_slot : no_samples_slot;
 }
 
 VkFormat resource_format(resource_t resource) {

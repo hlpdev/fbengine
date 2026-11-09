@@ -1,17 +1,18 @@
 [project]
 name = "fbengine_audio"
-version = "0.1.1"
+version = "1.0.0-rc.2"
 type = "library"
 license = "Apache-2.0"
 description = "fbengine's sound: sounds, channels, music streams, and 3D sound, on miniaudio."
 readme = "README.md"
 repository = "https://github.com/hlpdev/fbengine"
 keywords = ["engine", "game", "audio", "sound", "music"]
+fb = ">=1.2.3"
 
-# Its 3D sound follows fbengine's frames, and their entities. By path for now; by path and version
-# once FutureBlitz 1.1 lets a published package's dependency have both.
+# Its 3D sound follows fbengine's frames, and their entities. By its folder here, and published by
+# the version, which the folder's has to be in.
 [dependencies]
-fbengine = { path = "../fbengine" }
+fbengine = { path = "../fbengine", version = "1.0.0-rc.2" }
 
 # fbengine_audio's own DLL, native/fbengine_audio, built for each target into native/<target>/.
 [native]

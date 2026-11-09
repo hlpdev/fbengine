@@ -10,6 +10,21 @@ FetchContent_MakeAvailable(Catch2)
 list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 include(Catch)
 
+# What a test has before ctest stops it: a GPU test's 300 s, an out-of-memory test's 120 s, and a
+# fuzz's, race's, or soak's 300 s (its slowest takes 47 s on Windows in Debug). A sanitizer's build
+# gives every test an hour, as ThreadSanitizer's run of a GPU test is many times its own: these,
+# ctest's own default, which sanitizers.yml sets, and each add_test's at the end of this file.
+if(FBENGINE_SANITIZE)
+  set(fbengine_sanitized_timeout 3600)
+  set(fbengine_gpu_timeout 3600)
+  set(fbengine_oom_timeout 3600)
+  set(fbengine_stability_timeout 3600)
+else()
+  set(fbengine_gpu_timeout 300)
+  set(fbengine_oom_timeout 120)
+  set(fbengine_stability_timeout 300)
+endif()
+
 # ctest puts the toolchain's DLLs (MinGW's libstdc++ and friends) on PATH for the tests, so
 # they run from any terminal.
 set(fbengine_test_dll_paths "")
@@ -44,12 +59,24 @@ if(NOT fbengine_vulkan_driver STREQUAL "")
   cmake_path(NATIVE_PATH fbengine_vulkan_driver fbengine_vulkan_driver)
   set(fbengine_vulkan_environment "VK_DRIVER_FILES=${fbengine_vulkan_driver}")
 endif()
-# Every Catch2 test found at build time sees only the tests' Vulkan driver too.
+# Every Catch2 test found at build time sees only the tests' Vulkan driver too, or, for tests that
+# start no GPU, fbengine_discover_environment instead: one variable, as Catch's discovery splits a
+# list's, and a test's ENVIRONMENT is the last it's given.
+# A call gives no ENVIRONMENT of its own: where the driver is the job's, as macOS's MoltenVK
+# is, the environment is "", which passing ${ARGV} on drops, and the property after it, a
+# TIMEOUT, went as its value.
 function(catch_discover_tests)
-  if(fbengine_vulkan_environment STREQUAL "")
+  if("ENVIRONMENT" IN_LIST ARGV)
+    message(FATAL_ERROR "catch_discover_tests(${ARGV0}) gives an ENVIRONMENT, which this one does")
+  endif()
+  set(environment "${fbengine_vulkan_environment}")
+  if(DEFINED fbengine_discover_environment)
+    set(environment "${fbengine_discover_environment}")
+  endif()
+  if(environment STREQUAL "")
     _catch_discover_tests(${ARGV})
   else()
-    _catch_discover_tests(${ARGV} PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}")
+    _catch_discover_tests(${ARGV} PROPERTIES ENVIRONMENT "${environment}")
   endif()
 endfunction()
 
@@ -71,7 +98,7 @@ add_executable(fbengine_gpu_tests gpu/vulkan_tests.cpp gpu/present_tests.cpp
                gpu/buffer_tests.cpp gpu/graph_tests.cpp gpu/canvas_tests.cpp
                gpu/environment_tests.cpp
                gpu/pixels_tests.cpp gpu/text_tests.cpp gpu/example_tests.cpp
-               gpu/scene_tests.cpp
+               gpu/scene_tests.cpp gpu/swapchain_tests.cpp
                golden/golden.cpp golden/golden_tests.cpp golden/stb.cpp)
 target_link_libraries(fbengine_gpu_tests PRIVATE volk Vulkan::Headers Catch2::Catch2WithMain
                       fbengine_internal)
@@ -92,11 +119,11 @@ fbengine_add_shaders(TARGETS fbengine_gpu_tests NAMESPACE fbe::test_shaders
                      SHADERS gpu/shaders/triangle.slang gpu/shaders/textured.slang
                              gpu/shaders/shape.slang gpu/shaders/points.slang
                              gpu/shaders/spheres.slang gpu/shaders/poles.slang
-                             gpu/shaders/game_shader.slang
+                             gpu/shaders/game_shader.slang gpu/shaders/game_pass.slang
                      INCLUDES gpu/shaders/own)
 catch_discover_tests(fbengine_gpu_tests TEST_PREFIX "gpu." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}"
-                     PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}" TIMEOUT 300)
+                     PROPERTIES TIMEOUT ${fbengine_gpu_timeout})
 
 # The scene's insides, built in from fbengine_internal: how moves are run, and their scratch.
 add_executable(fbengine_scene_internal_tests scene/moves_tests.cpp)
@@ -152,6 +179,18 @@ if(FBENGINE_FB_TESTS)
                            "FBENGINE_FAKE_SLANGC=$<TARGET_FILE:fbengine_fake_slangc>;FBENGINE_WRONG_SLANGC=$<TARGET_FILE:fbengine_wrong_slangc>;FBENGINE_FAKE_SLANGC_LOG=${CMAKE_CURRENT_BINARY_DIR}/fake_slangc.log;FBENGINE_FAKE_SLANGC_SPV=${CMAKE_CURRENT_BINARY_DIR}/test_shaders/game_shader.spv;FBENGINE_SLANGC=${FBENGINE_SLANGC};SDL_VIDEO_DRIVER=offscreen;FBENGINE_TEST_FONTS=${harfbuzz_SOURCE_DIR}/test/api/fonts;FBENGINE_OWN_TEST_FONTS=${CMAKE_CURRENT_SOURCE_DIR}/fonts;FBENGINE_PACKAGES=${PROJECT_SOURCE_DIR}/packages")
     endif()
   endforeach()
+  # A pass and a material's shader cooked as a game's are, at test time, so they're always this
+  # build's, for the editor's tests, which can't cook, as it doesn't depend on fbengine_tools.
+  set(fbengine_cooked_shaders "${CMAKE_CURRENT_BINARY_DIR}/cooked_shaders")
+  add_test(NAME tools.cooked_shaders
+           COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/cooked_shaders"
+                   -- "${CMAKE_CURRENT_SOURCE_DIR}/cooked_shaders" "${fbengine_cooked_shaders}")
+  set_tests_properties(tools.cooked_shaders PROPERTIES FIXTURES_SETUP cooked_shaders TIMEOUT 300
+                       ENVIRONMENT "FBENGINE_SLANGC=${FBENGINE_SLANGC};FBENGINE_PACKAGES=${PROJECT_SOURCE_DIR}/packages"
+                       PASS_REGULAR_EXPRESSION "\ncooked 2 shaders\r?\n$")
+  set_tests_properties(fbengine_editor.package PROPERTIES FIXTURES_REQUIRED cooked_shaders)
+  set_property(TEST fbengine_editor.package APPEND PROPERTY ENVIRONMENT
+               "FBENGINE_COOKED_SHADERS=${fbengine_cooked_shaders}")
 
   # A program that ends with the GPU going, each way it can, and has to end: Windows' ending a process
   # with it going seems to have waited for good on CI. An end of its own stops the GPU first, and says
@@ -208,7 +247,7 @@ if(FBENGINE_FB_TESTS)
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        FIXTURES_SETUP model_frames TIMEOUT 300
                        PASS_REGULAR_EXPRESSION "
-25 of 25 frames as worked out\r?\n$")
+32 of 32 frames as worked out\r?\n$")
   # What masks.bin and worked_out.fb were worked out from, and that it refuses what it can't work out.
   find_program(FBENGINE_PYTHON NAMES python3 python)
   if(FBENGINE_PYTHON)
@@ -220,10 +259,57 @@ if(FBENGINE_FB_TESTS)
              COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_exports_test.py")
     set_tests_properties(tools.check_exports PROPERTIES PASS_REGULAR_EXPRESSION "macOS side holds")
     # Each target that builds gltf.cpp reads the simdjson fastgltf fetched, as its own compile says.
+    # With no compile_commands.json, as under the Visual Studio generator, it says so and is skipped.
     add_test(NAME tools.check_simdjson
-             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_simdjson.py" "${PROJECT_BINARY_DIR}")
-    set_tests_properties(tools.check_simdjson PROPERTIES
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_simdjson.py" "${PROJECT_BINARY_DIR}"
+                     "${fbengine_simdjson_folder}/simdjson.h")
+    set_tests_properties(tools.check_simdjson PROPERTIES SKIP_RETURN_CODE 77
                          PASS_REGULAR_EXPRESSION "targets read the simdjson fastgltf fetched")
+    add_test(NAME tools.check_simdjson_reads
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_simdjson_test.py")
+    set_tests_properties(tools.check_simdjson_reads PROPERTIES
+                         PASS_REGULAR_EXPRESSION "reads commands and rules as it should")
+    # miniaudio's decoders wrap a signed int's overflow, which a corrupt file's FLAC overflows.
+    add_test(NAME tools.miniaudio_wraps
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_miniaudio_wraps.py"
+                     "${PROJECT_BINARY_DIR}")
+    set_tests_properties(tools.miniaudio_wraps PROPERTIES SKIP_RETURN_CODE 77
+                         PASS_REGULAR_EXPRESSION "decoders wrap a signed int's overflow")
+    # Each DLL's notices name every library it links, as the build links it, and that check fails as
+    # it should. The build's link graph is CMake's file API's codemodel, which this asks for, and
+    # CMake answers as it generates.
+    cmake_file_api(QUERY API_VERSION 1 CODEMODEL 2)
+    add_test(NAME tools.check_notices
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_notices.py" "${PROJECT_BINARY_DIR}"
+                     "${PROJECT_SOURCE_DIR}")
+    set_tests_properties(tools.check_notices PROPERTIES
+                         PASS_REGULAR_EXPRESSION "name every library they link")
+    add_test(NAME tools.check_notices_test
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_notices_test.py")
+    set_tests_properties(tools.check_notices_test PROPERTIES PASS_REGULAR_EXPRESSION "cases hold")
+    # Each library's `fb publish --dry-run` passes, in publish.yml's order, with a folder of its own
+    # for the registry, so nothing's uploaded.
+    add_test(NAME tools.check_publish
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_publish.py" "${FBENGINE_FB}"
+                     "${PROJECT_SOURCE_DIR}")
+    set_tests_properties(tools.check_publish PROPERTIES
+                         PASS_REGULAR_EXPRESSION "libraries' dry runs passed, in publish.yml's order"
+                         TIMEOUT 900)
+    add_test(NAME tools.check_publish_test
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/check_publish_test.py")
+    set_tests_properties(tools.check_publish_test PROPERTIES PASS_REGULAR_EXPRESSION "cases hold")
+    # The editor packed for this target as publish.yml packs it for the release: its program by
+    # this OS's name, its DLLs, and the notices of what fb build bundled and of each DLL's package.
+    add_test(NAME tools.pack_editor
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/pack_editor.py" "${FBENGINE_FB}"
+                     "${FBENGINE_VERSION}" "${FBENGINE_TARGET}" "${CMAKE_CURRENT_BINARY_DIR}/packed_editor"
+                     "${PROJECT_SOURCE_DIR}")
+    set_tests_properties(tools.pack_editor PROPERTIES
+                         PASS_REGULAR_EXPRESSION "packed the editor, its DLLs, and the notices"
+                         TIMEOUT 900)
+    add_test(NAME tools.pack_editor_test
+             COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/pack_editor_test.py")
+    set_tests_properties(tools.pack_editor_test PROPERTIES PASS_REGULAR_EXPRESSION "cases hold")
   endif()
   add_test(NAME models.golden
            COMMAND fbengine_gpu_tests "the sample models' frames match their golden images")
@@ -256,7 +342,7 @@ if(FBENGINE_FB_TESTS)
   add_test(NAME examples.hello
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/hello")
   set_tests_properties(examples.hello PROPERTIES
-                       PASS_REGULAR_EXPRESSION "Running hello[^\n]*\nfbengine ${PROJECT_VERSION}\r?\n$")
+                       PASS_REGULAR_EXPRESSION "Running hello[^\n]*\nfbengine ${FBENGINE_VERSION}\r?\n$")
 
   # Input's cases that need a process of their own: what panics, and what's set before the video
   # starts, each checked against what it prints.
@@ -516,6 +602,64 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(examples.slack_water.end_screen PROPERTIES RESOURCE_LOCK slack_water
                        ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
+  # Its release, cooked once, within a budget, which each test of what it cooks reads, saying what each
+  # file took to cook.
+  add_test(NAME examples.slack_water.cook
+           COMMAND "${CMAKE_COMMAND}" "-DFB=${FBENGINE_FB}"
+                   "-DSOURCE=${PROJECT_SOURCE_DIR}/examples/slack_water" -DBUDGET=120
+                   -P "${CMAKE_CURRENT_SOURCE_DIR}/slack_water_cook.cmake")
+  set_tests_properties(examples.slack_water.cook PROPERTIES RESOURCE_LOCK slack_water
+                       ENVIRONMENT "FBENGINE_SLANGC=${FBENGINE_SLANGC}"
+                       FIXTURES_SETUP slack_water_cook TIMEOUT 600)
+  # Its front end, by the mouse, the keyboard, and a gamepad: the title over the island, the pause,
+  # and Options, each frame saved and checked, its options in a folder of its own.
+  add_test(NAME examples.slack_water.menus
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                   -- --menus "${PROJECT_BINARY_DIR}/example-frames/slack_water_menus")
+  set_tests_properties(examples.slack_water.menus PROPERTIES RESOURCE_LOCK slack_water
+                       ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
+  # Walks to the bright ending and the dim with sound captions on, each captioned sound's caption
+  # shown in the frame it starts, and the dim's flood's surf.
+  add_test(NAME examples.slack_water.captions
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                   -- --captions bright)
+  set_tests_properties(examples.slack_water.captions PROPERTIES RESOURCE_LOCK slack_water
+                       ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION "each shown in its frame True"
+                       FAIL_REGULAR_EXPRESSION "panic|error|False"
+                       SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
+  add_test(NAME examples.slack_water.captions_dim
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                   -- --captions dim)
+  set_tests_properties(examples.slack_water.captions_dim PROPERTIES RESOURCE_LOCK slack_water
+                       ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION "each shown in its frame True, flooded, the surf shown True"
+                       FAIL_REGULAR_EXPRESSION "panic|error|False"
+                       SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
+  # An option changed by the mouse, the keyboard, and a gamepad, kept: set on one run, and found on the
+  # next, in what's shown and what's drawn.
+  set(slack_water_kept "${PROJECT_BINARY_DIR}/example-frames/slack_water_kept")
+  add_test(NAME examples.slack_water.kept_clean COMMAND "${CMAKE_COMMAND}" -E rm -rf "${slack_water_kept}")
+  set_tests_properties(examples.slack_water.kept_clean PROPERTIES RESOURCE_LOCK slack_water
+                       FIXTURES_SETUP slack_water_kept_clean)
+  foreach(stage IN ITEMS set check)
+    add_test(NAME examples.slack_water.kept_${stage}
+             COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                     -- --kept ${stage} "${slack_water_kept}")
+    # A pass is its lines, which ignores how it exits, so a panic, a leak, or an exit that isn't 0
+    # fails it.
+    set_tests_properties(examples.slack_water.kept_${stage} PROPERTIES RESOURCE_LOCK slack_water
+                         ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                         FAIL_REGULAR_EXPRESSION "panic:|leak|exited with code [1-9]"
+                         SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
+  endforeach()
+  set_tests_properties(examples.slack_water.kept_set PROPERTIES
+                       FIXTURES_REQUIRED slack_water_kept_clean FIXTURES_SETUP slack_water_kept_set
+                       PASS_REGULAR_EXPRESSION "\nset: quality LOW, look 1[.]20, invert True, back at the title True\r?\n")
+  set_tests_properties(examples.slack_water.kept_check PROPERTIES
+                       FIXTURES_REQUIRED slack_water_kept_set
+                       PASS_REGULAR_EXPRESSION "\nafter a restart: quality LOW, look 1[.]20, invert True\r?\nshown as Quality: Low\r?\nits bloom off True\r?\n")
   # As it ships: a release, from its cooked pak, into a folder this clears, as the game never does.
   set(slack_water_cooked "${PROJECT_BINARY_DIR}/example-frames/slack_water_cooked")
   add_test(NAME examples.slack_water.cooked_clean
@@ -529,7 +673,7 @@ if(FBENGINE_FB_TESTS)
                    "${slack_water_cooked}")
   set_tests_properties(examples.slack_water.cooked PROPERTIES RESOURCE_LOCK slack_water
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
-                       FIXTURES_REQUIRED slack_water_cooked_clean
+                       FIXTURES_REQUIRED "slack_water_cooked_clean;slack_water_cook"
                        FIXTURES_SETUP slack_water_cooked_views
                        SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 600)
   # What it draws from its pak is close to what it draws from its files.
@@ -539,7 +683,7 @@ if(FBENGINE_FB_TESTS)
                    "${slack_water_cooked}" 25)
   set_tests_properties(examples.slack_water.cooked_alike PROPERTIES RESOURCE_LOCK slack_water
                        ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen"
-                       FIXTURES_REQUIRED "slack_water_views;slack_water_cooked_views"
+                       FIXTURES_REQUIRED "slack_water_views;slack_water_cooked_views;slack_water_cook"
                        TIMEOUT 300)
   # Which is to say something: not from a pak, or against another walk's words, it says so.
   add_test(NAME examples.slack_water.cooked_not
@@ -552,7 +696,7 @@ if(FBENGINE_FB_TESTS)
                    -- --cooked "${PROJECT_SOURCE_DIR}/examples/slack_water/tests/walk3d_dark.txt"
                    "${PROJECT_BINARY_DIR}/example-frames/slack_water_cooked_other")
   set_tests_properties(examples.slack_water.cooked_not examples.slack_water.cooked_other_walk
-                       PROPERTIES RESOURCE_LOCK slack_water
+                       PROPERTIES RESOURCE_LOCK slack_water FIXTURES_REQUIRED slack_water_cook
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 600)
   set_tests_properties(examples.slack_water.cooked_not PROPERTIES
@@ -571,6 +715,7 @@ if(FBENGINE_FB_TESTS)
                      "-DSUFFIX=${CMAKE_EXECUTABLE_SUFFIX}" ${ARGN}
                      -P "${CMAKE_CURRENT_SOURCE_DIR}/slack_water_shipped.cmake")
     set_tests_properties(examples.slack_water.${name} PROPERTIES RESOURCE_LOCK slack_water
+                         FIXTURES_REQUIRED slack_water_cook
                          ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                          SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 600)
   endfunction()
@@ -628,8 +773,10 @@ if(FBENGINE_FB_TESTS)
                        ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
   # Its flow, and its tools' sounds and materials, by their numbers, with nothing drawn.
+  # From the game's folder, as its tests read its tools' sounds.fb by their path.
   add_test(NAME examples.slack_water.rules
-           COMMAND "${FBENGINE_FB}" --color never test "${PROJECT_SOURCE_DIR}/examples/slack_water")
+           COMMAND "${FBENGINE_FB}" --color never test "${PROJECT_SOURCE_DIR}/examples/slack_water"
+           WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/examples/slack_water")
   set_tests_properties(examples.slack_water.rules PROPERTIES RESOURCE_LOCK slack_water TIMEOUT 300)
   add_test(NAME examples.slack_water.tools_rules
            COMMAND "${FBENGINE_FB}" --color never test
@@ -643,7 +790,7 @@ if(FBENGINE_FB_TESTS)
                    -- --frames "${PROJECT_BINARY_DIR}/example-frames/slack_water")
   set_tests_properties(examples.slack_water.frames PROPERTIES RESOURCE_LOCK slack_water
                        ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
-                       SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300
+                       SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 600
                        FIXTURES_SETUP slack_water_views)
   # Its assets: what its tools make, here, and what's kept in the repository, each loaded as the game
   # loads them, and the two the same.
@@ -652,7 +799,7 @@ if(FBENGINE_FB_TESTS)
                    -- "${PROJECT_BINARY_DIR}/example-frames/slack_water_made")
   set_tests_properties(examples.slack_water.tools PROPERTIES
                        FIXTURES_SETUP slack_water_made TIMEOUT 300
-                       PASS_REGULAR_EXPRESSION "18 textures\r?\n13 sounds\r?\n8 joints in Pip\r?\n$")
+                       PASS_REGULAR_EXPRESSION "18 textures\r?\n29 sounds\r?\n8 joints in Pip\r?\n$")
   foreach(checked IN ITEMS "made=${PROJECT_BINARY_DIR}/example-frames/slack_water_made"
                            "kept=${PROJECT_SOURCE_DIR}/examples/slack_water/assets")
     string(FIND "${checked}" "=" split)
@@ -674,6 +821,14 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(examples.slack_water.assets_match PROPERTIES RESOURCE_LOCK slack_water
                        FIXTURES_REQUIRED slack_water_made
                        ENVIRONMENT "SLACK_WATER_CHECKS=1;SDL_VIDEO_DRIVER=offscreen" TIMEOUT 300)
+  # The sea's shader is cooked by the game's build step, which every one of its tests runs, by the
+  # Slang release the engine's own are.
+  get_directory_property(fbengine_tests_here TESTS)
+  foreach(test IN LISTS fbengine_tests_here)
+    if(test MATCHES "^examples[.]slack_water[.]")
+      set_property(TEST "${test}" APPEND PROPERTY ENVIRONMENT "FBENGINE_SLANGC=${FBENGINE_SLANGC}")
+    endif()
+  endforeach()
   foreach(name IN ITEMS sprites_over_a_scene pixels_of_images_and_textures
           textures_by_their_settings)
     add_test(NAME proof.${name}_no_gpu
@@ -695,6 +850,8 @@ if(FBENGINE_FB_TESTS)
       "whatever its shading: 255, 18[78], 137"
       "its UVs, a half each: 18[789], 18[789], 0"
       "its normal, toward the camera: 18[78], 18[78], 255"
+      "where it is in the world, a quarter each: 18[6-8], 13[4-7], 9[6-9]"
+      "its normal in the world, along x: 255, 18[78], 18[78]"
       "its vertices' color, a half each: 18[78], 18[78], 18[78]"
       "what it would have drawn, with no layer: 137, 18[78], 255"
       "its layer's texture, a half each: 18[789], 18[789], 18[789]"
@@ -747,6 +904,8 @@ if(FBENGINE_FB_TESTS)
                            "on a slope, sliding moves it across True, standing True"
                            "over a step of 0[.]3 it reaches z -3[.]00, y 0[.]80"
                            "with a step height of 0[.]1 it stops at z -1[.]55"
+                           "moved through a wall, it stops at z -4[.]25"
+                           "teleported through it, it's at z -10[.]00"
                            "a ball into a rock stops at z -3[.]50, y 5[.]00, having hit it True"
                            "iterations by default 8"
                            "SLIDE_HORIZONTAL along a wall: 3[.]000, 1[.]000, -3[.]999"
@@ -953,9 +1112,9 @@ if(FBENGINE_FB_TESTS)
                            "out of the fog: [(]255, 255, 255, 255[)]"
                            "per vertex, range over distance, its middle: [(]113, 113, 113, 255[)]"
                            "and its corner: [(]113, 113, 113, 255[)]"
-                           "within its range: [(]240, 240, 240, 255[)]"
+                           "within its range: [(]255, 255, 255, 255[)]"
                            "the ambient light: [(]128, 128, 128, 255[)]"
-                           "nine lights, eight lighting: [(]192, 192, 192, 255[)]"
+                           "nine lights, eight lighting: [(]158, 158, 158, 255[)]"
                            "forced alpha: [(]188, 188, 188, 255[)]"
                            "AUTO without a texture's alpha OPAQUE"
                            "so opaque: [(]255, 255, 255, 255[)]"
@@ -1138,13 +1297,13 @@ if(FBENGINE_FB_TESTS)
                            "both flag 1 [(][01], [01], [01], 255[)]"
                            "flag 2, a name with _LM, adds [(]4[678], 3[012], 2[234], 255[)]"
                            "flag 3 alone, blank white [(]12[789], 6[345], 3[123], 255[)]"
-                           "flag 3, its diffuse [(][0-9]+, [45][0-9], 2[456], 255[)]"
+                           "flag 3, its diffuse [(](9[89]|10[0-2]), (4[89]|5[0-2]), 2[456], 255[)]"
                            "none, its vertices [(]12[789], 6[345], 3[123], 255[)]"
-                           "a diffuse alone [(][0-9]+, [45][0-9], 2[456], 255[)]"
+                           "a diffuse alone [(](9[89]|10[0-2]), (4[89]|5[0-2]), 2[456], 255[)]"
                            "a lightmap alone [(]18[789], 10[345], 6[123], 255[)]"
                            "a file that isn't there is a slot with nothing [(]18[789], 10[345], 6[123], 255[)]"
-                           "a texture's blend stays its first [(]20[012], [0-9]+, [45][0-9], 255[)]"
-                           "another folder's of the same name, the first's [(]20[012], 1?[0-9]+, 5[012], 255[)]"
+                           "a texture's blend stays its first [(]20[012], (9[89]|10[0-2]), (4[89]|5[0-2]), 255[)]"
+                           "another folder's of the same name, the first's [(]20[012], (9[89]|10[0-2]), 5[012], 255[)]"
                            "placed, showing True, the template False"
                            "what falls rests on its floor 40[.]000, 0[.]251, 0[.]000"
                            "through the pane, to the floor 42[.]000, 0[.]251, 0[.]000"
@@ -1319,8 +1478,12 @@ add_executable(fbengine_scene_tests scene/world_tests.cpp scene/transform_tests.
                scene/handles_tests.cpp scene/pick_tests.cpp scene/sprite_tests.cpp
                scene/plane_tests.cpp scene/draw_tests.cpp
                scene/terrain_tests.cpp scene/clusters_tests.cpp scene/effects_tests.cpp
-               "${PROJECT_SOURCE_DIR}/native/fbengine/scene/bvh.cpp")
+               scene/stability_tests.cpp "${PROJECT_SOURCE_DIR}/native/fbengine/scene/bvh.cpp")
 target_link_libraries(fbengine_scene_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
+if(WIN32)
+  # What the soak measures the process holds by.
+  target_link_libraries(fbengine_scene_tests PRIVATE psapi)
+endif()
 fbengine_set_warnings(fbengine_scene_tests)
 # bvh.cpp, built here too, rounds as the DLL's does.
 if(NOT MSVC)
@@ -1349,13 +1512,19 @@ if(UNIX)
   set_tests_properties(scene.ends_during_moves PROPERTIES
                        PASS_REGULAR_EXPRESSION "ended" TIMEOUT 300)
 endif()
-catch_discover_tests(fbengine_scene_tests TEST_PREFIX "scene."
+# Their game's shaders are SPIR-V made by hand, to try the checks before SPIRV-Tools' validator,
+# which isn't whole enough for it; the GPU's tests validate what Slang makes. They start no GPU.
+set(fbengine_discover_environment "FBE_SPIRV_VALIDATION=0")
+catch_discover_tests(fbengine_scene_tests TEST_PREFIX "scene." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}" "${PROJECT_BINARY_DIR}/native/fbengine")
+unset(fbengine_discover_environment)
 
 # The scene's panics, each a case of tests/scene/panics run on its own, which has to panic saying
 # what it does.
 if(FBENGINE_FB_TESTS)
   set(fbengine_scene_panics
+      "position-not-finite=SetPosition on a Pivot: a position isn't finite"
+      "translate-past-a-float=Translate on a Pivot: where the translation goes isn't finite"
       "particles-colors=SetColors on a Particles: a particle's alpha is 0 to 1, not 2"
       "particles-roll=SetRoll on a Particles: a particle's roll is up to 0 to Pi each way, not -1"
       "decal-limit=Decal: a decal's limit is above 0 and up to Pi / 2, not 2"
@@ -1385,6 +1554,7 @@ if(FBENGINE_FB_TESTS)
       "lit-by-freed=LitBy on a World that was freed"
       "map-as-color=SetMap on a Material: a material's metal-rough, normal, and occlusion maps are RGBA8_LINEAR"
       "tangent-w=SetTangents on a Geometry: a tangent's w is 1 or -1, not 0.25"
+      "remove-pass-none=RemovePass on a Camera: that isn't one of the camera's passes"
       "layer-uv-zero=SetLayerUv on a Material: a layer's UV scale is finite and not 0, not \\(0, 1\\)"
       "layer-texture-out-of-range=SetTexture on a Material: a material's layers are 0 to 7"
       "joints-wrong-count=SetJoints on a Geometry: a surface of 24 vertices has as many joints, or none, not 1"
@@ -1510,29 +1680,42 @@ catch_discover_tests(fbengine_physics_tests TEST_PREFIX "physics."
 
 # fbengine_physics' steps, through its DLL, which the tests find where CMake built it.
 add_executable(fbengine_physics_step_tests physics/step_tests.cpp physics/determinism_tests.cpp
-               physics/casts_tests.cpp)
+               physics/casts_tests.cpp physics/state_fuzz_tests.cpp physics/input_fuzz_tests.cpp)
 target_link_libraries(fbengine_physics_step_tests PRIVATE fbengine_physics_native
                       Catch2::Catch2WithMain)
+target_include_directories(fbengine_physics_step_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 fbengine_set_warnings(fbengine_physics_step_tests)
-catch_discover_tests(fbengine_physics_step_tests TEST_PREFIX "physics."
+# A test tagged [stability], a fuzz, race, or soak, is labeled so, for sanitizers.yml.
+catch_discover_tests(fbengine_physics_step_tests TEST_PREFIX "physics." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_physics_native>")
 
 # fbengine_physics' own C++, built into its test, for what only its insides show.
 file(GLOB fbengine_physics_sources CONFIGURE_DEPENDS
      "${PROJECT_SOURCE_DIR}/native/fbengine_physics/*/*.cpp")
 add_executable(fbengine_physics_internal_tests physics/contacts_tests.cpp
-               ${fbengine_physics_sources} physics/float_mode_tests.cpp)
+               ${fbengine_physics_sources} physics/float_mode_tests.cpp physics/leak_tests.cpp
+               physics/soak_tests.cpp stability.cpp own_new.cpp)
 target_include_directories(fbengine_physics_internal_tests PRIVATE
-                           "${PROJECT_SOURCE_DIR}/native/fbengine_physics")
+                           "${PROJECT_SOURCE_DIR}/native/fbengine_physics" "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(fbengine_physics_internal_tests PRIVATE FBE_PHYSICS_BUILDING
-                           FBE_VERSION="${PROJECT_VERSION}")
+                           FBE_VERSION="${FBENGINE_VERSION}")
 target_link_libraries(fbengine_physics_internal_tests PRIVATE Jolt Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_physics_internal_tests)
-catch_discover_tests(fbengine_physics_internal_tests TEST_PREFIX "physics."
+# A test tagged [stability], a fuzz, race, or soak, is labeled so, for sanitizers.yml.
+catch_discover_tests(fbengine_physics_internal_tests TEST_PREFIX "physics." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}")
 
 # fbengine_physics' examples, checked against what they print.
 if(FBENGINE_FB_TESTS)
+  # A dedicated server's run, with the GPU disabled and no Vulkan driver given, so if anything
+  # loaded Vulkan it would fail: a World, a scene, physics, audio on MANUAL, a textured model
+  # loaded without its images, and a Texture refused.
+  add_test(NAME examples.dedicated_server
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/dedicated_server"
+                   -- "${PROJECT_SOURCE_DIR}/tests/models")
+  set_tests_properties(examples.dedicated_server PROPERTIES TIMEOUT 120
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;VK_DRIVER_FILES=${PROJECT_BINARY_DIR}/no-such-driver.json"
+                       PASS_REGULAR_EXPRESSION "a texture refused: the GPU is disabled\r?\nserved, the GPU never started\r?\n$")
   add_test(NAME examples.falling_boxes
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/falling_boxes")
   set_tests_properties(examples.falling_boxes PROPERTIES PASS_REGULAR_EXPRESSION
@@ -1662,7 +1845,7 @@ add_executable(fbengine_jobs_tests jobs/jobs_tests.cpp
 target_include_directories(fbengine_jobs_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
 target_link_libraries(fbengine_jobs_tests PRIVATE Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_jobs_tests)
-catch_discover_tests(fbengine_jobs_tests TEST_PREFIX "jobs."
+catch_discover_tests(fbengine_jobs_tests TEST_PREFIX "jobs." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}")
 
 # res://'s paths, folders, and paks, built into the tests from their own sources.
@@ -1674,7 +1857,8 @@ add_executable(fbengine_vfs_tests vfs/vfs_tests.cpp
 target_include_directories(fbengine_vfs_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
 target_link_libraries(fbengine_vfs_tests PRIVATE Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_vfs_tests)
-catch_discover_tests(fbengine_vfs_tests TEST_PREFIX "vfs."
+catch_discover_tests(fbengine_vfs_tests TEST_PREFIX "vfs." ADD_TAGS_AS_LABELS
+                     PROPERTIES TIMEOUT ${fbengine_gpu_timeout}
                      DL_PATHS "${fbengine_test_dll_paths}")
 
 # A program that awaits jobs before its first Flip, which the main scheduler's ticks hand over.
@@ -1688,7 +1872,7 @@ endif()
 # The loaders' decoders, built into the tests from their own sources, with libktx's writer and
 # encoder, which make the KTX2 files the tests read, and stb_image_write, the PNGs and JPEGs.
 add_executable(fbengine_assets_tests assets/images_tests.cpp assets/models_tests.cpp
-               assets/files.cpp
+               assets/fuzz_tests.cpp assets/files.cpp
                "${PROJECT_SOURCE_DIR}/native/fbengine/assets/image.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/assets/gltf.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/assets/stb.cpp"
@@ -1706,6 +1890,12 @@ target_compile_definitions(fbengine_assets_tests PRIVATE
 # stb_image_write's code, C as it's written, without fbengine's C++ warnings.
 add_library(fbengine_stb_write STATIC assets/stb_write.c)
 target_link_libraries(fbengine_stb_write PUBLIC fbengine_stb)
+# Under the sanitizers, UBSan's shift check is off in this file alone: stb_image_write, at stb's commit
+# 003501f6d7a8668ce8b6d875e34dd97ad0d5d5b5, shifts into an int's sign in its JPEG writer
+# (stb_image_write.h:1263, stbiw__jpg_writeBits), which only the tests write their seed images with.
+if(FBENGINE_SANITIZE)
+  set_source_files_properties(assets/stb_write.c PROPERTIES COMPILE_OPTIONS -fno-sanitize=shift)
+endif()
 target_link_libraries(fbengine_assets_tests PRIVATE Catch2::Catch2WithMain fbengine_stb_write ktx
                       fastgltf::fastgltf)
 fbengine_set_warnings(fbengine_assets_tests)
@@ -1713,7 +1903,8 @@ fbengine_set_warnings(fbengine_assets_tests)
 if(MINGW)
   target_link_options(fbengine_assets_tests PRIVATE -mcrtdll=ucrt)
 endif()
-catch_discover_tests(fbengine_assets_tests TEST_PREFIX "assets."
+catch_discover_tests(fbengine_assets_tests TEST_PREFIX "assets." ADD_TAGS_AS_LABELS
+                     PROPERTIES TIMEOUT ${fbengine_gpu_timeout}
                      DL_PATHS "${fbengine_test_dll_paths}")
 
 # What Assets' mounts panic for, each by a run of tests/assets/panics, which says it, at the line
@@ -1762,14 +1953,46 @@ fbengine_set_warnings(fbengine_app_tests)
 catch_discover_tests(fbengine_app_tests TEST_PREFIX "app."
                      DL_PATHS "${fbengine_test_dll_paths}")
 
-# fbengine_video, through its DLL, against its test videos with bytes changed at random.
-add_executable(fbengine_video_tests video/mutation_tests.cpp)
+# fbengine_video, through its DLL, against its test videos with bytes changed at random, fuzzed,
+# and played a thousand times over.
+add_executable(fbengine_video_tests video/mutation_tests.cpp video/fuzz_tests.cpp
+               video/player_tests.cpp stability.cpp)
 target_link_libraries(fbengine_video_tests PRIVATE fbengine_video_native Catch2::Catch2WithMain)
+target_include_directories(fbengine_video_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+if(WIN32)
+  target_link_libraries(fbengine_video_tests PRIVATE psapi)
+endif()
 target_compile_definitions(fbengine_video_tests PRIVATE
                            FBE_VIDEO_MEDIA="${PROJECT_SOURCE_DIR}/packages/fbengine_video/tests/media")
 fbengine_set_warnings(fbengine_video_tests)
-catch_discover_tests(fbengine_video_tests TEST_PREFIX "video."
-                     DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_video_native>")
+# A test tagged [stability], a fuzz, race, or soak, is labeled so, for sanitizers.yml.
+catch_discover_tests(fbengine_video_tests TEST_PREFIX "video." ADD_TAGS_AS_LABELS
+                     DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_video_native>"
+                     PROPERTIES TIMEOUT ${fbengine_stability_timeout})
+
+# The video soak, fbengine_video's sources built in with tests/own_new.cpp, which counts each of
+# their allocations that's live, as a DLL's own operator new it couldn't.
+find_package(Threads REQUIRED)
+file(GLOB fbengine_video_soak_sources CONFIGURE_DEPENDS
+     "${PROJECT_SOURCE_DIR}/native/fbengine_video/*/*.cpp")
+add_executable(fbengine_video_soak_tests video/soak_tests.cpp own_new.cpp stability.cpp
+               ${fbengine_video_soak_sources})
+target_include_directories(fbengine_video_soak_tests PRIVATE
+                           "${PROJECT_SOURCE_DIR}/native/fbengine_video" "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_definitions(fbengine_video_soak_tests PRIVATE FBE_VIDEO_BUILDING
+                           FBE_VERSION="${FBENGINE_VERSION}"
+                           FBE_VIDEO_MEDIA="${PROJECT_SOURCE_DIR}/packages/fbengine_video/tests/media")
+target_link_libraries(fbengine_video_soak_tests PRIVATE pl_mpeg Threads::Threads
+                      Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_video_soak_tests)
+# MinGW's C++ library, a DLL, would allocate and free with its own operator new, which the count
+# can't see; in the test, it's what's counted, as on Linux and macOS, where the test's replaces it.
+if(MINGW)
+  target_link_options(fbengine_video_soak_tests PRIVATE -static-libstdc++ -static-libgcc)
+endif()
+catch_discover_tests(fbengine_video_soak_tests TEST_PREFIX "video." ADD_TAGS_AS_LABELS
+                     DL_PATHS "${fbengine_test_dll_paths}"
+                     PROPERTIES TIMEOUT ${fbengine_stability_timeout})
 
 # A video's thread, built in with a decoder of the test's, for what only its timing shows.
 add_executable(fbengine_video_thread_tests video/thread_tests.cpp
@@ -1777,7 +2000,7 @@ add_executable(fbengine_video_thread_tests video/thread_tests.cpp
 target_include_directories(fbengine_video_thread_tests PRIVATE
                            "${PROJECT_SOURCE_DIR}/native/fbengine_video")
 target_compile_definitions(fbengine_video_thread_tests PRIVATE FBE_VIDEO_BUILDING
-                           FBE_VERSION="${PROJECT_VERSION}")
+                           FBE_VERSION="${FBENGINE_VERSION}")
 target_link_libraries(fbengine_video_thread_tests PRIVATE Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_video_thread_tests)
 catch_discover_tests(fbengine_video_thread_tests TEST_PREFIX "video."
@@ -1925,7 +2148,7 @@ add_executable(fbengine_text_tests text/text_tests.cpp text/fuzz_tests.cpp ${fbe
                "${PROJECT_SOURCE_DIR}/native/fbengine/core/core.cpp")
 target_include_directories(fbengine_text_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
 target_compile_definitions(fbengine_text_tests PRIVATE FBE_BUILDING
-                           FBE_VERSION="${PROJECT_VERSION}"
+                           FBE_VERSION="${FBENGINE_VERSION}"
                            FBE_TEST_FONTS="${harfbuzz_SOURCE_DIR}/test/api/fonts"
                            FBE_OWN_TEST_FONTS="${CMAKE_CURRENT_SOURCE_DIR}/fonts"
                            FBE_TEXT_CORPUS="${CMAKE_CURRENT_SOURCE_DIR}/text/corpus"
@@ -1943,7 +2166,7 @@ add_executable(fbengine_collide_tests collide/collide_tests.cpp
                "${PROJECT_SOURCE_DIR}/native/fbengine/core/core.cpp")
 target_include_directories(fbengine_collide_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
 target_compile_definitions(fbengine_collide_tests PRIVATE FBE_BUILDING
-                           FBE_VERSION="${PROJECT_VERSION}")
+                           FBE_VERSION="${FBENGINE_VERSION}")
 target_link_libraries(fbengine_collide_tests PRIVATE SDL3::SDL3-static Catch2::Catch2WithMain)
 # Its float arithmetic as written, never fused, as fbengine_native's is, so its corners and the
 # GPU's it's checked against round alike on every target.
@@ -2075,6 +2298,18 @@ if(FBENGINE_FB_TESTS)
   endforeach()
 endif()
 
+# A soak of the asset pipeline, headless: a folder cooked, its pak mounted, loaded, reloaded, and
+# let go of, 2000 times, the loads and holds coming back to as many each round, and the process's
+# memory, sampled every 100 rounds after the first quarter, not rising by more than 2 KiB a round,
+# by its least-squares slope; tests/soak says how it went.
+if(FBENGINE_FB_TESTS)
+  add_test(NAME soak.cook_load_reload COMMAND "${FBENGINE_FB}" --color never run
+           "${CMAKE_CURRENT_SOURCE_DIR}/soak")
+  set_tests_properties(soak.cook_load_reload PROPERTIES TIMEOUT 1800 LABELS stability
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;FBENGINE_SLANGC=${FBENGINE_SLANGC}"
+                       PASS_REGULAR_EXPRESSION "\nsoaked\r?\n$")
+endif()
+
 # The job system's threads, started as the process ends, which mustn't hang its exit.
 if(FBENGINE_FB_TESTS)
   add_test(NAME jobs.ends COMMAND "${FBENGINE_FB}" --color never run
@@ -2157,28 +2392,56 @@ catch_discover_tests(fbengine_audio_tests TEST_PREFIX "audio."
 
 # fbengine_audio_native's C API, with a thread of the test's own mixing, as a device's does, and on
 # Windows, with OLE, on the null backend.
-add_executable(fbengine_audio_native_tests audio/native_tests.cpp audio/memory_tests.cpp)
+add_executable(fbengine_audio_native_tests audio/native_tests.cpp audio/memory_tests.cpp
+               audio/fuzz_tests.cpp audio/race_tests.cpp audio/vorbis_tests.cpp stability.cpp)
 target_link_libraries(fbengine_audio_native_tests PRIVATE fbengine_audio_native
                       Catch2::Catch2WithMain)
+target_include_directories(fbengine_audio_native_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(fbengine_audio_native_tests PRIVATE
-                           FBE_AUDIO_TEST_DATA="${PROJECT_SOURCE_DIR}/packages/fbengine_audio/tests/data")
+                           FBE_AUDIO_TEST_DATA="${PROJECT_SOURCE_DIR}/packages/fbengine_audio/tests/data"
+                           FBE_AUDIO_TEST_CORPUS="${CMAKE_CURRENT_SOURCE_DIR}/audio/corpus")
 if(WIN32)
   target_sources(fbengine_audio_native_tests PRIVATE audio/ole_tests.cpp)
-  target_link_libraries(fbengine_audio_native_tests PRIVATE ole32 psapi)
+  target_link_libraries(fbengine_audio_native_tests PRIVATE ole32)
 endif()
 fbengine_set_warnings(fbengine_audio_native_tests)
-catch_discover_tests(fbengine_audio_native_tests TEST_PREFIX "audio."
-                     DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_audio_native>")
+# A test tagged [stability], a fuzz, race, or soak, is labeled so, for sanitizers.yml.
+catch_discover_tests(fbengine_audio_native_tests TEST_PREFIX "audio." ADD_TAGS_AS_LABELS
+                     DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_audio_native>"
+                     PROPERTIES TIMEOUT ${fbengine_stability_timeout})
+
+# The sound soak, fbengine_audio's sources built in with tests/own_new.cpp, which counts each of
+# their allocations that's live, as a DLL's own operator new it couldn't.
+file(GLOB fbengine_audio_soak_sources CONFIGURE_DEPENDS
+     "${PROJECT_SOURCE_DIR}/native/fbengine_audio/*/*.cpp")
+add_executable(fbengine_audio_soak_tests audio/soak_tests.cpp own_new.cpp stability.cpp
+               ${fbengine_audio_soak_sources})
+target_include_directories(fbengine_audio_soak_tests PRIVATE
+                           "${PROJECT_SOURCE_DIR}/native/fbengine_audio" "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_definitions(fbengine_audio_soak_tests PRIVATE FBE_AUDIO_BUILDING
+                           FBE_VERSION="${FBENGINE_VERSION}"
+                           FBE_AUDIO_TEST_CORPUS="${CMAKE_CURRENT_SOURCE_DIR}/audio/corpus")
+target_link_libraries(fbengine_audio_soak_tests PRIVATE fbengine_miniaudio Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_audio_soak_tests)
+# MinGW's C++ library, a DLL, would allocate and free with its own operator new, which the count
+# can't see; in the test, it's what's counted, as on Linux and macOS, where the test's replaces it.
+if(MINGW)
+  target_link_options(fbengine_audio_soak_tests PRIVATE -static-libstdc++ -static-libgcc)
+endif()
+catch_discover_tests(fbengine_audio_soak_tests TEST_PREFIX "audio." ADD_TAGS_AS_LABELS
+                     DL_PATHS "${fbengine_test_dll_paths}"
+                     PROPERTIES TIMEOUT ${fbengine_stability_timeout})
 
 # fbengine_audio_native's C API with each of a call's allocations failing in turn: its sources built
 # into the test, whose operator new fails the one it says.
 file(GLOB fbengine_audio_oom_sources CONFIGURE_DEPENDS
      "${PROJECT_SOURCE_DIR}/native/fbengine_audio/*/*.cpp")
-add_executable(fbengine_audio_oom_tests audio/oom_tests.cpp ${fbengine_audio_oom_sources})
+add_executable(fbengine_audio_oom_tests audio/oom_tests.cpp own_new.cpp
+               ${fbengine_audio_oom_sources})
 target_include_directories(fbengine_audio_oom_tests PRIVATE
-                           "${PROJECT_SOURCE_DIR}/native/fbengine_audio")
+                           "${PROJECT_SOURCE_DIR}/native/fbengine_audio" "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(fbengine_audio_oom_tests PRIVATE FBE_AUDIO_BUILDING
-                           FBE_VERSION="${PROJECT_VERSION}")
+                           FBE_VERSION="${FBENGINE_VERSION}")
 target_link_libraries(fbengine_audio_oom_tests PRIVATE fbengine_miniaudio Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_audio_oom_tests)
 catch_discover_tests(fbengine_audio_oom_tests TEST_PREFIX "audio."
@@ -2200,8 +2463,8 @@ if(FBENGINE_FB_TESTS)
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/audio_panic")
   set_tests_properties(examples.audio_panic PROPERTIES TIMEOUT 60
                        PASS_REGULAR_EXPRESSION "panic: a mistake, with the audio started at [^\n]*\n.*exited with code 101")
-  # Section 6's item 15, by numbers, on no device and the null backend; --watch, for a person to
-  # hear, keeps to the null backend under --frames.
+  # Section 6's item 15, and item 16's sound files, by numbers, on no device and the null backend;
+  # --watch, for a person to hear, keeps to the null backend under --frames.
   set(fbengine_sound_proof
       "a Channel of a held 0.5: 0.5, 0.5"
       "at half its volume: 0.25, 0.25"
@@ -2226,6 +2489,10 @@ if(FBENGINE_FB_TESTS)
       "the first piece: 0.5, 0.5"
       "half way through the crossfade: 0.375, 0.375"
       "after it: 0.25, 0.25, the first playing False, the second True"
+      "an Ogg Vorbis .cwm: streamed False, 0.25 seconds, heard True"
+      "a WAV .cwm: 44100 Hz, heard 0.5, 0.5"
+      "a .cwm a sidecar streams: streamed True, 0.25 seconds, heard True"
+      "a PNG .cwm: INVALID_DATA"
       "following a car 1 ahead: 0.25, 0.25"
       "2 ahead, twice as far: 0.125, 0.125"
       "to the right: heard on the right"
@@ -2322,24 +2589,29 @@ catch_discover_tests(fbengine_core_tests TEST_PREFIX "core."
 # fbengine's C API, with no window or GPU.
 add_executable(fbengine_anim_tests anim/sample_tests.cpp anim/clip_tests.cpp anim/player_tests.cpp
                anim/skin_tests.cpp anim/model_tests.cpp anim/morph_tests.cpp anim/fuzz_tests.cpp
-               "${PROJECT_SOURCE_DIR}/native/fbengine/clip/sample.cpp")
+               anim/model_fuzz_tests.cpp "${PROJECT_SOURCE_DIR}/native/fbengine/clip/sample.cpp")
 target_link_libraries(fbengine_anim_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
+# The sample models model_fuzz_tests.cpp changes, as they're kept beside the tests.
+target_compile_definitions(fbengine_anim_tests PRIVATE
+                           FBENGINE_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/models")
 fbengine_set_warnings(fbengine_anim_tests)
-catch_discover_tests(fbengine_anim_tests TEST_PREFIX "anim."
+catch_discover_tests(fbengine_anim_tests TEST_PREFIX "anim." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}" "${PROJECT_BINARY_DIR}/native/fbengine")
 
 # Animation's C API with each of a call's allocations failing in turn, with fbengine's sources, as
 # operator new is this test's.
-add_executable(fbengine_effects_oom_tests scene/effects_oom_tests.cpp)
+add_executable(fbengine_effects_oom_tests scene/effects_oom_tests.cpp own_new.cpp)
 target_link_libraries(fbengine_effects_oom_tests PRIVATE fbengine_internal Catch2::Catch2WithMain)
+target_include_directories(fbengine_effects_oom_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 fbengine_set_warnings(fbengine_effects_oom_tests)
+# A deadlock is a failure too.
 catch_discover_tests(fbengine_effects_oom_tests TEST_PREFIX "scene." ADD_TAGS_AS_LABELS
-                     DL_PATHS "${fbengine_test_dll_paths}"
-                     PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}")
+                     DL_PATHS "${fbengine_test_dll_paths}" PROPERTIES TIMEOUT ${fbengine_oom_timeout})
 
-add_executable(fbengine_anim_oom_tests anim/oom_tests.cpp)
+add_executable(fbengine_anim_oom_tests anim/oom_tests.cpp own_new.cpp)
 target_link_libraries(fbengine_anim_oom_tests PRIVATE fbengine_internal Catch2::Catch2WithMain
                       ${CMAKE_DL_LIBS})
+target_include_directories(fbengine_anim_oom_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_options(fbengine_anim_oom_tests PRIVATE
                       "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/anim/own_new.map")
@@ -2354,8 +2626,14 @@ endif()
 fbengine_set_warnings(fbengine_anim_oom_tests)
 # A deadlock is a failure too, as an allocation failing inside a layer's lock was.
 catch_discover_tests(fbengine_anim_oom_tests TEST_PREFIX "anim." ADD_TAGS_AS_LABELS
-                     DL_PATHS "${fbengine_test_dll_paths}"
-                     PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}" TIMEOUT 120)
+                     DL_PATHS "${fbengine_test_dll_paths}" PROPERTIES TIMEOUT ${fbengine_oom_timeout})
+
+# The out-of-memory tests' operator new and delete themselves, every form of them.
+add_executable(fbengine_own_new_tests own_new_tests.cpp own_new.cpp)
+target_link_libraries(fbengine_own_new_tests PRIVATE Catch2::Catch2WithMain)
+target_include_directories(fbengine_own_new_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+fbengine_set_warnings(fbengine_own_new_tests)
+catch_discover_tests(fbengine_own_new_tests TEST_PREFIX "tools.")
 
 # A program of the whole of it, as a game would write it.
 if(FBENGINE_FB_TESTS)
@@ -2430,3 +2708,9 @@ foreach(test IN LISTS fbengine_all_tests)
   endif()
 endforeach()
 file(WRITE "${CMAKE_BINARY_DIR}/tests-vulkan-driver.txt" "${fbengine_vulkan_driver}")
+
+# A sanitizer's build's hour, for every add_test's, after the TIMEOUT each was given.
+if(FBENGINE_SANITIZE)
+  get_property(fbengine_all_tests DIRECTORY PROPERTY TESTS)
+  set_tests_properties(${fbengine_all_tests} PROPERTIES TIMEOUT ${fbengine_sanitized_timeout})
+endif()

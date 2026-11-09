@@ -193,14 +193,22 @@ void copy_instances(std::uint32_t from, std::uint32_t to) {
 const std::vector<instance_cluster_t>& instance_clusters(instances_t& found) {
     const scene_t& s = scene();
     const std::uint64_t version = found.geometry != none ? s.geometries[found.geometry].version : 0;
+    const std::uint64_t cull_version =
+        found.geometry != none ? s.geometries[found.geometry].cull_version : 0;
     const bool whole = found.clusters_stale || found.clusters_geometry != found.geometry ||
-                       found.clusters_version != version;
+                       found.clusters_version != version ||
+                       found.clusters_cull_version != cull_version;
     if (!whole && found.stale_clusters.empty()) {
         return found.clusters;
     }
     vec3_t low;
     vec3_t high;
-    if (found.geometry != none) {
+    // Each instance's box is its geometry's cull box, if it has one, as what its shader moves
+    // goes out of its bounds; else its bounds.
+    if (found.geometry != none && s.geometries[found.geometry].has_cull_box) {
+        low = s.geometries[found.geometry].cull_min;
+        high = s.geometries[found.geometry].cull_max;
+    } else if (found.geometry != none) {
         geometry_bounds(found.geometry, low, high);
     }
     const vec3_t both = low + high;
@@ -236,6 +244,7 @@ const std::vector<instance_cluster_t>& instance_clusters(instances_t& found) {
     found.clusters_stale = false;
     found.clusters_geometry = found.geometry;
     found.clusters_version = version;
+    found.clusters_cull_version = cull_version;
     found.stale_clusters.clear();
     return found.clusters;
 }
@@ -287,6 +296,32 @@ bool instances_bounds(instances_t& found, vec3_t& min, vec3_t& max) {
         max = vec3_t(std::fmax(max.x, cluster.high.x), std::fmax(max.y, cluster.high.y),
                      std::fmax(max.z, cluster.high.z));
     }
+    return true;
+}
+
+bool instance_finite(const fbe_instance_t& instance) {
+    return std::ranges::all_of(instance.matrix.m, [](float value) { return std::isfinite(value); });
+}
+
+bool instances_own_bounds(instances_t& found, vec3_t& min, vec3_t& max) {
+    const scene_t& s = scene();
+    if (found.geometry == none || !s.geometries[found.geometry].has_cull_box) {
+        return instances_bounds(found, min, max);
+    }
+    if (found.items.empty()) {
+        return false;
+    }
+    // Every instance at once, each by its geometry's bounds, not the cull box its clusters take.
+    vec3_t low;
+    vec3_t high;
+    geometry_bounds(found.geometry, low, high);
+    instance_cluster_t all;
+    all.count = static_cast<std::uint32_t>(found.items.size());
+    const vec3_t both = low + high;
+    const vec3_t across = high - low;
+    work_out_cluster(found, all, both * 0.5F, across * 0.5F);
+    min = all.low;
+    max = all.high;
     return true;
 }
 
@@ -359,6 +394,14 @@ FBE_API bool fbe_instances_set(uint64_t instances, const fbe_instance_t* all, in
         return fbe::fail(std::format("an Instances has 0 to {} of them, not {}",
                                      fbe::scene::most_instances, count));
     }
+    if (count > 0 && all == nullptr) {
+        return fbe::fail("there are no instances to set");
+    }
+    for (std::int32_t at = 0; at < count; ++at) {
+        if (!fbe::scene::instance_finite(all[at])) {
+            return fbe::fail(std::format("instance {}'s matrix isn't finite", at));
+        }
+    }
     fbe::scene::put_in_order(*found, all, static_cast<std::size_t>(count));
     found->clusters_stale = true;
     found->all_changed = true;
@@ -383,6 +426,12 @@ FBE_API bool fbe_instances_set_one(uint64_t instances, int32_t index,
     if (index < 0 || static_cast<std::size_t>(index) >= found->items.size()) {
         return fbe::fail(
             std::format("an Instances has {} of them, not one at {}", found->items.size(), index));
+    }
+    if (one == nullptr) {
+        return fbe::fail("there's no instance to set");
+    }
+    if (!fbe::scene::instance_finite(*one)) {
+        return fbe::fail(std::format("instance {}'s matrix isn't finite", index));
     }
     const std::uint32_t place = found->slots[static_cast<std::size_t>(index)];
     // Coming to mirror, or not, it goes with those it now draws with, which moves them all.

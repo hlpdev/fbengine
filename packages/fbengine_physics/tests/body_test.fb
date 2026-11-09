@@ -296,7 +296,7 @@ Function TheCApiRefusesBodiesItDoesntTake()
                "a dynamic body has no mesh in its shape, which only a static or kinematic body has")
         Expect(fbe_body_add(world, ball, FBE_BODY_DYNAMIC, AddressOf(nowhere),
                             AddressOf(unturned)) == 0)
-        Expect(Error() == "a vector is finite")
+        Expect(Error() == "a position is at most 1e9 from 0 each way, not (nan, 0, 0)")
         Expect(fbe_body_add(world, ball, FBE_BODY_DYNAMIC, AddressOf(at),
                             AddressOf(nothing)) == 0)
         Expect(Error() == "a rotation is finite, and not 0")
@@ -490,4 +490,20 @@ End Function
     Unsafe
         Return fbe_physics_error().ToString()
     End Unsafe
+End Function
+
+// A shape off its origin has its center of mass where the shape is, turned with the body.
+@Test
+Function ABodysCenterOfMassIsWhereItsShapeIs()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local barrel = Shape.Compound([ShapePart(Shape.Cylinder(0.9, 0.37), Vec3(0, 0.45, 0),
+                                             Quat(0, 0, 0, 1))])
+    Local body = Body(world, barrel, Motion.DYNAMIC, Vec3(1, 2, 3))
+    Expect(Distance(body.CenterOfMass(), Vec3(1, 2.45, 3)) < 0.0001, "{body.CenterOfMass()}")
+    body.SetRotation(Quat.FromAxisAngle(Vec3(1, 0, 0), Pi / 2))
+    Expect(Distance(body.CenterOfMass(), Vec3(1, 2, 3.45)) < 0.0001, "{body.CenterOfMass()}")
+    // One centered on its origin has it there.
+    Local box = Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.DYNAMIC, Vec3(4, 5, 6))
+    Expect(Distance(box.CenterOfMass(), Vec3(4, 5, 6)) < 0.0001)
 End Function

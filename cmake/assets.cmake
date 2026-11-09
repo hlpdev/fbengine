@@ -77,24 +77,29 @@ FetchContent_Declare(
   EXCLUDE_FROM_ALL
 )
 FetchContent_MakeAvailable(stb KTX fastgltf)
-# The fetched simdjson, through a header of ours beside it, fbengine_simdjson.h, whose quoted include
-# finds the simdjson.h in its own folder first, whatever folders come before: an Intel Mac's Homebrew
-# puts its own simdjson.h in /usr/local/include, and a dependency's plain -I reaching it is searched
-# before the fetched folder, which comes as -isystem from fastgltf, a SYSTEM dependency. Beside it,
-# it's a system header as simdjson.h is, whose warnings aren't ours. Its version, which gltf.cpp
-# holds the header it gets to, so one from elsewhere fails the build; what builds gltf.cpp calls
-# fbengine_use_fetched_simdjson, and tools/check_simdjson.py asks each one's compile what it reads.
-set(fbengine_simdjson_folder "${fastgltf_SOURCE_DIR}/deps/simdjson")
-file(STRINGS "${fbengine_simdjson_folder}/simdjson.h" fbengine_simdjson_line
+# The fetched simdjson, through a header of ours, fbengine_simdjson.h, beside a copy of it in a folder of
+# the build's own: its quoted include finds the simdjson.h in its own folder first, whatever folders
+# come before, as an Intel Mac's Homebrew puts its own in /usr/local/include, and a dependency's plain
+# -I reaching it is searched before -isystem's. It has to be beside one: a header the quoted include
+# finds elsewhere, by its whole path, isn't a system header, and simdjson's warnings would be ours.
+# The copy's there and not beside fastgltf's, which can be a checkout of someone's own
+# (FETCHCONTENT_SOURCE_DIR_FASTGLTF). Its version, which gltf.cpp holds the header it gets to, so one
+# from elsewhere fails the build; what builds gltf.cpp calls fbengine_use_fetched_simdjson, and
+# tools/check_simdjson.py asks each one's compile what it reads.
+set(fbengine_simdjson_fetched "${fastgltf_SOURCE_DIR}/deps/simdjson")
+file(STRINGS "${fbengine_simdjson_fetched}/simdjson.h" fbengine_simdjson_line
      REGEX "^#define SIMDJSON_VERSION \"[0-9.]+\"")
 string(REGEX MATCH "[0-9.]+" fbengine_simdjson_version "${fbengine_simdjson_line}")
 if(NOT fbengine_simdjson_version)
   message(FATAL_ERROR "fastgltf's simdjson.h says no version")
 endif()
-target_include_directories(fastgltf BEFORE PRIVATE "${fbengine_simdjson_folder}")
+target_include_directories(fastgltf BEFORE PRIVATE "${fbengine_simdjson_fetched}")
+set(fbengine_simdjson_folder "${PROJECT_BINARY_DIR}/fbengine_simdjson")
+configure_file("${fbengine_simdjson_fetched}/simdjson.h" "${fbengine_simdjson_folder}/simdjson.h" COPYONLY)
 file(CONFIGURE OUTPUT "${fbengine_simdjson_folder}/fbengine_simdjson.h"
-     CONTENT "// Made by fbengine's cmake/assets.cmake: the simdjson.h beside it.\n#include \"simdjson.h\"\n")
+     CONTENT "// Made by fbengine's cmake/assets.cmake: the simdjson.h beside it, fastgltf's.\n#include \"simdjson.h\"\n")
 function(fbengine_use_fetched_simdjson target)
+  target_include_directories(${target} SYSTEM PRIVATE "${fbengine_simdjson_folder}")
   target_compile_definitions(${target} PRIVATE FBE_SIMDJSON_VERSION="${fbengine_simdjson_version}")
 endfunction()
 
@@ -234,6 +239,10 @@ fbengine_patch_text("\t\tidx = nextSlash; // Path includes this slash"
 # An empty version, which it reads the first character of.
 fbengine_patch_text("\t\tif (assetInfo[\"version\"].get_string().get(version) != SUCCESS) FASTGLTF_UNLIKELY {"
                     "\t\tif (assetInfo[\"version\"].get_string().get(version) != SUCCESS || version.empty()) FASTGLTF_UNLIKELY {")
+# A whole-number accessor's bounds given as a float past an int64, which it casts to one, as C++
+# leaves undefined: NaN, infinite, or 1e30, refused as an invalid glTF.
+fbengine_patch_text("\t\t\t\t\t\t\t\tarray.set(idx++, value);\n\t\t\t\t\t\t\t} else if (array.isType<std::int64_t>()) {\n\t\t\t\t\t\t\t\tarray.set(idx++, static_cast<std::int64_t>(value));"
+                    "\t\t\t\t\t\t\t\tarray.set(idx++, value);\n\t\t\t\t\t\t\t} else if (array.isType<std::int64_t>()) {\n\t\t\t\t\t\t\t\tif (!(value >= -9223372036854775808.0 && value < 9223372036854775808.0)) FASTGLTF_UNLIKELY {\n\t\t\t\t\t\t\t\t\treturn Error::InvalidGltf;\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\tarray.set(idx++, static_cast<std::int64_t>(value));")
 file(WRITE "${fbengine_fastgltf_patched}/fastgltf.cpp.in" "${fbengine_text}")
 configure_file("${fbengine_fastgltf_patched}/fastgltf.cpp.in"
                "${fbengine_fastgltf_patched}/fastgltf.cpp" COPYONLY)
@@ -273,6 +282,70 @@ configure_file("${fbengine_basisu_patched}.in" "${fbengine_basisu_patched}" COPY
 fbengine_replace_source(ktx "${ktx_SOURCE_DIR}" external/basisu/encoder/basisu_enc.cpp
                         "${fbengine_basisu_patched}")
 target_include_directories(ktx PRIVATE "${ktx_SOURCE_DIR}/external/basisu/encoder")
+
+# Replaces `from` with `to` in the text in `variable`, which has to have it once, or configuring
+# fails, as a patch whose source has moved on would.
+function(fbengine_patch_once variable from to what)
+  string(FIND "${${variable}}" "${from}" fbengine_first)
+  string(FIND "${${variable}}" "${from}" fbengine_last REVERSE)
+  if(fbengine_first EQUAL -1 OR NOT fbengine_first EQUAL fbengine_last)
+    message(FATAL_ERROR "${what} doesn't have, once, what its patch expects")
+  endif()
+  string(REPLACE "${from}" "${to}" fbengine_patched "${${variable}}")
+  set(${variable} "${fbengine_patched}" PARENT_SCOPE)
+endfunction()
+
+# basisu's transcoder, in libktx v4.4.2 (external/basisu/transcoder/basisu_transcoder.cpp:12082,
+# read_bits1_to_9, and 12136, read_bits1_to_9_fst), reads a UASTC block's next bits as a uint16_t
+# through a pointer at any byte, which a fuzzed KTX2 reaches and UBSan stops at as a misaligned load.
+# The patched copy reads their two bytes by memcpy, and is built in libktx's reader and writer in
+# place of the original, finding its headers and tables beside it. Its other casts are to blocks
+# and codebooks at their own types' alignment.
+set(fbengine_transcoder_source
+    "${ktx_SOURCE_DIR}/external/basisu/transcoder/basisu_transcoder.cpp")
+file(READ "${fbengine_transcoder_source}" fbengine_transcoder)
+set(fbengine_transcoder_to
+    "		uint16_t w;
+		memcpy(&w, &pBuf[bit_offset >> 3U], sizeof(w));
+")
+fbengine_patch_once(fbengine_transcoder
+                    "		const uint16_t w = *(const uint16_t *)(&pBuf[bit_offset >> 3U]);
+"
+                    "${fbengine_transcoder_to}" basisu_transcoder.cpp)
+fbengine_patch_once(fbengine_transcoder
+                    "		const uint16_t w = *(const uint16_t*)(&pBuf[bit_offset >> 3U]);
+"
+                    "${fbengine_transcoder_to}" basisu_transcoder.cpp)
+set(fbengine_transcoder_patched "${CMAKE_BINARY_DIR}/ktx-patched/basisu_transcoder.cpp")
+file(WRITE "${fbengine_transcoder_patched}.in" "${fbengine_transcoder}")
+configure_file("${fbengine_transcoder_patched}.in" "${fbengine_transcoder_patched}" COPYONLY)
+foreach(target IN ITEMS ktx_read ktx)
+  fbengine_replace_source(${target} "${ktx_SOURCE_DIR}"
+                          external/basisu/transcoder/basisu_transcoder.cpp
+                          "${fbengine_transcoder_patched}")
+  target_include_directories(${target} PRIVATE "${ktx_SOURCE_DIR}/external/basisu/transcoder")
+endforeach()
+
+# libktx v4.4.2's ETC1S encoder (lib/basis_encode.cpp:872) makes the texture's supercompression
+# global data with new[], and deletes it with delete on a failure, where the texture's destroy frees
+# it with free (lib/texture2.c:614), as it does what it reads: AddressSanitizer reports the mismatch.
+# The patched copy allocates it with malloc and frees it on a failure with free, as the rest of
+# libktx does, and is built in libktx's writer in place of the original.
+file(READ "${ktx_SOURCE_DIR}/lib/basis_encode.cpp" fbengine_encode)
+fbengine_patch_once(fbengine_encode "        bgd = new ktx_uint8_t[bgd_size];
+"
+                    "        bgd = static_cast<ktx_uint8_t*>(malloc(bgd_size));
+        if (!bgd) return KTX_OUT_OF_MEMORY;
+"
+                    basis_encode.cpp)
+fbengine_patch_once(fbengine_encode "        delete bgd;
+" "        free(bgd);
+" basis_encode.cpp)
+set(fbengine_encode_patched "${CMAKE_BINARY_DIR}/ktx-patched/basis_encode.cpp")
+file(WRITE "${fbengine_encode_patched}.in" "${fbengine_encode}")
+configure_file("${fbengine_encode_patched}.in" "${fbengine_encode_patched}" COPYONLY)
+fbengine_replace_source(ktx "${ktx_SOURCE_DIR}" lib/basis_encode.cpp "${fbengine_encode_patched}")
+target_include_directories(ktx PRIVATE "${ktx_SOURCE_DIR}/lib")
 
 # fbengine's DLLs are UCRT's (cmake/native.cmake), so libktx is built for UCRT too: its encoder's
 # sprintf_s is UCRT's, inlined from the headers, which msvcrt's has no export of. What links the

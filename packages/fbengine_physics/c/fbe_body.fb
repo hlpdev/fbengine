@@ -31,6 +31,7 @@ Public Extern "C" Lib "fbengine_physics_native"
     Function fbe_body_set_motion(body: UInt64, motion: Int32): Bool
     Function fbe_body_position(body: UInt64, position: Ptr<fbe_body_vec3_t>): Bool
     Function fbe_body_rotation(body: UInt64, rotation: Ptr<fbe_body_quat_t>): Bool
+    Function fbe_body_center_of_mass(body: UInt64, center: Ptr<fbe_body_vec3_t>): Bool
     Function fbe_body_set_position(body: UInt64, position: Ptr<fbe_body_vec3_t>): Bool
     Function fbe_body_set_rotation(body: UInt64, rotation: Ptr<fbe_body_quat_t>): Bool
     Function fbe_body_velocity(body: UInt64, velocity: Ptr<fbe_body_vec3_t>): Bool

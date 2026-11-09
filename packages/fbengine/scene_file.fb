@@ -8,6 +8,7 @@ Import std.io
 Import std.math
 Import std.os
 Import std.text
+Import "./c/fbe_scene"
 Import "./camera"
 Import "./collision"
 Import "./components"
@@ -20,6 +21,7 @@ Import "./mesh"
 Import "./model"
 Import "./morph"
 Import "./pick"
+Import "./shader"
 Import "./sprite"
 Import "./texture"
 Import "./transform"
@@ -39,17 +41,45 @@ Const OF_LIGHT = ["light", "color", "intensity", "range", "cone", "shadows", "sh
 Const OF_CAMERA = ["projection", "field_of_view", "height", "range", "clear", "clear_depth",
                    "clear_color", "order", "fog", "fog_color", "fog_range", "fog_density", "hdr",
                    "exposure", "tonemap", "gamma", "bloom", "grade", "occlusion",
-                   "ambient_occlusion", "ambient_occlusion_radius", "fxaa", "temporal_aa"]
+                   "ambient_occlusion", "ambient_occlusion_radius", "fxaa", "temporal_aa",
+                   "passes"]
 Const OF_SPRITE = ["material", "color", "view", "size", "handle", "turn"]
 Const OF_DOCUMENT = ["format", "material", "geometry", "entity"]
 Const OF_MATERIAL = ["id", "color", "shading", "blend", "alpha_cutoff", "shininess",
                      "vertex_colors",
                      "wireframe", "two_sided", "fogged", "order", "layers", "metallic",
-                     "roughness", "emissive", "normal_scale", "occlusion_strength", "maps"]
+                     "roughness", "emissive", "normal_scale", "occlusion_strength", "maps",
+                     "shader", "parameters"]
 Const OF_MAP = ["map", "texture", "uv_set", "uv"]
 Const OF_LAYER = ["layer", "texture", "blend", "uv_set", "uv", "bump"]
 Const OF_GEOMETRY = ["id", "source", "surfaces", "cull_box"]
 Const OF_SURFACE = ["material", "vertices", "triangles"]
+
+// The passes each camera, by its handle, was read with that aren't passes, by where they were among
+// its passes, which it doesn't run, and a save keeps.
+Global keptPasses: Map<UInt64, (Int, Material)[]> = {}
+
+// A camera's passes as a scene has them: those it runs, and those it was read with that it doesn't,
+// in the order they were.
+Function PassesOf(camera: Camera): Material[]
+    Local running = camera.Passes()
+    Local kept = keptPasses.Get(camera.Live("Save")) ?? []
+    Local all: Material[] = []
+    Local next = 0
+    For each In kept
+        Local at, material = each
+        While all.Count < at && next < running.Count
+            all.Add(running[next])
+            next += 1
+        End While
+        all.Add(material)
+    End For
+    While next < running.Count
+        all.Add(running[next])
+        next += 1
+    End While
+    Return all
+End Function
 
 // A number as the shortest text its Float32 is, which a Float32 of it reads back exactly.
 Function Number(value: Float32): Value Throws IOError
@@ -144,6 +174,12 @@ Class Writing
             ClaimOf(mesh.Material())
         End If
         ClaimOf((entity As? Sprite)?.Material())
+        Local camera = entity As? Camera
+        If camera != Null
+            For pass In PassesOf(camera)
+                ClaimOf(pass)
+            End For
+        End If
         For child In entity.Children()
             Looked(child)
         End For
@@ -251,6 +287,32 @@ Class Writing
             layers.Add(layer)
         End For
         If layers.Count > 0 Then table["layers"] = layers
+        Local shader = material.Shader()
+        If shader != Null
+            Local file = shader.Path()
+            If file == Null || !file.StartsWith("res://")
+                Throw IOError(IOErrorKind.INVALID_DATA,
+                              "{user}: its {slot}'s shader is from {file ?? "no file"}, which a scene can't name")
+            End If
+            table["shader"] = Value(file)
+        Else
+            // One a scene opened in spite of its being gone keeps it.
+            Local lost = material.LostShader()
+            If lost != Null Then table["shader"] = Value(lost)
+        End If
+        // Up to the last that isn't 0, as they're all 0 until they're set.
+        Local last = -1
+        For at = 0 To 7
+            If material.Parameter(at) != Vec4(0, 0, 0, 0) Then last = at
+        End For
+        If last >= 0
+            Local parameters = Value.Array()
+            For at = 0 To last
+                Local four = material.Parameter(at)
+                parameters.Add(Try Numbers([four.x, four.y, four.z, four.w]))
+            End For
+            table["parameters"] = parameters
+        End If
         Local all = Materials ?? Value.Array()
         Materials = all
         all.Add(table)
@@ -458,6 +520,11 @@ Class Writing
             End If
             If camera.Fxaa() Then table["fxaa"] = Value(True)
             If camera.TemporalAA() Then table["temporal_aa"] = Value(True)
+            Local passes = Value.Array()
+            For pass In PassesOf(camera)
+                passes.Add(Value(Try MaterialId(pass, path, "pass{passes.Count}")))
+            End For
+            If passes.Count > 0 Then table["passes"] = passes
         End If
         Local sprite = entity As? Sprite
         If sprite != Null
@@ -629,6 +696,25 @@ Class Reading
                 made.SetLayerBump(index,
                                   BumpShift(bump[0], bump[1], bump[2], bump[3], bump[4], bump[5]))
             End If
+        End For
+        Local shader = Try TextOf(table, "shader", where)
+        If shader != Null
+            Try
+                made.SetShader(Try Assets.Load<Shader>(shader))
+            Catch error As IOError
+                Local says = "its shader {shader} can't be loaded: {error.Message}"
+                If !Tolerant Then Throw Wrong("{where}: {says}")
+                Problems.Add("{where}: {says}")
+                made.SetLostShader(shader)
+            End Try
+        End If
+        Local parameters = Try Items(table, "parameters", where)
+        Try Must(parameters.Count <= 8, where, "parameters", "are 8 at most")
+        For slot = 0 Until parameters.Count
+            Local holder = Value.Object()
+            holder["parameter"] = parameters[slot]
+            Local four = Try FloatsOf(holder, "parameter", 4, where) ?? [0.0, 0.0, 0.0, 0.0]
+            made.SetParameter(slot, Vec4(four[0], four[1], four[2], four[3]))
         End For
         Materials[id] = made
         Return made
@@ -1013,6 +1099,21 @@ Class Reading
             camera.SetAmbientOcclusionRadius(around)
             camera.SetFxaa(Try BoolOf(table, "fxaa", False, path))
             camera.SetTemporalAA(Try BoolOf(table, "temporal_aa", False, path))
+            Local at = 0
+            For pass In Try Items(table, "passes", path)
+                Local id = pass.AsString()
+                If id == Null Then Throw Wrong("{path}'s passes aren't materials")
+                Local material = Try MaterialOf(id, path)
+                // One whose shader isn't a pass's now, as one reloaded can be, doesn't run, as it
+                // wouldn't on the camera it was saved from, and stays where it was for a save.
+                If !fbe_camera_add_pass(camera.Live("Load"), material.Live("Load"))
+                    Problems.Add("{path}: its pass {id} isn't one: {LastError()}")
+                    Local kept = keptPasses.Get(camera.Live("Load")) ?? []
+                    kept.Add((at, material))
+                    keptPasses[camera.Live("Load")] = kept
+                End If
+                at += 1
+            End For
         End If
         Local sprite = made As? Sprite
         If sprite != Null

@@ -184,6 +184,67 @@ def vulkan_driver(build):
     return file.read_text().strip() if file.exists() else ""
 
 
+def required_fb(ci_text):
+    """The FutureBlitz CI builds with, by its workflow's FB_VERSION."""
+    found = re.search(r"^\s*FB_VERSION:\s*([0-9][0-9.]*)\s*$", ci_text, re.MULTILINE)
+    return found.group(1) if found else None
+
+
+def fb_version_of(said):
+    """The version an fb says with --version: "fb 1.2.3 (c77a32a, windows-x64)" is 1.2.3."""
+    found = re.match(r"fb ([0-9][0-9.]*)", said.strip())
+    return found.group(1) if found else None
+
+
+def cached_fb(build):
+    """The fb a build folder's tests run, as CMake found it when it first configured."""
+    cache = pathlib.Path(build) / "CMakeCache.txt"
+    if not cache.exists():
+        return None
+    found = re.search(r"^FBENGINE_FB:FILEPATH=(.*)$", cache.read_text(errors="replace"), re.MULTILINE)
+    return found.group(1).strip() if found else None
+
+
+def fb_problem(name, version, required):
+    """What's wrong with an fb of `version`, where CI's is `required`; None if nothing. One that's
+    older runs what's written for the newer, as a release that fb run doesn't say it runs, and its
+    tests fail in ways that look like anything but that."""
+    if required is None:
+        return "there's no FB_VERSION in .github/workflows/ci.yml to check fb against"
+    if version is None:
+        return f"{name} doesn't say its version"
+    if version != required:
+        return f"{name} is FutureBlitz {version}, and CI's is {required}"
+    return None
+
+
+def fb_problems(build, required):
+    """What's wrong with the fb the tests run, and the one on PATH, where CI's is `required`: each
+    with how to put it right."""
+    problems = []
+    for name, program in (("the build's fb", cached_fb(build)), ("the fb on PATH", shutil.which("fb"))):
+        if program is None:
+            continue
+        hint = " (cmake -B <build> -DFBENGINE_FB=<one that is>)" if name == "the build's fb" else ""
+        # One the cache names can have been taken off the disk since.
+        if not pathlib.Path(program).is_file():
+            problems.append(f"{name}, {program}, isn't there{hint}")
+            continue
+        problem = fb_problem(f"{name}, {program},", fb_version_of(output([program, "--version"])), required)
+        if problem is not None:
+            problems.append(problem + hint)
+    return problems
+
+
+def check_fb(build):
+    """Whether the fb the tests run, and the one on PATH, are CI's; false, with why, if not."""
+    step("fb")
+    problems = fb_problems(build, required_fb((ROOT / ".github" / "workflows" / "ci.yml").read_text()))
+    for problem in problems:
+        fail(problem)
+    return not problems
+
+
 def check_tests(build, only=None):
     step("ctest")
     listed = re.findall(r"Test +#\d+: (\S+)", output(["ctest", "--test-dir", str(build), "-N"]))
@@ -251,6 +312,31 @@ def check_line_ends():
     for path in [ROOT / "CMakeLists.txt", *(ROOT / "cmake").glob("*.cmake"), *(ROOT / "tests").glob("CMakeLists.txt")]:
         if b"\r" in path.read_bytes():
             fail(f"{path.relative_to(ROOT)} has a carriage return")
+# Vulkan's entries that are core only from 1.3, which a device of 1.2 has by an extension: what calls
+# them goes through the device device.cpp makes, which has whichever's there.
+DEVICE_ENTRIES = ["vkCmdBeginRendering", "vkCmdEndRendering", "vkCmdPipelineBarrier2"]
+
+
+def direct_entries(root):
+    """Where native code calls one of DEVICE_ENTRIES itself, but device.cpp, which chooses them."""
+    found = []
+    called = re.compile(r"\b(" + "|".join(DEVICE_ENTRIES) + r")(KHR)?\s*\(")
+    for path in sorted((root / "native").rglob("*")):
+        if path.suffix not in (".h", ".hpp", ".c", ".cpp") or path.name == "device.cpp":
+            continue
+        for number, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            code = line.split("//", 1)[0]
+            if called.search(code):
+                found.append(f"{path.relative_to(root).as_posix()}:{number}")
+    return found
+
+
+def check_device_entries():
+    step("the device's entries")
+    for where in direct_entries(ROOT):
+        fail(f"{where} calls Vulkan 1.3's entry itself, not the device's")
+
+
 def check_metal(build):
     step("the shaders' Metal")
     if run([sys.executable, str(ROOT / "tools" / "check_msl.py"), str(build)]) != 0:
@@ -312,11 +398,13 @@ def main():
     held = [hold_build(build), wait_for_turn()]
 
     built = options.no_build or check_build(build)
+    fb_fine = check_fb(build)
     if options.only is not None:
-        if built:
+        if built and fb_fine:
             check_tests(build, options.only)
         check_bindings()
         check_line_ends()
+        check_device_entries()
         check_metal(build)
         check_format()
         if not options.no_tidy and built:
@@ -332,11 +420,12 @@ def main():
         del held
         return
     check_locks()
-    if built:
+    if built and fb_fine:
         check_tests(build)
         check_exports()
     check_bindings()
     check_line_ends()
+    check_device_entries()
     check_metal(build)
     check_format()
     if not options.no_tidy and built:

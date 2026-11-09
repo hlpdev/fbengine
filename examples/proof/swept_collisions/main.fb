@@ -423,6 +423,20 @@ If !arguments.Contains("--watch")
     climber.Free()
     step.Free()
 
+    // A teleport, as ResetEntity is: a move's swept from where the last ended, through what's between,
+    // unless that's forgotten. A wall's near face at z -4.75, so a ball of 0.5 stops at -4.25.
+    Local gate = Block(Vec3(0, 5, -5), Vec3(4, 2, 0.5))
+    Local jumper = Mover(world, Vec3(0, 5, 0), 0.5, 0.5)
+    jumper.SetPosition(Vec3(0, 5, -10))
+    world.Collide()
+    Print("moved through a wall, it stops at z {jumper.Position().z:.2}")
+    jumper.SetPosition(Vec3(0, 5, -10))
+    jumper.ResetCollisions()
+    world.Collide()
+    Print("teleported through it, it's at z {jumper.Position().z:.2}")
+    jumper.Free()
+    gate.Free()
+
     // A mover against a mover: an ellipsoid, each by the other's radius.
     world.SetCollisionResponse(MOVER, OTHER, CollisionResponse.STOP)
     Local rock = Pivot()

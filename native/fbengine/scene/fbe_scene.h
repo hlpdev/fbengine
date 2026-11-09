@@ -293,7 +293,8 @@ FBE_API const char* fbe_entity_name(uint64_t entity);
 // Makes an entity the last child of `parent`, or puts it at the top of its World when `parent` is
 // 0, moving it and what's under it into the parent's World. Its own parent again changes nothing.
 // With `keep_world`, it stays where it is in the world and its local transform changes; without,
-// its local transform stays. False if the parent is the entity or under it.
+// its local transform stays. False if the parent is the entity or under it, or, with
+// `keep_world`, if where it is would be past a float under the parent.
 FBE_API bool fbe_entity_set_parent(uint64_t entity, uint64_t parent, bool keep_world);
 // Puts an entity at `index` among what's beside it, 0 first, which moves nothing, so its transform,
 // what's under it, and its collisions don't know. False if `index` isn't one of its siblings'.
@@ -322,7 +323,10 @@ FBE_API bool fbe_entity_showing(uint64_t entity);
 // scales, then turns, then moves; in the world, it's its parent's times its own. Its world rotation
 // is its parent's times its own, and its world scale its parent's times its own per axis, which
 // a turned child of a parent scaled unevenly shears from. A world position goes through the
-// parent's inverse, a world rotation and scale through the parent's.
+// parent's inverse, a world rotation and scale through the parent's. A number that isn't finite,
+// NaN or infinite, is refused by each call that sets, moves, turns, points, aligns, or poses one,
+// by a move or translation that would end at one, and by a world position or scale whose local
+// one would be past a float, under a parent scaled almost to nothing, leaving the entity as it was.
 FBE_API bool fbe_entity_set_position(uint64_t entity, float x, float y, float z, int32_t space);
 FBE_API bool fbe_entity_position(uint64_t entity, int32_t space, fbe_vec3_t* position);
 // Rotations are made length 1.
@@ -492,9 +496,11 @@ FBE_API float fbe_world_environment_intensity(uint64_t world);
 FBE_API bool fbe_world_set_ambient(uint64_t world, float r, float g, float b);
 FBE_API bool fbe_world_ambient(uint64_t world, fbe_color_t* color);
 
-// Whether a camera draws into an HDR image of its target's size, of half floats, whose light past
-// white is kept, rather than into its target, false at first; and what that light comes to in its
-// target, each only for one that's HDR: first times its exposure, 0 or more, 1 at first; then
+// Whether a camera draws into an HDR image of its target's size and samples, of half floats, whose
+// light past white is kept, rather than into its target, false at first; and what that light comes
+// to in its target, a sample at a time and averaged after, or what they resolve to if the device
+// can't read them or has 64 such images already, each only for one that's HDR: first times its
+// exposure, 0 or more, 1 at first; then
 // through an FBE_TONEMAP_, NONE at first, where a target stored as bytes clamps it at white, and
 // Khronos's NEUTRAL or ACES's filmic curve are what glTF's and film's looks want; and raised to one
 // over its gamma, above 0, 1 at first, as a game's brightness setting wants. A target stored as
@@ -561,6 +567,15 @@ FBE_API float fbe_camera_gamma(uint64_t camera);
 // firefly, counts for about as much as they do, and doesn't flicker. A viewport under 16 pixels on
 // its short side has none. Each is finite.
 FBE_API bool fbe_camera_set_bloom(uint64_t camera, float intensity, float threshold);
+// A camera's full-screen passes, in the order they were added, after its tonemap and grade, or for
+// a camera that isn't HDR, after what it draws. Each is a material, which it holds, whose shader is
+// a pass's, and whose parameters and layers are what that reads; added twice, or with another
+// shader, is false. A pass no pipeline can be made of says so once, on the error stream, and is
+// left out. With none, a camera does nothing it wouldn't.
+FBE_API bool fbe_camera_add_pass(uint64_t camera, uint64_t material);
+FBE_API bool fbe_camera_remove_pass(uint64_t camera, uint64_t material);
+FBE_API int32_t fbe_camera_pass_count(uint64_t camera);
+FBE_API uint64_t fbe_camera_pass(uint64_t camera, int32_t index);
 FBE_API float fbe_camera_bloom_intensity(uint64_t camera);
 FBE_API float fbe_camera_bloom_threshold(uint64_t camera);
 // An HDR camera's color grade, after its tonemap and before its gamma, as a color decision list has
@@ -748,9 +763,8 @@ FBE_API const char* fbe_material_scene_id(uint64_t material);
 FBE_API bool fbe_material_set_texture(uint64_t material, int32_t layer, uint64_t texture);
 FBE_API uint64_t fbe_material_texture(uint64_t material, int32_t layer);
 // What a layer's UVs go through: scaled down, so a scale of 2 looks twice as big, turned back by an
-// angle in radians, then moved back by an offset in UV units, as Blitz's ScaleTexture,
-// RotateTexture, and PositionTexture; false for a scale of 0, or anything not finite. Reading them
-// writes the five values in that order.
+// angle in radians, then moved back by an offset in UV units; false for a scale of 0, or anything
+// not finite. Reading them writes the five values in that order.
 FBE_API bool fbe_material_set_layer_uv(uint64_t material, int32_t layer, float scale_u,
                                        float scale_v, float angle, float offset_u, float offset_v);
 FBE_API bool fbe_material_layer_uv(uint64_t material, int32_t layer, float* values);
@@ -766,6 +780,12 @@ FBE_API bool fbe_material_set_layer(uint64_t material, int32_t layer, int32_t bl
                                     int32_t uv_set);
 FBE_API int32_t fbe_material_layer_blend(uint64_t material, int32_t layer);
 FBE_API int32_t fbe_material_layer_uv_set(uint64_t material, int32_t layer);
+
+// Every material reading one of `count` textures in `from` reads that one of `to` instead, in one
+// pass: in a layer only if it's of the same format, and in a map only if it's one that map can
+// read, as Model's reload does for what's held of a file that's changed. False, changing nothing,
+// for a count below 0, a `from` of 0, or a `to` that isn't a texture.
+FBE_API bool fbe_material_replace_textures(const uint64_t* from, const uint64_t* to, int32_t count);
 
 // What an FBE_SHADING_PBR material is beyond its color, which with its layers is its base color:
 // how much of a metal it is and how rough, each 0 to 1, a dielectric as rough as can be at first;
@@ -892,7 +912,8 @@ FBE_API uint64_t fbe_instances_geometry(uint64_t instances);
 FBE_API bool fbe_instances_set_material(uint64_t instances, uint64_t material);
 FBE_API uint64_t fbe_instances_material(uint64_t instances);
 // Sets all of them, 0 to 4194304, in place of what it had: the way to set many, kept in an order
-// where those near each other are together.
+// where those near each other are together. A matrix with a number that isn't finite is refused,
+// here and by fbe_instances_set_one, leaving what it had.
 FBE_API bool fbe_instances_set(uint64_t instances, const fbe_instance_t* all, int32_t count);
 FBE_API int32_t fbe_instances_count(uint64_t instances);
 // One of them, by where it was in what was set; its neighbors stay as they were set, and false for

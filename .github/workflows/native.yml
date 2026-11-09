@@ -66,10 +66,12 @@ jobs:
             wayland-protocols-devel mesa-libEGL-devel libdrm-devel mesa-libgbm-devel dbus-devel \
             systemd-devel ibus-devel
 
+      # Four jobs, as the runners have four cores: --parallel alone is make -j with no bound, which
+      # ran the arm64 runner out of memory once SPIRV-Tools was built here.
       - name: Build
         run: |
           cmake -S . -B build ${{ matrix.configure }} -DCMAKE_BUILD_TYPE=Release -DFBENGINE_BUILD_TESTS=OFF
-          cmake --build build --parallel
+          cmake --build build --parallel 4
           dlls=""
           for dll in packages/*/native/${{ matrix.target }}/*_native.*; do
             case "$dll" in *.dll.a) ;; *) dlls="$dlls $dll" ;; esac

@@ -221,6 +221,9 @@ std::uint32_t take_slot() {
 /// Destroys a texture's images now, which the GPU is done with.
 void destroy(texture_t& texture) {
     const fbe::gpu::device_t& gpu = *fbe::gpu::device();
+    if (texture.samples_slot != fbe::gpu::no_samples_slot) {
+        fbe::gpu::give_samples_slot(texture.samples_slot);
+    }
     vkDestroyImageView(gpu.device, texture.view, nullptr);
     vmaDestroyImage(gpu.allocator, texture.image, texture.memory);
     vkDestroyImageView(gpu.device, texture.stored_view, nullptr);
@@ -330,6 +333,8 @@ struct spec_t {
     VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
     bool depth = false;
     bool engine = false;
+    /// Whether a shader reads its samples, the engine's own, so it takes a slot for them.
+    bool reads_samples = false;
     /// A file's image, which it's made of, of this format; its levels, and more made from the
     /// first if `mipmaps`, in place of being cleared.
     const fbe::assets::image_t* image = nullptr;
@@ -546,19 +551,34 @@ bool make(std::uint32_t slot, const spec_t& spec) {
     }
     const auto attached = flag<VkImageUsageFlags>(VK_IMAGE_USAGE_TRANSFER_DST_BIT);
     const bool multisampled = spec.samples != VK_SAMPLE_COUNT_1_BIT;
+    // A shader reads the samples of the engine's own that says so, as an HDR camera's tonemap does,
+    // if the device can read as many; what can't reads what they resolve to. What isn't bound, the
+    // free slots' placeholder, takes no slot.
+    const bool sampled_samples = spec.engine && spec.reads_samples && multisampled &&
+                                 (gpu.properties.limits.sampledImageColorSampleCounts &
+                                  flag<VkSampleCountFlags>(spec.samples)) != 0;
+    const bool reads_samples =
+        sampled_samples && spec.bound && !fbe::gpu::faulted(fbe::gpu::fault_t::NO_READ_SAMPLES);
+    const auto read = (reads_samples || (sampled_samples && !spec.bound))
+                          ? flag<VkImageUsageFlags>(VK_IMAGE_USAGE_SAMPLED_BIT)
+                          : 0U;
     if ((multisampled &&
-         !make_attachment(texture, texture.vk_format,
-                          attached | flag<VkImageUsageFlags>(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT),
-                          flag<VkImageAspectFlags>(VK_IMAGE_ASPECT_COLOR_BIT), texture.msaa,
-                          texture.msaa_memory, texture.msaa_view,
-                          stores ? &texture.stored_msaa_view : nullptr)) ||
-        (spec.depth && !make_attachment(texture, fbe::texture::depth_format,
-                                        attached | flag<VkImageUsageFlags>(
-                                                       VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT),
-                                        flag<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT),
-                                        texture.depth, texture.depth_memory, texture.depth_view))) {
+         !make_attachment(
+             texture, texture.vk_format,
+             attached | read | flag<VkImageUsageFlags>(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT),
+             flag<VkImageAspectFlags>(VK_IMAGE_ASPECT_COLOR_BIT), texture.msaa, texture.msaa_memory,
+             texture.msaa_view, stores ? &texture.stored_msaa_view : nullptr)) ||
+        (spec.depth &&
+         !make_attachment(texture, fbe::texture::depth_format,
+                          attached | flag<VkImageUsageFlags>(VK_IMAGE_USAGE_TRANSFER_SRC_BIT) |
+                              flag<VkImageUsageFlags>(VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT),
+                          flag<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT), texture.depth,
+                          texture.depth_memory, texture.depth_view))) {
         destroy(texture);
         return false;
+    }
+    if (reads_samples) {
+        texture.samples_slot = fbe::gpu::take_samples_slot(texture.msaa_view);
     }
 
     // Before any commands use the image, so it can still go.
@@ -692,6 +712,59 @@ bool upload(std::uint64_t handle, const texture_t& texture, std::uint32_t x, std
     vkCmdCopyBufferToImage(commands, buffer, texture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
                            &region);
     record_mipmaps(commands, texture);
+    return true;
+}
+
+/// Uploads the whole of `level` of `handle`'s texture, `width` by `height`, from `pixels`, rows
+/// `pitch` bytes apart, as `upload` does but making nothing of the other levels from it.
+bool upload_level(std::uint64_t handle, const texture_t& texture, std::uint32_t level,
+                  std::uint32_t width, std::uint32_t height, const std::uint8_t* pixels,
+                  std::uint32_t pitch) {
+    if (level == 0) {
+        fbe::texture::changed_on_gpu(handle);
+    }
+    const std::uint32_t row = width * fbe::texture::pixel_size(texture.format);
+    const staging_t staging = make_staging(VkDeviceSize{ row } * height);
+    if (staging.buffer == VK_NULL_HANDLE) {
+        return false;
+    }
+    VkBuffer buffer = staging.buffer;
+    for (std::uint32_t line = 0; line < height; ++line) {
+        std::memcpy(staging.to + (std::size_t{ line } * row),
+                    pixels + (std::size_t{ line } * pitch), row);
+    }
+    vmaFlushAllocation(fbe::gpu::device()->allocator, staging.memory, 0, VK_WHOLE_SIZE);
+    const VkBufferImageCopy region{
+        .imageSubresource = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .mipLevel = level,
+            .layerCount = 1,
+        },
+        .imageExtent = { .width = width, .height = height, .depth = 1 },
+    };
+    if (fbe::gpu::in_graph(handle)) {
+        return fbe::gpu::add_pass({
+            .name = "write a level",
+            .uses = { { fbe::gpu::texture_resource(handle), fbe::gpu::use_t::COPY_TO } },
+            .record =
+                [buffer, image = texture.image, region](VkCommandBuffer commands) {
+                    vkCmdCopyBufferToImage(commands, buffer, image,
+                                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+                },
+            .carried = true,
+        });
+    }
+    VkCommandBuffer commands = fbe::gpu::upload_commands();
+    fbe::gpu::barrier(commands, levels_barrier(texture.image, level, 1,
+                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, resting_stages,
+                                               0, transfer, transfer_write));
+    vkCmdCopyBufferToImage(commands, buffer, texture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                           &region);
+    fbe::gpu::barrier(commands,
+                      levels_barrier(texture.image, level, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, transfer,
+                                     transfer_write, readers, shader_read));
     return true;
 }
 
@@ -992,6 +1065,44 @@ std::optional<spec_t> spec_of(const fbe::assets::image_t& image, bool srgb, bool
     };
 }
 
+/// What a free slot for samples points at: a pixel of as many samples as the device draws and
+/// reads, the fewest past 1, read in SHADER_READ_ONLY_OPTIMAL as a camera's are, so a shader that
+/// read one reads what's there. A device that reads none takes no slot, so it needs none.
+bool make_samples_placeholder() {
+    const VkPhysicalDeviceLimits& limits = fbe::gpu::device()->properties.limits;
+    const VkSampleCountFlags both =
+        limits.sampledImageColorSampleCounts & limits.framebufferColorSampleCounts;
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+    for (const VkSampleCountFlagBits count :
+         { VK_SAMPLE_COUNT_2_BIT, VK_SAMPLE_COUNT_4_BIT, VK_SAMPLE_COUNT_8_BIT }) {
+        if ((both & flag<VkSampleCountFlags>(count)) != 0) {
+            samples = count;
+            break;
+        }
+    }
+    if (samples == VK_SAMPLE_COUNT_1_BIT) {
+        return true;
+    }
+    const std::uint32_t slot = take_slot();
+    if (slot == UINT32_MAX || !make(slot, {
+                                              .format = FBE_TEXTURE_RGBA16F,
+                                              .target = true,
+                                              .samples = samples,
+                                              .engine = true,
+                                              .reads_samples = true,
+                                              .bound = false,
+                                          })) {
+        return false;
+    }
+    fbe::gpu::barrier(fbe::gpu::upload_commands(),
+                      fbe::gpu::color_transition(textures[slot].msaa,
+                                                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, output,
+                                                 output_access, resting_stages, shader_read));
+    fbe::gpu::point_free_samples_at(textures[slot].msaa_view);
+    return true;
+}
+
 } // namespace
 
 namespace fbe::texture {
@@ -1079,7 +1190,7 @@ std::uint64_t pixel_readbacks() {
 }
 
 std::uint64_t create_engine_target(std::uint32_t width, std::uint32_t height, std::int32_t format,
-                                   VkSampleCountFlagBits samples, bool depth) {
+                                   VkSampleCountFlagBits samples, bool depth, bool reads_samples) {
     return create({
         .width = width,
         .height = height,
@@ -1088,7 +1199,133 @@ std::uint64_t create_engine_target(std::uint32_t width, std::uint32_t height, st
         .samples = samples,
         .depth = depth,
         .engine = true,
+        .reads_samples = reads_samples,
     });
+}
+
+std::uint64_t depth_read_of(std::uint64_t target) {
+    texture_t* found = find(target);
+    if (found == nullptr) {
+        return 0;
+    }
+    if (found->depth_read != 0 && find(found->depth_read) != nullptr) {
+        return found->depth_read;
+    }
+    const std::uint32_t width = found->width;
+    const std::uint32_t height = found->height;
+    const std::uint32_t slot = take_slot();
+    if (slot == UINT32_MAX) {
+        return 0;
+    }
+    // taking a slot can move the pool.
+    found = find(target);
+    texture_t& made = textures[slot];
+    made = {
+        .format = FBE_TEXTURE_FROM_FILE,
+        .vk_format = depth_format,
+        .width = width,
+        .height = height,
+        .filter = FBE_TEXTURE_NEAREST,
+        .wrap_u = FBE_TEXTURE_CLAMP,
+        .wrap_v = FBE_TEXTURE_CLAMP,
+        .references = 1,
+        .engine = true,
+    };
+    const auto usage = flag<VkImageUsageFlags>(VK_IMAGE_USAGE_SAMPLED_BIT) |
+                       flag<VkImageUsageFlags>(VK_IMAGE_USAGE_TRANSFER_DST_BIT) |
+                       flag<VkImageUsageFlags>(VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
+    if (!make_attachment(made, depth_format, usage,
+                         flag<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT), made.image,
+                         made.memory, made.view)) {
+        destroy(made);
+        free_slots.push_back(slot);
+        return 0;
+    }
+    fbe::gpu::barrier(fbe::gpu::upload_commands(),
+                      depth_barrier(made.image, VK_IMAGE_LAYOUT_UNDEFINED,
+                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, transfer, 0));
+    fbe::gpu::write_texture(slot, made.view);
+    live[slot] = true;
+    found->depth_read = handle_of(slot);
+    return found->depth_read;
+}
+
+void record_depth_read(VkCommandBuffer commands, const texture_t& target,
+                       const texture_t& depth_read) {
+    const texture_t* read = &depth_read;
+    const auto tests = flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT) |
+                       flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT);
+    const auto written = flag<VkAccessFlags2>(VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+    const auto all = flag<VkAccessFlags2>(VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT) | written;
+    const auto shaders = flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
+    const auto sampled = flag<VkAccessFlags2>(VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    const auto aspect = flag<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT);
+    const auto moved = [&](VkImage image, VkImageLayout from, VkImageLayout to,
+                           VkPipelineStageFlags2 before_stages, VkAccessFlags2 before,
+                           VkPipelineStageFlags2 after_stages, VkAccessFlags2 after) {
+        VkImageMemoryBarrier2 barrier =
+            fbe::gpu::color_transition(image, from, to, before_stages, before, after_stages, after);
+        barrier.subresourceRange.aspectMask = aspect;
+        fbe::gpu::barrier(commands, barrier);
+    };
+    if (target.samples == VK_SAMPLE_COUNT_1_BIT) {
+        moved(target.depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+              VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, tests, written, transfer,
+              flag<VkAccessFlags2>(VK_ACCESS_2_TRANSFER_READ_BIT));
+        moved(read->image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, shaders,
+              0, transfer, transfer_write);
+        const VkImageSubresourceLayers layers{
+            .aspectMask = aspect,
+            .layerCount = 1,
+        };
+        const VkImageCopy region{
+            .srcSubresource = layers,
+            .dstSubresource = layers,
+            .extent = { .width = target.width, .height = target.height, .depth = 1 },
+        };
+        vkCmdCopyImage(commands, target.depth, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, read->image,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        moved(target.depth, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+              VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, transfer,
+              flag<VkAccessFlags2>(VK_ACCESS_2_TRANSFER_READ_BIT), tests, all);
+        moved(read->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, transfer, transfer_write, shaders, sampled);
+        return;
+    }
+    // One of its samples, as depths don't average: a pass that resolves it and draws nothing, which
+    // Vulkan has done as color's is.
+    const auto output =
+        flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
+    const auto resolving = flag<VkAccessFlags2>(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+    const auto reading = flag<VkAccessFlags2>(VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT);
+    moved(target.depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+          VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, tests, written, tests | output,
+          all | reading);
+    moved(read->image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+          shaders, 0, output, resolving);
+    const VkRenderingAttachmentInfo attachment{
+        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+        .imageView = target.depth_view,
+        .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        .resolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT,
+        .resolveImageView = read->view,
+        .resolveImageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+    };
+    const VkRenderingInfo rendering{
+        .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+        .renderArea = { .extent = { .width = target.width, .height = target.height } },
+        .layerCount = 1,
+        .pDepthAttachment = &attachment,
+    };
+    gpu::device()->begin_rendering(commands, &rendering);
+    gpu::device()->end_rendering(commands);
+    moved(read->image, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, output, resolving, shaders, sampled);
+    moved(target.depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+          VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, tests | output, all | reading, tests,
+          all);
 }
 
 std::uint64_t create_engine_texture(std::uint32_t width, std::uint32_t height, std::int32_t format,
@@ -1165,11 +1402,18 @@ bool start_textures() {
     if (slot == UINT32_MAX || !make(slot, { .format = FBE_TEXTURE_RGBA8_LINEAR, .engine = true })) {
         return false;
     }
+    // And in every slot no texture has yet, so an index past them samples white too.
+    fbe::gpu::write_every_texture(textures[slot].view);
     const std::array<std::uint8_t, 4> white{ 255, 255, 255, 255 };
-    return upload(handle_of(slot), textures[slot], 0, 0, 1, 1, white.data(), 4);
+    if (!upload(handle_of(slot), textures[slot], 0, 0, 1, 1, white.data(), 4)) {
+        return false;
+    }
+    return make_samples_placeholder();
 }
 
 void stop_textures() {
+    // Before it goes, so what's given back as the rest go points at none.
+    fbe::gpu::point_free_samples_at(VK_NULL_HANDLE);
     for (std::uint32_t slot = 0; slot < textures.size(); ++slot) {
         if (textures[slot].image != VK_NULL_HANDLE) {
             destroy(textures[slot]);
@@ -1454,6 +1698,10 @@ FBE_API bool fbe_texture_release(uint64_t texture) {
     if (--textures[slot].references > 0) {
         return true;
     }
+    if (textures[slot].depth_read != 0) {
+        fbe_texture_release(textures[slot].depth_read);
+        textures[slot].depth_read = 0;
+    }
     // Its handles are caught now; its image and slot wait for the frames that could draw it. What
     // was written into its CPU copy and not sent goes with it.
     drop_copy(slot);
@@ -1560,6 +1808,46 @@ FBE_API bool fbe_texture_write(uint64_t texture, int32_t x, int32_t y, int32_t w
     return upload(texture, *found, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y),
                   static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height), pixels,
                   static_cast<std::uint32_t>(pitch));
+}
+
+FBE_API bool fbe_texture_write_level(uint64_t texture, int32_t level, int32_t width, int32_t height,
+                                     const uint8_t* pixels, int32_t pitch) {
+    texture_t* found = fbe::texture::find(texture);
+    if (found == nullptr || !has_pixels(*found)) {
+        return false;
+    }
+    if (found->msaa != VK_NULL_HANDLE) {
+        return fbe::fail("a multisampled target is drawn into, not written");
+    }
+    if (level < 0 || std::cmp_greater_equal(level, found->levels)) {
+        return fbe::fail(
+            std::format("the texture has {} levels, and no level {}", found->levels, level));
+    }
+    const std::uint32_t level_width =
+        std::max(found->width >> static_cast<std::uint32_t>(level), 1U);
+    const std::uint32_t level_height =
+        std::max(found->height >> static_cast<std::uint32_t>(level), 1U);
+    if (std::int64_t{ width } != level_width || std::int64_t{ height } != level_height) {
+        return fbe::fail(std::format("level {} of a {}x{} texture is {}x{}, not {}x{}", level,
+                                     found->width, found->height, level_width, level_height, width,
+                                     height));
+    }
+    if (pixels == nullptr) {
+        return fbe::fail(std::format("there are no pixels to write into level {}", level));
+    }
+    const std::int64_t row = std::int64_t{ width } * fbe::texture::pixel_size(found->format);
+    if (pitch < row) {
+        return fbe::fail(std::format("a row of {} pixels is {} bytes, more than the pitch {}",
+                                     width, row, pitch));
+    }
+    // What the CPU wrote into its copy goes first, making the levels from it, so this goes over.
+    fbe::texture::send_pixels(texture);
+    found = fbe::texture::find(texture);
+    if (found == nullptr) {
+        return false;
+    }
+    return upload_level(texture, *found, static_cast<std::uint32_t>(level), level_width,
+                        level_height, pixels, static_cast<std::uint32_t>(pitch));
 }
 
 FBE_API bool fbe_texture_set_alpha(uint64_t texture, bool alpha) {

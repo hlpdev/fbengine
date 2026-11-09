@@ -10,6 +10,7 @@ Import std.ffi
 Import std.io
 Import std.os
 Import std.text
+Import std.time
 Import fbengine
 Import "./c/fbe_cook"
 Import "./c/fbe_tools"
@@ -115,6 +116,8 @@ Public Final Class Cooker
     /// light, and its alpha for the material's cutoff, blend, and fog to go on with:
     ///
     /// - `surface.place`, `float3`: in the camera's view, x right, y up, looking down -z.
+    /// - `surface.world()`, `float3`: where it is in the world, and `surface.worldNormal()` its normal
+    ///   there, for what's mapped by the world, as rock on a cliff is.
     /// - `surface.normal`, `float3`: length 1, or 0 for what has none, facing the camera for a
     ///   two-sided material's back.
     /// - `surface.uv0`, `surface.uv1`, `float2`.
@@ -131,14 +134,30 @@ Public Final Class Cooker
     /// For vertices of its own, it says `#define FBE_MOVES_VERTICES` first and writes
     /// `void move(inout float3 position, inout float3 normal, MovingVertex vertex)`, for each vertex
     /// of what's drawn but particles, morphed and skinned, and of its shadow: `vertex.uv0`,
-    /// `vertex.uv1`, `vertex.color`, and `vertex.parameter(index)`. The view culls by a Geometry's
+    /// `vertex.uv1`, `vertex.color`, `vertex.parameter(index)`, and `vertex.place`, where its
+    /// instance is in its Instances' space, 0 for what isn't one. The view culls by a Geometry's
     /// bounds, not where this moves it, so one moved further wants a SetCullBox; a Terrain has none,
     /// so moving one stays near its heights, as moving an Instances stays near its instances, each
     /// moved in its own space, before its matrix. A shadow's cut out by the material's own alpha, not what
     /// `shade` returns.
     ///
+    /// For normals of its own, a PBR material's, it says `#define FBE_BENDS_NORMALS` first and writes
+    /// `float3 bend(Surface surface)`: a normal, -1 to 1 and +Z out, in tangent space as a normal map
+    /// holds it, in place of the material's map's, through the tangents that would go by, or those
+    /// its first UVs make if it has none. The lights, the environment, and `surface.color` take it;
+    /// its `surface` has no color.
+    ///
     /// It reads only those: a texture of its own, or a global that isn't `static`, which the scene's
     /// pipelines don't bind, throws one of INVALID_DATA.
+    ///
+    /// A full-screen pass, for Camera.AddPass, says `#define FBE_PASS` first and writes
+    /// `float4 pass(float2 uv, float4 color, float depth)`, which gives each pixel of the camera's
+    /// viewport, from `uv`, 0 to 1 across it from its top left, the `color` drawn there so far, in
+    /// linear light after the tonemap and grade, and the `depth` of what's drawn there, how far in
+    /// front of the camera along its view, in meters, or its far for nothing, both colors premultiplied
+    /// by their alpha. It has
+    /// `parameter(index)`, `layer(index, uv)`, of its Material; `colorAt(uv)`, `depthAt(uv)`; and
+    /// `pixelSize()`, in UV.
     @MainThread
     Public Static Method CookShader(from: Path, to: Path) Throws IOError
         Try CookShaderReading(from, to, SlangcNamed())
@@ -166,9 +185,13 @@ Public Final Class Cooker
         End For
         // Slang's errors say the game's file and its lines, not the scratch copy's.
         Local where = from.Text.Replace("\\", "/")
-        Try File.WriteText(scratch.Path / "fbe_game_shader.slang", "#line 1 \"{where}\"\n{text}")
+        // A full-screen pass says so as a shader that moves vertices does.
+        Local pass = SaysPass(text)
+        Try File.WriteText(scratch.Path / (pass ? "fbe_game_pass.slang" : "fbe_game_shader.slang"),
+                           "#line 1 \"{where}\"\n{text}")
         Try File.WriteText(scratch.Path / "fbe_own.slang",
-                           "#define FBE_OWN_SHADER\n#include \"scene.slang\"\n")
+                           pass ? "#include \"pass.slang\"\n"
+                                : "#define FBE_OWN_SHADER\n#include \"scene.slang\"\n")
         Local compiled = scratch.Path / "own.spv"
         Local depfile = scratch.Path / "own.d"
         Local version = ""
@@ -240,10 +263,28 @@ Public Final Class Cooker
         Return forward.Replace(scratch.Text + "\\", "fbengine's ").Trim()
     End Method
 
+    // Whether a shader's text defines FBE_PASS, on a line of its own, not in a comment.
+    Static Method SaysPass(text: String): Bool
+        For line In text.SplitLines()
+            Local said = line.Trim()
+            If said == "#define FBE_PASS" || said.StartsWith("#define FBE_PASS ") ||
+               said.StartsWith("#define FBE_PASS\t")
+                Return True
+            End If
+        End For
+        Return False
+    End Method
+
     // What a shader that doesn't write what the scene's shader calls is missing, by what Slang said.
     Static Method Unwritten(said: String): String
+        If said.Contains("undefined identifier 'pass'")
+            Return "it says FBE_PASS, and has no `float4 pass(float2 uv, float4 color, float depth)`: "
+        End If
         If said.Contains("undefined identifier 'shade'")
             Return "it has no `float4 shade(Surface surface)`: "
+        End If
+        If said.Contains("undefined identifier 'bend'")
+            Return "it says FBE_BENDS_NORMALS, and has no `float3 bend(Surface surface)`: "
         End If
         If said.Contains("undefined identifier 'move'")
             Return "it says FBE_MOVES_VERTICES, and has no `void move(inout float3 position, " +
@@ -434,7 +475,8 @@ Public Final Class Cooker
     /// it, for Assets.MountRelease to refuse one of another.
     @MainThread
     Public Static Method CookFolder(source: Path, pak: Path, cache: Path? = Null,
-                                    version: String = "") Throws IOError
+                                    version: String = "",
+                                    timed: Func(String, Float64)? = Null) Throws IOError
         cooks += 1
         Local place = "res://fbengine-cooking-{cooks}"
         Assets.MountFolder(place, source)
@@ -518,6 +560,8 @@ Public Final Class Cooker
             Local kind = kinds[at]
             If kind == CookedAs.NOTHING || buffers.Contains(Folded(file.1)) Then Continue
             Local from = file.0
+            Local began = Instant.Now()
+            Local cooked = False
             If kind == CookedAs.IMAGE
                 Local settings = Try Assets.ReadSettings<ImageSettings>("{place}/{file.1}")
                 Local options = ImageOptions(settings)
@@ -526,7 +570,10 @@ Public Final Class Cooker
                 Local kept = CachedAs(cache, key, [file.0], ".ktx2")
                 from = kept ?? (scratch.Path / "cooked.ktx2")
                 used.Add(from.FileName())
-                If kept == Null || !File.Exists(from) Then Try CookImage(file.0, from, settings)
+                If kept == Null || !File.Exists(from)
+                    Try CookImage(file.0, from, settings)
+                    cooked = True
+                End If
             ElseIf kind == CookedAs.SHADER
                 from = Try CookedShader(file.0, file.1, cache, scratch.Path, used, ShaderStamp(),
                                         SlangcNamed())
@@ -549,8 +596,10 @@ Public Final Class Cooker
                 used.Add(from.FileName())
                 If kept == Null || !File.Exists(from)
                     Try CookModelIn(file.0, from, source, settings)
+                    cooked = True
                 End If
             End If
+            If cooked && timed != Null Then timed(file.1, (Instant.Now() - began).TotalSeconds)
             If !fbe_cook_pak_add(written, file.1, from.Text) Then Throw ToolsFailed(file.0.Text)
         End For
         If version != ""

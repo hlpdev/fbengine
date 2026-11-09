@@ -39,6 +39,7 @@ using fbe::gpu::flag;
 
 /// What fbe::gpu::refuse_pipelines_of said, for a test.
 std::string refused_name;
+VkSampleCountFlagBits refused_samples = VK_SAMPLE_COUNT_FLAG_BITS_MAX_ENUM;
 std::uint32_t refused_count = 0;
 
 struct hash_t {
@@ -84,7 +85,9 @@ std::unordered_map<fbe::gpu::pipeline_desc_t, VkPipeline, hash_t>& pipelines() {
 VkPipelineCache cache = VK_NULL_HANDLE;
 std::string cache_path;
 bool cache_path_set = false;
-/// How many pipelines there were when the cache's data was last looked at.
+/// How many pipelines have been made since the GPU started, which forgetting a shader's doesn't
+/// take back, and how many had when the cache's data was last looked at.
+std::size_t made_count = 0;
 std::size_t cached = 0;
 /// The size and checksum of the cache's data as it was read or last written, which it's written
 /// again only once it differs from; and how many bytes were read, and writes made.
@@ -273,7 +276,9 @@ VkPipelineColorBlendAttachmentState blend_state(fbe::gpu::blend_t blend) {
 }
 
 VkPipeline make_pipeline(const fbe::gpu::device_t& gpu, const fbe::gpu::pipeline_desc_t& desc) {
-    if (!refused_name.empty() && desc.shader->name == refused_name) {
+    if (!refused_name.empty() && desc.shader->name == refused_name &&
+        (refused_samples == VK_SAMPLE_COUNT_FLAG_BITS_MAX_ENUM ||
+         desc.samples == refused_samples)) {
         ++refused_count;
         fbe::fail(std::format("couldn't make a pipeline of {}", desc.shader->name));
         return VK_NULL_HANDLE;
@@ -422,17 +427,14 @@ VkPipelineLayout pipeline_layout() {
     return layout;
 }
 
-void refuse_pipelines_of(std::string_view name) {
+void refuse_pipelines_of(std::string_view name, VkSampleCountFlagBits samples) {
     refused_name = name;
+    refused_samples = samples;
     refused_count = 0;
 }
 
 std::uint32_t pipelines_refused() {
     return refused_count;
-}
-
-std::size_t pipelines_made() {
-    return pipelines().size();
 }
 
 VkPipeline pipeline(const pipeline_desc_t& desc) {
@@ -448,8 +450,28 @@ VkPipeline pipeline(const pipeline_desc_t& desc) {
     VkPipeline made = make_pipeline(*gpu, desc);
     if (made != VK_NULL_HANDLE) {
         pipelines().emplace(desc, made);
+        ++made_count;
     }
     return made;
+}
+
+void forget_pipelines_of(const shader_t* shader) {
+    const device_t* gpu = device();
+    if (gpu == nullptr) {
+        return;
+    }
+    std::erase_if(pipelines(), [gpu, shader](const auto& made) {
+        if (made.first.shader != shader) {
+            return false;
+        }
+        vkDestroyPipeline(gpu->device, made.second, nullptr);
+        return true;
+    });
+    const auto module = modules().find(shader);
+    if (module != modules().end()) {
+        vkDestroyShaderModule(gpu->device, module->second, nullptr);
+        modules().erase(module);
+    }
 }
 
 std::vector<std::byte> pipeline_cache_from(const std::string& path,
@@ -474,7 +496,7 @@ void start_pipeline_cache() {
     if (vkCreatePipelineCache(gpu->device, &info, nullptr, &cache) != VK_SUCCESS) {
         cache = VK_NULL_HANDLE;
     }
-    cached = pipelines().size();
+    cached = made_count;
 }
 
 std::vector<std::byte> pipeline_cache_data() {
@@ -494,14 +516,14 @@ std::vector<std::byte> pipeline_cache_data() {
 
 void save_pipeline_cache(bool now) {
     const device_t* gpu = device();
-    if (gpu == nullptr || cache == VK_NULL_HANDLE || pipelines().size() == cached) {
+    if (gpu == nullptr || cache == VK_NULL_HANDLE || made_count == cached) {
         return;
     }
     const std::uint64_t time = SDL_GetTicksNS();
     if (!now && written_yet && time - last_write < interval) {
         return;
     }
-    cached = pipelines().size();
+    cached = made_count;
     const std::string& path = the_cache_path();
     if (path.empty()) {
         return;
@@ -522,7 +544,7 @@ void save_pipeline_cache(bool now) {
 }
 
 bool pipeline_cache_pending() {
-    return pipelines().size() != cached;
+    return made_count != cached;
 }
 
 std::size_t pipeline_cache_loaded() {
@@ -553,6 +575,7 @@ void stop_pipelines() {
     layout = VK_NULL_HANDLE;
     cache = VK_NULL_HANDLE;
     cached = 0;
+    made_count = 0;
 }
 
 std::vector<std::byte> pack_pipeline_cache(std::span<const std::byte> data,

@@ -1298,3 +1298,38 @@ Function TheSceneAskedForIsWhatFollowsItsOption() Throws IOError
     Expect((ExpectThrows<IOError>(Scene.Requested(["--scene", "--x"]))?.Message ??
             "").Contains("--x"))
 End Function
+
+// A material's shader whose file is gone opens as one with none, as a texture that's gone does, saying
+// which material and file, and keeps the file for a save.
+@Test
+Function AMaterialsShaderThatsGoneStillOpens() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local folder = Try TempDir()
+    Local text =
+        "format = 1\n[[material]]\nid = \"paint\"\nshader = \"res://gone-shaders/gone.slang\"\n" +
+        "[[entity]]\npath = \"wall\"\nkind = \"MESH\"\ngeometry = \"builtin:cube\"\n" +
+        "material = \"paint\"\n"
+    Try File.WriteText(folder.Path / "gone.scene", text)
+    Assets.MountFolder("res://gone-shaders", folder.Path)
+    Defer Assets.Unmount("res://gone-shaders")
+    Local opened = Try Scene.Open("res://gone-shaders/gone.scene")
+    Local said = opened.Problems.Join("; ")
+    Expect(opened.Problems.Count == 1 && said.Contains("paint") &&
+           said.Contains("res://gone-shaders/gone.slang"), said)
+    Local material = (opened.Roots[0] As? Mesh)?.Material()
+    If material == Null Then Panic("its material")
+    Expect(material.Shader() == Null)
+    Local again = Try Scene.Text(opened.Roots)
+    Expect(again.Contains("shader = \"res://gone-shaders/gone.slang\"\n"), again)
+    // Given no shader by the game, it's none at a save.
+    material.SetShader(Null)
+    Expect(!(Try Scene.Text(opened.Roots)).Contains("shader ="))
+    // A game's load, not an editor's, refuses it, naming the material and the file.
+    Local error = ExpectThrows<IOError>(Scene.FromText(text))
+    Local message = error?.Message ?? ""
+    Expect(message.Contains("paint") && message.Contains("res://gone-shaders/gone.slang"), message)
+    For root In opened.Roots
+        root.Free()
+    End For
+End Function

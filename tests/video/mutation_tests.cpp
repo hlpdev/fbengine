@@ -67,7 +67,8 @@ void exercise(std::uint64_t video, random_t& random) {
 
 } // namespace
 
-TEST_CASE("videos with bytes changed at random open or are refused, and play to their ends") {
+TEST_CASE("videos with bytes changed at random open or are refused, and play to their ends",
+          "[stability]") {
     const std::array<std::vector<std::uint8_t>, 7> videos{
         read("colors.mpg"), read("countb.mpg"), read("cgop.mpg"), read("ntsc.mpg"),
         read("busy.mpg"),   read("late.mpg"),   read("gap.mpg"),

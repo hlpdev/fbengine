@@ -1,8 +1,15 @@
 // Jolt's own sample scenes stay stable: its Samples/Tests/General/{Pyramid,Wall,Stack,HeavyOnLight}Test
 // and Constraints/PointConstraintTest, built as they build them, each dropped through its gaps onto
 // its floor, stand or hang for twenty seconds, and the ones that stand come to rest as they do in
-// Jolt alone. A chain and a heavy box of our own too.
+// Jolt alone; and Constraints/{Hinge,Distance}ConstraintTest, General/FrictionTest's ramp, and a
+// jointed body as Rig's ragdolls are, each run a fixed number of steps twice, alike to the bit. A
+// chain and a heavy box of our own too.
+//
+// These are written here from the setups of Jolt's samples, at v5.6.0, which is what fbengine_physics
+// pins: none of their code is copied. Jolt Physics is Jorrit Rouwe's, under the MIT license, in
+// packages/fbengine_physics/notices/jolt.txt.
 
+Import std.collections
 Import std.core
 Import std.math
 Import std.test
@@ -224,3 +231,401 @@ Function AHeavyBoxOnALightOneStands()
     Run(world, 10.0)
     Expect(Standing([light, heavy], [Vec3(0, 0.5, 0), Vec3(0, 2, 0)], 0.1))
 End Function
+
+// A rotation undone.
+Function Unturned(q: Quat): Quat => Quat(-q.x, -q.y, -q.z, q.w)
+
+// Where a joint holds each of its bodies, in that body's own frame as it's made, or for the world
+// where it is, to say later how far apart the two are: 0 for a point or a hinge, the rod for a
+// distance joint.
+Final Class Held
+    Field a: Body
+    Field b: Body?
+    Field onA: Vec3
+    Field onB: Vec3
+    // The joint, for a hinge's Position.
+    Field joint: Joint? = Null
+
+    New(a: Body, pointA: Vec3, b: Body?, pointB: Vec3, joint: Joint? = Null)
+        Self.a = a
+        Self.b = b
+        Self.joint = joint
+        onA = Unturned(a.Rotation()) * (pointA - a.Position())
+        Local other = b
+        onB = other != Null ? Unturned(other.Rotation()) * (pointB - other.Position()) : pointB
+    End New
+
+    Method Apart(): Float
+        Local other = b
+        Local there = other != Null ? other.Position() + other.Rotation() * onB : onB
+        Return Distance(a.Position() + a.Rotation() * onA, there)
+    End Method
+End Class
+
+// The furthest any of `held` has come from `length` apart.
+Function MostOff(held: Held[], length: Float): Float
+    Local most: Float = 0
+    For each In held
+        most = Max(most, Abs(each.Apart() - length))
+    End For
+    Return most
+End Function
+
+// Whether none of `bodies` over the floor, `within` of the middle each way, is below `floor`; none
+// is going past `fastest`; and, if `resting`, none faster than 0.05 m a second: saying which if one
+// is.
+Function Holding(name: String, bodies: Body[], floor: Float, within: Float, fastest: Float,
+                 resting: Bool): Bool
+    For i = 0 To bodies.Count - 1
+        Local at = bodies[i].Position()
+        Local speed = Distance(bodies[i].Velocity(), Vec3(0, 0, 0))
+        Local over = Abs(at.x) < within && Abs(at.z) < within
+        If (over && at.y < floor) || speed > fastest || (resting && speed > 0.05)
+            Fail("{name}: body {i} is at {at}, going {speed} m a second")
+            Return False
+        End If
+    End For
+    Return True
+End Function
+
+// Whether any of `bodies` has come through the floor, from above it at `before` to below it now,
+// over it, `within` of its middle each way: one that's gone round its edge and under it hasn't. Each
+// one's height now goes in `before`.
+Function Through(name: String, bodies: Body[], before: Float[], within: Float): Bool
+    Local through = False
+    For i = 0 To bodies.Count - 1
+        Local at = bodies[i].Position()
+        If before[i] > 0 && at.y < 0 && Abs(at.x) < within && Abs(at.z) < within
+            Fail("{name}: body {i} came through the floor, to {at}")
+            through = True
+        End If
+        before[i] = at.y
+    End For
+    Return through
+End Function
+
+// Whether any of `contacts` is between two of `links` next to each other in the chain.
+Function NextTo(contacts: Contact[], links: Body[]): Bool
+    For contact In contacts
+        For i = 1 To links.Count - 1
+            If (RefEquals(contact.A, links[i]) && RefEquals(contact.B, links[i - 1])) ||
+               (RefEquals(contact.B, links[i]) && RefEquals(contact.A, links[i - 1]))
+                Return True
+            End If
+        End For
+    End For
+    Return False
+End Function
+
+// Whether any of `contacts` is between two of `parts`.
+Function Among(contacts: Contact[], parts: Body[]): Bool
+    For contact In contacts
+        If parts.Any(Function(part: Body) => RefEquals(part, contact.A)) &&
+           parts.Any(Function(part: Body) => RefEquals(part, contact.B))
+            Return True
+        End If
+    End For
+    Return False
+End Function
+
+// A scene as `made` makes it, stepped `steps` times at 60 a second, twice, in a world of its own each
+// time: whether they end alike to the bit, by the state's hash and every body's place and speed.
+Function Twice(made: Func(PhysicsWorld, Held[]): Body[], steps: Int): Bool
+    Local said: String[] = []
+    Local hashes: UInt64[] = []
+    For time = 1 To 2
+        Local world = PhysicsWorld()
+        Local held: Held[] = []
+        Local bodies = made(world, held)
+        For i = 1 To steps
+            world.Step(1.0 / 60)
+        End For
+        Local text = ""
+        For body In bodies
+            text +=
+                " {body.Position()} {body.Rotation()} {body.Velocity()} {body.AngularVelocity()}"
+        End For
+        said.Add(text)
+        hashes.Add(world.StateHash())
+        world.Free()
+    End For
+    If said[0] != said[1] || hashes[0] != hashes[1]
+        Fail("twice over, {hashes[0]} and {hashes[1]}:{said[0]}\nand:{said[1]}")
+        Return False
+    End If
+    Return True
+End Function
+
+// Jolt's HingeConstraintTest's straight chain: fourteen boxes of 4 m from a static one 50 m up, each
+// on a hinge at its corner to the last, about Y and Z by turns, from -10 to 20 degrees, and those
+// next to each other not colliding, as its group filter has them; here, by layers taken in turn.
+Function HingeChain(world: PhysicsWorld, held: Held[]): Body[]
+    Body(world, Shape.Box(Vec3(200, 2, 200)), Motion.STATIC, Vec3(0, -1, 0))
+    world.SetCollides(1, 2, False)
+    Local size: Float = 4
+    Local box = Shape.Box(Vec3(size, size, size))
+    Local position = Vec3(0, 50, 0)
+    Local before = Body(world, box, Motion.STATIC, position)
+    before.SetLayer(1)
+    Local links: Body[] = []
+    For i = 1 To 14
+        position = position + Vec3(size, 0, 0)
+        Local segment = Body(world, box, Motion.DYNAMIC, position)
+        segment.SetLayer(1 + (i % 2) As Int32)
+        Local corner = Vec3(-0.5 * size, -0.5 * size, 0)
+        Local axis = Vec3(0, 0, 1)
+        If (i % 2) == 0
+            corner = Vec3(-0.5 * size, 0, 0.5 * size)
+            axis = Vec3(0, 1, 0)
+        End If
+        Local hinge = Joint.Hinge(before, segment, position + corner, axis)
+        hinge.SetLimits(-10 * Pi / 180, 20 * Pi / 180)
+        held.Add(Held(before, position + corner, segment, position + corner, hinge))
+        before = segment
+        links.Add(segment)
+    End For
+    Return links
+End Function
+
+@Test
+Function JoltsHingeConstraintTestHolds()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local held: Held[] = []
+    Local links = HingeChain(world, held)
+    Local most: Float = 0
+    Local least: Float = 0
+    Local turned: Float = 0
+    Local touched = False
+    For step = 1 To 1200
+        world.Step(1.0 / 60)
+        most = Max(most, MostOff(held, 0))
+        For each In held
+            Local hinge = each.joint
+            If hinge != Null
+                least = Min(least, hinge.Position())
+                turned = Max(turned, hinge.Position())
+            End If
+        End For
+        touched = touched || NextTo(world.Began(), links)
+    End For
+    Print("hinge constraint: its hinges {most} m apart at most, turned {least} to {turned}")
+    Expect(most < HINGE_APART)
+    // Held to their limits, -10 to 20 degrees, which they come to as the chain hangs, as far past
+    // as its weight pushes a limit a solver keeps: 0.09 radians here.
+    Expect(least > -10 * Pi / 180 - 0.1 && turned < 20 * Pi / 180 + 0.1)
+    Expect(turned > 15 * Pi / 180)
+    // And those next to each other never touch, as their layers say.
+    Expect(!touched)
+    Expect(Holding("hinge constraint", links, 0, 100, 40, False))
+    Expect(Twice(HingeChain, 600))
+End Function
+
+// Jolt's DistanceConstraintTest: two chains of fourteen capsules from a static one 75 m up, each
+// held 5 m from the last end to end; the second's held only 4 to 8 m apart.
+Function DistanceChains(world: PhysicsWorld, held: Held[]): Body[]
+    Body(world, Shape.Box(Vec3(200, 2, 200)), Motion.STATIC, Vec3(0, -1, 0))
+    Local half: Float = 2.5
+    Local link = Shape.Capsule(2 * half, 1)
+    Local turned = Quat(0, 0, 0.70710678, 0.70710678)
+    Local links: Body[] = []
+    For variation = 0 To 1
+        Local position = Vec3(0, 75, 10 * (variation As Float))
+        Local before = Body(world, link, Motion.STATIC, position, turned)
+        For i = 1 To 14
+            position = position + Vec3(5 + 2 * half, 0, 0)
+            Local segment = Body(world, link, Motion.DYNAMIC, position, turned)
+            Local onBefore = position - Vec3(5 + half, 0, 0)
+            Local onSegment = position - Vec3(half, 0, 0)
+            Local rod = Joint.Distance(before, segment, onBefore, onSegment)
+            If variation == 1 Then rod.SetLimits(4, 8)
+            held.Add(Held(before, onBefore, segment, onSegment))
+            before = segment
+            links.Add(segment)
+        End For
+    End For
+    Return links
+End Function
+
+@Test
+Function JoltsDistanceConstraintTestHolds()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local held: Held[] = []
+    Local links = DistanceChains(world, held)
+    Local rods: Float = 0
+    Local shortest: Float = 1000
+    Local longest: Float = 0
+    Local heights = links.Map(Function(body: Body) => body.Position().y)
+    Local through = False
+    For step = 1 To 1200
+        world.Step(1.0 / 60)
+        through = Through("distance constraint", links, heights, 100) || through
+        For i = 0 To 13
+            rods = Max(rods, Abs(held[i].Apart() - 5))
+            shortest = Min(shortest, held[14 + i].Apart())
+            longest = Max(longest, held[14 + i].Apart())
+        End For
+    End For
+    Print(
+        "distance constraint: the rods {rods} m off 5 at most, the ropes {shortest} to {longest} m")
+    Expect(rods < ROD_OFF)
+    Expect(shortest > 4 - ROD_OFF && longest < 8 + ROD_OFF)
+    // And they're ropes, not rods: they go short of 5 m and long of it, near their limits.
+    Expect(shortest < 4.5 && longest > 7.5)
+    // The second reaches past the floor's edge, 100 m out, and swings under it, round its edge.
+    Expect(!through)
+    Expect(Holding("distance constraint", links, -1000, 100, 80, False))
+    Expect(Twice(DistanceChains, 600))
+End Function
+
+// Jolt's FrictionTest's first scene: a ramp at 45 degrees, of friction 1, with boxes 4 m wide and
+// balls of 2 m on it, each of friction 0 to 1 by tenths, as they combine, the root of the two.
+Function Ramp(world: PhysicsWorld, held: Held[]): Body[]
+    Local turned = Quat.FromAxisAngle(Vec3(1, 0, 0), Pi / 4)
+    Local ramp = Body(world, Shape.Box(Vec3(200, 2, 200)), Motion.STATIC, Vec3(0, 0, 0), turned)
+    ramp.SetFriction(1)
+    Local box = Shape.Box(Vec3(4, 4, 4))
+    Local ball = Shape.Sphere(2)
+    Local on: Body[] = []
+    For i = 0 To 10
+        Local made = Body(world, box, Motion.DYNAMIC, Vec3((-50 + i * 10) As Float, 55, -50),
+                          turned)
+        made.SetFriction(0.1 * (i As Float))
+        on.Add(made)
+    End For
+    For i = 0 To 10
+        Local made = Body(world, ball, Motion.DYNAMIC, Vec3((-50 + i * 10) As Float, 47, -40),
+                          turned)
+        made.SetFriction(0.1 * (i As Float))
+        on.Add(made)
+    End For
+    Return on
+End Function
+
+// How far along the ramp, down it, something's gone from `from`.
+Function DownTheRamp(at: Vec3, from: Vec3): Float
+    Return (at.z - from.z) * 0.70710678 - (at.y - from.y) * 0.70710678
+End Function
+
+@Test
+Function JoltsFrictionTestSlides()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local held: Held[] = []
+    Local on = Ramp(world, held)
+    Local starts = on.Map(Function(body: Body) => body.Position())
+    For step = 1 To 240
+        world.Step(1.0 / 60)
+    End For
+    // The boxes slide less the more friction they have, and of 1, as the ramp's, they hold.
+    Local said = ""
+    For i = 0 To 10
+        Local gone = DownTheRamp(on[i].Position(), starts[i])
+        said += " {gone}"
+        If i > 0 Then Expect(gone <= DownTheRamp(on[i - 1].Position(), starts[i - 1]) + 0.01, said)
+    End For
+    Print("friction: the boxes have gone{said} m down")
+    Expect(DownTheRamp(on[0].Position(), starts[0]) > 20)
+    Expect(DownTheRamp(on[10].Position(), starts[10]) < 1)
+    // The balls roll, all of them, at whatever friction.
+    For i = 11 To 21
+        Expect(DownTheRamp(on[i].Position(), starts[i]) > 10, "ball {i - 11}")
+    End For
+    // None is through the ramp: each one's middle is above its top, 1 m from the ramp's, by its own
+    // half size, 2 m, near enough.
+    For i = 0 To 21
+        Local at = on[i].Position()
+        Local above = at.y * 0.70710678 + at.z * 0.70710678 - 1
+        Expect(above > 1.9, "body {i} is {above} m above the ramp")
+    End For
+    Expect(Holding("friction", on, -1000, 1000, 60, False))
+    Expect(Twice(Ramp, 240))
+End Function
+
+// A jointed body, as Rig's ragdolls are, of a pelvis, a torso, a head, arms, and legs, here by points
+// at the neck, shoulders, and hips and hinges at the elbows and knees, as fbengine_physics has no
+// swing-twist joint: three of them dropped onto the floor, the second pushed over and the third
+// face down. Its parts don't collide with each other, as a ragdoll's group filter has it.
+Function Ragdolls(world: PhysicsWorld, held: Held[]): Body[]
+    Body(world, Shape.Box(Vec3(60, 2, 60)), Motion.STATIC, Vec3(0, -1, 0))
+    world.SetCollides(1, 1, False)
+    Local parts: Body[] = []
+    For which = 0 To 2
+        Local at = Vec3((which * 3) As Float, 1 + (which As Float) * 0.5, 0)
+        Local turn = which == 2 ? Quat.FromAxisAngle(Vec3(1, 0, 0), Pi / 2) : Quat.Identity
+        Local part = Function(shape: Shape, place: Vec3): Body
+            Local made = Body(world, shape, Motion.DYNAMIC, at + turn * place, turn)
+            made.SetLayer(1)
+            parts.Add(made)
+            Return made
+        End Function
+        Local point = Function(a: Body, b: Body, place: Vec3)
+            Local there = at + turn * place
+            Joint.Point(a, b, there)
+            held.Add(Held(a, there, b, there))
+        End Function
+        Local hinge = Function(a: Body, b: Body, place: Vec3, low: Float, high: Float)
+            Local there = at + turn * place
+            Local made = Joint.Hinge(a, b, there, turn * Vec3(1, 0, 0))
+            made.SetLimits(low, high)
+            held.Add(Held(a, there, b, there, made))
+        End Function
+        Local pelvis = part(Shape.Box(Vec3(0.3, 0.2, 0.2)), Vec3(0, 1, 0))
+        Local torso = part(Shape.Box(Vec3(0.35, 0.5, 0.2)), Vec3(0, 1.35, 0))
+        point(torso, pelvis, Vec3(0, 1.1, 0))
+        // A box, not a ball, as on a point it'd roll on the floor for ever, with no swing-twist's
+        // limits to stop it.
+        Local head = part(Shape.Box(Vec3(0.24, 0.24, 0.24)), Vec3(0, 1.75, 0))
+        point(head, torso, Vec3(0, 1.6, 0))
+        For side In [-1.0, 1.0]
+            Local upper = part(Shape.Capsule(0.25, 0.05), Vec3(0.25 * side, 1.4, 0))
+            point(upper, torso, Vec3(0.25 * side, 1.55, 0))
+            Local lower = part(Shape.Capsule(0.25, 0.05), Vec3(0.25 * side, 1.05, 0))
+            hinge(lower, upper, Vec3(0.25 * side, 1.2, 0), -2.5, 0)
+            Local thigh = part(Shape.Capsule(0.3, 0.07), Vec3(0.1 * side, 0.65, 0))
+            point(thigh, pelvis, Vec3(0.1 * side, 0.9, 0))
+            Local shin = part(Shape.Capsule(0.3, 0.07), Vec3(0.1 * side, 0.25, 0))
+            hinge(shin, thigh, Vec3(0.1 * side, 0.45, 0), 0, 2.5)
+        End For
+        If which == 1 Then torso.AddImpulseAt(Vec3(0, 0, 30), torso.Position() + Vec3(0, 0.4, 0))
+    End For
+    Return parts
+End Function
+
+@Test
+Function RagdollsComeToRestOnTheFloor()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local held: Held[] = []
+    Local parts = Ragdolls(world, held)
+    Local most: Float = 0
+    Local bent: Float = 0
+    Local touched = False
+    For step = 1 To 900
+        world.Step(1.0 / 60)
+        most = Max(most, MostOff(held, 0))
+        For each In held
+            Local hinge = each.joint
+            If hinge != Null Then bent = Max(bent, Abs(hinge.Position()))
+        End For
+        touched = touched || Among(world.Began(), parts)
+    End For
+    Print(
+        "ragdolls: their joints {most} m apart at most, their elbows and knees bent {bent} at most")
+    // At rest, none through the floor, every joint held, no elbow or knee bent past 2.5 by more
+    // than landing pushes it, 0.12 radians here, and no part touching another.
+    Expect(Holding("ragdolls", parts, 0, 30, 0.05, True))
+    Expect(most < JOINT_APART)
+    Expect(bent < 2.5 + 0.15)
+    Expect(!touched)
+    Expect(Twice(Ragdolls, 600))
+End Function
+
+// How far a joint's two points can come apart as it's pulled, about twice what's measured here, as
+// a solver of a few iterations leaves it: 0.09 m for a hinge chain of 4 m boxes swinging, 0.17 m off
+// a rod's 5 m and 0.29 m past a rope's 8 m as a 75 m chain strikes the floor, and 0.04 m for a
+// ragdoll's limbs landing.
+Const HINGE_APART: Float = 0.2
+Const ROD_OFF: Float = 0.5
+Const JOINT_APART: Float = 0.1
