@@ -322,7 +322,8 @@ TEST_CASE("texts that are broken, huge, or all marks are laid out safely and soo
     fbe::text::atlas().clear();
 }
 
-TEST_CASE("a scale past reason is refused, and one that's tiny lays out nothing out of reach", "[stability]") {
+TEST_CASE("a scale past reason is refused, and one that's tiny lays out nothing out of reach",
+          "[stability]") {
     const std::string open = std::string(FBE_TEST_FONTS) + "/OpenSans-Regular.ttf";
     const std::uint64_t font = fbe_text_load_font(open.c_str(), 0, 16.0F, 0);
     REQUIRE(font != 0);
