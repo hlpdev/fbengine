@@ -139,22 +139,28 @@ Function AMenuConsoleAndHudRunForThousandsOfFramesWithoutGrowing() Throws Graphi
         health.SetText("{100 - frame % 100}")
         said.SetText(Shown(frame))
         If frame % 3 == 0 Then console.Print("frame {frame}: {Shown(frame / 3)}")
-        If frame % 50 == 0 Then console.Run("echo {frame}")
+        If frame % 10 == 0 Then console.Run("echo {frame}")
         panel.Watch("frame", "{frame}")
         If frame % 2 == 0 Then panel.Watch("odd", "{frame}")
         speed = panel.Tweak("speed", 0.0, 10.0, speed)
         Screen.Canvas().Clear()
         ui.Draw()
-        If frame == 500 Then warm = Measured(root, console)
+        // Warm from frame 1000, when the console's run 100 and printed past 200; then the same every
+        // 100 frames, at the same point in the frame. Gpu.MemoryUsage isn't checked: on lavapipe
+        // it's the whole machine's memory, which other programs move, not this one's.
+        If frame % 100 == 0 && frame >= 1000
+            Local now = Measured(root, console)
+            Local was = warm ?? now
+            If warm == Null Then warm = now
+            Expect(now.Fonts == was.Fonts, "frame {frame}: fonts changed: {was} then {now}")
+            Expect(now.Textures == was.Textures,
+                   "frame {frame}: textures changed: {was} then {now}")
+            Expect(now.Tree == was.Tree, "frame {frame}: the tree changed: {was} then {now}")
+            Expect(now.Lines == 200 && now.Run == 100,
+                   "frame {frame}: the console isn't at its most: {now}")
+        End If
     End For
-    Local now = Measured(root, console)
-    Local was = warm ?? now
-    Expect(now.Fonts <= was.Fonts, "fonts grew: {was} then {now}")
-    Expect(now.Textures <= was.Textures, "textures grew: {was} then {now}")
-    // Gpu.MemoryUsage isn't checked: on lavapipe it's the whole machine's memory, which other
-    // programs move, not this one's.
-    Expect(now.Tree <= was.Tree + 2, "the tree grew: {was} then {now}")
-    Expect(now.Lines <= 200 && now.Run <= 100, "the console grew: {now}")
+    Expect(warm != Null)
     Expect(play.Text() == "Play", "the menu changed")
 End Function
 

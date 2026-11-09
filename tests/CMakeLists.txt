@@ -1933,7 +1933,8 @@ target_compile_definitions(fbengine_text_tests PRIVATE FBE_BUILDING
 target_link_libraries(fbengine_text_tests PRIVATE SDL3::SDL3-static freetype fbengine_harfbuzz
                       fbengine_sheenbidi Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_text_tests)
-catch_discover_tests(fbengine_text_tests TEST_PREFIX "text."
+# A test tagged [stability], a fuzz, race, or soak, is labeled so, for sanitizers.yml.
+catch_discover_tests(fbengine_text_tests TEST_PREFIX "text." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}")
 
 # collide's masks against a brute force, from its sources and core's.

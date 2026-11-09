@@ -236,7 +236,7 @@ void used(std::uint64_t font, random_t& random) {
 
 } // namespace
 
-TEST_CASE("damaged fonts are refused or laid out with, never read past") {
+TEST_CASE("damaged fonts are refused or laid out with, never read past", "[stability]") {
     random_t random(0x5EEDF0A7ULL);
     for (const std::filesystem::path& path : fonts()) {
         const std::vector<std::uint8_t> font = read(path);
@@ -262,7 +262,7 @@ TEST_CASE("damaged fonts are refused or laid out with, never read past") {
     }
 }
 
-TEST_CASE("bytes that are no font, and faces past a collection's, are refused") {
+TEST_CASE("bytes that are no font, and faces past a collection's, are refused", "[stability]") {
     random_t random(0xB17E5ULL);
     for (int round = 0; round < 200; ++round) {
         std::vector<std::uint8_t> bytes(1 + random.below(4096));
@@ -292,7 +292,7 @@ TEST_CASE("bytes that are no font, and faces past a collection's, are refused") 
     fbe::text::atlas().clear();
 }
 
-TEST_CASE("texts that are broken, huge, or all marks are laid out safely and soon") {
+TEST_CASE("texts that are broken, huge, or all marks are laid out safely and soon", "[stability]") {
     const std::string path = std::string(FBE_OWN_TEST_FONTS) + "/FbeTestMarks-Regular.ttf";
     const std::uint64_t marks = fbe_text_load_font(path.c_str(), 0, 16.0F, 0);
     const std::string open = std::string(FBE_TEST_FONTS) + "/OpenSans-Regular.ttf";
@@ -322,7 +322,7 @@ TEST_CASE("texts that are broken, huge, or all marks are laid out safely and soo
     fbe::text::atlas().clear();
 }
 
-TEST_CASE("a scale past reason is refused, and one that's tiny lays out nothing out of reach") {
+TEST_CASE("a scale past reason is refused, and one that's tiny lays out nothing out of reach", "[stability]") {
     const std::string open = std::string(FBE_TEST_FONTS) + "/OpenSans-Regular.ttf";
     const std::uint64_t font = fbe_text_load_font(open.c_str(), 0, 16.0F, 0);
     REQUIRE(font != 0);
@@ -362,7 +362,7 @@ TEST_CASE("a scale past reason is refused, and one that's tiny lays out nothing 
     fbe::text::atlas().clear();
 }
 
-TEST_CASE("the corpus of what broke text once is laid out safely") {
+TEST_CASE("the corpus of what broke text once is laid out safely", "[stability]") {
     const std::filesystem::path corpus = std::filesystem::path(FBE_TEXT_CORPUS);
     const std::string open = std::string(FBE_TEST_FONTS) + "/OpenSans-Regular.ttf";
     const std::uint64_t sans = fbe_text_load_font(open.c_str(), 0, 16.0F, 0);
