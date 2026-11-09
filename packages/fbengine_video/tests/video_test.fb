@@ -32,7 +32,7 @@ Function Counted(video: Video): Int => Round((video.Frame()[32, 24].r As Float) 
 
 @Test
 Function TheDllIsThePackagesVersion()
-    Expect(VideoVersion() == "1.0.0-rc.1")
+    Expect(VideoVersion() == "1.0.0-rc.2")
 End Function
 
 @Test

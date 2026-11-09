@@ -52,7 +52,7 @@ constexpr std::uint32_t format = 2;
 constexpr std::uint32_t jolt_version = (std::uint32_t{ JPH_VERSION_MAJOR } << 16U) |
                                        (std::uint32_t{ JPH_VERSION_MINOR } << 8U) |
                                        std::uint32_t{ JPH_VERSION_PATCH };
-// fbengine's version, as "1.0.0-rc.1", padded with 0s.
+// fbengine's version, as "1.0.0-rc.2", padded with 0s.
 constexpr std::size_t version_size = 16;
 static_assert(std::string_view(FBE_VERSION).size() < version_size);
 

@@ -1,6 +1,6 @@
 [project]
 name = "fbengine_editor"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 type = "executable"
 license = "Apache-2.0"
 description = "fbengine's editor, a program on its packages, which opens a game's project folder."
@@ -12,5 +12,5 @@ fb = ">=1.2.3"
 # A program, which the registry doesn't take: publish.yml builds it for each target and attaches it
 # to the release. Its packages by their folders, at the version they're released at.
 [dependencies]
-fbengine = { path = "../fbengine", version = "1.0.0-rc.1" }
-fbengine_ui = { path = "../fbengine_ui", version = "1.0.0-rc.1" }
+fbengine = { path = "../fbengine", version = "1.0.0-rc.2" }
+fbengine_ui = { path = "../fbengine_ui", version = "1.0.0-rc.2" }

@@ -1,6 +1,6 @@
 [project]
 name = "fbengine_ui"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 type = "library"
 license = "Apache-2.0"
 description = "fbengine's UI, in FutureBlitz: layout, themes, widgets, focus, a debug UI, a console, and localization."
@@ -11,4 +11,4 @@ fb = ">=1.2.3"
 
 # By its folder here, and published by the version, which the folder's has to be in.
 [dependencies]
-fbengine = { path = "../fbengine", version = "1.0.0-rc.1" }
+fbengine = { path = "../fbengine", version = "1.0.0-rc.2" }

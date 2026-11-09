@@ -11,7 +11,7 @@ Import std.os
 // The DLL is the package's own build: its version is project.toml's, which is fbengine's.
 @Test
 Function TheDllIsThePackagesVersion()
-    Expect(Physics.Version() == "1.0.0-rc.1")
+    Expect(Physics.Version() == "1.0.0-rc.2")
 End Function
 
 // The threads Jolt's pool has, which C counts, are those std counts.
