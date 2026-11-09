@@ -5,5 +5,5 @@ Import fbengine_audio
 // The DLL is the package's own build: its version is project.toml's.
 @Test
 Function TheDllIsThePackagesVersion()
-    Expect(Audio.Version() == "1.0.0-rc.2")
+    Expect(Audio.Version() == "1.0.0")
 End Function
