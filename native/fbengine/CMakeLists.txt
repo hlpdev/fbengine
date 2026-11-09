@@ -5,7 +5,7 @@ file(GLOB fbengine_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*/*.cp
 fbengine_add_native(fbengine_native fbengine fbe_ ${fbengine_sources})
 target_include_directories(fbengine_native PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(fbengine_native PRIVATE FBE_BUILDING
-                           FBE_VERSION="${PROJECT_VERSION}")
+                           FBE_VERSION="${FBENGINE_VERSION}")
 # What it links, which the tests' static library of its sources links too: SDL; FreeType,
 # HarfBuzz, and SheenBidi for text; stb, KTX, and fastgltf for assets; and the GPU's Vulkan,
 # through volk and VMA, and SPIRV-Tools, which validates a game's shader.
@@ -28,7 +28,7 @@ if(FBENGINE_BUILD_TESTS)
   fbengine_set_warnings(fbengine_internal)
   target_include_directories(fbengine_internal PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
   target_compile_definitions(fbengine_internal PUBLIC FBE_BUILDING
-                             FBE_VERSION="${PROJECT_VERSION}")
+                             FBE_VERSION="${FBENGINE_VERSION}")
   target_link_libraries(fbengine_internal PUBLIC ${fbengine_links})
   fbengine_use_fetched_simdjson(fbengine_internal)
   if(NOT MSVC)

@@ -186,7 +186,7 @@ file(GLOB fbengine_audio_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/
 fbengine_add_native(fbengine_audio_native fbengine_audio fbe_ ${fbengine_audio_sources})
 target_include_directories(fbengine_audio_native PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(fbengine_audio_native PRIVATE FBE_AUDIO_BUILDING
-                           FBE_VERSION="${PROJECT_VERSION}")
+                           FBE_VERSION="${FBENGINE_VERSION}")
 target_link_libraries(fbengine_audio_native PRIVATE fbengine_miniaudio)
 # Its float arithmetic as written, never fused: a multiply-subtract fused near the speed of sound
 # rounds once where the Doppler effect's tests of it round twice.

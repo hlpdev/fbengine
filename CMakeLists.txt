@@ -1,13 +1,15 @@
 cmake_minimum_required(VERSION 3.28)
 
 # fbengine's version is its packages', which are released together: the fbengine package's
-# project.toml says it, and the others' say the same.
+# project.toml says it, and the others' say the same. A prerelease, as 1.0.0-rc.1, is the whole of
+# FBENGINE_VERSION, which the DLLs and tests say; CMake's project version takes its numbers alone.
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/packages/fbengine/project.toml" fbengine_version_line
-     REGEX "^version = \"[0-9]+\\.[0-9]+\\.[0-9]+\"$" LIMIT_COUNT 1)
-if(NOT fbengine_version_line MATCHES "\"([0-9]+\\.[0-9]+\\.[0-9]+)\"")
-  message(FATAL_ERROR "packages/fbengine/project.toml has no version like \"0.1.0\"")
+     REGEX "^version = \"[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?\"$" LIMIT_COUNT 1)
+if(NOT fbengine_version_line MATCHES "\"(([0-9]+\\.[0-9]+\\.[0-9]+)(-[0-9A-Za-z.-]+)?)\"")
+  message(FATAL_ERROR "packages/fbengine/project.toml has no version like \"0.1.0\" or \"1.0.0-rc.1\"")
 endif()
-project(fbengine VERSION ${CMAKE_MATCH_1} LANGUAGES C CXX)
+set(FBENGINE_VERSION "${CMAKE_MATCH_1}")
+project(fbengine VERSION ${CMAKE_MATCH_2} LANGUAGES C CXX)
 # A new version there configures again, so the DLLs say it.
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
              "${CMAKE_CURRENT_SOURCE_DIR}/packages/fbengine/project.toml")

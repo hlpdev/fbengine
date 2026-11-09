@@ -302,7 +302,7 @@ if(FBENGINE_FB_TESTS)
     # this OS's name, its DLLs, and the notices of what fb build bundled and of each DLL's package.
     add_test(NAME tools.pack_editor
              COMMAND "${FBENGINE_PYTHON}" "${PROJECT_SOURCE_DIR}/tools/pack_editor.py" "${FBENGINE_FB}"
-                     "${PROJECT_VERSION}" "${FBENGINE_TARGET}" "${CMAKE_CURRENT_BINARY_DIR}/packed_editor"
+                     "${FBENGINE_VERSION}" "${FBENGINE_TARGET}" "${CMAKE_CURRENT_BINARY_DIR}/packed_editor"
                      "${PROJECT_SOURCE_DIR}")
     set_tests_properties(tools.pack_editor PROPERTIES
                          PASS_REGULAR_EXPRESSION "packed the editor, its DLLs, and the notices"
@@ -342,7 +342,7 @@ if(FBENGINE_FB_TESTS)
   add_test(NAME examples.hello
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/hello")
   set_tests_properties(examples.hello PROPERTIES
-                       PASS_REGULAR_EXPRESSION "Running hello[^\n]*\nfbengine ${PROJECT_VERSION}\r?\n$")
+                       PASS_REGULAR_EXPRESSION "Running hello[^\n]*\nfbengine ${FBENGINE_VERSION}\r?\n$")
 
   # Input's cases that need a process of their own: what panics, and what's set before the video
   # starts, each checked against what it prints.
@@ -1698,7 +1698,7 @@ add_executable(fbengine_physics_internal_tests physics/contacts_tests.cpp
 target_include_directories(fbengine_physics_internal_tests PRIVATE
                            "${PROJECT_SOURCE_DIR}/native/fbengine_physics" "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(fbengine_physics_internal_tests PRIVATE FBE_PHYSICS_BUILDING
-                           FBE_VERSION="${PROJECT_VERSION}")
+                           FBE_VERSION="${FBENGINE_VERSION}")
 target_link_libraries(fbengine_physics_internal_tests PRIVATE Jolt Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_physics_internal_tests)
 # A test tagged [stability], a fuzz, race, or soak, is labeled so, for sanitizers.yml.
@@ -1980,7 +1980,7 @@ add_executable(fbengine_video_soak_tests video/soak_tests.cpp own_new.cpp stabil
 target_include_directories(fbengine_video_soak_tests PRIVATE
                            "${PROJECT_SOURCE_DIR}/native/fbengine_video" "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(fbengine_video_soak_tests PRIVATE FBE_VIDEO_BUILDING
-                           FBE_VERSION="${PROJECT_VERSION}"
+                           FBE_VERSION="${FBENGINE_VERSION}"
                            FBE_VIDEO_MEDIA="${PROJECT_SOURCE_DIR}/packages/fbengine_video/tests/media")
 target_link_libraries(fbengine_video_soak_tests PRIVATE pl_mpeg Threads::Threads
                       Catch2::Catch2WithMain)
@@ -2000,7 +2000,7 @@ add_executable(fbengine_video_thread_tests video/thread_tests.cpp
 target_include_directories(fbengine_video_thread_tests PRIVATE
                            "${PROJECT_SOURCE_DIR}/native/fbengine_video")
 target_compile_definitions(fbengine_video_thread_tests PRIVATE FBE_VIDEO_BUILDING
-                           FBE_VERSION="${PROJECT_VERSION}")
+                           FBE_VERSION="${FBENGINE_VERSION}")
 target_link_libraries(fbengine_video_thread_tests PRIVATE Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_video_thread_tests)
 catch_discover_tests(fbengine_video_thread_tests TEST_PREFIX "video."
@@ -2148,7 +2148,7 @@ add_executable(fbengine_text_tests text/text_tests.cpp ${fbengine_text_sources}
                "${PROJECT_SOURCE_DIR}/native/fbengine/core/core.cpp")
 target_include_directories(fbengine_text_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
 target_compile_definitions(fbengine_text_tests PRIVATE FBE_BUILDING
-                           FBE_VERSION="${PROJECT_VERSION}"
+                           FBE_VERSION="${FBENGINE_VERSION}"
                            FBE_TEST_FONTS="${harfbuzz_SOURCE_DIR}/test/api/fonts"
                            FBE_OWN_TEST_FONTS="${CMAKE_CURRENT_SOURCE_DIR}/fonts"
                            FBE_SHAPE_TEST_FONTS="${harfbuzz_SOURCE_DIR}/test/shape/data/in-house/fonts")
@@ -2164,7 +2164,7 @@ add_executable(fbengine_collide_tests collide/collide_tests.cpp
                "${PROJECT_SOURCE_DIR}/native/fbengine/core/core.cpp")
 target_include_directories(fbengine_collide_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
 target_compile_definitions(fbengine_collide_tests PRIVATE FBE_BUILDING
-                           FBE_VERSION="${PROJECT_VERSION}")
+                           FBE_VERSION="${FBENGINE_VERSION}")
 target_link_libraries(fbengine_collide_tests PRIVATE SDL3::SDL3-static Catch2::Catch2WithMain)
 # Its float arithmetic as written, never fused, as fbengine_native's is, so its corners and the
 # GPU's it's checked against round alike on every target.
@@ -2417,7 +2417,7 @@ add_executable(fbengine_audio_soak_tests audio/soak_tests.cpp own_new.cpp stabil
 target_include_directories(fbengine_audio_soak_tests PRIVATE
                            "${PROJECT_SOURCE_DIR}/native/fbengine_audio" "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(fbengine_audio_soak_tests PRIVATE FBE_AUDIO_BUILDING
-                           FBE_VERSION="${PROJECT_VERSION}"
+                           FBE_VERSION="${FBENGINE_VERSION}"
                            FBE_AUDIO_TEST_CORPUS="${CMAKE_CURRENT_SOURCE_DIR}/audio/corpus")
 target_link_libraries(fbengine_audio_soak_tests PRIVATE fbengine_miniaudio Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_audio_soak_tests)
@@ -2439,7 +2439,7 @@ add_executable(fbengine_audio_oom_tests audio/oom_tests.cpp own_new.cpp
 target_include_directories(fbengine_audio_oom_tests PRIVATE
                            "${PROJECT_SOURCE_DIR}/native/fbengine_audio" "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(fbengine_audio_oom_tests PRIVATE FBE_AUDIO_BUILDING
-                           FBE_VERSION="${PROJECT_VERSION}")
+                           FBE_VERSION="${FBENGINE_VERSION}")
 target_link_libraries(fbengine_audio_oom_tests PRIVATE fbengine_miniaudio Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_audio_oom_tests)
 catch_discover_tests(fbengine_audio_oom_tests TEST_PREFIX "audio."

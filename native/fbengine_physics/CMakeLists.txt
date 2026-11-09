@@ -95,7 +95,7 @@ file(GLOB fbengine_physics_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR
 fbengine_add_native(fbengine_physics_native fbengine_physics fbe_ ${fbengine_physics_sources})
 target_include_directories(fbengine_physics_native PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(fbengine_physics_native PRIVATE FBE_PHYSICS_BUILDING
-                           FBE_VERSION="${PROJECT_VERSION}")
+                           FBE_VERSION="${FBENGINE_VERSION}")
 target_link_libraries(fbengine_physics_native PRIVATE Jolt)
 # What it works out for Jolt rounds the same everywhere: no multiply and add fused into one.
 if(MSVC)
