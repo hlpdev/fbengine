@@ -1865,9 +1865,10 @@ Function CheckLandmarks(folder: Path, island: Island, camera: Camera) Throws Gra
     Try Screen.Save(folder / "shelf_high.png")
     Flip(False)
     island.Update(0.0)
-    // Each point of it: how much bluer than red it's drawn at slack water, if it's a pool, and at high.
-    Local poolBlue: Int[] = []
-    Local dryBlue: Int[] = []
+    // Each point of it: at high water, whether the sea's over it; and which are its pools, below slack
+    // water, and which dry.
+    Local pools: Vec3[] = []
+    Local dry: Vec3[] = []
     Local covered = 0
     Local onShelf = 0
     For across = -8 To 8
@@ -1876,30 +1877,50 @@ Function CheckLandmarks(folder: Path, island: Island, camera: Camera) Throws Gra
             Local z = shelfAt.y + (along As Float) * 0.5
             Local height = GroundHeight(x, z)
             If ShelfAt(x, z, height) < 0.95 Then Continue
-            Local seen = PixelOf(camera, low, Vec3(x, Max(height, 0.0), z))
+            Local point = Vec3(x, Max(height, 0.0), z)
+            Local seen = PixelOf(camera, low, point)
             Local seenHigh = PixelOf(camera, high, Vec3(x, Max(height, SeaHeight(TIDE_IN_AT)), z))
             If seen == Null || seenHigh == Null Then Continue
             onShelf += 1
-            Local blue = (seen.b As Int) - (seen.r As Int)
-            If height < 0.0 && PoolAt(x, z) < -0.1 Then poolBlue.Add(blue)
-            If height > 0.05 Then dryBlue.Add(blue)
+            If height < 0.0 && PoolAt(x, z) < -0.1 Then pools.Add(point)
+            If height > 0.05 Then dry.Add(point)
             If (seenHigh.b As Int) > (seenHigh.r As Int) + 30 Then covered += 1
         End For
     End For
-    // The pools bluer than the dry shelf, by the sea in them, the shallows showing the rock under.
-    Local dryMean = 0
-    For blue In dryBlue
-        dryMean += blue
+    // The pools hold the sea at slack water: each shows it, as water bluer than the dry shelf is, by
+    // the sea in it, or as foam, brighter than the dry shelf; at four moments, as the foam rolls in
+    // and its broken edge, a few centimeters deep in a pool, lies one way or another on a GPU.
+    Local held = True
+    Local said = ""
+    For moment In [0.0, 0.4, 0.8, 1.2]
+        island.Update(moment)
+        island.Drawn(camera)
+        Local shown = Try Screen.ToImage()
+        Flip(False)
+        Local dryBlue = 0
+        Local dryLuma = 0.0
+        For point In dry
+            Local pixel = PixelOf(camera, shown, point)
+            If pixel == Null Then Continue
+            dryBlue += (pixel.b As Int) - (pixel.r As Int)
+            dryLuma += Luma(pixel)
+        End For
+        dryBlue = dry.Count > 0 ? dryBlue / dry.Count : 0
+        dryLuma = dry.Count > 0 ? dryLuma / (dry.Count As Float) : 0.0
+        Local showing = 0
+        For point In pools
+            Local pixel = PixelOf(camera, shown, point)
+            If pixel == Null Then Continue
+            If (pixel.b As Int) - (pixel.r As Int) > dryBlue + 10 || Luma(pixel) > dryLuma + 60.0
+                showing += 1
+            End If
+        End For
+        said = said + " {showing} of {pools.Count} at {moment} s"
+        If showing * 4 < pools.Count * 3 Then held = False
     End For
-    dryMean = dryBlue.Count > 0 ? dryMean / dryBlue.Count : 0
-    Local poolMean = 0
-    For blue In poolBlue
-        poolMean += blue
-    End For
-    poolMean = poolBlue.Count > 0 ? poolMean / poolBlue.Count : -1000
-    Checks("the shelf's pools hold the sea at slack water, {poolMean} bluer than red against its " +
-           "{dryBlue.Count} dry points' {dryMean}", onShelf > 40 && poolBlue.Count > 3 &&
-           poolMean > dryMean + 10 && dryBlue.Count > onShelf / 3)
+    island.Update(0.0)
+    Checks("the shelf's pools hold the sea at slack water, as water or foam,{said}",
+           onShelf > 40 && pools.Count > 3 && dry.Count > onShelf / 3 && held)
     Checks("and at high water the sea's over it, {covered} of {onShelf}",
            covered > onShelf * 9 / 10)
     Print("the ground's erosion took {ErosionSeconds()} s, of {DROPS} drops")
