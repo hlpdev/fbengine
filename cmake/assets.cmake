@@ -283,28 +283,39 @@ fbengine_replace_source(ktx "${ktx_SOURCE_DIR}" external/basisu/encoder/basisu_e
                         "${fbengine_basisu_patched}")
 target_include_directories(ktx PRIVATE "${ktx_SOURCE_DIR}/external/basisu/encoder")
 
-# basisu's transcoder, in libktx v4.4.2 (external/basisu/transcoder/basisu_transcoder.cpp:12136,
-# read_bits1_to_9_fst), reads a UASTC block's next bits as a uint16_t through a pointer at any byte,
-# which a fuzzed KTX2 reaches and UBSan stops at as a misaligned load. The patched copy reads its two
-# bytes by memcpy, and is built in libktx's reader and writer in place of the original, finding its
-# headers and tables beside it; the patch's text has to be there, once, or configuring fails.
+# Replaces `from` with `to` in the text in `variable`, which has to have it once, or configuring
+# fails, as a patch whose source has moved on would.
+function(fbengine_patch_once variable from to what)
+  string(FIND "${${variable}}" "${from}" fbengine_first)
+  string(FIND "${${variable}}" "${from}" fbengine_last REVERSE)
+  if(fbengine_first EQUAL -1 OR NOT fbengine_first EQUAL fbengine_last)
+    message(FATAL_ERROR "${what} doesn't have, once, what its patch expects")
+  endif()
+  string(REPLACE "${from}" "${to}" fbengine_patched "${${variable}}")
+  set(${variable} "${fbengine_patched}" PARENT_SCOPE)
+endfunction()
+
+# basisu's transcoder, in libktx v4.4.2 (external/basisu/transcoder/basisu_transcoder.cpp:12082,
+# read_bits1_to_9, and 12136, read_bits1_to_9_fst), reads a UASTC block's next bits as a uint16_t
+# through a pointer at any byte, which a fuzzed KTX2 reaches and UBSan stops at as a misaligned load.
+# The patched copy reads their two bytes by memcpy, and is built in libktx's reader and writer in
+# place of the original, finding its headers and tables beside it. Its other casts are to blocks
+# and codebooks at their own types' alignment.
 set(fbengine_transcoder_source
     "${ktx_SOURCE_DIR}/external/basisu/transcoder/basisu_transcoder.cpp")
 file(READ "${fbengine_transcoder_source}" fbengine_transcoder)
-set(fbengine_transcoder_from
-    "		const uint16_t w = *(const uint16_t*)(&pBuf[bit_offset >> 3U]);
-")
 set(fbengine_transcoder_to
     "		uint16_t w;
 		memcpy(&w, &pBuf[bit_offset >> 3U], sizeof(w));
 ")
-string(FIND "${fbengine_transcoder}" "${fbengine_transcoder_from}" fbengine_first)
-string(FIND "${fbengine_transcoder}" "${fbengine_transcoder_from}" fbengine_last REVERSE)
-if(fbengine_first EQUAL -1 OR NOT fbengine_first EQUAL fbengine_last)
-  message(FATAL_ERROR "basisu_transcoder.cpp doesn't have, once, what its patch expects")
-endif()
-string(REPLACE "${fbengine_transcoder_from}" "${fbengine_transcoder_to}" fbengine_transcoder
-               "${fbengine_transcoder}")
+fbengine_patch_once(fbengine_transcoder
+                    "		const uint16_t w = *(const uint16_t *)(&pBuf[bit_offset >> 3U]);
+"
+                    "${fbengine_transcoder_to}" basisu_transcoder.cpp)
+fbengine_patch_once(fbengine_transcoder
+                    "		const uint16_t w = *(const uint16_t*)(&pBuf[bit_offset >> 3U]);
+"
+                    "${fbengine_transcoder_to}" basisu_transcoder.cpp)
 set(fbengine_transcoder_patched "${CMAKE_BINARY_DIR}/ktx-patched/basisu_transcoder.cpp")
 file(WRITE "${fbengine_transcoder_patched}.in" "${fbengine_transcoder}")
 configure_file("${fbengine_transcoder_patched}.in" "${fbengine_transcoder_patched}" COPYONLY)
@@ -314,6 +325,27 @@ foreach(target IN ITEMS ktx_read ktx)
                           "${fbengine_transcoder_patched}")
   target_include_directories(${target} PRIVATE "${ktx_SOURCE_DIR}/external/basisu/transcoder")
 endforeach()
+
+# libktx v4.4.2's ETC1S encoder (lib/basis_encode.cpp:872) makes the texture's supercompression
+# global data with new[], and deletes it with delete on a failure, where the texture's destroy frees
+# it with free (lib/texture2.c:614), as it does what it reads: AddressSanitizer reports the mismatch.
+# The patched copy allocates it with malloc and frees it on a failure with free, as the rest of
+# libktx does, and is built in libktx's writer in place of the original.
+file(READ "${ktx_SOURCE_DIR}/lib/basis_encode.cpp" fbengine_encode)
+fbengine_patch_once(fbengine_encode "        bgd = new ktx_uint8_t[bgd_size];
+"
+                    "        bgd = static_cast<ktx_uint8_t*>(malloc(bgd_size));
+        if (!bgd) return KTX_OUT_OF_MEMORY;
+"
+                    basis_encode.cpp)
+fbengine_patch_once(fbengine_encode "        delete bgd;
+" "        free(bgd);
+" basis_encode.cpp)
+set(fbengine_encode_patched "${CMAKE_BINARY_DIR}/ktx-patched/basis_encode.cpp")
+file(WRITE "${fbengine_encode_patched}.in" "${fbengine_encode}")
+configure_file("${fbengine_encode_patched}.in" "${fbengine_encode_patched}" COPYONLY)
+fbengine_replace_source(ktx "${ktx_SOURCE_DIR}" lib/basis_encode.cpp "${fbengine_encode_patched}")
+target_include_directories(ktx PRIVATE "${ktx_SOURCE_DIR}/lib")
 
 # fbengine's DLLs are UCRT's (cmake/native.cmake), so libktx is built for UCRT too: its encoder's
 # sprintf_s is UCRT's, inlined from the headers, which msvcrt's has no export of. What links the
