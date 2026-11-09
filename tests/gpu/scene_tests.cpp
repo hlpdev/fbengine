@@ -13115,16 +13115,53 @@ TEST_CASE("a game's shader freed and had again, frame after frame, keeps its pip
     CHECK(fbe_gpu_validation_errors() == 0);
 }
 
+namespace {
+
+/// A shader of SPIR-V's header and the scene's entry points alone, for `generation`, its
+/// generator's word: what's checked before the validator takes it, a few hundred bytes, not the
+/// game shader's 368 KB, which 4095 of are 1.5 GB to copy, more than a sanitized build has time
+/// for.
+std::uint64_t tiny_shader_of(std::uint32_t generation) {
+    std::vector<std::uint32_t> words{ 0x07230203, 0x00010500, generation, 1, 0 };
+    constexpr std::array<std::pair<std::uint32_t, std::string_view>, 10> entries{
+        {
+            { 0, "vertexMain" },
+            { 4, "fragmentMain" },
+            { 0, "particleVertex" },
+            { 0, "shadowVertex" },
+            { 4, "shadowFragment" },
+            { 0, "instanceVertex" },
+            { 0, "shadowInstanceVertex" },
+            { 0, "prepassVertex" },
+            { 0, "prepassInstanceVertex" },
+            { 4, "prepassFragment" },
+        },
+    };
+    for (const auto& [model, name] : entries) {
+        const std::size_t name_words = (name.size() / 4) + 1;
+        words.push_back(static_cast<std::uint32_t>((3 + name_words) << 16U) | 15U);
+        words.push_back(model);
+        words.push_back(1);
+        std::vector<std::uint32_t> named(name_words, 0);
+        std::memcpy(named.data(), name.data(), name.size());
+        words.insert(words.end(), named.begin(), named.end());
+    }
+    const std::vector<std::uint8_t> bytes = cooked_shader(words);
+    return fbe_shader_create(bytes.data(), static_cast<std::int64_t>(bytes.size()), "tiny");
+}
+
+} // namespace
+
 // As many different shaders at once as a pipeline's key numbers, 4095: one more is refused, and
-// once one's freed, and its frames done, there's room for another.
+// once one's freed, and its frames done, there's room for another. They're tiny, and none is drawn.
 TEST_CASE("as many shaders as a pipeline's key numbers are kept at once",
           "[gpu][scene][stability]") {
-    // Validated, 4095 would take a Debug build a quarter of a second each.
+    // The validator would refuse them, being only entry points.
     const unvalidated_t unvalidated;
     const scene_t scene;
     std::vector<std::uint64_t> made;
     for (std::uint32_t generation = 1; generation <= 4095; ++generation) {
-        const std::uint64_t shader = shader_of_generation(generation);
+        const std::uint64_t shader = tiny_shader_of(generation);
         if (shader == 0) {
             break;
         }
@@ -13132,7 +13169,7 @@ TEST_CASE("as many shaders as a pipeline's key numbers are kept at once",
     }
     // Some may be the test program's own, made already.
     CHECK(made.size() > 4000);
-    CHECK(shader_of_generation(5000) == 0);
+    CHECK(tiny_shader_of(5000) == 0);
     CHECK(std::string(fbe_error()) ==
           "there are more different shaders than a pipeline's key can number");
     require(fbe_shader_release(made.back()));
@@ -13140,7 +13177,7 @@ TEST_CASE("as many shaders as a pipeline's key numbers are kept at once",
     for (int frame = 0; frame < 4; ++frame) {
         static_cast<void>(scene.drawn());
     }
-    const std::uint64_t another = shader_of_generation(5000);
+    const std::uint64_t another = tiny_shader_of(5000);
     CHECK(another != 0);
     made.push_back(another);
     for (const std::uint64_t shader : made) {
