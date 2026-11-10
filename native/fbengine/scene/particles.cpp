@@ -41,6 +41,43 @@ float between(particles_t& found, float low, float high) {
     return low + ((high - low) * next_random(found));
 }
 
+/// How many steps an age is: whole ones, held, or part of one too; none with no step.
+float steps_at(const particles_t& found, float age) {
+    if (found.step <= 0.0F) {
+        return 0.0F;
+    }
+    return found.held ? std::floor(age / found.step) : age / found.step;
+}
+
+/// A half-size after `steps` steps, each adding to it and then multiplying it: never below 0.
+float grown(const particles_t& found, float size, float steps) {
+    const float times = found.grow_multiplied;
+    if (std::fabs(times - 1.0F) < 1e-6F) {
+        return std::fmax(size + (found.grow_added * steps), 0.0F);
+    }
+    const float power = std::pow(times, steps);
+    const float added = found.grow_added * times * (power - 1.0F) / (times - 1.0F);
+    return std::fmax((size * power) + added, 0.0F);
+}
+
+/// When one of this life is gone: its life, or sooner if its alpha's faded to nothing by then,
+/// which, held, is at a whole step.
+float ends_at(const particles_t& found, float life) {
+    if (found.step <= 0.0F || found.fade <= 0.0F) {
+        return life;
+    }
+    const float falls = (found.fade / found.step) -
+                        ((found.color_end[3] - found.color_start[3]) / life);
+    if (falls <= 0.0F) {
+        return life;
+    }
+    float gone = found.color_start[3] / falls;
+    if (found.held) {
+        gone = std::ceil((gone / found.step) - 1e-4F) * found.step;
+    }
+    return std::fmin(life, gone);
+}
+
 /// One born at `place`, `ago` seconds before the clock, turned as `turn`.
 void spawn(particles_t& found, vec3_t place, quat_t turn, float ago) {
     const auto cosine = std::cos(found.spread);
@@ -50,10 +87,32 @@ void spawn(particles_t& found, vec3_t place, quat_t turn, float ago) {
     // Around its forward axis, -Z, as far off it as its spread.
     const vec3_t way = turn * vec3_t(out * std::cos(around), out * std::sin(around), -height);
     const float speed = between(found, found.speed_min, found.speed_max);
-    const vec3_t velocity = way * speed;
+    vec3_t velocity = way * speed;
     const float life = between(found, found.life_min, found.life_max);
+    // What's new takes its numbers after those, and only where it's set, so a seed's run of what
+    // was there before is what it was.
+    if (found.start_box.x != 0.0F || found.start_box.y != 0.0F || found.start_box.z != 0.0F) {
+        const float x = between(found, -found.start_box.x, found.start_box.x);
+        const float y = between(found, -found.start_box.y, found.start_box.y);
+        const float z = between(found, -found.start_box.z, found.start_box.z);
+        place = place + turn * vec3_t(x, y, z);
+    }
+    const vec3_t least = found.velocity_low;
+    const vec3_t most = found.velocity_high;
+    if (least.x != most.x || least.y != most.y || least.z != most.z) {
+        const float x = between(found, least.x, most.x);
+        const float y = between(found, least.y, most.y);
+        const float z = between(found, least.z, most.z);
+        velocity = velocity + vec3_t(x, y, z);
+    } else {
+        velocity = velocity + least;
+    }
+    const float scale = found.scale_min != found.scale_max
+                            ? between(found, found.scale_min, found.scale_max)
+                            : found.scale_min;
+    const float ends = ends_at(found, life);
     // Dead already, at the end of a long step, as if it never was.
-    if (ago >= life) {
+    if (ago >= ends) {
         return;
     }
     float birth = found.clock - ago;
@@ -67,15 +126,20 @@ void spawn(particles_t& found, vec3_t place, quat_t turn, float ago) {
         .life = life,
         .roll = between(found, -found.roll, found.roll),
         .spin = between(found, -found.spin, found.spin),
+        .scale = scale,
+        .ends = ends,
     };
     const auto slot = static_cast<std::uint32_t>(found.next);
     found.pending.emplace_back(slot, made);
+    if (!found.kept.empty()) {
+        found.kept[slot] = made;
+    }
     found.next = (found.next + 1) % static_cast<std::size_t>(found.capacity);
     found.born = std::min(found.born + 1, found.capacity);
-    found.deaths[slot] = found.total + life - ago;
+    found.deaths[slot] = found.total + ends - ago;
     found.latest_death = std::fmax(found.latest_death, found.deaths[slot]);
     // Where it can reach by its speed, for the box what's alive is in.
-    const float reach = speed * life;
+    const float reach = length(velocity) * life;
     const vec3_t low(place.x - reach, place.y - reach, place.z - reach);
     const vec3_t high(place.x + reach, place.y + reach, place.z + reach);
     bounds_slice_t& slice = found.slices[found.slice];
@@ -115,6 +179,9 @@ void sweep(particles_t& found) {
         if (found.deaths[slot] != 0.0 && found.deaths[slot] <= found.total) {
             found.pending.emplace_back(static_cast<std::uint32_t>(slot), particle_t{});
             found.deaths[slot] = 0.0;
+            if (!found.kept.empty()) {
+                found.kept[slot] = {};
+            }
         }
     }
 }
@@ -123,6 +190,10 @@ void sweep(particles_t& found) {
 void make_room(particles_t& found, std::int32_t capacity) {
     std::vector<double> deaths(static_cast<std::size_t>(capacity), 0.0);
     found.deaths = std::move(deaths);
+    if (!found.kept.empty()) {
+        std::vector<particle_t> kept(static_cast<std::size_t>(capacity));
+        found.kept = std::move(kept);
+    }
     found.capacity = capacity;
     found.pending.clear();
     found.next = 0;
@@ -134,6 +205,54 @@ void make_room(particles_t& found, std::int32_t capacity) {
 void ready_slots(particles_t& found) {
     if (found.deaths.size() != static_cast<std::size_t>(found.capacity)) {
         make_room(found, found.capacity);
+    }
+}
+
+/// The bursts a step of `seconds` has, each born where the emitter was then, on its way from
+/// `from` by `across`: those at so many seconds since they were set off, 0 and each `burst_every`
+/// after while they last, from the step's start up to its end, which is the next step's.
+void step_bursts(particles_t& found, float seconds, vec3_t from, vec3_t across, quat_t turn) {
+    if (found.burst_count <= 0 || found.burst_since < 0.0) {
+        return;
+    }
+    const auto every = static_cast<double>(found.burst_every);
+    const auto again = static_cast<double>(found.burst_again);
+    const auto lasts = static_cast<double>(found.burst_lasts);
+    const auto wrap = [&](double since) {
+        return again > 0.0 ? std::fmod(since, again) : since;
+    };
+    // Only what's born a life before the step's end can live to it, and only as many bursts as
+    // it holds: the rest of the step goes by with nothing to show for it.
+    const double apart = again > 0.0 ? std::fmin(every, again) : every;
+    const double fit = (static_cast<double>(found.capacity / found.burst_count) + 1.0) * apart;
+    double left = static_cast<double>(seconds);
+    const double shown = std::fmin(static_cast<double>(found.life_max), fit);
+    if (left > shown) {
+        found.burst_since = wrap(found.burst_since + (left - shown));
+        found.burst_next = static_cast<std::int64_t>(std::ceil(found.burst_since / every));
+        left = shown;
+    }
+    while (left > 0.0) {
+        const double next = static_cast<double>(found.burst_next) * every;
+        const bool due = (lasts <= 0.0 || next < lasts) && (again <= 0.0 || next < again);
+        // How long till the next thing: a burst, or their being set off again.
+        const double until = (due ? next : again) - found.burst_since;
+        if ((!due && again <= 0.0) || until >= left) {
+            found.burst_since += left;
+            break;
+        }
+        left -= std::fmax(until, 0.0);
+        if (!due) {
+            found.burst_since = 0.0;
+            found.burst_next = 0;
+            continue;
+        }
+        found.burst_since = next;
+        ++found.burst_next;
+        const float part = seconds > 0.0F ? 1.0F - static_cast<float>(left / seconds) : 1.0F;
+        for (std::int32_t i = 0; i < std::min(found.burst_count, found.capacity); ++i) {
+            spawn(found, from + across * part, turn, static_cast<float>(left));
+        }
     }
 }
 
@@ -185,6 +304,7 @@ void step_one(particles_t& found, float seconds) {
         const float along_step = start + ((1.0F - start) * part);
         spawn(found, from + across * along_step, turn, window * (1.0F - part));
     }
+    step_bursts(found, seconds, from, across, turn);
     trim_pending(found);
 }
 
@@ -245,6 +365,11 @@ void copy_particles(std::uint32_t from, std::uint32_t to) {
     copy.slice_age = 0.0F;
     copy.deaths.clear();
     copy.pending.clear();
+    copy.kept.clear();
+    if (copy.burst_since >= 0.0) {
+        copy.burst_since = 0.0;
+    }
+    copy.burst_next = 0;
     copy.next = 0;
     copy.born = 0;
     ++copy.generation;
@@ -270,6 +395,41 @@ float particles_clock(const particles_t& found, float tween) {
     return clock;
 }
 
+bool particle_state(const particles_t& found, const particle_t& particle, float now,
+                    particle_state_t& state) {
+    float age = now - particle.birth;
+    if (age < 0.0F) {
+        age += particles_wrap;
+    }
+    if (age >= particle.ends) {
+        return false;
+    }
+    const vec3_t born(particle.position[0], particle.position[1], particle.position[2]);
+    const vec3_t going(particle.velocity[0], particle.velocity[1], particle.velocity[2]);
+    // As the scene shader's particleVertex has it.
+    const float dragged = found.drag * age;
+    float left = age * (1.0F - (dragged * (0.5F - (dragged / 6.0F))));
+    float fell = age * age * (0.5F - (dragged * ((1.0F / 6.0F) - (dragged / 24.0F))));
+    if (dragged >= 0.01F) {
+        left = (1.0F - std::exp(-dragged)) / found.drag;
+        fell = (age - left) / found.drag;
+    }
+    const float part = age / particle.life;
+    const float steps = steps_at(found, age);
+    const float size =
+        (found.size_start + ((found.size_end - found.size_start) * part)) * particle.scale;
+    const float alpha =
+        found.color_start[3] + ((found.color_end[3] - found.color_start[3]) * part);
+    state = {
+        .place = born + going * left + found.gravity * fell,
+        .half_width = grown(found, size * found.shape[0], steps),
+        .half_height = grown(found, size * found.shape[1], steps),
+        .alpha = std::fmax(alpha - (found.fade * steps), 0.0F),
+        .age = age,
+    };
+    return true;
+}
+
 bool particles_bounds(const particles_t& found, vec3_t& min, vec3_t& max) {
     bool any = false;
     for (const bounds_slice_t& slice : found.slices) {
@@ -289,8 +449,12 @@ bool particles_bounds(const particles_t& found, vec3_t& min, vec3_t& max) {
     }
     // What gravity can add to that, drag or none, and a turned quad's corner.
     const float falling = 0.5F * length(found.gravity) * found.longest * found.longest;
-    const float reach =
-        falling + (std::fmax(found.size_start, found.size_end) * std::numbers::sqrt2_v<float>);
+    // Its biggest half-size: at its birth, or, grown, at the longest life's end.
+    const float widest = std::fmax(found.size_start, found.size_end) * found.scale_max *
+                         std::fmax(found.shape[0], found.shape[1]);
+    const float biggest =
+        std::fmax(widest, grown(found, widest, steps_at(found, found.longest)));
+    const float reach = falling + (biggest * std::numbers::sqrt2_v<float>);
     const vec3_t grown(reach, reach, reach);
     min = min - grown;
     max = max + grown;
@@ -596,6 +760,218 @@ FBE_API bool fbe_particles_burst(uint64_t particles, int32_t count) try {
     return true;
 } catch (const std::bad_alloc&) {
     return fbe::fail("out of memory");
+}
+
+FBE_API bool fbe_particles_set_start_box(uint64_t particles, float x, float y, float z) {
+    particles_t* found = fbe::scene::particles_of(particles);
+    if (found == nullptr) {
+        return false;
+    }
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) || x < 0.0F || y < 0.0F ||
+        z < 0.0F) {
+        return fbe::fail(
+            std::format("a particle's start box is 0 or more each way, not {}, {}, {}", x, y, z));
+    }
+    found->start_box = fbe::scene::vec3_t(x, y, z);
+    return true;
+}
+
+FBE_API bool fbe_particles_start_box(uint64_t particles, fbe_vec3_t* box) {
+    const particles_t* found = fbe::scene::particles_of(particles);
+    if (found == nullptr) {
+        return false;
+    }
+    *box = { .x = found->start_box.x, .y = found->start_box.y, .z = found->start_box.z };
+    return true;
+}
+
+FBE_API bool fbe_particles_set_velocity_box(uint64_t particles, const fbe_vec3_t* least,
+                                            const fbe_vec3_t* most) {
+    particles_t* found = fbe::scene::particles_of(particles);
+    if (found == nullptr) {
+        return false;
+    }
+    const std::array numbers{ least->x, least->y, least->z, most->x, most->y, most->z };
+    if (!std::ranges::all_of(numbers, [](float each) { return std::isfinite(each); }) ||
+        most->x < least->x || most->y < least->y || most->z < least->z) {
+        return fbe::fail("a particle's added velocity is finite, least to most on each axis");
+    }
+    found->velocity_low = fbe::scene::vec3_t(least->x, least->y, least->z);
+    found->velocity_high = fbe::scene::vec3_t(most->x, most->y, most->z);
+    return true;
+}
+
+FBE_API bool fbe_particles_velocity_box(uint64_t particles, fbe_vec3_t* least, fbe_vec3_t* most) {
+    const particles_t* found = fbe::scene::particles_of(particles);
+    if (found == nullptr) {
+        return false;
+    }
+    *least = { .x = found->velocity_low.x, .y = found->velocity_low.y, .z = found->velocity_low.z };
+    *most = { .x = found->velocity_high.x, .y = found->velocity_high.y, .z = found->velocity_high.z };
+    return true;
+}
+
+FBE_API bool fbe_particles_set_size_range(uint64_t particles, float least, float most) {
+    particles_t* found = fbe::scene::particles_of(particles);
+    if (found == nullptr) {
+        return false;
+    }
+    if (!std::isfinite(least) || !std::isfinite(most) || least < 0.0F || most < least) {
+        return fbe::fail(std::format(
+            "what a particle's size is times is 0 or more, least to most, not {} to {}", least,
+            most));
+    }
+    found->scale_min = least;
+    found->scale_max = most;
+    return true;
+}
+
+FBE_API bool fbe_particles_set_shape(uint64_t particles, float width, float height) {
+    particles_t* found = fbe::scene::particles_of(particles);
+    if (found == nullptr) {
+        return false;
+    }
+    if (!std::isfinite(width) || !std::isfinite(height) || width < 0.0F || height < 0.0F) {
+        return fbe::fail(std::format(
+            "a particle's width and height are 0 or more times its size, not {} and {}", width,
+            height));
+    }
+    found->shape = { width, height };
+    return true;
+}
+
+FBE_API bool fbe_particles_set_steps(uint64_t particles, float seconds, bool held) {
+    particles_t* found = fbe::scene::particles_of(particles);
+    if (found == nullptr) {
+        return false;
+    }
+    if (!std::isfinite(seconds) || seconds < 0.0F) {
+        return fbe::fail(std::format("a particle's step is 0 seconds or more, not {}", seconds));
+    }
+    found->step = seconds;
+    found->held = held;
+    return true;
+}
+
+FBE_API bool fbe_particles_set_growth(uint64_t particles, float added, float multiplied) {
+    particles_t* found = fbe::scene::particles_of(particles);
+    if (found == nullptr) {
+        return false;
+    }
+    if (!std::isfinite(added) || !std::isfinite(multiplied) || multiplied <= 0.0F) {
+        return fbe::fail(std::format(
+            "what's added to a particle's size a step is finite, and what it's times above 0, not "
+            "{} and {}",
+            added, multiplied));
+    }
+    found->grow_added = added;
+    found->grow_multiplied = multiplied;
+    return true;
+}
+
+FBE_API bool fbe_particles_set_fade(uint64_t particles, float a_step) {
+    particles_t* found = fbe::scene::particles_of(particles);
+    if (found == nullptr) {
+        return false;
+    }
+    if (!std::isfinite(a_step) || a_step < 0.0F) {
+        return fbe::fail(
+            std::format("what's taken off a particle's alpha a step is 0 or more, not {}", a_step));
+    }
+    found->fade = a_step;
+    return true;
+}
+
+FBE_API bool fbe_particles_set_roll_along(uint64_t particles, bool along) {
+    particles_t* found = fbe::scene::particles_of(particles);
+    if (found == nullptr) {
+        return false;
+    }
+    found->roll_along = along;
+    return true;
+}
+
+FBE_API bool fbe_particles_settings(uint64_t particles, fbe_particles_settings_t* settings) {
+    const particles_t* found = fbe::scene::particles_of(particles);
+    if (found == nullptr) {
+        return false;
+    }
+    *settings = {
+        .size_least = found->scale_min,
+        .size_most = found->scale_max,
+        .width = found->shape[0],
+        .height = found->shape[1],
+        .step = found->step,
+        .added = found->grow_added,
+        .multiplied = found->grow_multiplied,
+        .fade = found->fade,
+        .burst_every = found->burst_every,
+        .burst_lasts = found->burst_lasts,
+        .burst_again = found->burst_again,
+        .burst_count = found->burst_count,
+        .held = found->held,
+        .roll_along = found->roll_along,
+        .bursting = found->burst_count > 0 && found->burst_since >= 0.0 &&
+                    (found->burst_lasts <= 0.0F || found->burst_again > 0.0F ||
+                     found->burst_since < static_cast<double>(found->burst_lasts)),
+    };
+    return true;
+}
+
+FBE_API bool fbe_particles_set_bursts(uint64_t particles, int32_t count, float every, float lasts,
+                                      float again) {
+    particles_t* found = fbe::scene::particles_of(particles);
+    if (found == nullptr) {
+        return false;
+    }
+    if (count < 0 || !std::isfinite(every) || !std::isfinite(lasts) || !std::isfinite(again) ||
+        every < fbe::scene::least_burst || lasts < 0.0F ||
+        (again != 0.0F && again < fbe::scene::least_burst)) {
+        return fbe::fail(std::format(
+            "bursts are of 0 particles or more, every 0.001 seconds or more, lasting 0 or more, "
+            "and set off again after 0, for never, or 0.001 or more, not {}, {}, {}, {}",
+            count, every, lasts, again));
+    }
+    found->burst_count = count;
+    found->burst_every = every;
+    found->burst_lasts = lasts;
+    found->burst_again = again;
+    found->burst_since = count > 0 ? 0.0 : -1.0;
+    found->burst_next = 0;
+    return true;
+}
+
+FBE_API int32_t fbe_particles_read(uint64_t particles, fbe_particle_t* read, int32_t capacity) try {
+    particles_t* found = fbe::scene::particles_of(particles);
+    if (found == nullptr) {
+        return -1;
+    }
+    if (found->kept.empty()) {
+        // From now on: what was born before isn't known here.
+        found->kept.resize(static_cast<std::size_t>(found->capacity));
+        return 0;
+    }
+    std::int32_t count = 0;
+    for (const fbe::scene::particle_t& particle : found->kept) {
+        fbe::scene::particle_state_t state;
+        if (!fbe::scene::particle_state(*found, particle, found->clock, state)) {
+            continue;
+        }
+        if (count < capacity && read != nullptr) {
+            read[count] = {
+                .position = { .x = state.place.x, .y = state.place.y, .z = state.place.z },
+                .half_width = state.half_width,
+                .half_height = state.half_height,
+                .alpha = state.alpha,
+                .age = state.age,
+            };
+        }
+        ++count;
+    }
+    return count;
+} catch (const std::bad_alloc&) {
+    fbe::fail("out of memory");
+    return -1;
 }
 
 FBE_API int32_t fbe_particles_alive(uint64_t particles) {
