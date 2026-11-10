@@ -166,6 +166,32 @@ End Struct
     Public Field rotation: fbe_quat_t
 End Struct
 
+@CLayout Public Struct fbe_particles_settings_t
+    Public Field size_least: Float32
+    Public Field size_most: Float32
+    Public Field width: Float32
+    Public Field height: Float32
+    Public Field step: Float32
+    Public Field added: Float32
+    Public Field multiplied: Float32
+    Public Field fade: Float32
+    Public Field burst_every: Float32
+    Public Field burst_lasts: Float32
+    Public Field burst_again: Float32
+    Public Field burst_count: Int32
+    Public Field held: Bool
+    Public Field roll_along: Bool
+    Public Field bursting: Bool
+End Struct
+
+@CLayout Public Struct fbe_particle_t
+    Public Field position: fbe_vec3_t
+    Public Field half_width: Float32
+    Public Field half_height: Float32
+    Public Field alpha: Float32
+    Public Field age: Float32
+End Struct
+
 Public Extern "C" Lib "fbengine_native"
     Function fbe_world_create(): UInt64
     Function fbe_world_main(): UInt64
@@ -526,6 +552,25 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_particles_set_seed(particles: UInt64, seed: UInt32): Bool
     Function fbe_particles_burst(particles: UInt64, count: Int32): Bool
     Function fbe_particles_alive(particles: UInt64): Int32
+    Function fbe_particles_set_start_box(particles: UInt64, x: Float32, y: Float32,
+                                         z: Float32): Bool
+    Function fbe_particles_start_box(particles: UInt64, box: Ptr<fbe_vec3_t>): Bool
+    Function fbe_particles_set_velocity_box(particles: UInt64, least: Ptr<fbe_vec3_t>,
+                                            most: Ptr<fbe_vec3_t>): Bool
+    Function fbe_particles_velocity_box(particles: UInt64, least: Ptr<fbe_vec3_t>,
+                                        most: Ptr<fbe_vec3_t>): Bool
+    Function fbe_particles_set_size_range(particles: UInt64, least: Float32, most: Float32): Bool
+    Function fbe_particles_set_shape(particles: UInt64, width: Float32, height: Float32): Bool
+    Function fbe_particles_set_steps(particles: UInt64, seconds: Float32, held: Bool): Bool
+    Function fbe_particles_set_growth(particles: UInt64, added: Float32, multiplied: Float32): Bool
+    Function fbe_particles_set_fade(particles: UInt64, a_step: Float32): Bool
+    Function fbe_particles_set_roll_along(particles: UInt64, along: Bool): Bool
+    Function fbe_particles_set_bursts(particles: UInt64, count: Int32, every: Float32,
+                                      lasts: Float32, again: Float32): Bool
+    Function fbe_particles_settings(particles: UInt64,
+                                    settings: Ptr<fbe_particles_settings_t>): Bool
+    Function fbe_particles_read(particles: UInt64, read: Ptr<fbe_particle_t>,
+                                capacity: Int32): Int32
     Function fbe_world_set_sky_atmosphere(world: UInt64, sun: UInt64, brightness: Float32): Bool
     Function fbe_world_set_sky_texture(world: UInt64, texture: UInt64, brightness: Float32): Bool
     Function fbe_world_clear_sky(world: UInt64): Bool

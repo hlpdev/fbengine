@@ -190,6 +190,10 @@ TEST_CASE("a velocity within a box is added to each particle's own, on the world
         CHECK(one.position.y == Approx(4.0F));
         CHECK(one.position.z == Approx(-6.0F));
     }
+    // With no speed of its own, where that takes it is in its bounds all the same.
+    fbe_aabb_t added{};
+    REQUIRE(fbe_entity_bounds(emitter, &added));
+    CHECK((added.max.x >= 2.0F && added.max.y >= 4.0F && added.min.z <= -6.0F));
     // Between two, with its own speed along its forward axis, the world's -X as it's turned.
     REQUIRE(fbe_particles_set_capacity(emitter, 1024));
     REQUIRE(fbe_particles_set_motion(emitter, 5.0F, 5.0F, 0.0F, 0.0F));
@@ -356,7 +360,8 @@ TEST_CASE("each step takes an amount off a particle's alpha, and one with none i
     CHECK(read(emitter)[0].alpha == Approx(1.0F - (3.0F * 0.28F)));
     REQUIRE(fbe_world_step_particles(world.handle, 0.04F));
     CHECK(fbe_particles_alive(emitter) == 0);
-    // With its colors' own fade it's from what they have it: 1 to 0 over 2 seconds, less 0.1 a step.
+    // With its colors' own fade it's from what they have it: 1 to 0 over 2 seconds, less 0.1 a
+    // step.
     REQUIRE(fbe_particles_set_steps(emitter, 0.5F, false));
     REQUIRE(fbe_particles_set_fade(emitter, 0.1F));
     REQUIRE(fbe_particles_set_life(emitter, 2.0F, 2.0F));
@@ -528,6 +533,25 @@ TEST_CASE("an emitter that sets none of the new has a seed's run as it was", "[s
         CHECK(plain[at].position.z == set[at].position.z);
         CHECK(plain[at].half_width == set[at].half_width);
     }
+    // A range of sizes takes a number for each, after the first's place, so the run's another.
+    const std::uint64_t ranged = fbe_entity_create(world.handle, 0, FBE_ENTITY_PARTICLES);
+    REQUIRE(fbe_particles_set_rate(ranged, 0.0F));
+    REQUIRE(fbe_particles_set_motion(ranged, 1.0F, 3.0F, 1.0F, 2.0F));
+    REQUIRE(fbe_particles_set_life(ranged, 5.0F, 9.0F));
+    REQUIRE(fbe_particles_set_seed(ranged, 77));
+    REQUIRE(fbe_particles_read(ranged, nullptr, 0) == 0);
+    REQUIRE(fbe_particles_set_size_range(ranged, 1.0F, 3.0F));
+    REQUIRE(fbe_particles_burst(ranged, 50));
+    REQUIRE(fbe_world_step_particles(world.handle, 1.0F));
+    const std::vector<fbe_particle_t> other = read(ranged);
+    REQUIRE(other.size() == 50);
+    std::size_t moved = 0;
+    for (std::size_t at = 0; at < other.size(); ++at) {
+        if (other[at].position.x != plain[at].position.x) {
+            ++moved;
+        }
+    }
+    CHECK(moved > 40);
 }
 
 TEST_CASE("a copy of an emitter has what's new of its settings", "[scene][particles]") {
@@ -553,4 +577,22 @@ TEST_CASE("a copy of an emitter has what's new of its settings", "[scene][partic
     CHECK(box.z == 3.0F);
     CHECK_FALSE(fbe_particles_settings(0, &settings));
     CHECK_FALSE(fbe_particles_set_roll_along(0, true));
+}
+
+TEST_CASE("a copy of an emitter that's bursting bursts from its own start", "[scene][particles]") {
+    const test_world_t world;
+    const std::uint64_t emitter = still_emitter(world.handle);
+    REQUIRE(fbe_particles_set_bursts(emitter, 4, 1.0F, 2.5F, 0.0F));
+    REQUIRE(fbe_world_step_particles(world.handle, 1.0F));
+    const std::size_t first = read(emitter).size();
+    CHECK(first >= 4);
+    // Past where they last: no more of them come.
+    REQUIRE(fbe_world_step_particles(world.handle, 3.0F));
+    const std::size_t all = read(emitter).size();
+    CHECK(all == 12);
+    const std::uint64_t copy = fbe_entity_copy(emitter, world.handle, 0);
+    REQUIRE(fbe_particles_read(copy, nullptr, 0) == 0);
+    REQUIRE(fbe_world_step_particles(world.handle, 1.0F));
+    CHECK(read(copy).size() == first);
+    CHECK(read(emitter).size() == all);
 }

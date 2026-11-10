@@ -259,6 +259,36 @@ typedef struct fbe_pose_t {
     fbe_vec3_t position;
     fbe_quat_t rotation;
 } fbe_pose_t;
+
+// What fbe_particles_settings reads: what a Particles' size range, shape, steps, growth, fade,
+// roll along, and bursts are set to, and whether its bursts are set off and have more to come.
+typedef struct fbe_particles_settings_t {
+    float size_least;
+    float size_most;
+    float width;
+    float height;
+    float step;
+    float added;
+    float multiplied;
+    float fade;
+    float burst_every;
+    float burst_lasts;
+    float burst_again;
+    int32_t burst_count;
+    bool held;
+    bool roll_along;
+    bool bursting;
+} fbe_particles_settings_t;
+
+// A live particle as it is at the emitter's clock now, by the formula it's drawn by: where, in the
+// world, its half-width and half-height, its alpha, and its age in seconds.
+typedef struct fbe_particle_t {
+    fbe_vec3_t position;
+    float half_width;
+    float half_height;
+    float alpha;
+    float age;
+} fbe_particle_t;
 // NOLINTEND(modernize-use-using)
 
 // A new World, empty.
@@ -1043,33 +1073,7 @@ FBE_API bool fbe_particles_set_roll_along(uint64_t particles, bool along);
 FBE_API bool fbe_particles_set_bursts(uint64_t particles, int32_t count, float every, float lasts,
                                       float again);
 // What those set, but the two boxes, and whether its bursts are set off and have more to come.
-typedef struct fbe_particles_settings_t {
-    float size_least;
-    float size_most;
-    float width;
-    float height;
-    float step;
-    float added;
-    float multiplied;
-    float fade;
-    float burst_every;
-    float burst_lasts;
-    float burst_again;
-    int32_t burst_count;
-    bool held;
-    bool roll_along;
-    bool bursting;
-} fbe_particles_settings_t;
 FBE_API bool fbe_particles_settings(uint64_t particles, fbe_particles_settings_t* settings);
-// A live particle as it is at the emitter's clock now, by the formula it's drawn by: where, in the
-// world, its half-width and half-height, its alpha, and its age in seconds.
-typedef struct fbe_particle_t {
-    fbe_vec3_t position;
-    float half_width;
-    float half_height;
-    float alpha;
-    float age;
-} fbe_particle_t;
 // Reads an emitter's live particles, in no order that's kept, with no GPU, as a server has none:
 // writes up to `capacity` and gives how many there are, -1 for a freed one. It keeps a copy of
 // each one's birth from the first call on, which costs it 48 bytes for each it holds, so the first

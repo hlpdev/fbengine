@@ -2205,6 +2205,293 @@ TEST_CASE("what's dead draws nothing, and comes back at no turn of the clock", "
     CHECK(lit_pixels(scene.drawn()) != 0);
 }
 
+namespace {
+
+/// What an emitter's read has of its particles now, having been read once before.
+std::vector<fbe_particle_t> particles_read(std::uint64_t emitter) {
+    const std::int32_t count = fbe_particles_read(emitter, nullptr, 0);
+    REQUIRE(count >= 0);
+    std::vector<fbe_particle_t> all(static_cast<std::size_t>(count));
+    REQUIRE(fbe_particles_read(emitter, all.data(), count) == count);
+    return all;
+}
+
+/// Whether a frame has each of `all` drawn as it's read: lit two pixels inside each side of its
+/// width and height, unturned, and dark two pixels outside them, and its middle of its alpha over
+/// black. They're apart, facing a new camera, in a white of full alpha but for their own.
+void drawn_as_read(const scene_t& scene, const fbe::golden::frame_t& frame,
+                   const std::vector<fbe_particle_t>& all) {
+    for (const fbe_particle_t& one : all) {
+        const float pixel_size = -one.position.z / pixels_at_1;
+        const float inside = 2.0F * pixel_size;
+        const auto seen = [&](float x, float y) {
+            return pixel_of(frame, pixel_at(scene.camera, one.position.x + x, one.position.y + y,
+                                            one.position.z));
+        };
+        CAPTURE(one.position.x, one.position.y, one.half_width, one.half_height, one.alpha);
+        const std::uint8_t shade = srgb(one.alpha);
+        CHECK(near(seen(0.0F, 0.0F), { shade, shade, shade }, 3));
+        for (const float side : { -1.0F, 1.0F }) {
+            CHECK(seen(side * (one.half_width - inside), 0.0F)[0] > 0);
+            CHECK(seen(side * (one.half_width + inside), 0.0F)[0] == 0);
+            CHECK(seen(0.0F, side * (one.half_height - inside))[0] > 0);
+            CHECK(seen(0.0F, side * (one.half_height + inside))[0] == 0);
+        }
+    }
+}
+
+/// A still emitter at a depth of 8 whose particles are read from now.
+std::uint64_t read_emitter(const scene_t& scene, float half) {
+    const std::uint64_t emitter = still_emitter(scene.world, 0.0F, 0.0F, -8.0F, half);
+    require(fbe_particles_set_seed(emitter, 20261110));
+    REQUIRE(fbe_particles_read(emitter, nullptr, 0) == 0);
+    return emitter;
+}
+
+} // namespace
+
+TEST_CASE("a particle's drawn as wide and high as it's read: its shape, and its size at birth",
+          "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t emitter = read_emitter(scene, 0.5F);
+    require(fbe_particles_set_shape(emitter, 2.0F, 0.5F));
+    require(fbe_particles_set_size_range(emitter, 1.5F, 1.5F));
+    require(fbe_particles_burst(emitter, 1));
+    std::vector<fbe_particle_t> all = particles_read(emitter);
+    REQUIRE(all.size() == 1);
+    CHECK(all[0].half_width == 1.5F);
+    CHECK(all[0].half_height == 0.375F);
+    drawn_as_read(scene, scene.drawn(), all);
+    // Four of a size each its own, each born somewhere in a box, apart: what's drawn is each as
+    // it's read.
+    require(fbe_particles_set_capacity(emitter, 16));
+    require(fbe_particles_set_shape(emitter, 1.0F, 1.0F));
+    require(fbe_particles_set_sizes(emitter, 0.2F, 0.2F));
+    require(fbe_particles_set_size_range(emitter, 1.0F, 2.5F));
+    require(fbe_particles_set_start_box(emitter, 3.0F, 3.0F, 0.0F));
+    // By the first seed that has them apart, so each has its own pixels.
+    bool apart = false;
+    for (std::uint32_t seed = 1; seed < 100 && !apart; ++seed) {
+        require(fbe_particles_set_capacity(emitter, 16));
+        require(fbe_particles_set_seed(emitter, seed));
+        require(fbe_particles_burst(emitter, 4));
+        all = particles_read(emitter);
+        REQUIRE(all.size() == 4);
+        apart = true;
+        for (std::size_t a = 0; a < all.size(); ++a) {
+            for (std::size_t b = a + 1; b < all.size(); ++b) {
+                apart = apart && (std::fabs(all[a].position.x - all[b].position.x) > 1.2F ||
+                                  std::fabs(all[a].position.y - all[b].position.y) > 1.2F);
+            }
+        }
+    }
+    REQUIRE(apart);
+    CHECK(all[0].half_width != all[1].half_width);
+    drawn_as_read(scene, scene.drawn(), all);
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+TEST_CASE("a particle's drawn as it's read as it grows and fades by steps, smooth and held",
+          "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t emitter = read_emitter(scene, 0.2F);
+    require(fbe_particles_set_shape(emitter, 1.0F, 1.5F));
+    require(fbe_particles_set_steps(emitter, 0.1F, false));
+    require(fbe_particles_set_growth(emitter, 0.2F, 1.3F));
+    require(fbe_particles_set_fade(emitter, 0.1F));
+    require(fbe_particles_burst(emitter, 1));
+    drawn_as_read(scene, scene.drawn(), particles_read(emitter));
+    // Three and a half steps on, smooth: bigger than three steps have it, and fainter.
+    require(fbe_world_step_particles(scene.world, 0.35F));
+    const std::vector<fbe_particle_t> smooth = particles_read(emitter);
+    REQUIRE(smooth.size() == 1);
+    drawn_as_read(scene, scene.drawn(), smooth);
+    // Held: as three whole steps have it, by hand.
+    require(fbe_particles_set_steps(emitter, 0.1F, true));
+    const std::vector<fbe_particle_t> held = particles_read(emitter);
+    float width = 0.2F;
+    for (int step = 0; step < 3; ++step) {
+        width = (width + 0.2F) * 1.3F;
+    }
+    CHECK(std::fabs(held[0].half_width - width) < 0.001F);
+    CHECK(std::fabs(held[0].alpha - 0.7F) < 0.001F);
+    CHECK(smooth[0].half_width > held[0].half_width + 0.02F);
+    CHECK(smooth[0].alpha < held[0].alpha - 0.02F);
+    drawn_as_read(scene, scene.drawn(), held);
+    // Faded to nothing at its tenth step, it's gone from both, 9 seconds before its life's end.
+    require(fbe_world_step_particles(scene.world, 0.66F));
+    CHECK(particles_read(emitter).empty());
+    CHECK(lit_pixels(scene.drawn()) == 0);
+    // Added to alone, each step the same: two steps on, twice that wider and higher.
+    require(fbe_particles_set_fade(emitter, 0.0F));
+    require(fbe_particles_set_growth(emitter, 0.25F, 1.0F));
+    require(fbe_particles_burst(emitter, 1));
+    require(fbe_world_step_particles(scene.world, 0.25F));
+    const std::vector<fbe_particle_t> added = particles_read(emitter);
+    REQUIRE(added.size() == 1);
+    CHECK(std::fabs(added[0].half_width - 0.7F) < 0.001F);
+    CHECK(std::fabs(added[0].half_height - 0.8F) < 0.001F);
+    drawn_as_read(scene, scene.drawn(), added);
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+TEST_CASE("a particle faded to nothing is gone, though what it's drawn in leaves its alpha out",
+          "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t emitter = read_emitter(scene, 0.5F);
+    const std::uint64_t material = unlit(0.0F, 1.0F, 0.0F);
+    require(fbe_material_set_blend(material, FBE_BLEND_OPAQUE));
+    require(fbe_particles_set_material(emitter, material));
+    require(fbe_particles_set_steps(emitter, 0.1F, true));
+    require(fbe_particles_set_fade(emitter, 0.25F));
+    require(fbe_particles_burst(emitter, 1));
+    require(fbe_world_step_particles(scene.world, 0.35F));
+    // Three steps: a quarter of its alpha left, and as green as ever.
+    CHECK(particles_read(emitter).size() == 1);
+    CHECK(near(middle(scene.drawn()), { 0, 255, 0 }));
+    // The fourth takes the last of it.
+    require(fbe_world_step_particles(scene.world, 0.1F));
+    CHECK(particles_read(emitter).empty());
+    CHECK(fbe_particles_alive(emitter) == 0);
+    CHECK(lit_pixels(scene.drawn()) == 0);
+    fbe_material_release(material);
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+TEST_CASE("particles added a velocity from a box are drawn where they're read", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t emitter = read_emitter(scene, 0.15F);
+    const fbe_vec3_t least{ .x = -3.0F, .y = -3.0F, .z = 0.0F };
+    const fbe_vec3_t most{ .x = 3.0F, .y = 3.0F, .z = 0.0F };
+    require(fbe_particles_set_velocity_box(emitter, &least, &most));
+    require(fbe_particles_set_forces(emitter, 0.0F, -1.0F, 0.0F, 0.5F));
+    require(fbe_particles_burst(emitter, 3));
+    require(fbe_world_step_particles(scene.world, 1.0F));
+    const std::vector<fbe_particle_t> all = particles_read(emitter);
+    REQUIRE(all.size() == 3);
+    const fbe::golden::frame_t frame = scene.drawn();
+    drawn_as_read(scene, frame, all);
+    // Three small squares, and nothing else.
+    const float side = 0.3F * pixels_at_1 / 8.0F;
+    CHECK(lit_pixels(frame) < static_cast<int>(3.0F * (side + 2.0F) * (side + 2.0F)));
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+TEST_CASE("a particle rolled along its way has its right the way it's moving in the view",
+          "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t emitter = read_emitter(scene, 0.25F);
+    // Long and thin: 1 to each side along its right, an eighth up and down.
+    require(fbe_particles_set_shape(emitter, 4.0F, 0.5F));
+    // Up and to the right, then bent down by gravity: after a second it's going down to the right.
+    const fbe_vec3_t going{ .x = 1.0F, .y = 1.0F, .z = 0.0F };
+    require(fbe_particles_set_velocity_box(emitter, &going, &going));
+    require(fbe_particles_set_forces(emitter, 0.0F, -2.0F, 0.0F, 0.0F));
+    require(fbe_particles_burst(emitter, 1));
+    const float along = 0.7F * std::numbers::sqrt2_v<float> / 2.0F;
+    // Lit 0.7 from its middle along a way, by how its middle is read.
+    const auto lit_along = [&](float x, float y) {
+        const std::vector<fbe_particle_t> all = particles_read(emitter);
+        REQUIRE(all.size() == 1);
+        const fbe::golden::frame_t frame = scene.drawn();
+        const fbe_vec3_t at = all[0].position;
+        return pixel_of(frame, pixel_at(scene.camera, at.x + x, at.y + y, at.z))[0] > 0;
+    };
+    // Not rolled, its right is the view's.
+    CHECK(lit_along(0.7F, 0.0F));
+    CHECK_FALSE(lit_along(along, along));
+    require(fbe_particles_set_roll_along(emitter, true));
+    CHECK(lit_along(along, along));
+    CHECK(lit_along(-along, -along));
+    CHECK_FALSE(lit_along(0.7F, 0.0F));
+    CHECK_FALSE(lit_along(-along, along));
+    // A second on, by gravity alone, it's going (1, -1).
+    require(fbe_world_step_particles(scene.world, 1.0F));
+    CHECK(lit_along(along, -along));
+    CHECK_FALSE(lit_along(along, along));
+    // With drag, what's left of its own way and what gravity's given it: at 2 a second of drag, a
+    // second on from (1, 1) under -2 it's going (0.135, -0.729), mostly down.
+    require(fbe_particles_set_capacity(emitter, 16));
+    require(fbe_particles_set_forces(emitter, 0.0F, -2.0F, 0.0F, 2.0F));
+    require(fbe_particles_burst(emitter, 1));
+    require(fbe_world_step_particles(scene.world, 1.0F));
+    const float kept = std::exp(-2.0F);
+    const float way_x = kept;
+    const float way_y = kept - (1.0F - kept);
+    const float length = std::hypot(way_x, way_y);
+    CHECK(lit_along(0.7F * way_x / length, 0.7F * way_y / length));
+    CHECK_FALSE(lit_along(0.7F * way_y / length, -0.7F * way_x / length));
+    // Its own roll is added to that: a quarter turn, and it's across its way.
+    require(fbe_particles_set_capacity(emitter, 16));
+    require(fbe_particles_set_forces(emitter, 0.0F, 0.0F, 0.0F, 0.0F));
+    const fbe_vec3_t right{ .x = 1.0F, .y = 0.0F, .z = 0.0F };
+    require(fbe_particles_set_velocity_box(emitter, &right, &right));
+    require(fbe_particles_burst(emitter, 1));
+    CHECK(lit_along(0.7F, 0.0F));
+    CHECK_FALSE(lit_along(0.0F, 0.7F));
+    // Seen from behind, the world's +X is the view's left, and it's along that all the same.
+    require(fbe_entity_set_position(scene.camera, 0.0F, 0.0F, -16.0F, FBE_SPACE_WORLD));
+    require(fbe_entity_set_rotation(scene.camera, 0.0F, 1.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+    CHECK(lit_along(0.7F, 0.0F));
+    CHECK_FALSE(lit_along(0.0F, 0.7F));
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+TEST_CASE("bursts of smoke that swells and sparks that fall, as a game's kinds have them",
+          "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    // Smoke: born in a box, drifting up, each a size of its own, swelling and fading by ticks.
+    const std::uint64_t smoke = fbe_entity_create(scene.world, 0, FBE_ENTITY_PARTICLES);
+    require(fbe_entity_set_position(smoke, -2.5F, -2.0F, -8.0F, FBE_SPACE_WORLD));
+    require(fbe_particles_set_seed(smoke, 7));
+    require(fbe_particles_set_rate(smoke, 0.0F));
+    require(fbe_particles_set_motion(smoke, 0.0F, 0.0F, 0.0F, 0.0F));
+    require(fbe_particles_set_life(smoke, 4.0F, 4.0F));
+    require(fbe_particles_set_sizes(smoke, 0.2F, 0.2F));
+    const fbe_color_t grey{ .r = 0.6F, .g = 0.6F, .b = 0.7F, .a = 1.0F };
+    require(fbe_particles_set_colors(smoke, &grey, &grey));
+    require(fbe_particles_set_start_box(smoke, 1.0F, 0.2F, 0.0F));
+    const fbe_vec3_t up_least{ .x = -0.2F, .y = 0.8F, .z = 0.0F };
+    const fbe_vec3_t up_most{ .x = 0.2F, .y = 1.4F, .z = 0.0F };
+    require(fbe_particles_set_velocity_box(smoke, &up_least, &up_most));
+    require(fbe_particles_set_size_range(smoke, 0.5F, 1.5F));
+    require(fbe_particles_set_steps(smoke, 0.1F, true));
+    require(fbe_particles_set_growth(smoke, 0.01F, 1.02F));
+    require(fbe_particles_set_fade(smoke, 0.03F));
+    require(fbe_particles_set_bursts(smoke, 3, 0.5F, 0.0F, 0.0F));
+    // Sparks: thin, thrown out to the right, falling, rolled along their way.
+    const std::uint64_t sparks = fbe_entity_create(scene.world, 0, FBE_ENTITY_PARTICLES);
+    require(fbe_entity_set_position(sparks, 1.0F, 2.0F, -8.0F, FBE_SPACE_WORLD));
+    require(fbe_particles_set_seed(sparks, 11));
+    require(fbe_particles_set_rate(sparks, 0.0F));
+    require(fbe_particles_set_motion(sparks, 0.0F, 0.0F, 0.0F, 0.0F));
+    require(fbe_particles_set_life(sparks, 4.0F, 4.0F));
+    require(fbe_particles_set_sizes(sparks, 0.1F, 0.1F));
+    const fbe_color_t hot{ .r = 1.0F, .g = 0.8F, .b = 0.2F, .a = 1.0F };
+    require(fbe_particles_set_colors(sparks, &hot, &hot));
+    require(fbe_particles_set_shape(sparks, 4.0F, 0.5F));
+    const fbe_vec3_t out_least{ .x = 0.5F, .y = 0.0F, .z = 0.0F };
+    const fbe_vec3_t out_most{ .x = 2.5F, .y = 1.5F, .z = 0.0F };
+    require(fbe_particles_set_velocity_box(sparks, &out_least, &out_most));
+    require(fbe_particles_set_forces(sparks, 0.0F, -3.0F, 0.0F, 0.0F));
+    require(fbe_particles_set_roll_along(sparks, true));
+    require(fbe_particles_set_bursts(sparks, 4, 0.25F, 0.6F, 0.0F));
+    // 1.4 seconds: the smoke's at 0, 0.5, and 1, and the sparks' at 0, 0.25, and 0.5.
+    for (int tick = 0; tick < 14; ++tick) {
+        require(fbe_world_step_particles(scene.world, 0.1F));
+    }
+    CHECK(fbe_particles_alive(smoke) == 9);
+    CHECK(fbe_particles_alive(sparks) == 12);
+    fbe::golden::check("scene_particle_kinds", scene.drawn(), { .channel = 3, .share = 0.01 });
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
 TEST_CASE("a particle stays where it was born when its emitter moves on", "[gpu][scene]") {
     const scene_t scene;
     require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));

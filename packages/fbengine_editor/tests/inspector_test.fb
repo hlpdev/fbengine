@@ -370,7 +370,8 @@ Function ItShowsWhatReflectionFindsOnEachKind() Throws IOError, GraphicsError
         HasRows(
             editor,
             own +
-            " Capacity Rate Roll Life Speeds Spread Spin Gravity Drag Sizes StartColor EndColor"))
+            " Capacity Rate Roll Life Speeds Spread Spin Gravity Drag Sizes StartColor EndColor" +
+            " StartBox Fade RollAlong"))
     // Many have how many ahead of what they share, and what's particular to one kind only if all are.
     Selecting(editor, light)
     editor.Edited.ToggleSelected(camera)

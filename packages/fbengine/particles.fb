@@ -205,7 +205,205 @@ Public Final Class Particles Extends Entity
     /// How many are alive.
     @MainThread @PanicsAtCaller
     Public Method Alive(): Int => fbe_particles_alive(Live("Alive"))
+
+    /// Sets how far to each side of the emitter one may be born, on the emitter's own axes: a box
+    /// of twice `half` about it, none at first. Below 0 panics.
+    @Limits(0)
+    @MainThread @PanicsAtCaller
+    Public Method SetStartBox(half: Vec3)
+        If !fbe_particles_set_start_box(Live("SetStartBox"), half.x, half.y, half.z)
+            Failed("SetStartBox")
+        End If
+    End Method
+
+    /// How far to each side of the emitter one may be born.
+    @MainThread @PanicsAtCaller
+    Public Method StartBox(): Vec3
+        Local particles = Live("StartBox")
+        Local box = fbe_vec3_t()
+        Unsafe
+            fbe_particles_start_box(particles, AddressOf(box))
+        End Unsafe
+        Return Vec3(box.x, box.y, box.z)
+    End Method
+
+    /// Sets a velocity added to each one's own, on the world's axes, chosen between `least` and
+    /// `most` on each axis, in units a second; none at first. A `most` below its `least` panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetVelocityBox(least: Vec3, most: Vec3)
+        Local particles = Live("SetVelocityBox")
+        Local low = fbe_vec3_t(least.x, least.y, least.z)
+        Local high = fbe_vec3_t(most.x, most.y, most.z)
+        Local set = False
+        Unsafe
+            set = fbe_particles_set_velocity_box(particles, AddressOf(low), AddressOf(high))
+        End Unsafe
+        If !set Then Failed("SetVelocityBox")
+    End Method
+
+    /// The least and the most of the velocity added to each one's own.
+    @MainThread @PanicsAtCaller
+    Public Method VelocityBox(): (Vec3, Vec3)
+        Local particles = Live("VelocityBox")
+        Local low = fbe_vec3_t()
+        Local high = fbe_vec3_t()
+        Unsafe
+            fbe_particles_velocity_box(particles, AddressOf(low), AddressOf(high))
+        End Unsafe
+        Return (Vec3(low.x, low.y, low.z), Vec3(high.x, high.y, high.z))
+    End Method
+
+    /// Sets what each one's size is times, chosen at its birth between `least` and `most`, 0 or
+    /// more; 1 at first. Others panic.
+    @MainThread @PanicsAtCaller
+    Public Method SetSizeRange(least: Float, most: Float)
+        If !fbe_particles_set_size_range(Live("SetSizeRange"), least, most)
+            Failed("SetSizeRange")
+        End If
+    End Method
+
+    /// What each one's size is times: the least, then the most.
+    @MainThread @PanicsAtCaller
+    Public Method SizeRange(): Vec2
+        Local found = Settings("SizeRange")
+        Return Vec2(found.size_least, found.size_most)
+    End Method
+
+    /// Sets each one's half-width and half-height, as so many times its size; 1 and 1 at first, a
+    /// square. Below 0 panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetShape(width: Float, height: Float)
+        If !fbe_particles_set_shape(Live("SetShape"), width, height) Then Failed("SetShape")
+    End Method
+
+    /// Each one's half-width and half-height, as so many times its size.
+    @MainThread @PanicsAtCaller
+    Public Method Shape(): Vec2
+        Local found = Settings("Shape")
+        Return Vec2(found.width, found.height)
+    End Method
+
+    /// Sets a step's length in seconds, 0 for none, as at first, which SetGrowth and SetFade go
+    /// by: a game's tick, for what it would step a tick at a time. With `held`, they change only at
+    /// each whole step of a particle's age, as stepping by hand does; without, they go smoothly
+    /// between, and are the same at each whole step. Below 0 panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetSteps(seconds: Float, held: Bool = False)
+        If !fbe_particles_set_steps(Live("SetSteps"), seconds, held) Then Failed("SetSteps")
+    End Method
+
+    /// A step's length in seconds, 0 for none.
+    @MainThread @PanicsAtCaller
+    Public Method Step(): Float => Settings("Step").step
+
+    /// Whether growth and fading wait for each whole step.
+    @MainThread @PanicsAtCaller
+    Public Method StepsHeld(): Bool => Settings("StepsHeld").held
+
+    /// Sets what each step does to each one's half-width and half-height: `added` to each, then
+    /// each times `multiplied`, above 0; 0 and 1 at first, for nothing. One shrunk to nothing draws
+    /// nothing. Others panic.
+    @MainThread @PanicsAtCaller
+    Public Method SetGrowth(added: Float, multiplied: Float = 1)
+        If !fbe_particles_set_growth(Live("SetGrowth"), added, multiplied) Then Failed("SetGrowth")
+    End Method
+
+    /// What each step adds to each one's half-width and half-height, then what it multiplies them
+    /// by.
+    @MainThread @PanicsAtCaller
+    Public Method Growth(): Vec2
+        Local found = Settings("Growth")
+        Return Vec2(found.added, found.multiplied)
+    End Method
+
+    /// Sets what each step takes off each one's alpha, 0 or more, 0 at first, from what its colors
+    /// have it. One that reaches none is gone then, before its life's end, and not counted alive.
+    /// Below 0 panics.
+    @Limits(0)
+    @MainThread @PanicsAtCaller
+    Public Method SetFade(aStep: Float)
+        If !fbe_particles_set_fade(Live("SetFade"), aStep) Then Failed("SetFade")
+    End Method
+
+    /// What each step takes off each one's alpha.
+    @MainThread @PanicsAtCaller
+    Public Method Fade(): Float => Settings("Fade").fade
+
+    /// Sets whether each is rolled the way it's moving in the view, its right along that, with
+    /// its own roll and spin added; not at first.
+    @MainThread @PanicsAtCaller
+    Public Method SetRollAlong(along: Bool)
+        If !fbe_particles_set_roll_along(Live("SetRollAlong"), along) Then Failed("SetRollAlong")
+    End Method
+
+    /// Whether each is rolled the way it's moving in the view.
+    @MainThread @PanicsAtCaller
+    Public Method RollAlong(): Bool => Settings("RollAlong").roll_along
+
+    /// Sets bursts of `count`, as many as it holds at most, every `every` seconds from now, the
+    /// first in the next step, for `lasts` seconds, 0 for as long as it's on, set off again `again`
+    /// seconds after they were, 0 for never. 0 of them stops them. `every` is 0.001 or more, as
+    /// `again` is unless it's 0; others panic.
+    @MainThread @PanicsAtCaller
+    Public Method SetBursts(count: Int, every: Float, lasts: Float = 0, again: Float = 0)
+        If count < 0 || count > 2147483647 Then Panic("SetBursts on a Particles: {count} isn't a count")
+        If !fbe_particles_set_bursts(Live("SetBursts"), count As Int32, every, lasts, again)
+            Failed("SetBursts")
+        End If
+    End Method
+
+    /// Whether its bursts are set off and have more to come.
+    @MainThread @PanicsAtCaller
+    Public Method Bursting(): Bool => Settings("Bursting").bursting
+
+    /// Its live particles as they are now, by the formula they're drawn by, with no GPU, as a
+    /// server has none, in no order that's kept. It keeps each one's birth from the first call on,
+    /// 48 bytes for each it holds, so the first call gives none, and those born after are read.
+    @MainThread @PanicsAtCaller
+    Public Method Read(): Particle[]
+        Local particles = Live("Read")
+        Local count = fbe_particles_read(particles, Null, 0)
+        Local all: Particle[] = []
+        If count <= 0 Then Return all
+        Local read = Buffer<fbe_particle_t>(count As Int64)
+        Unsafe
+            count = fbe_particles_read(particles, read.Pointer(), count)
+        End Unsafe
+        For at = 0 Until count
+            Local one = read[at]
+            all.Add(Particle(Vec3(one.position.x, one.position.y, one.position.z), one.half_width,
+                             one.half_height, one.alpha, one.age))
+        End For
+        Return all
+    End Method
+
+    Method Settings(call: String): fbe_particles_settings_t
+        Local particles = Live(call)
+        Local found = fbe_particles_settings_t()
+        Unsafe
+            fbe_particles_settings(particles, AddressOf(found))
+        End Unsafe
+        Return found
+    End Method
 End Class
+
+/// A particle as Particles.Read has it: where it is in the world, its half-width and half-height,
+/// its alpha, and its age in seconds.
+Public Struct Particle
+    Public Field Position: Vec3
+    Public Field HalfWidth: Float
+    Public Field HalfHeight: Float
+    Public Field Alpha: Float
+    Public Field Age: Float
+
+    Public New(position: Vec3, halfWidth: Float, halfHeight: Float, alpha: Float, age: Float)
+        Position = position
+        HalfWidth = halfWidth
+        HalfHeight = halfHeight
+        Alpha = alpha
+        Age = age
+    End New
+End Struct
 
 Extend World
     /// Sets the World's sky to the atmosphere, one scattering of the sun's light, marched per pixel,
