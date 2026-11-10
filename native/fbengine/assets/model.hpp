@@ -11,6 +11,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -221,6 +222,14 @@ struct model_t {
     /// images', which hot reload loads it again for when they change.
     std::vector<std::string> reads;
 };
+
+/// What's after an image file's name in the name of its cook as numbers, not a color, beside it in
+/// a pak: the cooker's, for an image that models read both ways, as wall.png.linear.ktx2.
+inline constexpr std::string_view linear_cook = ".linear.ktx2";
+
+/// Whether an image's sidecar, its import settings' TOML, says `srgb`, at its top, and what; none
+/// for one that doesn't say.
+std::optional<bool> sidecar_srgb(std::string_view text);
 
 struct model_options_t {
     /// What Basis Universal KTX2 images are transcoded to.

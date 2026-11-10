@@ -33,6 +33,9 @@ Const SHADER_MAGIC = "FBESHADR"
 // for the buffers it names.
 Const SNIFFED = 256
 Const MOST_JSON = 1 << 28
+// What's after an image's name in the name of its cook as numbers, not a color, beside it in the
+// pak, which a model that reads it so loads: the engine's linear_cook.
+Const LINEAR_COOK = ".linear.ktx2"
 
 /// Makes a game's source files into what its release loads: its images into KTX2s of GPU blocks
 /// with their mips, its glTFs into binary glTFs whose meshes are ordered for the GPU, and all of
@@ -526,6 +529,10 @@ Public Final Class Cooker
         // which their binary glTFs hold once they're cooked.
         Local kinds: CookedAs[] = []
         Local buffers = Set<String>()
+        // The images the glTFs name, by their names folded: the first to read each as a color, and
+        // as numbers that aren't one, as a normal, occlusion, or metal-rough map's are.
+        Local colors = Map<String, String>()
+        Local numbers = Map<String, String>()
         For file In files
             Local kind = CookedAs.NOTHING
             If OnDisk(file.0) != output
@@ -541,6 +548,10 @@ Public Final Class Cooker
                     Local json = Try JsonOf(file.0, start)
                     For named In Try UrisOf(file.1, json, place, "images")
                         Try RefuseLeftOut(file.1, named)
+                    End For
+                    For use In Try UsesOf(file.1, json, place)
+                        Local by = use.1 ? colors : numbers
+                        If by.Get(Folded(use.0)) == Null Then by[Folded(use.0)] = file.1
                     End For
                     For named In Try BuffersOf(file.1, json, place)
                         Try RefuseLeftOut(file.1, named)
@@ -564,16 +575,47 @@ Public Final Class Cooker
             Local cooked = False
             If kind == CookedAs.IMAGE
                 Local settings = Try Assets.ReadSettings<ImageSettings>("{place}/{file.1}")
-                Local options = ImageOptions(settings)
-                Local key = "image {options.format} {options.srgb} {options.mipmaps} " +
-                            "{options.quality}"
-                Local kept = CachedAs(cache, key, [file.0], ".ktx2")
-                from = kept ?? (scratch.Path / "cooked.ktx2")
-                used.Add(from.FileName())
-                If kept == Null || !File.Exists(from)
-                    Try CookImage(file.0, from, settings)
-                    cooked = True
+                Local color = colors.Get(Folded(file.1))
+                Local number = numbers.Get(Folded(file.1))
+                Local says = Try SaysSrgb("{place}/{file.1}")
+                If says != Null
+                    // What its sidecar says, which no model may read otherwise.
+                    Local against = says ? number : color
+                    If against != Null
+                        Throw IOError(IOErrorKind.INVALID_DATA,
+                                      "{against} reads {file.1} as {says ? "numbers, not a color" : "a color"}, and {file.1}.toml says srgb = {says ? "true" : "false"}",
+                                      file.0.Text)
+                    End If
+                ElseIf number != Null
+                    // What the models read it as: numbers, here, and a color too if any does, which
+                    // is then beside it.
+                    If color != Null
+                        Local beside = file.1 + LINEAR_COOK
+                        If seen.Get(Folded(beside)) != Null
+                            Throw IOError(IOErrorKind.INVALID_DATA,
+                                          "{source} has {beside}, which is the name {file.1} is cooked to as {number} reads it",
+                                          source.Text)
+                        End If
+                        Local linear = settings
+                        linear.Srgb = False
+                        Local also = Try CookedImage(file.0, linear, cache,
+                                                     scratch.Path / "linear.ktx2",
+                                                     used)
+                        If also.1 && timed != Null
+                            timed(beside, (Instant.Now() - began).TotalSeconds)
+                            began = Instant.Now()
+                        End If
+                        If !fbe_cook_pak_add(written, beside, also.0.Text)
+                            Throw ToolsFailed(file.0.Text)
+                        End If
+                    Else
+                        settings.Srgb = False
+                    End If
                 End If
+                Local made = Try CookedImage(file.0, settings, cache, scratch.Path / "cooked.ktx2",
+                                             used)
+                from = made.0
+                cooked = made.1
             ElseIf kind == CookedAs.SHADER
                 from = Try CookedShader(file.0, file.1, cache, scratch.Path, used, ShaderStamp(),
                                         SlangcNamed())
@@ -615,6 +657,34 @@ Public Final Class Cooker
                 If !used.Contains(entry.Name()) Then Try File.Delete(entry.Path)
             End For
         End If
+    End Method
+
+    // The image at `file` cooked as `settings` say: where it is, `cache`'s of it or `scratch`, in
+    // `used` by its name, and whether it was cooked now.
+    Static Method CookedImage(file: Path, settings: ImageSettings, cache: Path?, scratch: Path,
+                              used: Set<String>): (Path, Bool) Throws IOError
+        Local options = ImageOptions(settings)
+        Local key = "image {options.format} {options.srgb} {options.mipmaps} {options.quality}"
+        Local kept = CachedAs(cache, key, [file], ".ktx2")
+        Local from = kept ?? scratch
+        used.Add(from.FileName())
+        If kept != Null && File.Exists(from) Then Return (from, False)
+        Try CookImage(file, from, settings)
+        Return (from, True)
+    End Method
+
+    // Whether the sidecar of the file at `path`, a res:// one, says `srgb`, at its top, and what;
+    // Null for one that doesn't say, or isn't there.
+    Static Method SaysSrgb(path: String): Bool? Throws IOError
+        Local text = ""
+        Try
+            text = String.FromUtf8(Try Assets.ReadBytes(path + ".toml")) ?? ""
+        Catch e As IOError
+            If e.Kind != IOErrorKind.NOT_FOUND && e.Kind != IOErrorKind.IS_A_DIRECTORY Then Throw e
+            Return Null
+        End Try
+        Local read = Try? Toml.Read(text)
+        Return Under(read, "srgb")?.AsBool()
     End Method
 
     // Where `cache` keeps what's cooked of the files `reads`, by their bytes and `key`, the
@@ -843,23 +913,83 @@ Public Final Class Cooker
             folder += names[at] + "/"
         End For
         For item In (read[array]?.AsArray() ?? [])
-            Local uri = item["uri"]?.AsString()
-            If uri == Null || uri.StartsWith("/") Then Continue
-            Local decoded = PercentDecoded(uri)
-            Local path = "{place}/{folder}{decoded}"
-            If Folded(decoded).StartsWith("res://")
-                path = "{place}/{decoded.Slice(6, decoded.Length)}"
-            ElseIf decoded.Contains(":")
-                Continue
-            End If
-            Local normalized = Try? Assets.Normalize(path)
-            If normalized == Null || !normalized.StartsWith(place + "/")
-                Throw IOError(IOErrorKind.INVALID_DATA,
-                              "{name} names {uri}, which is above the folder that's cooked", name)
-            End If
-            named.Add(normalized.Slice(place.Length + 1, normalized.Length))
+            Local one = Try UriNamed(name, folder, item["uri"]?.AsString(), place)
+            If one != Null Then named.Add(one)
         End For
         Return named
+    End Method
+
+    // What the glTF `name`, in `folder` of the folder cooked, names by `uri`, as a name from that
+    // folder, which `place` is mounted at; Null for none, and for what isn't a file of the folder.
+    Static Method UriNamed(name: String, folder: String, uri: String?,
+                           place: String): String? Throws IOError
+        If uri == Null || uri.StartsWith("/") Then Return Null
+        Local decoded = PercentDecoded(uri)
+        Local path = "{place}/{folder}{decoded}"
+        If Folded(decoded).StartsWith("res://")
+            path = "{place}/{decoded.Slice(6, decoded.Length)}"
+        ElseIf decoded.Contains(":")
+            Return Null
+        End If
+        Local normalized = Try? Assets.Normalize(path)
+        If normalized == Null || !normalized.StartsWith(place + "/")
+            Throw IOError(IOErrorKind.INVALID_DATA,
+                          "{name} names {uri}, which is above the folder that's cooked", name)
+        End If
+        Return normalized.Slice(place.Length + 1, normalized.Length)
+    End Method
+
+    // What's at `key` of `value`, an object; Null for none, or for no object.
+    Static Method Under(value: Value?, key: String): Value?
+        If value == Null || !value.IsObject Then Return Null
+        Return value[key]
+    End Method
+
+    // What the glTF `name`, whose JSON is in `bytes`, reads the images it names by their paths as,
+    // each as a name from the folder cooked, which `place` is mounted at, and whether as a color,
+    // as its materials' base color and emissive textures are, or as numbers, as the rest are: as
+    // the engine decodes them, a texture's image its KTX2 if it has one. One read both ways is
+    // there twice.
+    Static Method UsesOf(name: String, bytes: UInt8[], place: String): (String,
+                                                                        Bool)[] Throws IOError
+        Local json = bytes
+        If bytes.Count >= 20 && bytes[0..4] == "glTF".Bytes
+            Local length = JsonLength(bytes)
+            If length > MOST_JSON || 20 + length > bytes.Count Then Return []
+            json = bytes[20..20 + (length As Int)]
+        End If
+        Local text = String.FromUtf8(json)
+        If text == Null Then Return []
+        Local read = Try? Json.Read(text)
+        If read == Null Then Return []
+        Local names = name.Split("/")
+        Local folder = ""
+        For at = 0 Until names.Count - 1
+            folder += names[at] + "/"
+        End For
+        Local images = read["images"]?.AsArray() ?? []
+        Local textures = read["textures"]?.AsArray() ?? []
+        Local uses: (String, Bool)[] = []
+        For material In (read["materials"]?.AsArray() ?? [])
+            Local pbr = Under(material, "pbrMetallicRoughness")
+            For slot In [(Under(pbr, "baseColorTexture"), True),
+                         (Under(material, "emissiveTexture"), True),
+                         (Under(pbr, "metallicRoughnessTexture"), False),
+                         (Under(material, "normalTexture"), False),
+                         (Under(material, "occlusionTexture"), False)]
+                Local index = Under(slot.0, "index")?.AsInt()
+                If index == Null || index < 0 || index >= textures.Count Then Continue
+                Local texture = textures[index As Int]
+                Local basisu = Under(Under(texture, "extensions"), "KHR_texture_basisu")
+                Local image = Under(basisu, "source")?.AsInt() ?? Under(texture, "source")?.AsInt()
+                If image == Null || image < 0 || image >= images.Count Then Continue
+                Local one = Try UriNamed(name, folder,
+                                         Under(images[image As Int], "uri")?.AsString(),
+                                         place)
+                If one != Null Then uses.Add((one, slot.1))
+            End For
+        End For
+        Return uses
     End Method
 
     // `uri` with each %XX its byte, as fastgltf reads a URI's path.
