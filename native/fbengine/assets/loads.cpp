@@ -3,6 +3,7 @@
 
 #include "assets/loads.hpp"
 
+#include "assets/shared.hpp"
 #include "vfs/disk.hpp"
 
 #include <exception>
@@ -101,6 +102,7 @@ void run_load_here(load_t& load, jobs_t* jobs) {
             .jobs = jobs,
             .progress =
                 [&load](float done) { load.progress = read_part + ((1 - read_part) * done); },
+            .shared = shared_known,
         };
         result_t<model_t> model = decode_model(load.path, *bytes, load.files, options);
         if (model) {

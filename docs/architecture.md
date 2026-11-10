@@ -283,6 +283,20 @@ good modern engine on its own. Every structural choice is checked against both.
   Task completes on the main thread at a Flip, or at a tick of the main scheduler while FB waits.
 - A cache keyed by normalized path hands out the same asset again, refcounted; `Free()` and the
   last reference let it go.
+- A glTF's image that's a file of its own, a URI image, has one texture that every model naming
+  the file shares, whatever folder or model names it: it's known by the file's normalized `res://`
+  path and a hash of its bytes, and by how it's made, the color space it's read in (sRGB for a
+  color, linear for a map), its mipmaps, and its sampling (filter and wraps), so the same file read
+  another way is another texture. The first model to want one makes it; a load that finds one
+  there leaves the image undecoded, keeping its file's bytes in case it's gone, or wanted another
+  way, by the time the model's made; each model, material, and entity holds it, and it's freed
+  after the last lets go, which the texture area tells the assets area, whose list holds nothing.
+  Its `Texture.Path` is the image file's, not a model's. A changed file is another hash, so hot
+  reload makes each model reading it again, the first making the new texture and the rest sharing
+  it, and the old one goes with the last model made of the old file. Images inside a model's file
+  (a buffer view, a data URI, a GLB's) are that model's alone. The coordinator's decision,
+  2026-11-10: a game's pack named 526 image files 2,037 times, more textures than an Apple M3's
+  bindless set of 1,116 holds.
 - A game's `[build]` names fbengine_tools' step, `step/game.fb`. Its files are in `assets/`, and
   each build the step writes its module `res`, the typed references to them, with a `Mount`: a
   debug build mounts `assets/` and watches it for hot reload, and a release cooks it into

@@ -13,6 +13,7 @@
 #include <functional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace fbe::assets {
@@ -184,12 +185,29 @@ struct light_t {
     float outer_cone = 0.785398F;
 };
 
+/// Where a model's image is from, for one that's a file of its own, a URI image, which the models
+/// naming it share a texture of.
+struct image_source_t {
+    /// What its texture's shared by, shared_file's of its res:// path and its bytes; "" for an
+    /// image inside its model's file, which isn't shared.
+    std::string file;
+    /// Its res:// path, normalized.
+    std::string path;
+    /// As it's decoded: whether as a color, and what a Basis Universal KTX2 is transcoded to.
+    image_options_t options;
+    /// Its file's bytes, for one left undecoded since a texture of it was there already, which
+    /// are decoded if that's gone by the time it's wanted, or is made another way.
+    std::vector<std::uint8_t> encoded;
+};
+
 struct model_t {
     std::vector<mesh_t> meshes;
     std::vector<material_t> materials;
     std::vector<image_t> images;
     /// What each image's called: its name, or for none, its URI, percents decoded, or "".
     std::vector<std::string> image_names;
+    /// Where each image is from, as many as there are images, for a model decoded with them.
+    std::vector<image_source_t> image_sources;
     std::vector<sampler_t> samplers;
     std::vector<node_t> nodes;
     std::vector<scene_t> scenes;
@@ -214,6 +232,9 @@ struct model_options_t {
     /// Whether it decodes its images; without, each is there, and empty, as the cooker's check of
     /// a glTF has them.
     bool images = true;
+    /// Whether a texture of a file, shared_file's, decoded as a color or not, is there already, on
+    /// the threads that decode: then the image is left undecoded, its file's bytes in its source.
+    std::function<bool(std::string_view file, bool srgb)> shared;
 };
 
 /// The glTF (or binary glTF) at `path`, whose `bytes` are read, with the buffers and images it

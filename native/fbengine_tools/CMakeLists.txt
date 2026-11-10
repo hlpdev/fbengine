@@ -7,6 +7,7 @@
 file(GLOB fbengine_tools_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*/*.cpp")
 set(fbengine_tools_engine_sources
     "${PROJECT_SOURCE_DIR}/native/fbengine/assets/gltf.cpp"
+    "${PROJECT_SOURCE_DIR}/native/fbengine/assets/shared.cpp"
     "${PROJECT_SOURCE_DIR}/native/fbengine/assets/image.cpp"
     "${PROJECT_SOURCE_DIR}/native/fbengine/jobs/jobs.cpp"
     "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/disk.cpp"
