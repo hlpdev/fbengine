@@ -8,6 +8,7 @@
 // what isn't base64.
 
 #include "assets/model.hpp"
+#include "assets/shared.hpp"
 
 #include <algorithm>
 #include <array>
@@ -346,7 +347,7 @@ private:
 
     // What a URI names, read from res://: a path from the glTF's folder, or a res:// one. A URI of
     // any other scheme, or a path from the root of a disk, isn't one of the game's files.
-    result_t<bytes_t> read_uri(const gltf::URI& uri) const {
+    result_t<bytes_t> read_uri(const gltf::URI& uri, std::string* key = nullptr) const {
         const std::string_view text = uri.string();
         const std::size_t colon = text.find(':');
         const std::size_t slash = text.find_first_of("/\\");
@@ -364,6 +365,9 @@ private:
         {
             const std::scoped_lock lock(m_reads_mutex);
             m_reads.push_back(named->key());
+        }
+        if (key != nullptr) {
+            *key = named->key();
         }
         result_t<bytes_t> bytes = m_files.read(*named);
         if (!bytes) {
@@ -718,6 +722,7 @@ private:
         }
 
         model.images.resize(count);
+        model.image_sources.resize(count);
         model.image_names.reserve(count);
         for (const gltf::Image& image : m_asset.images) {
             const auto* uri = std::get_if<gltf::sources::URI>(&image.data);
@@ -734,7 +739,8 @@ private:
             // there's memory for.
             try {
                 if (used[i] != 0) {
-                    result_t<image_t> image = decode_one_image(i, color[i] != 0);
+                    result_t<image_t> image =
+                        decode_one_image(i, color[i] != 0, model.image_sources[i]);
                     if (image) {
                         model.images[i] = std::move(*image);
                     } else {
@@ -770,14 +776,22 @@ private:
         return {};
     }
 
-    result_t<image_t> decode_one_image(std::size_t index, bool srgb) const {
+    // An image decoded, and for one that's a file of its own, where it's from, in `source`: one a
+    // texture's shared of already is left undecoded, empty, its file's bytes in `source`.
+    result_t<image_t> decode_one_image(std::size_t index, bool srgb, image_source_t& source) const {
         const gltf::Image& image = m_asset.images[index];
         const image_options_t options{ .srgb = srgb, .transcode = m_options.transcode };
         const std::string name = std::format("{}'s image {}", m_path.text(), index);
         if (const auto* uri = std::get_if<gltf::sources::URI>(&image.data)) {
-            result_t<bytes_t> bytes = read_uri(uri->uri);
+            result_t<bytes_t> bytes = read_uri(uri->uri, &source.path);
             if (!bytes) {
                 return std::unexpected(std::move(bytes.error()));
+            }
+            source.file = shared_file(source.path, shared_hash(bytes->data(), bytes->size()));
+            source.options = options;
+            if (m_options.shared && m_options.shared(source.file, srgb)) {
+                source.encoded = std::move(*bytes);
+                return image_t{};
             }
             return decode_image(*bytes, options, name);
         }

@@ -1,0 +1,254 @@
+// Models sharing the Textures of images that are files of their own: one Texture of a file for
+// every Model naming it, by what's in it and how it's read, on the GPU ctest's tests use; a
+// machine with no Vulkan sets FBENGINE_NO_GPU to 1 and skips them.
+
+Import std.collections
+Import std.core
+Import std.image.image
+Import std.image.png
+Import std.io
+Import std.math
+Import std.os
+Import std.test
+Import std.text
+Import std.time
+Import fbengine
+Import "./gltfs"
+
+Function NoSharedGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
+
+// A PNG of a color.
+Function Colored(color: Color32): UInt8[]
+    Local image = Image(2, 2)
+    image.Fill(color)
+    Return Png.Encode(image)
+End Function
+
+// A glTF of a triangle whose material reads the image at `uri` for `map`, its base color or its
+// normals, sampled as `sampler` says, a glTF sampler's members.
+Function Reading(uri: String, sampler: String = "", map: String = "base"): UInt8[]
+    Local read = "\"normalTexture\":{{\"index\":0}}"
+    If map == "base"
+        read = "\"pbrMetallicRoughness\":{{\"baseColorTexture\":{{\"index\":0}}}}"
+    End If
+    Local file = Gltf(1, "\"images\":[{{\"uri\":\"{uri}\"}}],\"samplers\":[{{{sampler}}}]," +
+                      "\"textures\":[{{\"source\":0,\"sampler\":0}}],\"materials\":[{{{read}}}]," +
+                      "\"nodes\":[{{\"mesh\":0}}],\"scenes\":[{{\"nodes\":[0]}}]")
+    // Its triangle's of that material.
+    Return String.FromUtf8(file)?.Replace("\"indices\":3}}",
+                                          "\"indices\":3,\"material\":0}}")?.Bytes ?? []
+End Function
+
+// Two models naming one image file make one Texture, which goes with the last of them.
+@Test
+Function TwoModelsNamingAnImageFileShareItsTexture() Throws IOError
+    If NoSharedGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://shared-two", {"a.gltf": Reading("wall.png"),
+                                           "b.gltf": Reading("wall.png"),
+                                           "wall.png": Colored(Color32(255, 0, 0, 255))})
+    Defer Assets.Unmount("res://shared-two")
+    Local before = Texture.Count()
+    Local first = Try Assets.Load<Model>("res://shared-two/a.gltf")
+    Expect(Texture.Count() == before + 1)
+    Local second = Try Assets.Load<Model>("res://shared-two/b.gltf")
+    Expect(Texture.Count() == before + 1)
+    Expect(first.Textures()[0]?.Path() == "res://shared-two/wall.png")
+    Expect(second.Textures()[0]?.Path() == "res://shared-two/wall.png")
+    // Freeing one keeps the other's, which still reads as it did.
+    first.Free()
+    Expect(Texture.Count() == before + 1)
+    Local kept = second.Materials()[0].Texture(0)
+    Expect(kept != Null && !kept.Freed())
+    If kept != Null && !kept.Freed() Then Expect(kept.ReadPixel(0, 0) == Color32(255, 0, 0, 255))
+    second.Free()
+    Expect(Texture.Count() == before)
+    // And one made after that is made anew.
+    Local third = Try Assets.Load<Model>("res://shared-two/a.gltf")
+    Expect(Texture.Count() == before + 1)
+    Expect(third.Materials()[0].Texture(0)?.ReadPixel(0, 0) == Color32(255, 0, 0, 255))
+    third.Free()
+    Expect(Texture.Count() == before)
+End Function
+
+// Read with another sampling, or in another color space, a file's another Texture; read the same
+// way again, the same one.
+@Test
+Function AnotherSamplingOrColorSpaceIsAnotherTexture() Throws IOError
+    If NoSharedGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://shared-ways",
+                      {"plain.gltf": Reading("wall.png"),
+                       "again.gltf": Reading("wall.png"),
+                       "nearest.gltf": Reading("wall.png", "\"magFilter\":9728"),
+                       "clamped.gltf": Reading("wall.png", "\"wrapS\":33071"),
+                       "normal.gltf": Reading("wall.png", "", "normal"),
+                       "wall.png": Colored(Color32(128, 128, 255, 255))})
+    Defer Assets.Unmount("res://shared-ways")
+    Local before = Texture.Count()
+    Local models: Model[] = []
+    For name In ["plain", "nearest", "clamped", "normal"]
+        models.Add(Try Assets.Load<Model>("res://shared-ways/{name}.gltf"))
+        Expect(Texture.Count() == before + models.Count)
+    End For
+    models.Add(Try Assets.Load<Model>("res://shared-ways/again.gltf"))
+    Expect(Texture.Count() == before + 4)
+    Expect(models[1].Materials()[0].Texture(0)?.Filter() == TextureFilter.NEAREST)
+    Expect(models[0].Materials()[0].Texture(0)?.Filter() == TextureFilter.LINEAR)
+    Expect(models[2].Materials()[0].Texture(0)?.WrapAcross() == TextureWrap.CLAMP)
+    Local color = models[0].Textures()[0]
+    Local normals = models[3].Textures()[0]
+    Expect(color != Null && normals != Null)
+    If color != Null && normals != Null
+        Expect(color.VulkanFormat() != normals.VulkanFormat())
+    End If
+    For model In models
+        model.Free()
+    End For
+    Expect(Texture.Count() == before)
+End Function
+
+// An image inside a model's file is that model's alone.
+@Test
+Function AnImageInsideAModelsFileIsItsOwn() Throws IOError
+    If NoSharedGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local file = Reading(PngUri(Color32(0, 255, 0, 255)))
+    Assets.MountFiles("res://shared-inside", {"a.gltf": file, "b.gltf": file})
+    Defer Assets.Unmount("res://shared-inside")
+    Local before = Texture.Count()
+    Local first = Try Assets.Load<Model>("res://shared-inside/a.gltf")
+    Local second = Try Assets.Load<Model>("res://shared-inside/b.gltf")
+    Expect(Texture.Count() == before + 2)
+    Expect(first.Textures()[0]?.Path() == "res://shared-inside/a.gltf#0")
+    Expect(second.Textures()[0]?.Path() == "res://shared-inside/b.gltf#0")
+    first.Free()
+    second.Free()
+    Expect(Texture.Count() == before)
+End Function
+
+// A pack of 2,000 models naming 10 image files makes 10 Textures, and freeing them all frees those.
+@Test
+Function ManyModelsOfTenFilesMakeTenTextures() Throws IOError
+    If NoSharedGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local files = Map<String, UInt8[]>()
+    For at = 0 Until 10
+        files["t{at}.png"] = Colored(Color32((at * 20) As UInt8, 0, 0, 255))
+    End For
+    For at = 0 Until 2000
+        Local which = at % 10
+        files["m{at}.gltf"] = Reading("t{which}.png")
+    End For
+    Assets.MountFiles("res://shared-many", files)
+    Defer Assets.Unmount("res://shared-many")
+    Local before = Texture.Count()
+    Local models: Model[] = []
+    For at = 0 Until 2000
+        models.Add(Try Assets.Load<Model>("res://shared-many/m{at}.gltf"))
+    End For
+    Expect(Texture.Count() == before + 10)
+    Expect(models[1999].Materials()[0].Texture(0)?.ReadPixel(0, 0) == Color32(180, 0, 0, 255))
+    For model In models
+        model.Free()
+    End For
+    Expect(Texture.Count() == before)
+End Function
+
+// An image file that's changed reaches every model sharing it, as one Texture still.
+@Test
+Function AChangedImageFileReachesEveryModelSharingIt() Throws IOError
+    If NoSharedGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "a.gltf", Reading("wall.png"))
+    Try File.WriteBytes(folder.Path / "b.gltf", Reading("wall.png"))
+    Try File.WriteBytes(folder.Path / "wall.png", Colored(Color32(255, 0, 0, 255)))
+    Assets.MountFolder("res://shared-reload", folder.Path)
+    Defer Assets.Unmount("res://shared-reload")
+    Local before = Texture.Count()
+    Local first = Try Assets.Load<Model>("res://shared-reload/a.gltf")
+    Local second = Try Assets.Load<Model>("res://shared-reload/b.gltf")
+    Defer first.Free()
+    Defer second.Free()
+    Local world = World()
+    Defer world.Free()
+    Local spawned = Try first.Spawn()
+    Local also = Try second.Spawn()
+    Expect(Texture.Count() == before + 1)
+    Assets.Reloaded()
+    Try File.WriteBytes(folder.Path / "wall.png", Colored(Color32(0, 255, 0, 255)))
+    Try Assets.Reload("res://shared-reload/wall.png")
+    Local done = 0
+    FlipUntil(Function(): Bool
+        done += Assets.Reloaded().Count
+        Return done >= 2
+    End Function)
+    Expect(done == 2)
+    Flip()
+    Flip()
+    Expect(Texture.Count() == before + 1)
+    Expect(first.Materials()[0].Texture(0)?.ReadPixel(0, 0) == Color32(0, 255, 0, 255))
+    Expect(second.Materials()[0].Texture(0)?.ReadPixel(0, 0) == Color32(0, 255, 0, 255))
+    Expect(!spawned.Freed() && !also.Freed())
+End Function
+
+// What two models of `files`, a.gltf and b.gltf, look like, side by side, unlit, and how many
+// Textures they made.
+Function Drawn(at: String, files: Map<String, UInt8[]>): (Image, Int) Throws IOError, GraphicsError
+    Assets.MountFiles(at, files)
+    Defer Assets.Unmount(at)
+    Local world = World()
+    Defer world.Free()
+    World.SetCurrent(world)
+    Local before = Texture.Count()
+    Local first = Try Assets.Load<Model>("{at}/a.gltf")
+    Defer first.Free()
+    Local second = Try Assets.Load<Model>("{at}/b.gltf")
+    Defer second.Free()
+    Local made = Texture.Count() - before
+    For model In [first, second]
+        Local paint = model.Materials()[0]
+        paint.SetColor(Color(1, 1, 1))
+        paint.SetAlphaCutoff(0)
+        paint.SetShading(Shading.UNLIT)
+    End For
+    (Try first.Spawn()).SetPosition(Vec3(-2, -1, -8))
+    (Try second.Spawn()).SetPosition(Vec3(0.5, -1, -8))
+    Local target = Try Texture.Target(64, 64, TextureFormat.RGBA8, 1, True)
+    Defer target.Free()
+    Local camera = Camera()
+    camera.SetRenderTarget(target)
+    camera.SetClearColor(Color(0, 0, 1))
+    camera.Render()
+    Return (target.ToImage(), made As Int)
+End Function
+
+// Two models sharing a Texture draw as two with a Texture each of the same image do, to the pixel.
+@Test
+Function ModelsSharingATextureDrawAsTheyDidWithTheirOwn() Throws IOError, GraphicsError
+    If NoSharedGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local red = Color32(255, 0, 0, 255)
+    Local shared, one = Try Drawn("res://shared-drawn", {"a.gltf": Reading("wall.png"),
+                                                         "b.gltf": Reading("wall.png"),
+                                                         "wall.png": Colored(red)})
+    Local own, two = Try Drawn("res://shared-own", {"a.gltf": Reading(PngUri(red)),
+                                                    "b.gltf": Reading(PngUri(red))})
+    Expect(one == 1)
+    Expect(two == 2)
+    Local same = True
+    Local left = 0
+    Local right = 0
+    For y = 0 Until 64
+        For x = 0 Until 64
+            If shared[x, y] != own[x, y] Then same = False
+            If shared[x, y] == red && x < 32 Then left += 1
+            If shared[x, y] == red && x >= 32 Then right += 1
+        End For
+    End For
+    Expect(same)
+    // Each of the two is there, in the image's red.
+    Expect(left > 20 && right > 20)
+End Function

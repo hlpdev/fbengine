@@ -34,13 +34,18 @@ FBE_API uint64_t fbe_model_geometry(uint64_t load, int32_t index, const uint64_t
                                     int32_t count);
 // How many levels the model's image at `index` has, 0 for one no material reads, as a KTX2's PNG
 // fallback is, which isn't decoded and makes no texture; -1 for none. After fbe_model_drop_images,
-// as it was.
+// as it was. One that's a file of its own, left undecoded as a texture of that file was there
+// already, has 1 until it's decoded or dropped.
 FBE_API int32_t fbe_model_image_levels(uint64_t load, int32_t index);
 // Lets go of its images' texels, which its textures have now.
 FBE_API bool fbe_model_drop_images(uint64_t load);
-// A new texture of the model's image at `index`, filtered and wrapped as the first of its
-// materials to read it says, with mipmaps made if `mipmaps` and it has one level, starting the GPU
-// if it hasn't; 0 if it can't be.
+// A texture of the model's image at `index`, filtered and wrapped as the first of its materials to
+// read it says, with mipmaps made if `mipmaps` and it has one level, starting the GPU if it hasn't,
+// held once for the caller; 0 if it can't be. An image inside the model's file makes a new one. An
+// image that's a file of its own, a URI image, has one texture that every model naming the file
+// holds, for each way it's made: what's in the file, the color space it's read in, its mipmaps, and
+// its sampling; it's made by the first, held again by the rest, and freed after the last lets go.
+// Its path, as fbe_texture_path gives it, is the image file's res:// path.
 FBE_API uint64_t fbe_model_texture(uint64_t load, int32_t index, bool mipmaps);
 // The image of the model's that a material reads, for an FBE_MODEL_ map, -1 for none or a material
 // or a map that isn't there.
@@ -50,11 +55,11 @@ FBE_API int32_t fbe_model_material_image(uint64_t load, int32_t material, int32_
 // of its UV set, its UVs moved as its file says, from `textures`, what fbe_model_texture gave,
 // `count` of them, by the model's indices. Where a texture's sampled otherwise than this material
 // says, as when two materials read one image, or is decoded as a color for a map that holds none,
-// as when one image is both, it reads another texture of the image: one in `others`, or a new one,
-// held once, added there with its image's index in `other_images`, each with room for `capacity`,
-// and `made` counting them, which the caller starts at 0, for all its materials, and lets go of
-// whatever this returns. A map on a UV set past 1 is left out, said once on stderr. False if it
-// can't, and for one reading nothing, true.
+// as when one image is both, it reads another texture of the image: one in `others`, or one more
+// as fbe_model_texture gives them, held once, added there with its image's index in `other_images`,
+// each with room for `capacity`, and `made` counting them, which the caller starts at 0, for all
+// its materials, and lets go of whatever this returns. A map on a UV set past 1 is left out, said
+// once on stderr. False if it can't, and for one reading nothing, true.
 FBE_API bool fbe_model_material_textures(uint64_t load, int32_t index, uint64_t material,
                                          const uint64_t* textures, int32_t count, uint64_t* others,
                                          int32_t* other_images, int32_t capacity, int32_t* made);

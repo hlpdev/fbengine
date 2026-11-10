@@ -7,6 +7,7 @@
 #include "texture/texture.hpp"
 
 #include "assets/loads.hpp"
+#include "assets/shared.hpp"
 #include "core/engine.hpp"
 #include "fbengine.h"
 #include "gpu/graph.hpp"
@@ -1420,6 +1421,7 @@ void stop_textures() {
         }
         // Every handle there was is caught, and the slots are free for the next start.
         if (live[slot]) {
+            fbe::assets::shared_forget(handle_of(slot));
             ++generations[slot];
         }
         live[slot] = false;
@@ -1705,6 +1707,7 @@ FBE_API bool fbe_texture_release(uint64_t texture) {
     // Its handles are caught now; its image and slot wait for the frames that could draw it. What
     // was written into its CPU copy and not sent goes with it.
     drop_copy(slot);
+    fbe::assets::shared_forget(texture);
     live[slot] = false;
     ++generations[slot];
     textures_made -= textures[slot].engine ? 0 : 1;

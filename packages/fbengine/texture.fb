@@ -70,6 +70,9 @@ Public Final Class Texture Implements Asset
     // The path of the file it's of, in development, whose cook won't have its pixels, until a
     // warning's said so.
     Field cookedWithout: String = ""
+    // How many Models hold it, as each does its images' Textures: one of an image that's a file of
+    // its own is every Model's that names the file, and goes with the last of them.
+    Field sharers: Int = 0
 
     /// A texture `width` by `height` pixels of `format`, transparent black, with mipmaps unless
     /// `mipmaps` is False, starting the GPU if it hasn't; it throws when the GPU can't start, the
@@ -131,7 +134,9 @@ Public Final Class Texture Implements Asset
     /// The file it was loaded from, as Load was given it, or Null for one that wasn't, as a game
     /// finds what a surface is made of by its texture's name. A Model's own says that model's file
     /// and which of its images, as res://door.glb#2, with :1 and on after that for each other Texture
-    /// of the image, read another way than Textures' is.
+    /// of the image, read another way than Textures' is; but for an image that's a file of its own,
+    /// which every Model naming it shares one Texture of, however many ways it's read, each saying
+    /// that file, as res://wall.png.
     @MainThread @PanicsAtCaller
     Public Method Path(): String?
         Local found = ""
@@ -270,6 +275,13 @@ Public Final Class Texture Implements Asset
 
     Method Destroy()
         If handle != 0 Then fbe_texture_release(handle)
+    End Method
+
+    // Let go of by one of the Models that hold it, and freed with the last, unless it's been.
+    @MainThread
+    Package Method Unshared()
+        sharers -= 1
+        If sharers <= 0 && !Freed() Then Free()
     End Method
 
     /// Lets go of the texture now; a material that draws with it keeps it. Using it after panics.
@@ -599,6 +611,22 @@ Public Final Class Texture Implements Asset
 
     Static Method Slot(handle: UInt64): Int => (handle & 0xFFFFFFFF) As Int
 End Class
+
+/// The Texture of a handle C holds once more for a Model, one more Model's now: its wrapper, if the
+/// game holds one, as another Model does one of an image file they both name, that hold let go of
+/// for the wrapper's own; or a new one, whose hold it is.
+Package Function TextureShared(handle: UInt64): Texture
+    Local slot = (handle & 0xFFFFFFFF) As Int
+    Local kept: Texture? = slot < textures.Count ? textures[slot] : Null
+    If kept != Null && kept.handle == handle && !kept.Freed()
+        fbe_texture_release(handle)
+        kept.sharers += 1
+        Return kept
+    End If
+    Local made = Texture(handle)
+    made.sharers = 1
+    Return made
+End Function
 
 /// The Texture a handle is for, from its wrapper if the game still holds one, or a new one, which
 /// holds the handle once; Null for 0.
