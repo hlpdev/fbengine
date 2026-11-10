@@ -561,6 +561,38 @@ Extend Mesh
     @MainThread @PanicsAtCaller
     Public Method Material(): Material? => MaterialOf(fbe_mesh_material(Live("Material")))
 
+    /// Makes the mesh draw its surface at `surface` in `material`, or as before for Null: one copy
+    /// of a model in another skin, with no geometry copied and its geometry's materials as they
+    /// were. It comes before SetMaterial's, and that before the surface's own. It's by the
+    /// surface's index, whatever geometry the mesh has then or later, each level of detail's
+    /// surface of that index with it; its copies share it, and a scene file keeps it. An index
+    /// below 0 or past 65535 panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetSurfaceMaterial(surface: Int, material: Material?)
+        Local mesh = Live("SetSurfaceMaterial")
+        Local drawn: UInt64 = material != Null ? material.Live("SetSurfaceMaterial") : 0
+        If surface < 0 || surface > 65535
+            Panic("SetSurfaceMaterial on a Mesh: its surfaces are 0 to 65535, not {surface}")
+        End If
+        If !fbe_mesh_set_surface_material(mesh, surface As Int32, drawn)
+            Failed("SetSurfaceMaterial")
+        End If
+    End Method
+
+    /// The material the mesh draws its surface at `surface` in instead of its own, or Null for
+    /// none, as for any surface it's set none for.
+    @MainThread @PanicsAtCaller
+    Public Method SurfaceMaterial(surface: Int): Material?
+        Local mesh = Live("SurfaceMaterial")
+        If surface < 0 || surface > 65535 Then Return Null
+        Return MaterialOf(fbe_mesh_surface_material(mesh, surface As Int32))
+    End Method
+
+    /// One past the last surface the mesh has a material of its own for, 0 with none.
+    @MainThread @PanicsAtCaller
+    Public Method SurfaceMaterialCount(): Int =>
+        fbe_mesh_surface_materials(Live("SurfaceMaterialCount"))
+
     /// Sets the mesh's own color and alpha, which multiply its materials' for it alone, white at
     /// first: a copy tinted or faded is the only one that is. It sets alpha too, so SetColor after
     /// SetAlpha sets the alpha again. Colors take any finite value; an alpha outside 0 to 1

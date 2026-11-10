@@ -345,6 +345,9 @@ void remove_mesh(std::uint32_t entity) {
         release_geometry(s.meshes[index].geometry);
     }
     release_material(s.meshes[index].material);
+    for (const std::uint32_t material : s.meshes[index].surface_materials) {
+        release_material(material);
+    }
     if (index != s.meshes.size() - 1) {
         s.meshes[index] = std::move(s.meshes.back());
         s.entities.component[s.meshes[index].entity] = index;

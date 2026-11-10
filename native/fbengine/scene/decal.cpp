@@ -186,7 +186,7 @@ void add_mesh(decal_t& decal, const mesh_t& mesh) {
     tree.overlapping(low, high, decal.stack, [&](std::uint32_t triangle) {
         const triangle_origin_t origin = tree.origin(triangle);
         const surface_t& surface = surfaces[origin.surface];
-        const std::uint32_t material = mesh.material != none ? mesh.material : surface.material;
+        const std::uint32_t material = mesh_material(mesh, origin.surface, surface.material);
         if (drawn_blend(material, mesh.tint[3]) != FBE_BLEND_OPAQUE) {
             return;
         }

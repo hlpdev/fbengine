@@ -25,6 +25,7 @@ Import "./shader"
 Import "./sprite"
 Import "./texture"
 Import "./transform"
+Import "./update"
 Import "./visibility"
 Import "./window"
 Import "./world"
@@ -34,8 +35,8 @@ Const FORMAT: Int32 = 1
 // What a file can say of an entity, whatever it is, and of each kind.
 Const EVERY_ENTITY = ["path", "kind", "name", "position", "rotation", "scale", "hidden", "pick",
                       "blocks_sight", "group", "shape", "radius", "box", "step_height", "max_slope",
-                      "auto_fade", "occluder", "casts_shadows", "components"]
-Const OF_MESH = ["geometry", "material", "color", "morph"]
+                      "auto_fade", "occluder", "casts_shadows", "tweened", "components"]
+Const OF_MESH = ["geometry", "material", "surface_materials", "color", "morph"]
 Const OF_LIGHT = ["light", "color", "intensity", "range", "cone", "shadows", "shadow_size",
                   "shadow_bias", "cascades", "shadow_distance"]
 Const OF_CAMERA = ["projection", "field_of_view", "height", "range", "clear", "clear_depth",
@@ -172,6 +173,9 @@ Class Writing
                 End If
             End If
             ClaimOf(mesh.Material())
+            For surface = 0 Until mesh.SurfaceMaterialCount()
+                ClaimOf(mesh.SurfaceMaterial(surface))
+            End For
         End If
         ClaimOf((entity As? Sprite)?.Material())
         Local camera = entity As? Camera
@@ -455,12 +459,22 @@ Class Writing
         If fade != Vec2(0, 0) Then table["auto_fade"] = Try Numbers([fade.x, fade.y])
         If entity.Occluder() Then table["occluder"] = Value(True)
         If !entity.CastsShadows() Then table["casts_shadows"] = Value(False)
+        If entity.Tweened() != Tweened.ALL Then table["tweened"] = Value("{entity.Tweened()}")
         Local mesh = entity As? Mesh
         If mesh != Null
             Local geometry = mesh.Geometry()
             If geometry != Null Then table["geometry"] = Try GeometryValue(geometry, path)
             Local drawn = mesh.Material()
             If drawn != Null Then table["material"] = Value(Try MaterialId(drawn, path, "material"))
+            // Each surface's own, by its index, "" for a surface without.
+            If mesh.SurfaceMaterialCount() > 0
+                Local own = Value.Array()
+                For surface = 0 Until mesh.SurfaceMaterialCount()
+                    Local one = mesh.SurfaceMaterial(surface)
+                    own.Add(Value(one != Null ? Try MaterialId(one, path, "surface{surface}") : ""))
+                End For
+                table["surface_materials"] = own
+            End If
             If mesh.Color() != Color(1, 1, 1, 1) Then table["color"] = Try Four(mesh.Color())
             Local weights = mesh.MorphWeights()
             If weights.Any(Function(each: Float) => each != 0.0) Then table["morph"] = Try Numbers(weights)
@@ -984,6 +998,9 @@ Class Reading
         End If
         made.SetOccluder(Try BoolOf(table, "occluder", False, path))
         made.SetCastsShadows(Try BoolOf(table, "casts_shadows", True, path))
+        made.SetTweened(Try Named<Tweened>(table, "tweened", Tweened.ALL,
+                                           [Tweened.ALL, Tweened.PLACE, Tweened.TURN, Tweened.NONE],
+                                           path))
         Local components = table["components"]
         If components != Null
             Try Must(components.IsObject, path, "components", "is a table")
@@ -997,6 +1014,13 @@ Class Reading
         If mesh != Null
             Local material = Try TextOf(table, "material", path)
             If material != Null Then mesh.SetMaterial(Try MaterialOf(material, path))
+            Local own = Try Items(table, "surface_materials", path)
+            Try Must(own.Count <= 65536, path, "surface_materials", "is 65536 at most")
+            For surface = 0 Until own.Count
+                Local id = own[surface].AsString()
+                If id == Null Then Throw Wrong("{path}'s surface_materials has what isn't text")
+                If id != "" Then mesh.SetSurfaceMaterial(surface, Try MaterialOf(id, path))
+            End For
             mesh.SetColor(Try ColorOf(table, "color", Color(1, 1, 1, 1), path, True))
             Local weights = Try FloatsOf(table, "morph", -1, path)
             If weights != Null Then mesh.SetMorphWeights(weights)

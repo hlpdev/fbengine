@@ -309,7 +309,7 @@ bool gather_casters(const scene::camera_t& camera, const scene::view_t& view, st
                 continue;
             }
             const std::uint32_t slot =
-                mesh.material != none ? mesh.material : geometry.surfaces[surface].material;
+                scene::mesh_material(mesh, surface, geometry.surfaces[surface].material);
             const scene::material_t& material = slot != none ? s.materials[slot] : standard;
             const std::int32_t blend = scene::drawn_blend(slot, mesh.tint[3]);
             if (material.order != 0 || blend != FBE_BLEND_OPAQUE) {

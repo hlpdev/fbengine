@@ -25,6 +25,18 @@ Public Function CaptureWorld()
     World.Current().Capture()
 End Function
 
+/// What of an entity's own transform drawing tweens between its World's last capture and now.
+Public Enum Tweened
+    /// Its place, its turn, and its scale, as at first.
+    ALL = 0
+    /// Its place and scale, with the turn it has now.
+    PLACE = 1
+    /// Its turn and scale, at the place it has now.
+    TURN = 2
+    /// None of it: it's drawn as it is now.
+    NONE = 3
+End Enum
+
 Extend World
     /// Steps the World by `seconds`, 0 or more, of which it counts 1000000 at most: the Players on its
     /// entities move on by them, it collides, its Particles spawn, then their handlers hear the events
@@ -48,6 +60,29 @@ Extend World
 End Extend
 
 Extend Entity
+    /// Keeps where the entity is, and everything under it, as World.Capture does for all: it's
+    /// drawn from where it is now, not tweened from where it was, the rest of its World tweening
+    /// still. For what's put somewhere, not moved there: a camera cut to another place, a sprite
+    /// used again, a player sent through a door.
+    @MainThread @PanicsAtCaller
+    Public Method Capture()
+        If !fbe_entity_capture(Live("Capture")) Then Failed("Capture")
+    End Method
+
+    /// Sets what of the entity's own transform drawing tweens, Tweened.ALL at first. On PLACE it's
+    /// drawn at its place part way with the turn it has now: a player's eyes, which a fixed step
+    /// walks and the mouse turns every frame, so the turn's seen the frame it's made. On NONE it's
+    /// drawn as it is. What's under it takes what it's drawn with, and tweens its own as its own
+    /// setting says; a Copy keeps it, and so does a scene file.
+    @MainThread @PanicsAtCaller
+    Public Method SetTweened(tweened: Tweened)
+        If !fbe_entity_set_tweened(Live("SetTweened"), tweened As Int32) Then Failed("SetTweened")
+    End Method
+
+    /// What of the entity's own transform drawing tweens.
+    @MainThread @PanicsAtCaller
+    Public Method Tweened(): Tweened => fbe_entity_tweened(Live("Tweened")) As Tweened
+
     /// The entity's matrix to the world `tween` of the way, 0 to 1, from where its World was
     /// last captured to where it is now, everything above it tweened too: what drawing between
     /// steps draws. One made since the capture is where it is.

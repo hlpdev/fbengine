@@ -225,7 +225,7 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
                 continue;
             }
             const std::uint32_t material =
-                mesh.material != none ? mesh.material : surfaces[surface].material;
+                scene::mesh_material(mesh, surface, surfaces[surface].material);
             if (behind && meets_depth(material)) {
                 continue;
             }

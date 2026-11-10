@@ -1943,6 +1943,33 @@ TEST_CASE("only what casts does, and only what's lit per pixel has shadows", "[g
     fbe_material_release(caster_paint);
 }
 
+TEST_CASE("a surface casts by the material its mesh has for it, not its own", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t paint = fbe_material_create();
+    wall(scene.world, -10.0F, 30.0F, paint);
+    sun_from_right(scene.world);
+    const std::uint64_t solid = fbe_material_create();
+    const std::uint64_t block = cube(scene.world, 5.0F, 0.0F, -5.0F, 0);
+    require(fbe_surface_set_material(fbe_mesh_geometry(block), 0, solid));
+    const std::uint8_t lit = srgb(sun_lit());
+    CHECK(near(middle(scene.drawn()), { 0, 0, 0 }));
+    // Its own for the surface blends, so it casts nothing, though the surface's own is solid.
+    const std::uint64_t glass = fbe_material_create();
+    require(fbe_material_set_blend(glass, FBE_BLEND_ALPHA));
+    require(fbe_mesh_set_surface_material(block, 0, glass));
+    CHECK(near(middle(scene.drawn()), { lit, lit, lit }));
+    require(fbe_mesh_set_surface_material(block, 0, 0));
+    CHECK(near(middle(scene.drawn()), { 0, 0, 0 }));
+    // And the other way: the mesh's for all blends, its own for the surface is solid, and casts.
+    require(fbe_mesh_set_material(block, glass));
+    CHECK(near(middle(scene.drawn()), { lit, lit, lit }));
+    require(fbe_mesh_set_surface_material(block, 0, solid));
+    CHECK(near(middle(scene.drawn()), { 0, 0, 0 }));
+    fbe_material_release(glass);
+    fbe_material_release(solid);
+    fbe_material_release(paint);
+}
+
 TEST_CASE("a terrain casts, and a skinned mesh where its joints have it", "[gpu][scene]") {
     const scene_t scene;
     const std::uint64_t paint = fbe_material_create();
@@ -6682,6 +6709,63 @@ TEST_CASE("a decal's parented to what it's on, keeping its place, it follows", "
     fbe_material_release(red);
 }
 
+TEST_CASE("two meshes of one geometry draw a surface each in its own mesh's material for it",
+          "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    // Two squares side by side, facing the camera: the left surface red, the right green.
+    const std::uint64_t geometry = fbe_geometry_create();
+    const std::uint64_t red = unlit(1.0F, 0.0F, 0.0F);
+    const std::uint64_t green = unlit(0.0F, 1.0F, 0.0F);
+    const std::uint64_t blue = unlit(0.0F, 0.0F, 1.0F);
+    for (const auto& [left, material] : { std::pair{ -1.0F, red }, std::pair{ 0.0F, green } }) {
+        const std::int32_t surface = fbe_geometry_add_surface(geometry);
+        std::array<fbe_vertex_t, 4> corners{};
+        corners[0].position = { .x = left, .y = -0.5F, .z = 0.0F };
+        corners[1].position = { .x = left + 1.0F, .y = -0.5F, .z = 0.0F };
+        corners[2].position = { .x = left + 1.0F, .y = 0.5F, .z = 0.0F };
+        corners[3].position = { .x = left, .y = 0.5F, .z = 0.0F };
+        for (fbe_vertex_t& corner : corners) {
+            corner.normal.z = 1.0F;
+            corner.color = { .r = 1.0F, .g = 1.0F, .b = 1.0F, .a = 1.0F };
+        }
+        REQUIRE(fbe_surface_add_vertices(geometry, surface, corners.data(), 4) == 0);
+        const std::array<std::uint32_t, 6> indices{ 0, 1, 2, 0, 2, 3 };
+        REQUIRE(fbe_surface_add_triangles(geometry, surface, indices.data(), 6) == 0);
+        require(fbe_surface_set_material(geometry, surface, material));
+    }
+    const auto mesh_at = [&](float y) {
+        const std::uint64_t mesh = fbe_entity_create(scene.world, 0, FBE_ENTITY_MESH);
+        require(fbe_mesh_set_geometry(mesh, geometry));
+        require(fbe_entity_set_position(mesh, 0.0F, y, -4.0F, FBE_SPACE_WORLD));
+        return mesh;
+    };
+    const std::uint64_t above = mesh_at(1.0F);
+    const std::uint64_t below = mesh_at(-1.0F);
+    require(fbe_mesh_set_surface_material(below, 1, blue));
+    const auto seen = [&](const fbe::golden::frame_t& frame, float x, float y) {
+        return pixel_of(frame, pixel_at(scene.camera, x, y, -4.0F));
+    };
+    fbe::golden::frame_t frame = scene.drawn();
+    CHECK(near(seen(frame, -0.5F, 1.0F), { 255, 0, 0 }));
+    CHECK(near(seen(frame, 0.5F, 1.0F), { 0, 255, 0 }));
+    CHECK(near(seen(frame, -0.5F, -1.0F), { 255, 0, 0 }));
+    CHECK(near(seen(frame, 0.5F, -1.0F), { 0, 0, 255 }));
+    // The geometry's own are as they were, and none of it was copied.
+    CHECK(fbe_surface_material(geometry, 1) == green);
+    CHECK(fbe_mesh_geometry(above) == geometry);
+    CHECK(fbe_mesh_geometry(below) == geometry);
+    // Set back, it's the geometry's again.
+    require(fbe_mesh_set_surface_material(below, 1, 0));
+    frame = scene.drawn();
+    CHECK(near(seen(frame, 0.5F, -1.0F), { 0, 255, 0 }));
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_geometry_release(geometry);
+    fbe_material_release(red);
+    fbe_material_release(green);
+    fbe_material_release(blue);
+}
+
 TEST_CASE("a decal stays on a bumpy terrain from however far off", "[gpu][scene]") {
     const float distance = GENERATE(30.0F, 80.0F, 200.0F, 500.0F);
     const scene_t scene;
@@ -7640,6 +7724,30 @@ TEST_CASE("what an occluder doesn't vouch for doesn't occlude", "[gpu][scene]") 
         require(fbe_entity_set_occluder(small, true));
         CHECK_FALSE(draws_entity(scene.camera, behind));
     }
+    fbe_material_release(paint);
+}
+
+TEST_CASE("an occluder's surface occludes by the material its mesh has for it", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t paint = unlit(1.0F, 0.0F, 0.0F);
+    const std::uint64_t behind = cube(scene.world, 0.0F, 0.0F, -20.0F, paint);
+    const std::uint64_t blocker = wall(scene.world, -5.0F, 1.0F, 0);
+    require(fbe_surface_set_material(fbe_mesh_geometry(blocker), 0, paint));
+    require(fbe_entity_set_occluder(blocker, true));
+    CHECK_FALSE(draws_entity(scene.camera, behind));
+    // A wireframe's mostly holes, and it's the mesh's own for that surface.
+    const std::uint64_t lines = unlit(1.0F, 0.0F, 0.0F);
+    require(fbe_material_set_wireframe(lines, true));
+    require(fbe_mesh_set_surface_material(blocker, 0, lines));
+    CHECK(draws_entity(scene.camera, behind));
+    require(fbe_mesh_set_surface_material(blocker, 0, 0));
+    CHECK_FALSE(draws_entity(scene.camera, behind));
+    // The other way: the mesh's for all is the wireframe, its own for the surface solid.
+    require(fbe_mesh_set_material(blocker, lines));
+    CHECK(draws_entity(scene.camera, behind));
+    require(fbe_mesh_set_surface_material(blocker, 0, paint));
+    CHECK_FALSE(draws_entity(scene.camera, behind));
+    fbe_material_release(lines);
     fbe_material_release(paint);
 }
 

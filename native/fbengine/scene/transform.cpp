@@ -167,11 +167,16 @@ pose_t tweened_t::pose(std::uint32_t entity) const {
         vec3_t position = entities.position[at];
         quat_t rotation = entities.rotation[at];
         vec3_t scale = entities.scale[at];
-        if (entities.captured[at]) {
-            const vec3_t moved = position - entities.captured_position[at];
+        const std::uint8_t tweened = entities.tweened[at];
+        if (entities.captured[at] && tweened != FBE_TWEENED_NONE) {
+            if (tweened != FBE_TWEENED_TURN) {
+                const vec3_t moved = position - entities.captured_position[at];
+                position = entities.captured_position[at] + moved * m_tween;
+            }
+            if (tweened != FBE_TWEENED_PLACE) {
+                rotation = slerp(entities.captured_rotation[at], rotation, m_tween);
+            }
             const vec3_t grown = scale - entities.captured_scale[at];
-            position = entities.captured_position[at] + moved * m_tween;
-            rotation = slerp(entities.captured_rotation[at], rotation, m_tween);
             scale = entities.captured_scale[at] + grown * m_tween;
         }
         const mat4_t local = compose(position, rotation, scale);
@@ -190,6 +195,26 @@ pose_t tweened_t::pose(std::uint32_t entity) const {
         s.posed[at] = m_stamp;
     }
     return s.poses[entity];
+}
+
+bool capture_one(std::uint32_t entity) {
+    entities_t& entities = scene().entities;
+    entities.captured_position[entity] = entities.position[entity];
+    entities.captured_rotation[entity] = entities.rotation[entity];
+    entities.captured_scale[entity] = entities.scale[entity];
+    entities.captured[entity] = true;
+    if (entities.kind[entity] == FBE_ENTITY_PARTICLES) {
+        capture_particles(entity);
+    }
+    if (entities.kind[entity] == FBE_ENTITY_MESH) {
+        mesh_t& mesh = scene().meshes[entities.component[entity]];
+        try {
+            mesh.captured_weights = mesh.weights;
+        } catch (const std::bad_alloc&) {
+            return fail("out of memory");
+        }
+    }
+    return true;
 }
 
 mat4_t tweened_matrix(std::uint32_t entity, float tween) {
@@ -493,20 +518,8 @@ FBE_API bool fbe_world_capture(uint64_t world) {
             !entities.slots.find(entities.slots.handle(entity))) {
             continue;
         }
-        entities.captured_position[entity] = entities.position[entity];
-        entities.captured_rotation[entity] = entities.rotation[entity];
-        entities.captured_scale[entity] = entities.scale[entity];
-        entities.captured[entity] = true;
-        if (entities.kind[entity] == FBE_ENTITY_PARTICLES) {
-            fbe::scene::capture_particles(entity);
-        }
-        if (entities.kind[entity] == FBE_ENTITY_MESH) {
-            fbe::scene::mesh_t& mesh = scene().meshes[entities.component[entity]];
-            try {
-                mesh.captured_weights = mesh.weights;
-            } catch (const std::bad_alloc&) {
-                return fbe::fail("out of memory");
-            }
+        if (!fbe::scene::capture_one(entity)) {
+            return false;
         }
     }
     return true;
