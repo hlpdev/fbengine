@@ -1511,7 +1511,16 @@ std::optional<bool> sidecar_srgb(std::string_view text) {
             return std::nullopt;
         }
         const std::size_t equals = line.find('=');
-        if (equals == std::string_view::npos || trimmed(line.substr(0, equals)) != "srgb") {
+        if (equals == std::string_view::npos) {
+            continue;
+        }
+        // A key can be in quotes, as TOML has it.
+        std::string_view key = trimmed(line.substr(0, equals));
+        if (key.size() >= 2 && (key.front() == '"' || key.front() == '\'') &&
+            key.back() == key.front()) {
+            key = key.substr(1, key.size() - 2);
+        }
+        if (key != "srgb") {
             continue;
         }
         const std::string_view value = trimmed(line.substr(equals + 1));

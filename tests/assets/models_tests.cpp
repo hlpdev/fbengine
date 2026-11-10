@@ -795,6 +795,10 @@ TEST_CASE("an image's sidecar says srgb at its top, or doesn't", "[assets]") {
     // Another table's isn't the image's.
     REQUIRE(assets::sidecar_srgb("[images]\nsrgb = false\n") == std::nullopt);
     REQUIRE(assets::sidecar_srgb("srgb = 1\n") == std::nullopt);
+    // A key in quotes is the same key.
+    REQUIRE(assets::sidecar_srgb("\"srgb\" = false\n") == false);
+    REQUIRE(assets::sidecar_srgb("'srgb' = true\n") == true);
+    REQUIRE(assets::sidecar_srgb("\"srgb' = true\n") == std::nullopt);
 }
 
 TEST_CASE("a glTF's image file is read as its model reads it, and its sidecar can't say otherwise",
