@@ -1,0 +1,197 @@
+// The color space a cooked image has: its sidecar's, if that says, and else what the models naming
+// it read it as, so a model draws from a pak as it does from its folder; on the GPU ctest's tests
+// use; a machine with no Vulkan sets FBENGINE_NO_GPU to 1 and skips them. Each test stops the GPU,
+// as what's loaded without one isn't transcoded for it.
+
+Import std.collections
+Import std.core
+Import std.image.image
+Import std.image.png
+Import std.io
+Import std.math
+Import std.os
+Import std.test
+Import std.text
+Import fbengine
+Import fbengine_tools
+
+Function NoColorGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
+
+// A PNG of one color, 8 across.
+Function Flat(color: Color32): UInt8[]
+    Local image = Image(8, 8)
+    image.Fill(color)
+    Return Png.Encode(image)
+End Function
+
+// A triangle's glTF with `images`, its images' URIs, and `material`, its material's members,
+// whose textures are its images, one each, by their numbers.
+Function Triangle(images: String[], material: String): String
+    Local buffer = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x80, 0x3F, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0x80, 0x3F, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 2, 0] As UInt8[]
+    Local named: String[] = []
+    Local textures: String[] = []
+    For at = 0 Until images.Count
+        named.Add("{{\"uri\":\"{images[at]}\"}}")
+        textures.Add("{{\"source\":{at}}}")
+    End For
+    Return "{{\"asset\":{{\"version\":\"2.0\"}},\"buffers\":[{{\"byteLength\":66," +
+           "\"uri\":\"data:application/octet-stream;base64,{Base64.Encode(buffer)}\"}}]," +
+           "\"bufferViews\":[{{\"buffer\":0,\"byteLength\":36}}," +
+           "{{\"buffer\":0,\"byteOffset\":36,\"byteLength\":24}}," +
+           "{{\"buffer\":0,\"byteOffset\":60,\"byteLength\":6}}],\"accessors\":[" +
+           "{{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"," +
+           "\"min\":[0,0,0],\"max\":[1,1,0]}},{{\"bufferView\":1,\"componentType\":5126," +
+           "\"count\":3,\"type\":\"VEC2\"}},{{\"bufferView\":2,\"componentType\":5123," +
+           "\"count\":3,\"type\":\"SCALAR\"}}],\"images\":[{named.Join(",")}]," +
+           "\"textures\":[{textures.Join(",")}],\"materials\":[{{{material}}}]," +
+           "\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":0,\"TEXCOORD_0\":1}}," +
+           "\"indices\":2,\"material\":0}}]}}],\"nodes\":[{{\"mesh\":0}}]," +
+           "\"scenes\":[{{\"nodes\":[0]}}]}}"
+End Function
+
+Const BASE = "\"pbrMetallicRoughness\":{{\"baseColorTexture\":{{\"index\":0}}}}"
+Const LIGHTMAP = "\"occlusionTexture\":{{\"index\":0}}"
+
+// What the models at `paths` look like, side by side, in a white ambient light alone, which their
+// occlusion dims, and each one's Texture's Vulkan format, for `map`.
+Function Shown(paths: String[], maps: ModelMap[]): (Image, UInt32[]) Throws IOError, GraphicsError
+    Local world = World()
+    Defer world.Free()
+    World.SetCurrent(world)
+    world.SetAmbientLight(Color(1, 1, 1))
+    Local formats: UInt32[] = []
+    Local models: Model[] = []
+    For at = 0 Until paths.Count
+        Local model = Try Assets.Load<Model>(paths[at])
+        models.Add(model)
+        formats.Add(model.TextureOf(0, maps[at])?.VulkanFormat() ?? 0)
+        (Try model.Spawn()).SetPosition(Vec3(-2.0 + 2.5 * (at As Float), -1, -8))
+    End For
+    Local target = Try Texture.Target(64, 64, TextureFormat.RGBA8, 1, True)
+    Defer target.Free()
+    Local camera = Camera()
+    camera.SetRenderTarget(target)
+    camera.SetClearColor(Color(0, 0, 1))
+    camera.Render()
+    Local image = target.ToImage()
+    For model In models
+        model.Free()
+    End For
+    Return (image, formats)
+End Function
+
+// Whether two images are the same, pixel for pixel, with `least` of them or more not the clear
+// color's.
+Function Same(first: Image, second: Image, least: Int): Bool
+    Local drawn = 0
+    For y = 0 Until first.Height
+        For x = 0 Until first.Width
+            If first[x, y] != second[x, y] Then Return False
+            If first[x, y] != Color32(0, 0, 255, 255) Then drawn += 1
+        End For
+    End For
+    Return drawn >= least
+End Function
+
+// VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_BC7_SRGB_BLOCK, and VK_FORMAT_ASTC_4x4_SRGB_BLOCK.
+Function IsSrgb(format: UInt32): Bool => format == 43 || format == 146 || format == 158
+
+// A model's lightmap, an occlusion image with no sidecar, is cooked as the numbers the model reads
+// it as, so the model loads from the pak, and draws as it does from its folder.
+@Test
+Function ALightmapWithNoSidecarIsCookedAsItsModelReadsIt() Throws IOError, GraphicsError
+    If NoColorGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Defer Gpu.Stop()
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Local source = folder.Path / "source"
+    Try Dir.Create(source)
+    Try File.WriteBytes(source / "light.png", Flat(Color32(128, 128, 128, 255)))
+    Try File.WriteText(source / "room.gltf", Triangle(["light.png"], LIGHTMAP))
+    Try Cooker.CookFolder(source, folder.Path / "game.pak")
+    Assets.MountFolder("res://color-folder", source)
+    Local debug, was = Try Shown(["res://color-folder/room.gltf"], [ModelMap.OCCLUSION])
+    Assets.Unmount("res://color-folder")
+    Try Assets.MountPak("res://color-pak", folder.Path / "game.pak")
+    Defer Assets.Unmount("res://color-pak")
+    Local release, now = Try Shown(["res://color-pak/room.gltf"], [ModelMap.OCCLUSION])
+    Expect(was[0] != 0 && !IsSrgb(was[0]))
+    Expect(now[0] != 0 && !IsSrgb(now[0]))
+    Expect(Same(debug, release, 20))
+End Function
+
+// An image one model reads as a color and another as numbers is cooked both ways, and each model
+// finds its own in the pak, and draws as it does from the folder.
+@Test
+Function AnImageReadBothWaysIsCookedBothWays() Throws IOError, GraphicsError
+    If NoColorGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Defer Gpu.Stop()
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Local source = folder.Path / "source"
+    Try Dir.Create(source)
+    Try File.WriteBytes(source / "both.png", Flat(Color32(128, 128, 128, 255)))
+    Try File.WriteText(source / "painted.gltf", Triangle(["both.png"], BASE))
+    Try File.WriteText(source / "lit.gltf", Triangle(["both.png"], LIGHTMAP))
+    Try Cooker.CookFolder(source, folder.Path / "game.pak")
+    Local maps = [ModelMap.BASE_COLOR, ModelMap.OCCLUSION]
+    Assets.MountFolder("res://both-folder", source)
+    Local debug, was = Try Shown(["res://both-folder/painted.gltf", "res://both-folder/lit.gltf"],
+                                 maps)
+    Assets.Unmount("res://both-folder")
+    Try Assets.MountPak("res://both-pak", folder.Path / "game.pak")
+    Defer Assets.Unmount("res://both-pak")
+    Local release, now = Try Shown(["res://both-pak/painted.gltf", "res://both-pak/lit.gltf"], maps)
+    Expect(IsSrgb(was[0]) && !IsSrgb(was[1]) && was[1] != 0)
+    Expect(IsSrgb(now[0]) && !IsSrgb(now[1]) && now[1] != 0)
+    Expect(Same(debug, release, 40))
+    // The one read as numbers is beside the image, by its name.
+    Expect(Assets.Exists("res://both-pak/both.png.linear.ktx2"))
+End Function
+
+// A sidecar that says an image is a color, or isn't, and a model that reads it the other way: an
+// error naming both, as the model loads from its folder and as the folder's cooked.
+@Test
+Function ASidecarAgainstAModelsUseIsAnErrorInBoth() Throws IOError, GraphicsError
+    If NoColorGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Defer Gpu.Stop()
+    For says In [True, False]
+        Local folder = Try TempDir()
+        Defer Try? folder.Close()
+        Local source = folder.Path / "source"
+        Try Dir.Create(source)
+        Try File.WriteBytes(source / "map.png", Flat(Color32(128, 128, 128, 255)))
+        Try File.WriteText(source / "map.png.toml",
+                           "# as it's painted\nsrgb = {says ? "true" : "false"}\n")
+        Try File.WriteText(source / "room.gltf", Triangle(["map.png"], says ? LIGHTMAP : BASE))
+        Local place = "res://against-{says}"
+        Assets.MountFolder(place, source)
+        Local loading = ExpectThrows<IOError>(Assets.Load<Model>("{place}/room.gltf"))
+        Assets.Unmount(place)
+        Expect(loading?.Kind == IOErrorKind.INVALID_DATA, loading?.Message ?? "it loaded")
+        Expect((loading?.Message ?? "").Contains("room.gltf") &&
+               (loading?.Message ?? "").Contains("map.png.toml"), loading?.Message ?? "")
+        Local cooking = ExpectThrows<IOError>(Cooker.CookFolder(source, folder.Path / "game.pak"))
+        Expect(cooking?.Kind == IOErrorKind.INVALID_DATA, cooking?.Message ?? "it cooked")
+        Expect((cooking?.Message ?? "").Contains("room.gltf") &&
+               (cooking?.Message ?? "").Contains("map.png.toml"), cooking?.Message ?? "")
+    End For
+    // One that agrees with its model is cooked as it says, and loads.
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Local source = folder.Path / "source"
+    Try Dir.Create(source)
+    Try File.WriteBytes(source / "map.png", Flat(Color32(128, 128, 128, 255)))
+    Try File.WriteText(source / "map.png.toml", "srgb = false\n")
+    Try File.WriteText(source / "room.gltf", Triangle(["map.png"], LIGHTMAP))
+    Try Cooker.CookFolder(source, folder.Path / "game.pak")
+    Try Assets.MountPak("res://against-pak", folder.Path / "game.pak")
+    Defer Assets.Unmount("res://against-pak")
+    Local shown, formats = Try Shown(["res://against-pak/room.gltf"], [ModelMap.OCCLUSION])
+    Expect(formats[0] != 0 && !IsSrgb(formats[0]))
+End Function

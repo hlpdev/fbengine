@@ -784,6 +784,57 @@ TEST_CASE("an image file a texture's shared of already is left undecoded", "[ass
     REQUIRE(assets::shared_file("res://wall.png", assets::shared_hash(wall.data(), 8)) != file);
 }
 
+TEST_CASE("an image's sidecar says srgb at its top, or doesn't", "[assets]") {
+    REQUIRE(assets::sidecar_srgb("srgb = true\n") == true);
+    REQUIRE(assets::sidecar_srgb(
+                "# a normal map\r\nmipmaps = true\r\n  srgb=false  # numbers\r\n") == false);
+    REQUIRE(assets::sidecar_srgb("") == std::nullopt);
+    REQUIRE(assets::sidecar_srgb("compression = \"bc7\"\n") == std::nullopt);
+    REQUIRE(assets::sidecar_srgb("# srgb = false\n") == std::nullopt);
+    REQUIRE(assets::sidecar_srgb("srgb_too = false\n") == std::nullopt);
+    // Another table's isn't the image's.
+    REQUIRE(assets::sidecar_srgb("[images]\nsrgb = false\n") == std::nullopt);
+    REQUIRE(assets::sidecar_srgb("srgb = 1\n") == std::nullopt);
+    // A key in quotes is the same key.
+    REQUIRE(assets::sidecar_srgb("\"srgb\" = false\n") == false);
+    REQUIRE(assets::sidecar_srgb("'srgb' = true\n") == true);
+    REQUIRE(assets::sidecar_srgb("\"srgb' = true\n") == std::nullopt);
+}
+
+TEST_CASE("a glTF's image file is read as its model reads it, and its sidecar can't say otherwise",
+          "[assets]") {
+    const test::temp_folder_t folder;
+    builder_t built;
+    built.positions({ 0, 0, 0 });
+    const std::string json =
+        built.json(R"(,"images":[{"uri":"map.png"}],"textures":[{"source":0}],)"
+                   R"("materials":[{"occlusionTexture":{"index":0}}])",
+                   built.data_uri());
+    folder.write("models/map.png", test::png(2, 2, 4, std::vector<std::uint8_t>(16, 99)));
+    vfs::vfs_t files;
+    files.mount(path("res://"), vfs::folder(folder.path));
+    // Numbers, with no sidecar, and with one that says so.
+    REQUIRE_FALSE(decoded(json, files).image_sources.at(0).options.srgb);
+    folder.write("models/map.png.toml", std::string_view("srgb = false\n"));
+    const assets::model_t agreed = decoded(json, files);
+    REQUIRE(std::ranges::contains(agreed.reads, "res://models/map.png.toml"));
+    // One that says it's a color is refused, by both names.
+    folder.write("models/map.png.toml", std::string_view("srgb = true\n"));
+    const assets::result_t<assets::model_t> refused = decode(json, files);
+    REQUIRE_FALSE(refused.has_value());
+    REQUIRE(refused.error().failure == assets::failure_t::INVALID_DATA);
+    REQUIRE(refused.error().message.contains("test.gltf"));
+    REQUIRE(refused.error().message.contains("res://models/map.png.toml says srgb = true"));
+    // Its cook as numbers, beside it, is what's read, where there's one.
+    folder.write("models/map.png.toml", std::string_view("mipmaps = true\n"));
+    folder.write("models/map.png.linear.ktx2",
+                 test::png(4, 4, 4, std::vector<std::uint8_t>(64, 7)));
+    const assets::model_t cooked = decoded(json, files);
+    REQUIRE(cooked.images.at(0).width == 4);
+    REQUIRE(cooked.image_sources.at(0).path == "res://models/map.png");
+    REQUIRE(std::ranges::contains(cooked.reads, "res://models/map.png.linear.ktx2"));
+}
+
 TEST_CASE("shared textures are found by what they're of and how they're made", "[assets]") {
     const std::string file = assets::shared_file("res://shared-tests/wall.png", 7);
     const std::size_t before = assets::shared_count();

@@ -328,6 +328,16 @@ good modern engine on its own. Every structural choice is checked against both.
   zips, a file at a time, with Zip64 where sizes or counts need it. Names starting with '.' aren't
   in a folder mount, a pak, or the references, and Thumbs.db and desktop.ini aren't in the last
   two.
+- A model's image that's a file of its own has the color space the model reads it in, in a debug
+  build and a release alike: a color for a base color or emissive texture, numbers for the rest. A
+  debug build decodes the PNG or JPEG so; the cooker, for an image whose sidecar doesn't say
+  `srgb`, cooks it as the glTFs naming it read it, and one read both ways both ways, the numbers
+  beside it as `<name>.linear.ktx2`, which a load that reads it as numbers alone looks for first. A
+  sidecar that does say `srgb` wins, and one that says the other of what a model reads is an
+  INVALID_DATA error naming the model and the sidecar, at that model's load and in the cook. A
+  material in one model that reads a color's image as numbers too reads the color's texels,
+  undecoded, as before. The coordinator's decision, 2026-11-10: a game's lightmaps with no
+  sidecars were linear in debug and sRGB in its pak, where their models couldn't be read.
 - The engine loads modern formats only: glTF for meshes, scenes, and animation; KTX2, PNG, and
   JPEG for textures; OGG, WAV, and FLAC for sound. Converting anything else is a game's own
   tooling, outside the engine and the language (the user, 2026-10-31).

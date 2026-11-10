@@ -7,6 +7,14 @@ format by its bytes, not its name.
 - Images (PNGs and JPEGs) become KTX2s of GPU blocks with their mips, made in linear light: BC7 by
   default, which every desktop GPU reads, or ASTC 4x4, Basis Universal's UASTC, or the
   texels as they are, as each one's sidecar (`wall.png.toml`, fbengine's `ImageSettings`) says.
+  An image's color space is its sidecar's `srgb`, if it says; with none, it's what the glTFs in the
+  folder that name it read it as, the way a debug build decodes it: a color for a base color or
+  emissive texture, and numbers, linear, for a normal, occlusion, or metal-rough map, so a model
+  draws from the pak as it does from the folder. An image that no glTF names is a color. One read
+  both ways is cooked both ways, the color at its own name and the numbers beside it, as
+  `wall.png.linear.ktx2`, which a model reading it as numbers loads. A sidecar that says `srgb`
+  against how a glTF reads the image stops the cook, naming both, as it stops that model's load in
+  a debug build.
 - glTFs (named `.gltf` or `.glb`) become binary glTFs of one buffer. meshoptimizer orders their
   triangles and vertices for the GPU's caches and fetches, unless their sidecar (fbengine's
   `ModelSettings`) says `optimize = false`. A glTF the engine wouldn't load stops the cook.

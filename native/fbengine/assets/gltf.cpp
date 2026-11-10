@@ -347,7 +347,10 @@ private:
 
     // What a URI names, read from res://: a path from the glTF's folder, or a res:// one. A URI of
     // any other scheme, or a path from the root of a disk, isn't one of the game's files.
-    result_t<bytes_t> read_uri(const gltf::URI& uri, std::string* key = nullptr) const {
+    // With `after`, it's the file of that name and `after`, which needn't be there, and is one
+    // of what's read only if it is.
+    result_t<bytes_t> read_uri(const gltf::URI& uri, std::string* key = nullptr,
+                               std::string_view after = {}) const {
         const std::string_view text = uri.string();
         const std::size_t colon = text.find(':');
         const std::size_t slash = text.find_first_of("/\\");
@@ -361,6 +364,18 @@ private:
         result_t<vfs::path_t> named = vfs::resolve(m_path, text);
         if (!named) {
             return std::unexpected(std::move(named.error()));
+        }
+        if (!after.empty()) {
+            named = vfs::parse(named->key().append(after));
+            if (!named) {
+                return std::unexpected(std::move(named.error()));
+            }
+            result_t<bytes_t> beside = m_files.read(*named);
+            if (beside) {
+                const std::scoped_lock lock(m_reads_mutex);
+                m_reads.push_back(named->key());
+            }
+            return beside;
         }
         {
             const std::scoped_lock lock(m_reads_mutex);
@@ -701,6 +716,7 @@ private:
         const std::size_t count = m_asset.images.size();
         std::vector<char> used(count, 0);
         std::vector<char> color(count, 0);
+        std::vector<char> numbers(count, 0);
         const auto mark = [&](const auto& info, bool is_color) {
             if (!info) {
                 return;
@@ -708,9 +724,7 @@ private:
             const std::int32_t image = image_of(info->textureIndex);
             if (image >= 0) {
                 used[static_cast<std::size_t>(image)] = 1;
-                if (is_color) {
-                    color[static_cast<std::size_t>(image)] = 1;
-                }
+                (is_color ? color : numbers)[static_cast<std::size_t>(image)] = 1;
             }
         };
         for (const gltf::Material& material : m_asset.materials) {
@@ -740,7 +754,7 @@ private:
             try {
                 if (used[i] != 0) {
                     result_t<image_t> image =
-                        decode_one_image(i, color[i] != 0, model.image_sources[i]);
+                        decode_one_image(i, color[i] != 0, numbers[i] != 0, model.image_sources[i]);
                     if (image) {
                         model.images[i] = std::move(*image);
                     } else {
@@ -778,7 +792,11 @@ private:
 
     // An image decoded, and for one that's a file of its own, where it's from, in `source`: one a
     // texture's shared of already is left undecoded, empty, its file's bytes in `source`.
-    result_t<image_t> decode_one_image(std::size_t index, bool srgb, image_source_t& source) const {
+    // `srgb` is whether any of its materials reads it as a color, and `numbers` whether any reads
+    // it as what isn't one. A file of its own whose sidecar says it's the other is refused, and
+    // one read as numbers alone is its cook as numbers, beside it in a pak, if that's there.
+    result_t<image_t> decode_one_image(std::size_t index, bool srgb, bool numbers,
+                                       image_source_t& source) const {
         const gltf::Image& image = m_asset.images[index];
         const image_options_t options{ .srgb = srgb, .transcode = m_options.transcode };
         const std::string name = std::format("{}'s image {}", m_path.text(), index);
@@ -786,6 +804,20 @@ private:
             result_t<bytes_t> bytes = read_uri(uri->uri, &source.path);
             if (!bytes) {
                 return std::unexpected(std::move(bytes.error()));
+            }
+            if (const result_t<bytes_t> sidecar = read_uri(uri->uri, nullptr, ".toml"); sidecar) {
+                const std::optional<bool> says = sidecar_srgb(std::string_view(
+                    reinterpret_cast<const char*>(sidecar->data()), sidecar->size()));
+                if (says && (*says ? numbers : srgb)) {
+                    return fail(std::format("it reads {} as {}, and {}.toml says srgb = {}",
+                                            source.path, *says ? "numbers, not a color" : "a color",
+                                            source.path, *says));
+                }
+            }
+            if (!srgb) {
+                if (result_t<bytes_t> cooked = read_uri(uri->uri, nullptr, linear_cook); cooked) {
+                    bytes = std::move(cooked);
+                }
             }
             source.file = shared_file(source.path, shared_hash(bytes->data(), bytes->size()));
             source.options = options;
@@ -1459,6 +1491,49 @@ private:
 };
 
 } // namespace
+
+std::optional<bool> sidecar_srgb(std::string_view text) {
+    while (!text.empty()) {
+        const std::size_t end = text.find('\n');
+        std::string_view line = text.substr(0, end);
+        text = end == std::string_view::npos ? std::string_view() : text.substr(end + 1);
+        line = line.substr(0, line.find('#'));
+        const auto trimmed = [](std::string_view part) {
+            const std::size_t first = part.find_first_not_of(" \t\r");
+            if (first == std::string_view::npos) {
+                return std::string_view();
+            }
+            return part.substr(first, part.find_last_not_of(" \t\r") - first + 1);
+        };
+        line = trimmed(line);
+        // Past its top, a table's keys are that table's.
+        if (line.starts_with('[')) {
+            return std::nullopt;
+        }
+        const std::size_t equals = line.find('=');
+        if (equals == std::string_view::npos) {
+            continue;
+        }
+        // A key can be in quotes, as TOML has it.
+        std::string_view key = trimmed(line.substr(0, equals));
+        if (key.size() >= 2 && (key.front() == '"' || key.front() == '\'') &&
+            key.back() == key.front()) {
+            key = key.substr(1, key.size() - 2);
+        }
+        if (key != "srgb") {
+            continue;
+        }
+        const std::string_view value = trimmed(line.substr(equals + 1));
+        if (value == "true") {
+            return true;
+        }
+        if (value == "false") {
+            return false;
+        }
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
 
 result_t<model_t> decode_model(const vfs::path_t& path, std::span<const std::uint8_t> bytes,
                                const vfs::view_t& files, const model_options_t& options) {
