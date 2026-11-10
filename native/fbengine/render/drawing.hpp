@@ -76,8 +76,15 @@ struct particles_data_t {
     float size_end;
     float now;
     float wrap;
+    std::array<float, 2> shape;
+    float step;
+    float grow_added;
+    float grow_multiplied;
+    float fade;
+    std::uint32_t held;
+    std::uint32_t roll_along;
 };
-static_assert(sizeof(particles_data_t) == 72, "the scene shader reads an emitter of 72 bytes");
+static_assert(sizeof(particles_data_t) == 104, "the scene shader reads an emitter of 104 bytes");
 
 /// A sky as its shader reads it: the view's axes in the world, its half-size at a distance of 1,
 /// what /// it is, its texture's index, the sun's way and how bright, its sampler, whether it's

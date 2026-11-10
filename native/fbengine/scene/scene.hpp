@@ -256,7 +256,9 @@ struct terrain_t {
 };
 
 /// A particle as the GPU keeps it: where it was born, when, on its emitter's clock, how fast and
-/// which way, how long it lives, and how it's turned then and spins.
+/// which way, how long its life is, which its size and color go by, how it's turned then and
+/// spins, what its size is times, chosen at its birth, and when it's gone, its life or sooner for
+/// one that fades to nothing first.
 struct particle_t {
     std::array<float, 3> position{};
     float birth = 0.0F;
@@ -264,12 +266,16 @@ struct particle_t {
     float life = 0.0F;
     float roll = 0.0F;
     float spin = 0.0F;
+    float scale = 0.0F;
+    float ends = 0.0F;
 };
-static_assert(sizeof(particle_t) == 40, "the scene shader reads particles 40 bytes apart");
+static_assert(sizeof(particle_t) == 48, "the scene shader reads particles 48 bytes apart");
 
 /// What an emitter's clock reaches before it starts again, which a float keeps to an
 /// eight-thousandth of a second, and a particle's life is at most half of.
 constexpr float particles_wrap = 1024.0F;
+/// The least bursts are apart, and the least till they're set off again.
+constexpr float least_burst = 0.001F;
 
 /// The box what was born in a stretch of time can reach by its speed alone.
 struct bounds_slice_t {
@@ -298,6 +304,37 @@ struct particles_t {
     float size_end = 0.1F;
     std::array<float, 4> color_start{ 1.0F, 1.0F, 1.0F, 1.0F };
     std::array<float, 4> color_end{ 1.0F, 1.0F, 1.0F, 0.0F };
+    /// How far to each side of the emitter one may be born, in its own space, and what's added
+    /// to its velocity, on the world's axes, between these.
+    vec3_t start_box;
+    vec3_t velocity_low;
+    vec3_t velocity_high;
+    /// What its size is times, chosen at its birth between these, and its half-width and
+    /// half-height as multiples of its size.
+    float scale_min = 1.0F;
+    float scale_max = 1.0F;
+    std::array<float, 2> shape{ 1.0F, 1.0F };
+    /// A step's length, 0 for none, at each of which its half-width and half-height have
+    /// `grow_added` added and are then times `grow_multiplied`, and its alpha has `fade` taken
+    /// off; and whether those wait for each whole step or go smoothly between.
+    float step = 0.0F;
+    float grow_added = 0.0F;
+    float grow_multiplied = 1.0F;
+    float fade = 0.0F;
+    bool held = false;
+    /// Whether each is rolled the way it moves in the view, its own roll and spin added to that.
+    bool roll_along = false;
+    /// Bursts: so many, every so many seconds, for so long, 0 for ever, set off again after so
+    /// long, 0 for never; how long since they were set off, below 0 for not, and which is next.
+    std::int32_t burst_count = 0;
+    float burst_every = 1.0F;
+    float burst_lasts = 0.0F;
+    float burst_again = 0.0F;
+    double burst_since = -1.0;
+    std::int64_t burst_next = 0;
+    /// What it's had born since fbe_particles_read first asked, by slot, which it keeps from
+    /// then on; empty before.
+    std::vector<particle_t> kept;
     std::uint32_t random = 1;
     float clock = 0.0F;
     float captured_clock = 0.0F;
@@ -667,6 +704,17 @@ void add_particles(std::uint32_t entity);
 void remove_particles(std::uint32_t entity);
 void copy_particles(std::uint32_t from, std::uint32_t to);
 void capture_particles(std::uint32_t entity);
+/// How a particle is at an age, by the formula the scene shader has: where, its half-width and
+/// half-height, and its alpha. False for one that's gone, or never was.
+struct particle_state_t {
+    vec3_t place;
+    float half_width = 0.0F;
+    float half_height = 0.0F;
+    float alpha = 0.0F;
+    float age = 0.0F;
+};
+bool particle_state(const particles_t& found, const particle_t& particle, float now,
+                    particle_state_t& state);
 /// An emitter's clock `tween` of the way from its capture to now.
 float particles_clock(const particles_t& found, float tween);
 /// The box in the world what's alive of an emitter's in: false for none lately.
