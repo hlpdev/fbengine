@@ -200,6 +200,9 @@ struct mesh_t {
     std::uint32_t geometry = none;
     /// A material it draws every surface in instead of their own, which it holds, or none.
     std::uint32_t material = none;
+    /// A material for a surface alone, by the surface's index, which it holds, none for a surface
+    /// without, as all past its end are: it comes before `material`, and that before the surface's.
+    std::vector<std::uint32_t> surface_materials;
     /// Its own color and alpha, which multiply its materials', white at first.
     std::array<float, 4> tint{ 1.0F, 1.0F, 1.0F, 1.0F };
     /// Its morph targets' weights, one a target from the first, 0 past them, and as they were at
@@ -717,6 +720,16 @@ std::uint32_t material_slot(std::uint64_t handle);
 /// Holds a material once more, or lets it go once, freeing it after its last; none does nothing.
 void retain_material(std::uint32_t material);
 void release_material(std::uint32_t material);
+/// How many of its surfaces a mesh can have a material of its own for, from the first.
+constexpr std::int32_t most_surfaces = 65536;
+/// The material a mesh draws its surface at `surface` in, whose own is `own`: the mesh's for that
+/// surface, else the mesh's for all, else the surface's own; none for the default.
+inline std::uint32_t mesh_material(const mesh_t& mesh, std::size_t surface, std::uint32_t own) {
+    if (surface < mesh.surface_materials.size() && mesh.surface_materials[surface] != none) {
+        return mesh.surface_materials[surface];
+    }
+    return mesh.material != none ? mesh.material : own;
+}
 /// Holds the materials of surfaces copied from others, as Clone and Add copy them.
 void retain_materials(const std::vector<surface_t>& surfaces);
 void release_materials(const std::vector<surface_t>& surfaces);

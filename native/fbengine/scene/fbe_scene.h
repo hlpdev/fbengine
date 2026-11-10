@@ -828,6 +828,16 @@ FBE_API uint64_t fbe_surface_material(uint64_t geometry, int32_t surface);
 // A material a mesh draws all its surfaces in instead of their own, which it holds, 0 for none.
 FBE_API bool fbe_mesh_set_material(uint64_t mesh, uint64_t material);
 FBE_API uint64_t fbe_mesh_material(uint64_t mesh);
+// A material a mesh draws one surface in, by the surface's index, which it holds, 0 for none: it
+// comes before the mesh's material for all, and that before the surface's own, so one copy of a
+// model is re-skinned with no geometry copied and its geometry's materials as they were. It's by
+// index, whatever geometry the mesh has then or later, each level of detail's surface of that
+// index with it; a copy of the mesh shares them. False for an index below 0 or past
+// 65535.
+FBE_API bool fbe_mesh_set_surface_material(uint64_t mesh, int32_t surface, uint64_t material);
+FBE_API uint64_t fbe_mesh_surface_material(uint64_t mesh, int32_t surface);
+// One past the last surface a mesh has a material of its own for, 0 with none; -1 for a freed mesh.
+FBE_API int32_t fbe_mesh_surface_materials(uint64_t mesh);
 // A mesh's own color and alpha, which multiply its materials', white at first: each mesh's,
 // copies' too, so a copy fades or tints alone. Alpha is 0 to 1, and colors any finite value.
 FBE_API bool fbe_mesh_set_tint(uint64_t mesh, float r, float g, float b, float a);

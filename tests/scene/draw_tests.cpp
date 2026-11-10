@@ -336,6 +336,97 @@ TEST_CASE("a camera's draws are seen from where it is between the steps, sprites
     CHECK(near(seen[0].matrix[10], 0.8660254F));
 }
 
+TEST_CASE("a mesh draws a surface in a material of its own for it, before its material for all, "
+          "its geometry's as they were",
+          "[render]") {
+    const test_world_t world;
+    const std::uint64_t camera = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);
+    // A geometry of two surfaces, each a triangle in its own material, and two meshes of it.
+    const std::uint64_t geometry = fbe_geometry_create();
+    const std::uint64_t cloth = fbe_material_create();
+    const std::uint64_t skin = fbe_material_create();
+    for (const std::uint64_t material : { cloth, skin }) {
+        const std::int32_t surface = fbe_geometry_add_surface(geometry);
+        std::array<fbe_vertex_t, 3> corners{};
+        corners[1].position.x = 1.0F;
+        corners[2].position.y = 1.0F;
+        for (fbe_vertex_t& corner : corners) {
+            corner.normal.z = 1.0F;
+            corner.color = { .r = 1.0F, .g = 1.0F, .b = 1.0F, .a = 1.0F };
+        }
+        fbe_surface_add_vertices(geometry, surface, corners.data(), 3);
+        const std::array<std::uint32_t, 3> indices{ 0, 1, 2 };
+        fbe_surface_add_triangles(geometry, surface, indices.data(), 3);
+        REQUIRE(fbe_surface_set_material(geometry, surface, material));
+    }
+    const auto mesh_at = [&](float x) {
+        const std::uint64_t mesh = fbe_entity_create(world.handle, 0, FBE_ENTITY_MESH);
+        fbe_mesh_set_geometry(mesh, geometry);
+        fbe_entity_set_position(mesh, x, 0.0F, -10.0F, FBE_SPACE_WORLD);
+        return mesh;
+    };
+    const std::uint64_t plain = mesh_at(-2.0F);
+    const std::uint64_t dressed = mesh_at(2.0F);
+    const auto drawn_in = [&](std::uint64_t mesh, std::int32_t surface) {
+        for (const fbe_draw_t& draw : draws(camera)) {
+            if (draw.entity == mesh && draw.surface == surface) {
+                return draw.material;
+            }
+        }
+        return std::uint64_t{ 1 };
+    };
+    const std::uint64_t coat = fbe_material_create();
+    CHECK(fbe_mesh_surface_material(dressed, 0) == 0);
+    REQUIRE(fbe_mesh_set_surface_material(dressed, 0, coat));
+    CHECK(fbe_mesh_surface_material(dressed, 0) == coat);
+    CHECK(fbe_mesh_surface_material(dressed, 1) == 0);
+    CHECK(drawn_in(dressed, 0) == coat);
+    CHECK(drawn_in(dressed, 1) == skin);
+    // The other mesh, and the geometry, as they were.
+    CHECK(drawn_in(plain, 0) == cloth);
+    CHECK(drawn_in(plain, 1) == skin);
+    CHECK(fbe_surface_material(geometry, 0) == cloth);
+    CHECK(fbe_geometry_surface_count(geometry) == 2);
+    // Before its material for all, which the other surface takes.
+    const std::uint64_t paint = fbe_material_create();
+    REQUIRE(fbe_mesh_set_material(dressed, paint));
+    CHECK(drawn_in(dressed, 0) == coat);
+    CHECK(drawn_in(dressed, 1) == paint);
+    // A copy shares them, and holds them on its own.
+    const std::uint64_t copy = fbe_entity_copy(dressed, 0, 0);
+    CHECK(drawn_in(copy, 0) == coat);
+    REQUIRE(fbe_mesh_set_surface_material(dressed, 0, 0));
+    CHECK(fbe_mesh_surface_material(dressed, 0) == 0);
+    CHECK(drawn_in(dressed, 0) == paint);
+    CHECK(drawn_in(copy, 0) == coat);
+    REQUIRE(fbe_mesh_set_material(dressed, 0));
+    CHECK(drawn_in(dressed, 0) == cloth);
+    // It's held by the mesh alone, and let go of with it.
+    fbe_material_release(coat);
+    CHECK(drawn_in(copy, 0) == coat);
+    CHECK(fbe_material_alive(coat));
+    fbe_entity_free(copy);
+    CHECK_FALSE(fbe_material_alive(coat));
+    // One past the geometry's is kept for a geometry that has it; none below 0, or past any.
+    CHECK(fbe_mesh_set_surface_material(dressed, 5, paint));
+    CHECK(fbe_mesh_surface_material(dressed, 5) == paint);
+    CHECK(fbe_mesh_surface_materials(dressed) == 6);
+    CHECK(fbe_mesh_set_surface_material(dressed, 5, 0));
+    CHECK(fbe_mesh_surface_materials(dressed) == 0);
+    CHECK(fbe_mesh_surface_materials(camera) == -1);
+    CHECK(drawn_in(dressed, 1) == skin);
+    CHECK_FALSE(fbe_mesh_set_surface_material(dressed, -1, paint));
+    CHECK(std::string_view(fbe_error()).contains("a mesh's surfaces are 0 to"));
+    CHECK_FALSE(fbe_mesh_set_surface_material(dressed, 1 << 30, paint));
+    CHECK(fbe_mesh_surface_material(dressed, -1) == 0);
+    CHECK_FALSE(fbe_mesh_set_surface_material(camera, 0, paint));
+    CHECK_FALSE(fbe_mesh_set_surface_material(dressed, 0, coat));
+    fbe_material_release(paint);
+    fbe_material_release(cloth);
+    fbe_material_release(skin);
+    fbe_geometry_release(geometry);
+}
+
 TEST_CASE("a camera's draw projection holds with its far plane near float's top", "[render]") {
     const test_world_t world;
     const std::uint64_t camera = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);

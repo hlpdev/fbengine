@@ -1333,3 +1333,54 @@ Function AMaterialsShaderThatsGoneStillOpens() Throws IOError
         root.Free()
     End For
 End Function
+
+// A mesh's materials for its own surfaces come back by their indices, one shared by two meshes
+// shared still, the geometry's own as they were, and a surface with none still with none.
+@Test
+Function AMeshsSurfaceMaterialsComeBack() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local coat = Material(Color(0.25, 0.5, 0.75))
+    Local boots = Material(Color(1, 0, 0))
+    Local worn = Mesh(Geometry.Cube())
+    worn.SetName("worn")
+    worn.SetSurfaceMaterial(0, coat)
+    worn.SetSurfaceMaterial(3, boots)
+    Local other = Mesh(Geometry.Cube())
+    other.SetName("other")
+    other.SetSurfaceMaterial(0, coat)
+    Local plain = Mesh(Geometry.Cube())
+    plain.SetName("plain")
+    Local text = Try Scene.Text([worn, other, plain])
+    Expect(text.Contains("surface_materials"), text)
+    Local again = Fresh()
+    Defer again.Free()
+    Local read = Try Scene.FromText(text)
+    Local first = read[0] As? Mesh
+    Local second = read[1] As? Mesh
+    Local third = read[2] As? Mesh
+    If first == Null || second == Null || third == Null Then Panic("its meshes")
+    Expect(first.SurfaceMaterialCount() == 4 && second.SurfaceMaterialCount() == 1)
+    Expect(third.SurfaceMaterialCount() == 0 && third.SurfaceMaterial(0) == Null)
+    Expect(first.SurfaceMaterial(0)?.Color() == Color(0.25, 0.5, 0.75))
+    Expect(first.SurfaceMaterial(1) == Null && first.SurfaceMaterial(2) == Null)
+    Expect(first.SurfaceMaterial(3)?.Color() == Color(1, 0, 0))
+    Expect(first.Material() == Null && first.Geometry()?.Surface(0)?.Material() == Null)
+    Expect((Try Scene.Text(read)) == text, "written again, it changed")
+    // One material, shared: the other's changes with it.
+    first.SurfaceMaterial(0)?.SetColor(Color(0, 1, 0))
+    Expect(second.SurfaceMaterial(0)?.Color() == Color(0, 1, 0), "one material, shared")
+    // Cleared, it's not written.
+    first.SetSurfaceMaterial(0, Null)
+    first.SetSurfaceMaterial(3, Null)
+    second.SetSurfaceMaterial(0, Null)
+    Expect(!(Try Scene.Text(read)).Contains("surface_materials"))
+    // What isn't a list of text is refused.
+    Local bad =
+        "format = 1\n[[entity]]\npath = \"a\"\nkind = \"MESH\"\ngeometry = \"builtin:cube\"\n"
+    For wrong In ["surface_materials = 3\n", "surface_materials = [3]\n",
+                  "surface_materials = [\"nothing\"]\n"]
+        Expect(ExpectThrows<IOError>(Scene.FromText(bad + wrong))?.Kind == IOErrorKind.INVALID_DATA,
+               wrong)
+    End For
+End Function

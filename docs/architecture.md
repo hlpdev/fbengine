@@ -214,6 +214,13 @@ good modern engine on its own. Every structural choice is checked against both.
   before, with the finest taking the rest, so the glow is at the same part of a view at any size.
   It's added before exposure, and over partly covered pixels as a layer of its own. A viewport
   under 16 pixels on its short side has none.
+- **Which material a surface draws in**: a mesh's own for that surface
+  (`mesh.SetSurfaceMaterial(surface, material)`), else the mesh's for all (`SetMaterial`), else
+  the surface's own in its geometry. So one copy of a model is re-skinned with no geometry copied
+  and the geometry's materials untouched. It's one function (mesh_material) that drawing, shadows,
+  occluders, and decals all ask. It's by the surface's index, kept across a change of geometry,
+  shared by copies, and saved by scene files as `surface_materials`, a list by index with "" for
+  a surface without.
 - **One material system, three shading models**: PBR, UNLIT, and VERTEX (per-vertex lighting,
   for a retro look). Texture layers with blend modes and their own UV sets, lightmaps (SCP:CB's
   rooms are lightmapped), fog, and alpha all go through the same pipelines, as specialization

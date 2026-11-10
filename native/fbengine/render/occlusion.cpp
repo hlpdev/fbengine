@@ -448,7 +448,7 @@ bool fill_occlusion(const scene::camera_t& camera, const scene::view_t& view,
         const bool mirrored = scene::mirrors(occluder.matrix);
         for (std::size_t at = 0; at < geometry.surfaces.size(); ++at) {
             const scene::surface_t& surface = geometry.surfaces[at];
-            const std::uint32_t slot = mesh.material != none ? mesh.material : surface.material;
+            const std::uint32_t slot = scene::mesh_material(mesh, at, surface.material);
             const scene::material_t& material = slot != none ? s.materials[slot] : standard;
             // Only what draws solid, and where it's been said to: a skinned one's vertices aren't.
             if (material.order != 0 || material.alpha_cutoff > 0.0F || material.wireframe ||

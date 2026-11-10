@@ -765,6 +765,60 @@ FBE_API bool fbe_mesh_set_material(uint64_t mesh, uint64_t material) {
     return true;
 }
 
+FBE_API bool fbe_mesh_set_surface_material(uint64_t mesh, int32_t surface, uint64_t material) {
+    fbe::scene::mesh_t* found = fbe::scene::mesh_of(mesh);
+    std::uint32_t slot = none;
+    if (found == nullptr || !fbe::scene::optional_material(material, slot)) {
+        return false;
+    }
+    // Any surface a geometry can have, whichever it has now: a reloaded model's keeps its own.
+    if (surface < 0 || surface >= fbe::scene::most_surfaces) {
+        return fbe::fail(std::format("a mesh's surfaces are 0 to {}, not {}",
+                                     fbe::scene::most_surfaces - 1, surface));
+    }
+    const auto at = static_cast<std::size_t>(surface);
+    std::vector<std::uint32_t>& all = found->surface_materials;
+    if (at >= all.size()) {
+        if (slot == none) {
+            return true;
+        }
+        try {
+            all.resize(at + 1, none);
+        } catch (const std::bad_alloc&) {
+            return fbe::fail("out of memory");
+        }
+    }
+    fbe::scene::retain_material(slot);
+    fbe::scene::release_material(all[at]);
+    all[at] = slot;
+    while (!all.empty() && all.back() == none) {
+        all.pop_back();
+    }
+    return true;
+}
+
+FBE_API uint64_t fbe_mesh_surface_material(uint64_t mesh, int32_t surface) {
+    const fbe::scene::mesh_t* found = fbe::scene::mesh_of(mesh);
+    if (found == nullptr) {
+        return 0;
+    }
+    if (surface < 0 || surface >= fbe::scene::most_surfaces) {
+        fbe::fail(std::format("a mesh's surfaces are 0 to {}, not {}",
+                              fbe::scene::most_surfaces - 1, surface));
+        return 0;
+    }
+    const auto at = static_cast<std::size_t>(surface);
+    if (at >= found->surface_materials.size() || found->surface_materials[at] == none) {
+        return 0;
+    }
+    return scene().material_slots.handle(found->surface_materials[at]);
+}
+
+FBE_API int32_t fbe_mesh_surface_materials(uint64_t mesh) {
+    const fbe::scene::mesh_t* found = fbe::scene::mesh_of(mesh);
+    return found != nullptr ? static_cast<std::int32_t>(found->surface_materials.size()) : -1;
+}
+
 FBE_API uint64_t fbe_mesh_material(uint64_t mesh) {
     const fbe::scene::mesh_t* found = fbe::scene::mesh_of(mesh);
     if (found == nullptr || found->material == none) {

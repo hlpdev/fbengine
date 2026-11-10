@@ -6682,6 +6682,63 @@ TEST_CASE("a decal's parented to what it's on, keeping its place, it follows", "
     fbe_material_release(red);
 }
 
+TEST_CASE("two meshes of one geometry draw a surface each in its own mesh's material for it",
+          "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    // Two squares side by side, facing the camera: the left surface red, the right green.
+    const std::uint64_t geometry = fbe_geometry_create();
+    const std::uint64_t red = unlit(1.0F, 0.0F, 0.0F);
+    const std::uint64_t green = unlit(0.0F, 1.0F, 0.0F);
+    const std::uint64_t blue = unlit(0.0F, 0.0F, 1.0F);
+    for (const auto& [left, material] : { std::pair{ -1.0F, red }, std::pair{ 0.0F, green } }) {
+        const std::int32_t surface = fbe_geometry_add_surface(geometry);
+        std::array<fbe_vertex_t, 4> corners{};
+        corners[0].position = { .x = left, .y = -0.5F, .z = 0.0F };
+        corners[1].position = { .x = left + 1.0F, .y = -0.5F, .z = 0.0F };
+        corners[2].position = { .x = left + 1.0F, .y = 0.5F, .z = 0.0F };
+        corners[3].position = { .x = left, .y = 0.5F, .z = 0.0F };
+        for (fbe_vertex_t& corner : corners) {
+            corner.normal.z = 1.0F;
+            corner.color = { .r = 1.0F, .g = 1.0F, .b = 1.0F, .a = 1.0F };
+        }
+        REQUIRE(fbe_surface_add_vertices(geometry, surface, corners.data(), 4) == 0);
+        const std::array<std::uint32_t, 6> indices{ 0, 1, 2, 0, 2, 3 };
+        REQUIRE(fbe_surface_add_triangles(geometry, surface, indices.data(), 6) == 0);
+        require(fbe_surface_set_material(geometry, surface, material));
+    }
+    const auto mesh_at = [&](float y) {
+        const std::uint64_t mesh = fbe_entity_create(scene.world, 0, FBE_ENTITY_MESH);
+        require(fbe_mesh_set_geometry(mesh, geometry));
+        require(fbe_entity_set_position(mesh, 0.0F, y, -4.0F, FBE_SPACE_WORLD));
+        return mesh;
+    };
+    const std::uint64_t above = mesh_at(1.0F);
+    const std::uint64_t below = mesh_at(-1.0F);
+    require(fbe_mesh_set_surface_material(below, 1, blue));
+    const auto seen = [&](const fbe::golden::frame_t& frame, float x, float y) {
+        return pixel_of(frame, pixel_at(scene.camera, x, y, -4.0F));
+    };
+    fbe::golden::frame_t frame = scene.drawn();
+    CHECK(near(seen(frame, -0.5F, 1.0F), { 255, 0, 0 }));
+    CHECK(near(seen(frame, 0.5F, 1.0F), { 0, 255, 0 }));
+    CHECK(near(seen(frame, -0.5F, -1.0F), { 255, 0, 0 }));
+    CHECK(near(seen(frame, 0.5F, -1.0F), { 0, 0, 255 }));
+    // The geometry's own are as they were, and none of it was copied.
+    CHECK(fbe_surface_material(geometry, 1) == green);
+    CHECK(fbe_mesh_geometry(above) == geometry);
+    CHECK(fbe_mesh_geometry(below) == geometry);
+    // Set back, it's the geometry's again.
+    require(fbe_mesh_set_surface_material(below, 1, 0));
+    frame = scene.drawn();
+    CHECK(near(seen(frame, 0.5F, -1.0F), { 0, 255, 0 }));
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_geometry_release(geometry);
+    fbe_material_release(red);
+    fbe_material_release(green);
+    fbe_material_release(blue);
+}
+
 TEST_CASE("a decal stays on a bumpy terrain from however far off", "[gpu][scene]") {
     const float distance = GENERATE(30.0F, 80.0F, 200.0F, 500.0F);
     const scene_t scene;
