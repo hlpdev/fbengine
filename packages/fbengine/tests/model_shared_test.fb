@@ -252,3 +252,168 @@ Function ModelsSharingATextureDrawAsTheyDidWithTheirOwn() Throws IOError, Graphi
     // Each of the two is there, in the image's red.
     Expect(left > 20 && right > 20)
 End Function
+
+// A glTF of a triangle whose material's base color is wall.png, read nearest, and whose normals
+// are bump.png's.
+Function Roomed(): UInt8[]
+    Local file = Gltf(1, "\"images\":[{{\"uri\":\"wall.png\"}},{{\"uri\":\"bump.png\"}}]," +
+                      "\"samplers\":[{{\"magFilter\":9728}}]," +
+                      "\"textures\":[{{\"source\":0,\"sampler\":0}},{{\"source\":1}}]," +
+                      "\"materials\":[{{\"pbrMetallicRoughness\":{{\"baseColorTexture\":" +
+                      "{{\"index\":0}}}},\"normalTexture\":{{\"index\":1}}}}]," +
+                      "\"nodes\":[{{\"mesh\":0}}],\"scenes\":[{{\"nodes\":[0]}}]")
+    Return String.FromUtf8(file)?.Replace("\"indices\":3}}",
+                                          "\"indices\":3,\"material\":0}}")?.Bytes ?? []
+End Function
+
+// What the current World looks like, lit from the camera's side.
+Function Lit(): Image Throws GraphicsError
+    Local target = Try Texture.Target(64, 64, TextureFormat.RGBA8, 1, True)
+    Defer target.Free()
+    Local camera = Camera()
+    Defer camera.Free()
+    camera.SetRenderTarget(target)
+    camera.SetClearColor(Color(0, 0, 1))
+    Local light = Light(LightType.POINT)
+    Defer light.Free()
+    light.SetPosition(Vec3(1, 2, 0))
+    light.SetRange(40)
+    camera.Render()
+    Return target.ToImage()
+End Function
+
+// A scene that names a model's image files' Textures says how each is read, and reads them back
+// so: the same color space and sampling, the same picture, and the same Textures the model has.
+@Test
+Function ASceneKeepsHowAnImageFilesTextureIsRead() Throws IOError, GraphicsError
+    If NoSharedGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local bump = Image(2, 2)
+    bump.Fill(Color32(128, 128, 255, 255))
+    bump[0, 0] = Color32(200, 128, 200, 255)
+    Assets.MountFiles("res://shared-scene", {"room.gltf": Roomed(),
+                                             "wall.png": Colored(Color32(255, 128, 0, 255)),
+                                             "bump.png": Png.Encode(bump)})
+    Defer Assets.Unmount("res://shared-scene")
+    Local world = World()
+    Defer world.Free()
+    World.SetCurrent(world)
+    Local before = Texture.Count()
+    Local model = Try Assets.Load<Model>("res://shared-scene/room.gltf")
+    Defer model.Free()
+    Expect(Texture.Count() == before + 2)
+    // A material of the game's, reading the model's Textures, on a mesh of its own.
+    Local paint = Material()
+    paint.SetTexture(0, model.Textures()[0])
+    paint.SetMap(MaterialMap.NORMAL, model.Textures()[1])
+    Local mesh = Mesh(Geometry.Cube())
+    mesh.SetMaterial(paint)
+    mesh.SetPosition(Vec3(-1, -1, -6))
+    mesh.SetRotation(Quat.FromEuler(0.4, 0.6, 0.0))
+    Local text = Try Scene.Text([mesh])
+    Expect(text.Contains("texture = \"res://shared-scene/wall.png\"\nfilter = \"NEAREST\"\n"))
+    Expect(text.Contains("texture = \"res://shared-scene/bump.png\"\nlinear = true\n"))
+    Local first = Try Lit()
+    mesh.Free()
+    Local roots = Try Scene.FromText(text)
+    Expect(roots.Count == 1)
+    // Each is the model's, still.
+    Expect(Texture.Count() == before + 2)
+    Local read = (roots[0] As Mesh).Material()
+    Expect(read != Null)
+    If read != Null
+        Local color = read.Texture(0)
+        Local normals = read.Map(MaterialMap.NORMAL)
+        Expect(color != Null && normals != Null)
+        If color != Null && normals != Null
+            Expect(color.Filter() == TextureFilter.NEAREST)
+            Expect(color.WrapAcross() == TextureWrap.REPEAT &&
+                   color.WrapDown() == TextureWrap.REPEAT)
+            Expect(color.Format() == TextureFormat.RGBA8)
+            Expect(normals.Format() == TextureFormat.RGBA8_LINEAR)
+            Expect(normals.Filter() == TextureFilter.LINEAR)
+            Expect(RefEquals(color, model.Textures()[0]))
+            Expect(RefEquals(normals, model.Textures()[1]))
+        End If
+    End If
+    Local second = Try Lit()
+    Local same = True
+    Local drawn = 0
+    For y = 0 Until 64
+        For x = 0 Until 64
+            If first[x, y] != second[x, y] Then same = False
+            If first[x, y] != Color32(0, 0, 255, 255) Then drawn += 1
+        End For
+    End For
+    Expect(same)
+    Expect(drawn > 20)
+    // And it says the same again.
+    Expect((Try Scene.Text(roots)) == text)
+End Function
+
+// A scene written before, which says a texture's file and no more, reads as it did: the file's
+// Texture as Assets loads it, a color, LINEAR and REPEAT, whatever a model's made of it.
+@Test
+Function ASceneThatSaysOnlyATexturesFileReadsAsItDid() Throws IOError
+    If NoSharedGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://shared-old", {"room.gltf": Roomed(),
+                                           "wall.png": Colored(Color32(255, 128, 0, 255)),
+                                           "bump.png": Colored(Color32(128, 128, 255, 255))})
+    Defer Assets.Unmount("res://shared-old")
+    Local world = World()
+    Defer world.Free()
+    World.SetCurrent(world)
+    Local model = Try Assets.Load<Model>("res://shared-old/room.gltf")
+    Defer model.Free()
+    Local before = Texture.Count()
+    Local text = "format = 1\n[[material]]\nid = \"m\"\n[[material.layers]]\nlayer = 0\n" +
+                 "texture = \"res://shared-old/wall.png\"\n[[entity]]\npath = \"wall\"\n" +
+                 "kind = \"MESH\"\ngeometry = \"builtin:cube\"\nmaterial = \"m\"\n"
+    Local roots = Try Scene.FromText(text)
+    Local read = (roots[0] As Mesh).Material()?.Texture(0)
+    Expect(read != Null)
+    If read != Null
+        Expect(read.Filter() == TextureFilter.LINEAR)
+        Expect(read.Format() == TextureFormat.RGBA8)
+        Expect(read.Path() == "res://shared-old/wall.png")
+        Expect(!RefEquals(read, model.Textures()[0]))
+    End If
+    Expect(Texture.Count() == before + 1)
+    Expect((Try Scene.Text(roots)).Contains("texture = \"res://shared-old/wall.png\"\nblend = "))
+End Function
+
+// A shared Texture held once more and let go of once is still the one the next model shares: it's
+// forgotten when the last hold goes, not at each.
+@Test
+Function ASharedTextureLetGoOfOnceIsStillShared() Throws IOError
+    If NoSharedGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://shared-held", {"a.gltf": Reading("wall.png"),
+                                            "b.gltf": Reading("wall.png"),
+                                            "wall.png": Colored(Color32(255, 0, 0, 255))})
+    Defer Assets.Unmount("res://shared-held")
+    Local before = Texture.Count()
+    Local first = Try Assets.Load<Model>("res://shared-held/a.gltf")
+    Local shared = first.Textures()[0]
+    Expect(shared != Null)
+    // A material of the game's holds it, and lets go.
+    Local paint = Material()
+    paint.SetTexture(0, shared)
+    paint.Free()
+    Local second = Try Assets.Load<Model>("res://shared-held/b.gltf")
+    Expect(Texture.Count() == before + 1)
+    Expect(RefEquals(second.Textures()[0], shared))
+    // And one that outlives its models is still shared, until it goes.
+    Local keeping = Material()
+    keeping.SetTexture(0, shared)
+    first.Free()
+    second.Free()
+    Expect(Texture.Count() == before + 1)
+    Local third = Try Assets.Load<Model>("res://shared-held/a.gltf")
+    Expect(Texture.Count() == before + 1)
+    Expect(keeping.Texture(0)?.Path() == third.Textures()[0]?.Path())
+    third.Free()
+    keeping.Free()
+    Expect(Texture.Count() == before)
+End Function

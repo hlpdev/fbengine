@@ -7,6 +7,7 @@
 #include "assets/shared.hpp"
 #include "core/engine.hpp"
 #include "fbengine.h"
+#include "vfs/vfs.hpp"
 
 #include <algorithm>
 #include <array>
@@ -273,6 +274,30 @@ std::optional<sampling_t> first_sampling(const assets::model_t& model, std::int3
     return std::nullopt;
 }
 
+/// How a shared texture's made, as it's known by: sRGB or not, with mipmaps or not, and sampled.
+std::string made_as(bool srgb, bool mipmaps, const sampling_t& sampled) {
+    return std::format("{} {} {} {} {}", srgb ? 1 : 0, mipmaps ? 1 : 0, sampled.filter,
+                       sampled.wrap_u, sampled.wrap_v);
+}
+
+/// The shared texture of `file`, decoded as a color or not and made as `made` says, sampled as
+/// `sampled` still, held once more; 0 for none.
+std::uint64_t shared_held(std::string_view file, bool decoded_srgb, std::string_view made,
+                          const sampling_t& sampled) {
+    const std::uint64_t shared = assets::shared_find(file, decoded_srgb, made);
+    if (shared == 0 || !fbe_texture_retain(shared)) {
+        return 0;
+    }
+    // One a game's sampled otherwise since is the game's now, and no longer this.
+    if (fbe_texture_filter(shared) == sampled.filter &&
+        fbe_texture_wrap_u(shared) == sampled.wrap_u &&
+        fbe_texture_wrap_v(shared) == sampled.wrap_v) {
+        return shared;
+    }
+    fbe_texture_release(shared);
+    return 0;
+}
+
 /// A texture of a model's image at `index`, sRGB or not, with mipmaps or not, sampled as
 /// `sampling` says, or as it's made for none, held once more. An image that's a file of its own
 /// has one texture for each way it's made, which every model naming that file holds: the one
@@ -289,17 +314,11 @@ std::uint64_t texture_of(std::uint64_t load, std::int32_t index, bool srgb, bool
     const sampling_t sampled = sampling.value_or(sampling_t{});
     std::string made;
     if (file) {
-        made = std::format("{} {} {} {} {}", srgb ? 1 : 0, mipmaps ? 1 : 0, sampled.filter,
-                           sampled.wrap_u, sampled.wrap_v);
-        const std::uint64_t shared = assets::shared_find(source->file, source->options.srgb, made);
-        if (shared != 0 && fbe_texture_retain(shared)) {
-            // One a game's sampled otherwise since is the game's now, and no longer this.
-            if (fbe_texture_filter(shared) == sampled.filter &&
-                fbe_texture_wrap_u(shared) == sampled.wrap_u &&
-                fbe_texture_wrap_v(shared) == sampled.wrap_v) {
-                return shared;
-            }
-            fbe_texture_release(shared);
+        made = made_as(srgb, mipmaps, sampled);
+        if (const std::uint64_t shared =
+                shared_held(source->file, source->options.srgb, made, sampled);
+            shared != 0) {
+            return shared;
         }
         assets::image_t& image = found->model.images[static_cast<std::size_t>(index)];
         if (image.levels.empty() && !source->encoded.empty()) {
@@ -699,6 +718,71 @@ FBE_API uint64_t fbe_model_texture(uint64_t load, int32_t index, bool mipmaps) {
         return 0;
     }
     return texture_of(load, index, true, mipmaps, first_sampling(*model, index));
+}
+
+FBE_API uint64_t fbe_model_image_texture(const char* path, bool srgb, int32_t filter,
+                                         int32_t wrap_u, int32_t wrap_v, bool make) {
+    invalid = false;
+    if (path == nullptr) {
+        fbe::fail("no path was given");
+        return 0;
+    }
+    const fbe::vfs::result_t<fbe::vfs::path_t> named = fbe::vfs::parse(path);
+    if (!named) {
+        fbe::fail(named.error().message);
+        return 0;
+    }
+    const fbe::vfs::result_t<fbe::vfs::bytes_t> bytes = fbe::vfs::files().view().read(*named);
+    if (!bytes) {
+        fbe::fail(bytes.error().message);
+        return 0;
+    }
+    const std::string file =
+        assets::shared_file(named->key(), assets::shared_hash(bytes->data(), bytes->size()));
+    const sampling_t sampled{ .filter = filter, .wrap_u = wrap_u, .wrap_v = wrap_v };
+    // A model's that isn't sRGB is of an image decoded as no color, or of a color's, read as
+    // none by a map.
+    const std::string made = made_as(true, true, sampled);
+    if (const std::uint64_t shared = shared_held(file, srgb, made, sampled); shared != 0) {
+        return shared;
+    }
+    if (!srgb) {
+        if (const std::uint64_t shared =
+                shared_held(file, true, made_as(false, true, sampled), sampled);
+            shared != 0) {
+            return shared;
+        }
+    }
+    if (!make) {
+        return 0;
+    }
+    if (!fbe_texture_start_loads()) {
+        return 0;
+    }
+    const std::uint64_t load = fbe_assets_load(FBE_ASSETS_IMAGE, path, !srgb, false);
+    if (load == 0) {
+        return 0;
+    }
+    if (fbe_assets_failed(load)) {
+        invalid = fbe_assets_failure(load) == FBE_ASSETS_INVALID_DATA;
+        const std::string why = fbe_assets_error(load);
+        fbe_assets_free(load);
+        fbe::fail(why);
+        return 0;
+    }
+    const std::uint64_t texture = fbe_texture_from_load(load, srgb, true);
+    if (texture == 0) {
+        invalid = fbe_texture_load_invalid();
+        const std::string why = fbe_error();
+        fbe_assets_free(load);
+        fbe::fail(why);
+        return 0;
+    }
+    fbe_assets_free(load);
+    set_sampling(texture, sampled);
+    fbe_texture_set_path(texture, named->key().c_str());
+    assets::shared_add(file, srgb, made, texture);
+    return texture;
 }
 
 FBE_API int32_t fbe_model_material_image(uint64_t load, int32_t material, int32_t map) {

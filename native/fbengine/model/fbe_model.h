@@ -47,6 +47,13 @@ FBE_API bool fbe_model_drop_images(uint64_t load);
 // its sampling; it's made by the first, held again by the rest, and freed after the last lets go.
 // Its path, as fbe_texture_path gives it, is the image file's res:// path.
 FBE_API uint64_t fbe_model_texture(uint64_t load, int32_t index, bool mipmaps);
+// The texture of the image file at `path`, a res:// one, read as a color, sRGB, or not, and
+// sampled so, with mipmaps, that the models naming the file share, held once more for the caller:
+// the one there is, or with `make`, a new one of the file, read now, which the next to name it
+// shares; its path is the file's, normalized. 0 if it can't be, with fbe_error's why, and
+// fbe_model_invalid saying whether that's the file's; and without `make`, for none there, 0.
+FBE_API uint64_t fbe_model_image_texture(const char* path, bool srgb, int32_t filter,
+                                         int32_t wrap_u, int32_t wrap_v, bool make);
 // The image of the model's that a material reads, for an FBE_MODEL_ map, -1 for none or a material
 // or a map that isn't there.
 FBE_API int32_t fbe_model_material_image(uint64_t load, int32_t material, int32_t map);

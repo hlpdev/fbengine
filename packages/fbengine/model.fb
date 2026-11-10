@@ -734,3 +734,24 @@ Public Final Class Model Implements Asset
         If freed Then Panic("{call} on a Model that was freed")
     End Method
 End Class
+
+/// The Texture of the image file at `path` that the Models naming it share, read as a color or not
+/// and sampled so, and whether it's a new wrapper, the caller's to Free: the one there is, or with
+/// `make`, one made of the file now. Null for none there without `make`; with it, it throws what
+/// the file can't be made one for.
+@MainThread
+Package Function SharedTexture(path: String, srgb: Bool, filter: TextureFilter, across: TextureWrap,
+                               down: TextureWrap, make: Bool): (Texture, Bool)? Throws IOError
+    Local handle: UInt64 = 0
+    Unsafe
+        handle = fbe_model_image_texture(path, srgb, filter As Int32, across As Int32,
+                                         down As Int32,
+                                         make)
+    End Unsafe
+    If handle == 0
+        If !make Then Return Null
+        Local kind = fbe_model_invalid() ? IOErrorKind.INVALID_DATA : IOErrorKind.OTHER
+        Throw IOError(kind, "{path}: {LastError()}", path)
+    End If
+    Return TextureHeld(handle)
+End Function

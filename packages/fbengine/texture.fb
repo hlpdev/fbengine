@@ -277,6 +277,9 @@ Public Final Class Texture Implements Asset
         If handle != 0 Then fbe_texture_release(handle)
     End Method
 
+    // Whether it's sampled as a color, sRGB, decoded to linear light.
+    @MainThread Package Method Srgb(): Bool => fbe_texture_srgb(Live("Srgb"))
+
     // Let go of by one of the Models that hold it, and freed with the last, unless it's been.
     @MainThread
     Package Method Unshared()
@@ -626,6 +629,18 @@ Package Function TextureShared(handle: UInt64): Texture
     Local made = Texture(handle)
     made.sharers = 1
     Return made
+End Function
+
+/// The Texture of a handle C holds once more for the caller: its wrapper, if the game holds one,
+/// that hold let go of, and False; or a new one, whose hold it is, for the caller to Free, and True.
+Package Function TextureHeld(handle: UInt64): (Texture, Bool)
+    Local slot = (handle & 0xFFFFFFFF) As Int
+    Local kept: Texture? = slot < textures.Count ? textures[slot] : Null
+    If kept != Null && kept.handle == handle && !kept.Freed()
+        fbe_texture_release(handle)
+        Return (kept, False)
+    End If
+    Return (Texture(handle), True)
 End Function
 
 /// The Texture a handle is for, from its wrapper if the game still holds one, or a new one, which

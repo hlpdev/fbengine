@@ -65,7 +65,15 @@ material = "room/crate.material"
   `texture`, `uv_set`, and `uv`. A map but EMISSIVE isn't a color, so its file's import settings say it isn't sRGB,
   and `Scene.Load` refuses one that is. A layer's or a map's `texture` is an image's file, or one of a model's:
   `res://door.glb#2` by its image's number, with `:1` and on for another Texture of that image, read as other than
-  its first is. A texture of neither can't be saved, and `Scene.Save` says which entity has it.
+  its first is. A texture of neither can't be saved, and `Scene.Save` says which entity has it. Beside an image's
+  file, a layer or a map says how its texture's read where that's not as a file's read by itself: `linear = true`
+  for one that isn't a color, as a normal map is, `filter = "NEAREST"`, and `wrap_across` and `wrap_down`, each
+  CLAMP or MIRROR; left out, it's a color, LINEAR, and REPEAT. That's what a model's texture of an image that's a
+  file of its own needs, as it says that file, `res://wall.png`, and no model's. `Scene.Load` reads the texture so:
+  the one the models naming the file share, if there's one read so; or the file's as `Assets.Load<Texture>` gives it,
+  with its import settings, if that's read so, as it always is for one that says the file and no more, which is how
+  files written before these read as they did; or else one made of the file, read so, which models naming it
+  share from then on.
 - A **light**'s shadows are `shadows`, `shadow_size`, `shadow_bias`, `cascades`, and `shadow_distance`; a **camera**'s
   picture `hdr`, `exposure`, `tonemap`, `gamma`, `bloom`, `grade`, `occlusion`, `ambient_occlusion`,
   `ambient_occlusion_radius`, `fxaa`, and `temporal_aa`; and any entity's `occluder` and `casts_shadows`. Each is
