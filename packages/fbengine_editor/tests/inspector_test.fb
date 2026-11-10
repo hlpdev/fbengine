@@ -371,7 +371,7 @@ Function ItShowsWhatReflectionFindsOnEachKind() Throws IOError, GraphicsError
             editor,
             own +
             " Capacity Rate Roll Life Speeds Spread Spin Gravity Drag Sizes StartColor EndColor" +
-            " StartBox Fade RollAlong"))
+            " Fade RollAlong"))
     // Many have how many ahead of what they share, and what's particular to one kind only if all are.
     Selecting(editor, light)
     editor.Edited.ToggleSelected(camera)
