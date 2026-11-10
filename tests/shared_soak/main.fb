@@ -1,12 +1,15 @@
 // A soak of models sharing their image files' textures, on the GPU ctest's tests use: each round,
 // 24 glTFs naming 4 PNGs, the PNGs another color each round, so other files to share by, are
 // mounted, loaded, and freed, some in the order they were loaded and some against it,
-// FBENGINE_SOAK_ITERATIONS times, 400 unless it says. Each round the textures there are go up by
-// the 4, and come back to what there were, as the loads and the holds on assets do; and the
-// process's own memory, sampled every 20 rounds once the first quarter's warmed the caches,
-// doesn't rise steadily, by SOAK_RISE a round, as a leak's does. With the engine built under
-// AddressSanitizer, as its DLL says, its memory isn't judged: LeakSanitizer does that, at the
-// end. It prints how it went, and exits 1 if it didn't.
+// FBENGINE_SOAK_ITERATIONS times, 400 unless it says. What's judged is what's kept, by count: each
+// round leaves as many shared textures, worlds, geometries, materials, entities, textures, loads,
+// and holds on assets as the first did, and no more waiting for a frame to be freed than a round
+// at first left; and the blocks the process's heaps have in use, whoever's they are, sampled
+// every 20 rounds once the first quarter's warmed the caches, don't rise by SOAK_BLOCKS a round,
+// as a leak's do, where they can be counted. The process's own memory mustn't rise steadily
+// either, by SOAK_RISE a round. With the engine built under AddressSanitizer, as its DLL says,
+// neither's judged: LeakSanitizer does that, at the end. It prints how it went, and exits 1 if it
+// didn't.
 
 Import std.collections
 Import std.core
@@ -18,10 +21,16 @@ Import std.text
 Import std.time
 Import fbengine
 Import fbengine.c.fbe_assets
+Import fbengine.c.fbe_gpu
+Import fbengine.c.fbe_scene
 
 // How much the process's memory may rise a round, steadily, in bytes: more than an allocator's
 // pages wander by, and less than a texture left behind, or a model's parts.
 Const SOAK_RISE: Float64 = 2048.0
+
+// How many of the heaps' blocks in use may be added a round, steadily: under one, as a leak of
+// anything a round, a model's or an image's, is one at the least.
+Const SOAK_BLOCKS: Float64 = 0.5
 
 Const MODELS: Int = 24
 Const IMAGES: Int = 4
@@ -100,42 +109,82 @@ Function Round(round: Int, textures: Int32): String Throws IOError
     Return wrong
 End Function
 
+// What's kept now, each by its name: the textures the models share, by the list that finds them;
+// the worlds, geometries, materials, and entities there are; the textures; and the loads and the
+// holds on assets.
+Function Kept(): (String, Int64)[]
+    Return [("shared textures", fbe_assets_shared_count()),
+            ("worlds", fbe_scene_live(0)), ("geometries", fbe_scene_live(1)),
+            ("materials", fbe_scene_live(2)), ("entities", fbe_scene_live(3)),
+            ("textures", Texture.Count() As Int64), ("loads", Assets.Loads()),
+            ("holds on assets", Assets.Holds() As Int64)]
+End Function
+
 // The rounds, and what they leave.
 Window.SetHeadless(True)
 Local iterations = Int.Parse(Env.Get("FBENGINE_SOAK_ITERATIONS") ?? "400") ?? 400
-// One round first, which starts the GPU and makes what the engine keeps.
+// One round first, which starts the GPU and makes what the engine keeps, and the frames that free
+// what it left.
 Local wrong = Try Round(0, Texture.Count())
+Flip()
 Local textures = Texture.Count()
-Local loads = Assets.Loads()
-Local holds = Assets.Holds()
+Local kept = Kept()
+// What waits for the GPU to be done with a frame to be freed goes when that frame's begun again,
+// which is in the next round, as nothing's drawn here: so it's never more than a round leaves, the
+// most of the first eighth's.
+Local waiting = 0
 Local samples: Int64[] = []
+Local blocks: Int64[] = []
 Local started = Instant.Now()
 For round = 1 To iterations
     If wrong != "" Then Break
     wrong = Try Round(round, textures)
-    If wrong == "" && Assets.Loads() != loads
-        wrong = "{Assets.Loads()} loads are left, not {loads}"
+    Flip()
+    Local waits = fbe_gpu_waiting_frees() As Int
+    If round <= iterations / 8
+        waiting = Max(waiting, waits)
+    ElseIf wrong == "" && waits > waiting
+        wrong = "{waits} frees wait for a frame, more than the {waiting} a round left at first"
     End If
-    If wrong == "" && Assets.Holds() != holds
-        wrong = "{Assets.Holds()} holds on assets are left, not {holds}"
-    End If
+    Local now = Kept()
+    For at = 0 Until kept.Count
+        If wrong == "" && now[at].1 != kept[at].1
+            wrong = "{now[at].1} {now[at].0} are left, not {kept[at].1}"
+        End If
+    End For
     If wrong != ""
         wrong = "round {round}: {wrong}"
         Break
     End If
-    Flip()
-    If round >= iterations / 4 && round % 20 == 0 Then samples.Add(fbe_assets_resident_bytes())
-    If round % 50 == 0
-        Print("round {round}: {fbe_assets_resident_bytes() / 1024} KiB, {Texture.Count()} textures")
+    If round >= iterations / 4 && round % 20 == 0
+        samples.Add(fbe_assets_resident_bytes())
+        blocks.Add(fbe_assets_heap_blocks())
+    End If
+    If round % (iterations / 8) == 0
+        Print("round {round}: {fbe_assets_resident_bytes() / 1024} KiB, " +
+              "{fbe_assets_heap_blocks()} blocks in use")
     End If
 End For
 If wrong != ""
     Print(wrong)
     Process.Exit(1)
 End If
+Local said: String[] = []
+For each In kept
+    said.Add("{each.1} {each.0}")
+End For
+Print("each round left {said.Join(", ")}, as the first did, and {waiting} frees waiting " +
+      "for a frame at the most")
 Local rise = Rise(samples, 20)
+Local more = Rise(blocks, 20)
 Print("{iterations} rounds in {Instant.Now() - started}; after the first quarter, memory rose " +
-      "{rise} bytes a round")
+      "{rise} bytes a round, and the heaps' blocks in use {more} a round")
+// A leak leaves blocks behind each round, one at the least, where they can be counted.
+Local counted = blocks.Count > 0 && blocks[0] >= 0
+If !fbe_assets_address_sanitized() && counted && more > SOAK_BLOCKS
+    Print("its blocks rose more than {SOAK_BLOCKS} a round")
+    Process.Exit(1)
+End If
 If !fbe_assets_address_sanitized() && rise > SOAK_RISE
     Print("it rose more than {SOAK_RISE} bytes a round")
     Process.Exit(1)

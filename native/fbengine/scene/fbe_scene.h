@@ -261,6 +261,11 @@ typedef struct fbe_pose_t {
 } fbe_pose_t;
 // NOLINTEND(modernize-use-using)
 
+// A test hook, for a soak that counts what's kept: how many there are, not freed, of the worlds
+// for 0, the geometries for 1, the materials for 2, and every world's entities for 3; -1 for
+// another number.
+FBE_API int64_t fbe_scene_live(int32_t what);
+
 // A new World, empty.
 FBE_API uint64_t fbe_world_create(void);
 // The World there always is, made the first time it's asked for.

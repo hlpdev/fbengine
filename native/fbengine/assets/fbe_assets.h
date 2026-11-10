@@ -105,6 +105,15 @@ FBE_API int64_t fbe_assets_count(void);
 // bytes on Windows, its resident set elsewhere; 0 where that can't be told. What a soak of loads,
 // reloads, and mounts watches for what they leave.
 FBE_API int64_t fbe_assets_resident_bytes(void);
+// Test hooks, for a soak that counts what's kept, not a game's. How many textures the models
+// naming image files share, by the list that finds them: each is forgotten as it's freed, so with
+// none of them left there are none.
+FBE_API int64_t fbe_assets_shared_count(void);
+// How many blocks the process's heaps have in use now, whoever asked for them, the engine, the
+// program, or a driver: every heap's busy blocks on Windows, the malloc zones' on macOS; -1 where
+// that can't be told, as on Linux, whose malloc counts its free ones. A leak adds to them each
+// time round, where the pages a process holds also rise as its heaps are cut up.
+FBE_API int64_t fbe_assets_heap_blocks(void);
 // Whether this DLL's built with AddressSanitizer, whose memory a soak doesn't judge, as
 // LeakSanitizer does.
 FBE_API bool fbe_assets_address_sanitized(void);

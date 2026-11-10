@@ -237,6 +237,21 @@ frame_t& recording_frame() {
     return begin();
 }
 
+std::size_t waiting_frees() {
+    const device_t* gpu = device();
+    if (gpu == nullptr) {
+        return 0;
+    }
+    std::size_t waiting = 0;
+    for (const frame_t& frame : gpu->frames) {
+        waiting += frame.garbage.size();
+    }
+    for (const carried_t& carry : carried) {
+        waiting += carry.garbage.size();
+    }
+    return waiting;
+}
+
 void after_frame(std::function<void()> free) {
     // Begun first, so what's left goes with this frame, not one whose beginning frees it now.
     begin().garbage.push_back(std::move(free));
@@ -382,6 +397,10 @@ void stop_frames() {
 } // namespace fbe::gpu
 
 extern "C" {
+
+FBE_API int32_t fbe_gpu_waiting_frees(void) {
+    return static_cast<int32_t>(fbe::gpu::waiting_frees());
+}
 
 FBE_API bool fbe_gpu_counters(fbe_gpu_counters_t* counters) {
     if (counters == nullptr) {

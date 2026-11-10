@@ -2322,9 +2322,9 @@ if(FBENGINE_FB_TESTS)
 endif()
 
 # A soak of models sharing their image files' textures, on the GPU the tests use: 24 glTFs naming 4
-# PNGs, loaded and freed, 400 times, the textures there are going up by the 4 and coming back each
-# round, and the process's memory not rising by more than 2 KiB a round; tests/shared_soak says
-# how it went.
+# PNGs, loaded and freed, 400 times, each round leaving as many of what the engine keeps as the
+# first did, by count, the heaps' blocks in use not rising by half a block a round, and the
+# process's memory not by more than 2 KiB a round; tests/shared_soak says how it went.
 if(FBENGINE_FB_TESTS)
   add_test(NAME soak.shared_textures COMMAND "${FBENGINE_FB}" --color never run
            "${CMAKE_CURRENT_SOURCE_DIR}/shared_soak")

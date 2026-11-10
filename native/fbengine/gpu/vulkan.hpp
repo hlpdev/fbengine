@@ -168,6 +168,8 @@ frame_t& recording_frame();
 
 /// Has `free` run once the GPU is done with the frame being recorded, and every frame before it.
 void after_frame(std::function<void()> free);
+/// How many of those wait now.
+std::size_t waiting_frees();
 
 /// Has `free` run each time the GPU stops, before it finishes what's freed after frames: what's
 /// kept on the GPU from frame to frame goes there. Asked for twice, it's still once.

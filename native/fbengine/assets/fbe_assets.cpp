@@ -3,6 +3,7 @@
 // throwing through extern "C".
 
 #include "assets/loads.hpp"
+#include "assets/shared.hpp"
 #include "core/engine.hpp"
 #include "fbengine.h"
 #include "jobs/jobs.hpp"
@@ -22,10 +23,12 @@
 // clang-format on
 #elifdef __APPLE__
 #include <mach/mach.h>
+#include <malloc/malloc.h>
 #else
 #include <unistd.h>
 #endif
 
+#include <array>
 #include <cstdio>
 #include <exception>
 #include <format>
@@ -253,6 +256,40 @@ FBE_API bool fbe_assets_free(uint64_t load) {
 
 FBE_API int64_t fbe_assets_count(void) {
     return static_cast<int64_t>(assets::loads().count());
+}
+
+FBE_API int64_t fbe_assets_shared_count(void) {
+    return static_cast<int64_t>(assets::shared_count());
+}
+
+FBE_API int64_t fbe_assets_heap_blocks(void) {
+#ifdef _WIN32
+    std::array<HANDLE, 256> heaps{};
+    const DWORD count = GetProcessHeaps(static_cast<DWORD>(heaps.size()), heaps.data());
+    if (count == 0 || count > heaps.size()) {
+        return -1;
+    }
+    int64_t blocks = 0;
+    for (DWORD at = 0; at < count; ++at) {
+        if (HeapLock(heaps[at]) == 0) {
+            continue;
+        }
+        PROCESS_HEAP_ENTRY entry{};
+        while (HeapWalk(heaps[at], &entry) != 0) {
+            if ((entry.wFlags & PROCESS_HEAP_ENTRY_BUSY) != 0) {
+                ++blocks;
+            }
+        }
+        HeapUnlock(heaps[at]);
+    }
+    return blocks;
+#elifdef __APPLE__
+    malloc_statistics_t statistics{};
+    malloc_zone_statistics(nullptr, &statistics);
+    return static_cast<int64_t>(statistics.blocks_in_use);
+#else
+    return -1;
+#endif
 }
 
 FBE_API int64_t fbe_assets_resident_bytes(void) {
