@@ -125,6 +125,15 @@ catch_discover_tests(fbengine_gpu_tests TEST_PREFIX "gpu." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}"
                      PROPERTIES TIMEOUT ${fbengine_gpu_timeout})
 
+# Where Vulkan's looked for on macOS when the system's search doesn't find it.
+add_executable(fbengine_gpu_internal_tests gpu/loader_tests.cpp)
+target_link_libraries(fbengine_gpu_internal_tests PRIVATE Catch2::Catch2WithMain fbengine_internal)
+target_include_directories(fbengine_gpu_internal_tests PRIVATE
+                           "${PROJECT_SOURCE_DIR}/native/fbengine")
+fbengine_set_warnings(fbengine_gpu_internal_tests)
+catch_discover_tests(fbengine_gpu_internal_tests TEST_PREFIX "gpu.internal."
+                     DL_PATHS "${fbengine_test_dll_paths}")
+
 # The scene's insides, built in from fbengine_internal: how moves are run, and their scratch.
 add_executable(fbengine_scene_internal_tests scene/moves_tests.cpp)
 target_link_libraries(fbengine_scene_internal_tests PRIVATE volk Vulkan::Headers

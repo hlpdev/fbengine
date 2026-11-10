@@ -23,8 +23,10 @@ A game engine for FutureBlitz: windows and input, 2D, the 3D scene, and a Vulkan
 
 It runs on a GPU with Vulkan 1.2, on Windows x64, Linux x64 and arm64 with glibc 2.28 or later, and
 macOS arm64 and x64 through MoltenVK. On macOS, a player needs MoltenVK and Vulkan's loader, which
-the package doesn't ship: Homebrew's `molten-vk` and `vulkan-loader` are what its tests use. It
-needs fb 1.2.3 or later. How it fits together is in
+the package doesn't ship: Homebrew's `molten-vk` and `vulkan-loader` are what its tests use, and
+they're found where Homebrew puts them. A game that ships its own puts `libvulkan.1.dylib` and
+`libMoltenVK.dylib` in its app's Frameworks, or beside the program, and MoltenVK's
+`MoltenVK_icd.json` in Resources/vulkan/icd.d. It needs fb 1.2.3 or later. How it fits together is in
 [docs/architecture.md](https://github.com/hlpdev/fbengine/blob/master/docs/architecture.md), and
 its scene files in [docs/scene-files.md](https://github.com/hlpdev/fbengine/blob/master/docs/scene-files.md).
 

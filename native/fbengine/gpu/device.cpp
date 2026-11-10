@@ -13,6 +13,7 @@
 #include "core/engine.hpp"
 #include "fbengine.h"
 #include "gpu/graph.hpp"
+#include "gpu/loader.hpp"
 #include "gpu/pipeline.hpp"
 #include "gpu/vulkan.hpp"
 
@@ -144,9 +145,32 @@ bool make_instance() {
     const SDL_LogPriority logging = SDL_GetLogPriority(SDL_LOG_CATEGORY_APPLICATION);
     SDL_SetLogPriority(SDL_LOG_CATEGORY_APPLICATION, SDL_LOG_PRIORITY_CRITICAL);
     loaded = SDL_Vulkan_LoadLibrary(nullptr);
+#ifdef __APPLE__
+    // dlopen's own places leave out Homebrew's on Apple silicon and an app's Frameworks, so those
+    // are tried after, unless the player named one by SDL_VULKAN_LIBRARY; SDL's why is the first's.
+    if (!loaded && SDL_GetHint(SDL_HINT_VULKAN_LIBRARY) == nullptr) {
+        const std::string why = SDL_GetError();
+        const char* base = SDL_GetBasePath();
+        for (const std::string& path :
+             fbe::gpu::apple_vulkan_libraries(base != nullptr ? base : "")) {
+            if (SDL_Vulkan_LoadLibrary(path.c_str())) {
+                loaded = true;
+                break;
+            }
+        }
+        if (!loaded) {
+            SDL_SetError("%s", why.c_str());
+        }
+    }
+#endif
     SDL_SetLogPriority(SDL_LOG_CATEGORY_APPLICATION, logging);
     if (!loaded) {
+#ifdef __APPLE__
+        return fbe::fail_sdl("couldn't load Vulkan, which on macOS is Homebrew's vulkan-loader and "
+                             "molten-vk, or the game's own in its Frameworks");
+#else
         return fbe::fail_sdl("couldn't load Vulkan");
+#endif
     }
     volkInitializeCustom(
         reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr()));
