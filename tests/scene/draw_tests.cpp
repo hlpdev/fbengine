@@ -417,7 +417,7 @@ TEST_CASE("a mesh draws a surface in a material of its own for it, before its ma
     CHECK(drawn_in(dressed, 1) == skin);
     CHECK_FALSE(fbe_mesh_set_surface_material(dressed, -1, paint));
     CHECK(std::string_view(fbe_error()).contains("a mesh's surfaces are 0 to"));
-    CHECK_FALSE(fbe_mesh_set_surface_material(dressed, 1 << 30, paint));
+    CHECK_FALSE(fbe_mesh_set_surface_material(dressed, 1073741824, paint));
     CHECK(fbe_mesh_surface_material(dressed, -1) == 0);
     CHECK_FALSE(fbe_mesh_set_surface_material(camera, 0, paint));
     CHECK_FALSE(fbe_mesh_set_surface_material(dressed, 0, coat));
