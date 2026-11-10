@@ -405,6 +405,8 @@ struct entities_t {
     std::vector<quat_t> captured_rotation;
     std::vector<vec3_t> captured_scale;
     std::vector<bool> captured;
+    /// What of its own transform drawing tweens, an FBE_TWEENED.
+    std::vector<std::uint8_t> tweened;
     /// Where it starts fading from a camera, and where it's gone, 0 and 0 for never.
     std::vector<float> fade_near;
     std::vector<float> fade_far;

@@ -167,11 +167,16 @@ pose_t tweened_t::pose(std::uint32_t entity) const {
         vec3_t position = entities.position[at];
         quat_t rotation = entities.rotation[at];
         vec3_t scale = entities.scale[at];
-        if (entities.captured[at]) {
-            const vec3_t moved = position - entities.captured_position[at];
+        const std::uint8_t tweened = entities.tweened[at];
+        if (entities.captured[at] && tweened != FBE_TWEENED_NONE) {
+            if (tweened != FBE_TWEENED_TURN) {
+                const vec3_t moved = position - entities.captured_position[at];
+                position = entities.captured_position[at] + moved * m_tween;
+            }
+            if (tweened != FBE_TWEENED_PLACE) {
+                rotation = slerp(entities.captured_rotation[at], rotation, m_tween);
+            }
             const vec3_t grown = scale - entities.captured_scale[at];
-            position = entities.captured_position[at] + moved * m_tween;
-            rotation = slerp(entities.captured_rotation[at], rotation, m_tween);
             scale = entities.captured_scale[at] + grown * m_tween;
         }
         const mat4_t local = compose(position, rotation, scale);
