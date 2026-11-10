@@ -265,8 +265,10 @@ Public Final Class Model Implements Asset
             If texture.Freed() Then Continue
             Local source = texture.Path()
             If source == Null Then Continue
-            Local now = TextureFrom(SameImage(before, source))
+            Local now = TextureFrom(SameImage(before, source), texture)
             If now == Null || now.Freed() Then Continue
+            // An image file's own, which the file read again still has.
+            If now.Live("Reload") == texture.Live("Reload") Then Continue
             from.Add(texture.Live("Reload"))
             to.Add(now.Live("Reload"))
         End For
@@ -305,17 +307,28 @@ Public Final Class Model Implements Asset
         Return marked.Join("#")
     End Method
 
-    // Which of its Textures, its own or another of an image, has `source` for its Path, or Null.
+    // Which of its Textures, its own or another of an image, has `source` for its Path, or Null:
+    // of several, as an image file's are that's read in more ways than one, the one sampled and
+    // made as `like` is, or the first.
     @MainThread
-    Package Method TextureFrom(source: String): Texture?
+    Package Method TextureFrom(source: String, like: Texture? = Null): Texture?
         Live("TextureFrom")
+        Local found: Texture? = Null
+        Local all: Texture[] = others.Clone()
         For texture In textures
-            If texture != Null && texture.Path() == source Then Return texture
+            If texture != Null Then all.Add(texture)
         End For
-        For texture In others
-            If texture.Path() == source Then Return texture
+        For texture In all
+            If texture.Freed() || texture.Path() != source Then Continue
+            If like == Null Then Return texture
+            If texture.Filter() == like.Filter() && texture.WrapAcross() == like.WrapAcross() &&
+               texture.WrapDown() == like.WrapDown() &&
+               texture.VulkanFormat() == like.VulkanFormat()
+                Return texture
+            End If
+            found = found ?? texture
         End For
-        Return Null
+        Return found
     End Method
 
     /// The Texture its material at `index` reads for `map`, as it's bound, which for an image read
@@ -421,8 +434,10 @@ Public Final Class Model Implements Asset
             End If
             Local texture = fbe_model_texture(load.Handle, at, True)
             If texture == 0 Then Throw PartError()
-            Local own = Texture(texture)
-            own.SetSource("{load.Path()}#{at}")
+            Local own = TextureShared(texture)
+            // One of an image that's a file of its own is every model's that names the file, and
+            // says that file.
+            If own.Path() == Null Then own.SetSource("{load.Path()}#{at}")
             textures.Add(own)
         End For
         Local read = Buffer<UInt64>(info.Images As Int64 + 1)
@@ -450,11 +465,11 @@ Public Final Class Model Implements Asset
         // What it made is here to let go of, even if it then couldn't.
         Local readOtherwise = Map<Int32, Int>()
         For at = 0 Until made
-            Local other = Texture(kept[at])
+            Local other = TextureShared(kept[at])
             Local image = images[at]
             Local nth = (readOtherwise.Get(image) ?? 0) + 1
             readOtherwise[image] = nth
-            other.SetSource("{load.Path()}#{image}:{nth}")
+            If other.Path() == Null Then other.SetSource("{load.Path()}#{image}:{nth}")
             others.Add(other)
         End For
         If failure != Null Then Throw failure
@@ -699,10 +714,10 @@ Public Final Class Model Implements Asset
             If !material.Freed() Then material.Free()
         End For
         For texture In textures
-            If texture != Null && !texture.Freed() Then texture.Free()
+            If texture != Null Then texture.Unshared()
         End For
         For texture In others
-            If !texture.Freed() Then texture.Free()
+            texture.Unshared()
         End For
         For skin In skins
             If !skin.Freed() Then skin.Free()
@@ -719,3 +734,24 @@ Public Final Class Model Implements Asset
         If freed Then Panic("{call} on a Model that was freed")
     End Method
 End Class
+
+/// The Texture of the image file at `path` that the Models naming it share, read as a color or not
+/// and sampled so, and whether it's a new wrapper, the caller's to Free: the one there is, or with
+/// `make`, one made of the file now. Null for none there without `make`; with it, it throws what
+/// the file can't be made one for.
+@MainThread
+Package Function SharedTexture(path: String, srgb: Bool, filter: TextureFilter, across: TextureWrap,
+                               down: TextureWrap, make: Bool): (Texture, Bool)? Throws IOError
+    Local handle: UInt64 = 0
+    Unsafe
+        handle = fbe_model_image_texture(path, srgb, filter As Int32, across As Int32,
+                                         down As Int32,
+                                         make)
+    End Unsafe
+    If handle == 0
+        If !make Then Return Null
+        Local kind = fbe_model_invalid() ? IOErrorKind.INVALID_DATA : IOErrorKind.OTHER
+        Throw IOError(kind, "{path}: {LastError()}", path)
+    End If
+    Return TextureHeld(handle)
+End Function

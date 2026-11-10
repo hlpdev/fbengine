@@ -1884,6 +1884,7 @@ add_executable(fbengine_assets_tests assets/images_tests.cpp assets/models_tests
                assets/fuzz_tests.cpp assets/files.cpp
                "${PROJECT_SOURCE_DIR}/native/fbengine/assets/image.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/assets/gltf.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/assets/shared.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/assets/stb.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/assets/loads.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/vfs.cpp"
@@ -2252,6 +2253,7 @@ add_executable(fbengine_tools_tests tools/cook_tests.cpp tools/model_tests.cpp a
                "${PROJECT_SOURCE_DIR}/native/fbengine_tools/cook/model.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine_tools/cook/stb.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/assets/gltf.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/assets/shared.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/assets/image.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/jobs/jobs.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/disk.cpp"
@@ -2316,6 +2318,18 @@ if(FBENGINE_FB_TESTS)
            "${CMAKE_CURRENT_SOURCE_DIR}/soak")
   set_tests_properties(soak.cook_load_reload PROPERTIES TIMEOUT 1800 LABELS stability
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;FBENGINE_SLANGC=${FBENGINE_SLANGC}"
+                       PASS_REGULAR_EXPRESSION "\nsoaked\r?\n$")
+endif()
+
+# A soak of models sharing their image files' textures, on the GPU the tests use: 24 glTFs naming 4
+# PNGs, loaded and freed, 400 times, the textures there are going up by the 4 and coming back each
+# round, and the process's memory not rising by more than 2 KiB a round; tests/shared_soak says
+# how it went.
+if(FBENGINE_FB_TESTS)
+  add_test(NAME soak.shared_textures COMMAND "${FBENGINE_FB}" --color never run
+           "${CMAKE_CURRENT_SOURCE_DIR}/shared_soak")
+  set_tests_properties(soak.shared_textures PROPERTIES TIMEOUT 1800 LABELS "gpu;stability"
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        PASS_REGULAR_EXPRESSION "\nsoaked\r?\n$")
 endif()
 

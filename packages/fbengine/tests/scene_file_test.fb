@@ -747,7 +747,7 @@ Function AMapIsKeptByItsFile() Throws IOError, GraphicsError
     mesh.SetMaterial(paint)
     Local text = Try Scene.Text([mesh])
     Expect(text.Contains(
-        "[[material.maps]]\nmap = \"NORMAL\"\ntexture = \"res://maps/bumps.png\"\nuv_set = 1\n"),
+        "[[material.maps]]\nmap = \"NORMAL\"\ntexture = \"res://maps/bumps.png\"\nlinear = true\nuv_set = 1\n"),
            text)
     Local again = Fresh()
     Defer again.Free()
@@ -758,8 +758,9 @@ Function AMapIsKeptByItsFile() Throws IOError, GraphicsError
            kept.MapUvSet(MaterialMap.NORMAL) == 1)
     Expect(kept.Map(MaterialMap.EMISSIVE)?.Path() == "res://maps/wall.png")
     Expect(kept.Map(MaterialMap.OCCLUSION) == Null)
-    // A color as a normal map.
-    Local wrong = text.Replace("res://maps/bumps.png", "res://maps/wall.png")
+    // A color as a normal map, in a file that doesn't say it's read as none.
+    Local wrong = text.Replace("res://maps/bumps.png", "res://maps/wall.png").Replace(
+        "linear = true\n", "")
     Local error = ExpectThrows<IOError>(Scene.FromText(wrong))
     Expect((error?.Message ?? "").Contains("isn't sRGB"), error?.Message ?? "")
     Try File.WriteText(folder.Path / "wrong.scene", wrong)
