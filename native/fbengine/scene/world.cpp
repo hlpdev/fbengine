@@ -83,6 +83,7 @@ std::uint32_t make_entity(std::uint32_t world, std::int32_t kind) {
         entities.captured_rotation.emplace_back();
         entities.captured_scale.emplace_back();
         entities.captured.push_back(false);
+        entities.tweened.push_back(FBE_TWEENED_ALL);
         entities.fade_near.push_back(0.0F);
         entities.fade_far.push_back(0.0F);
         entities.made.push_back(0);
@@ -98,6 +99,7 @@ std::uint32_t make_entity(std::uint32_t world, std::int32_t kind) {
         entities.occluder[entity] = false;
         entities.colliders[entity] = {};
         entities.captured[entity] = false;
+        entities.tweened[entity] = FBE_TWEENED_ALL;
         entities.fade_near[entity] = 0.0F;
         entities.fade_far[entity] = 0.0F;
     }
@@ -527,6 +529,53 @@ FBE_API bool fbe_entity_set_parent(uint64_t entity, uint64_t parent, bool keep_w
     return true;
 }
 
+FBE_API bool fbe_entity_capture(uint64_t entity) {
+    const std::uint32_t slot = entity_slot(entity);
+    if (slot == none) {
+        return false;
+    }
+    fbe::scene::entities_t& entities = scene().entities;
+    fbe::scene::update_world(slot);
+    const fbe::scene::mat4_t now = entities.world_matrix[slot];
+    // By a stack of its own, so no tree is too deep, kept for the next.
+    static std::vector<std::uint32_t>& stack = *new std::vector<std::uint32_t>();
+    try {
+        stack.assign(1, slot);
+        while (!stack.empty()) {
+            const std::uint32_t at = stack.back();
+            stack.pop_back();
+            if (!fbe::scene::capture_one(at)) {
+                return false;
+            }
+            stack.insert(stack.end(), entities.children[at].begin(), entities.children[at].end());
+        }
+    } catch (const std::bad_alloc&) {
+        return fbe::fail("out of memory");
+    }
+    // Where it is now in the world, under where its parent was captured, so it's drawn from here.
+    if (entities.parent[slot] != none) {
+        fbe::scene::recapture(slot, now);
+    }
+    return true;
+}
+
+FBE_API bool fbe_entity_set_tweened(uint64_t entity, int32_t tweened) {
+    const std::uint32_t slot = entity_slot(entity);
+    if (slot == none) {
+        return false;
+    }
+    if (tweened < FBE_TWEENED_ALL || tweened > FBE_TWEENED_NONE) {
+        return fbe::fail(std::format("{} isn't a Tweened", tweened));
+    }
+    scene().entities.tweened[slot] = static_cast<std::uint8_t>(tweened);
+    return true;
+}
+
+FBE_API int32_t fbe_entity_tweened(uint64_t entity) {
+    const std::uint32_t slot = entity_slot(entity);
+    return slot != none ? scene().entities.tweened[slot] : -1;
+}
+
 FBE_API bool fbe_entity_set_sibling_index(uint64_t entity, int32_t index) {
     const std::uint32_t slot = entity_slot(entity);
     if (slot == none) {
@@ -635,6 +684,7 @@ FBE_API uint64_t fbe_entity_copy(uint64_t entity, uint64_t world, uint64_t paren
         entities.casts_shadows[copy] = entities.casts_shadows[original];
         entities.occluder[copy] = entities.occluder[original];
         entities.fade_near[copy] = entities.fade_near[original];
+        entities.tweened[copy] = entities.tweened[original];
         entities.fade_far[copy] = entities.fade_far[original];
         // A copy collides as its original does, from where it is, with nothing touched yet.
         entities.colliders[copy] = entities.colliders[original];

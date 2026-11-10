@@ -25,6 +25,7 @@ Import "./shader"
 Import "./sprite"
 Import "./texture"
 Import "./transform"
+Import "./update"
 Import "./visibility"
 Import "./window"
 Import "./world"
@@ -34,7 +35,7 @@ Const FORMAT: Int32 = 1
 // What a file can say of an entity, whatever it is, and of each kind.
 Const EVERY_ENTITY = ["path", "kind", "name", "position", "rotation", "scale", "hidden", "pick",
                       "blocks_sight", "group", "shape", "radius", "box", "step_height", "max_slope",
-                      "auto_fade", "occluder", "casts_shadows", "components"]
+                      "auto_fade", "occluder", "casts_shadows", "tweened", "components"]
 Const OF_MESH = ["geometry", "material", "surface_materials", "color", "morph"]
 Const OF_LIGHT = ["light", "color", "intensity", "range", "cone", "shadows", "shadow_size",
                   "shadow_bias", "cascades", "shadow_distance"]
@@ -458,6 +459,7 @@ Class Writing
         If fade != Vec2(0, 0) Then table["auto_fade"] = Try Numbers([fade.x, fade.y])
         If entity.Occluder() Then table["occluder"] = Value(True)
         If !entity.CastsShadows() Then table["casts_shadows"] = Value(False)
+        If entity.Tweened() != Tweened.ALL Then table["tweened"] = Value("{entity.Tweened()}")
         Local mesh = entity As? Mesh
         If mesh != Null
             Local geometry = mesh.Geometry()
@@ -996,6 +998,9 @@ Class Reading
         End If
         made.SetOccluder(Try BoolOf(table, "occluder", False, path))
         made.SetCastsShadows(Try BoolOf(table, "casts_shadows", True, path))
+        made.SetTweened(Try Named<Tweened>(table, "tweened", Tweened.ALL,
+                                           [Tweened.ALL, Tweened.PLACE, Tweened.TURN, Tweened.NONE],
+                                           path))
         Local components = table["components"]
         If components != Null
             Try Must(components.IsObject, path, "components", "is a table")

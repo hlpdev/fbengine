@@ -30,6 +30,13 @@ extern "C" {
 #define FBE_SPACE_LOCAL 0
 #define FBE_SPACE_WORLD 1
 
+// What of an entity's own transform is drawn part way from its World's last capture: all of it,
+// its place alone, its turn alone, or none. Its scale goes part way unless none does.
+#define FBE_TWEENED_ALL   0
+#define FBE_TWEENED_PLACE 1
+#define FBE_TWEENED_TURN  2
+#define FBE_TWEENED_NONE  3
+
 // An entity's own axes.
 #define FBE_AXIS_RIGHT   0
 #define FBE_AXIS_UP      1
@@ -1161,6 +1168,18 @@ FBE_API int32_t fbe_world_pick(uint64_t world, const fbe_vec3_t* from, const fbe
 // now, for drawing between then and later: a fixed step captures before each step, and draws
 // part way between the last two.
 FBE_API bool fbe_world_capture(uint64_t world);
+// Keeps one entity's transform, and everything under it, as it is now, as fbe_world_capture does
+// for all: it's drawn from where it is now in the world, under its parent as that was captured,
+// not tweened from where it was, as for a camera cut somewhere or a sprite reused; the rest of its
+// World still tweens.
+FBE_API bool fbe_entity_capture(uint64_t entity);
+// What of an entity's own local transform drawing tweens, FBE_TWEENED_ALL at first: with
+// FBE_TWEENED_PLACE it's drawn at its place part way with the turn it has now, as for a player's
+// eyes that a fixed step walks and the mouse turns each frame; with FBE_TWEENED_TURN the other way
+// about; with FBE_TWEENED_NONE as it is now. What's under it takes what it's drawn with, and
+// tweens its own as its own setting says. A copy keeps it. -1 for a freed entity.
+FBE_API bool fbe_entity_set_tweened(uint64_t entity, int32_t tweened);
+FBE_API int32_t fbe_entity_tweened(uint64_t entity);
 // An entity's matrix to the world `tween` of the way, 0 to 1, from its World's last capture to now,
 // each entity above it tweened too: positions and scales lerped, rotations slerped. One made since
 // the capture is where it is now. False for a tween outside 0 to 1.

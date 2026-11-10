@@ -29,6 +29,50 @@ Function UpdateWorldCollidesTheCurrentWorld()
     Expect(IsClose(mover.Position().y, 0.501, 0.002) && mover.Collisions().Count == 1)
 End Function
 
+// One captured on its own is where it is, what's under it too, and the rest tween.
+@Test
+Function AnEntityCapturedIsDrawnWhereItIs()
+    Local world = Fresh()
+    Defer world.Free()
+    Local camera = Pivot()
+    Local held = Pivot(camera)
+    held.SetPosition(Vec3(0, 0, -1))
+    Local walker = Pivot()
+    CaptureWorld()
+    camera.SetPosition(Vec3(100, 0, 0))
+    walker.SetPosition(Vec3(0, 0, 4))
+    camera.Capture()
+    For tween In [0.0, 0.5, 1.0]
+        Local at = camera.TweenedMatrix(tween As Float).TransformPoint(Vec3.Zero())
+        Expect(IsClose(at, Vec3(100, 0, 0), 0.0001), "the camera at {tween}: {at}")
+        Local hand = held.TweenedMatrix(tween As Float).TransformPoint(Vec3.Zero())
+        Expect(IsClose(hand, Vec3(100, 0, -1), 0.0001), "what it holds at {tween}: {hand}")
+    End For
+    Local walked = walker.TweenedMatrix(0.5).TransformPoint(Vec3.Zero())
+    Expect(IsClose(walked, Vec3(0, 0, 2), 0.0001), "the walker: {walked}")
+End Function
+
+// A player's eyes: walked by the step, turned by the mouse, seen turned at once from part way.
+@Test
+Function ACameraOnItsPlaceAloneIsTurnedAtOnce()
+    Local world = Fresh()
+    Defer world.Free()
+    Local eyes = Camera()
+    Expect(eyes.Tweened() == Tweened.ALL)
+    eyes.SetTweened(Tweened.PLACE)
+    Expect(eyes.Tweened() == Tweened.PLACE)
+    CaptureWorld()
+    eyes.SetPosition(Vec3(4, 0, 0))
+    eyes.Turn(0, Deg(90), 0)
+    Local halfway = eyes.TweenedMatrix(0.5)
+    Expect(IsClose(halfway.TransformPoint(Vec3.Zero()), Vec3(2, 0, 0), 0.0001))
+    Local ahead = halfway.TransformPoint(Vec3(0, 0, -1)) - Vec3(2, 0, 0)
+    Local now = eyes.Matrix(Space.WORLD).TransformPoint(Vec3(0, 0, -1)) - Vec3(4, 0, 0)
+    Expect(IsClose(ahead, now, 0.0001), "it looks {ahead}, not {now}")
+    eyes.SetTweened(Tweened.NONE)
+    Expect(IsClose(eyes.TweenedMatrix(0.5), eyes.Matrix(Space.WORLD), 0.0001))
+End Function
+
 @Test
 Function DrawingTweensFromTheCapture()
     Local world = Fresh()

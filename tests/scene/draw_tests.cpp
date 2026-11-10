@@ -427,6 +427,153 @@ TEST_CASE("a mesh draws a surface in a material of its own for it, before its ma
     fbe_geometry_release(geometry);
 }
 
+TEST_CASE("an entity captured on its own is drawn from where it is now, its children with it, "
+          "and the rest still tween",
+          "[render]") {
+    const test_world_t world;
+    const std::uint64_t camera = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);
+    // A crate teleported, with a cube on it, and another crate that only walks, under a pivot that
+    // walks too.
+    const std::uint64_t carried = fbe_entity_create(world.handle, 0, FBE_ENTITY_PIVOT);
+    const std::uint64_t teleported = cube(world.handle, 0.0F, 0.0F, -20.0F);
+    REQUIRE(fbe_entity_set_parent(teleported, carried, true));
+    const std::uint64_t on_it = cube(world.handle, 0.0F, 1.0F, -20.0F);
+    REQUIRE(fbe_entity_set_parent(on_it, teleported, true));
+    const std::uint64_t walking = cube(world.handle, -4.0F, 0.0F, -20.0F);
+    // And one at the top of the World, cut from one place to another.
+    const std::uint64_t cut = cube(world.handle, -8.0F, 0.0F, -20.0F);
+    REQUIRE(fbe_world_capture(world.handle));
+    fbe_entity_translate(carried, 2.0F, 0.0F, 0.0F, FBE_SPACE_WORLD);
+    fbe_entity_set_position(teleported, 6.0F, 0.0F, -20.0F, FBE_SPACE_WORLD);
+    fbe_entity_translate(walking, 2.0F, 0.0F, 0.0F, FBE_SPACE_WORLD);
+    // What's on it slides along it too, in the same step.
+    fbe_entity_translate(on_it, 0.0F, 0.0F, 3.0F, FBE_SPACE_LOCAL);
+    REQUIRE(fbe_entity_capture(teleported));
+    fbe_entity_set_position(cut, -8.0F, 5.0F, -20.0F, FBE_SPACE_WORLD);
+    REQUIRE(fbe_entity_capture(cut));
+    const auto at_of = [&](std::uint64_t entity, float tween, std::size_t axis) {
+        for (const fbe_draw_t& draw : draws(camera, tween)) {
+            if (draw.entity == entity) {
+                return draw.matrix[12 + axis];
+            }
+        }
+        return -1000.0F;
+    };
+    const auto x_of = [&](std::uint64_t entity, float tween) { return at_of(entity, tween, 0); };
+    for (const float tween : { 0.0F, 0.5F, 1.0F }) {
+        INFO("at " << tween);
+        CHECK(near(x_of(teleported, tween), 6.0F));
+        CHECK(near(x_of(on_it, tween), 6.0F));
+        CHECK(near(at_of(on_it, tween, 2), -17.0F));
+        CHECK(near(at_of(cut, tween, 1), 5.0F));
+        CHECK(near(x_of(walking, tween), -4.0F + (2.0F * tween)));
+    }
+    // Moved after, it tweens from where it was captured.
+    fbe_entity_set_position(teleported, 8.0F, 0.0F, -20.0F, FBE_SPACE_WORLD);
+    CHECK(near(x_of(teleported, 0.0F), 6.0F));
+    CHECK(near(x_of(teleported, 0.5F), 7.0F));
+    CHECK_FALSE(fbe_entity_capture(0));
+}
+
+TEST_CASE("an entity's place, its turn, both, or neither is tweened, as it's set", "[render]") {
+    const test_world_t world;
+    // The player's eyes: the tick walks them 4 to the right, and the mouse turns them a quarter
+    // turn to the left in the same step, and they grow, to see its scale's own way.
+    const std::uint64_t eyes = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);
+    const std::uint64_t held = fbe_entity_create(world.handle, eyes, FBE_ENTITY_PIVOT);
+    fbe_entity_set_position(held, 0.0F, 0.0F, -1.0F, FBE_SPACE_LOCAL);
+    CHECK(fbe_entity_tweened(eyes) == FBE_TWEENED_ALL);
+    REQUIRE(fbe_world_capture(world.handle));
+    fbe_entity_set_position(eyes, 4.0F, 0.0F, 0.0F, FBE_SPACE_WORLD);
+    fbe_entity_set_scale(eyes, 3.0F, 3.0F, 3.0F, FBE_SPACE_LOCAL);
+    const float half = std::sqrt(0.5F);
+    fbe_entity_set_rotation(eyes, 0.0F, half, 0.0F, half, FBE_SPACE_WORLD);
+    struct drawn_t {
+        float x;
+        float ahead_x;
+        float ahead_z;
+        float size;
+    };
+    // Where it's drawn half way, which way its -Z points, and how long its X axis is.
+    const auto drawn = [&](std::uint64_t entity) {
+        fbe_mat4_t matrix{};
+        REQUIRE(fbe_entity_tweened_matrix(entity, 0.5F, &matrix));
+        const float size = std::sqrt((matrix.m[0] * matrix.m[0]) + (matrix.m[1] * matrix.m[1]) +
+                                     (matrix.m[2] * matrix.m[2]));
+        return drawn_t{
+            .x = matrix.m[12],
+            .ahead_x = -matrix.m[8] / size,
+            .ahead_z = -matrix.m[10] / size,
+            .size = size,
+        };
+    };
+    // All of it, as ever: half way there, an eighth of a turn, twice the size.
+    drawn_t found = drawn(eyes);
+    CHECK(near(found.x, 2.0F));
+    CHECK(near(found.ahead_x, -half));
+    CHECK(near(found.ahead_z, -half));
+    CHECK(near(found.size, 2.0F));
+    // Its place alone: half way there, looking where it looks now.
+    REQUIRE(fbe_entity_set_tweened(eyes, FBE_TWEENED_PLACE));
+    CHECK(fbe_entity_tweened(eyes) == FBE_TWEENED_PLACE);
+    found = drawn(eyes);
+    CHECK(near(found.x, 2.0F));
+    CHECK(near(found.ahead_x, -1.0F));
+    CHECK(near(found.ahead_z, 0.0F));
+    CHECK(near(found.size, 2.0F));
+    // What it holds is 1 ahead of that, at its drawn size: to its left.
+    CHECK(near(drawn(held).x, 2.0F - 2.0F));
+    // Its turn alone: where it is now, an eighth of a turn.
+    REQUIRE(fbe_entity_set_tweened(eyes, FBE_TWEENED_TURN));
+    found = drawn(eyes);
+    CHECK(near(found.x, 4.0F));
+    CHECK(near(found.ahead_x, -half));
+    CHECK(near(found.size, 2.0F));
+    // Neither: as it is, size and all.
+    REQUIRE(fbe_entity_set_tweened(eyes, FBE_TWEENED_NONE));
+    found = drawn(eyes);
+    CHECK(near(found.x, 4.0F));
+    CHECK(near(found.ahead_x, -1.0F));
+    CHECK(near(found.size, 3.0F));
+    CHECK(near(drawn(held).x, 4.0F - 3.0F));
+    // A copy keeps it; one made new tweens all.
+    const std::uint64_t copy = fbe_entity_copy(eyes, 0, 0);
+    CHECK(fbe_entity_tweened(copy) == FBE_TWEENED_NONE);
+    fbe_entity_free(copy);
+    std::array<std::uint64_t, 16> gone{};
+    while (fbe_entity_freed(gone.data(), gone.size()) != 0) {}
+    // Whichever of these is made where the copy was.
+    for (int i = 0; i < 4; ++i) {
+        CHECK(fbe_entity_tweened(fbe_entity_create(world.handle, 0, FBE_ENTITY_PIVOT)) ==
+              FBE_TWEENED_ALL);
+    }
+    CHECK_FALSE(fbe_entity_set_tweened(eyes, 4));
+    CHECK(std::string_view(fbe_error()) == "4 isn't a Tweened");
+    CHECK_FALSE(fbe_entity_set_tweened(eyes, -1));
+    CHECK(fbe_entity_tweened(0) == -1);
+}
+
+TEST_CASE("a camera on its place alone draws what's ahead of its new turn from its tweened place",
+          "[render]") {
+    const test_world_t world;
+    const std::uint64_t eyes = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);
+    REQUIRE(fbe_entity_set_tweened(eyes, FBE_TWEENED_PLACE));
+    // One cube 20 ahead of where it starts, and one 20 to the left of where it's half way.
+    const std::uint64_t ahead = cube(world.handle, 0.0F, 0.0F, -20.0F);
+    const std::uint64_t left = cube(world.handle, -18.0F, 0.0F, 0.0F);
+    REQUIRE(fbe_world_capture(world.handle));
+    fbe_entity_set_position(eyes, 4.0F, 0.0F, 0.0F, FBE_SPACE_WORLD);
+    const float half = std::sqrt(0.5F);
+    fbe_entity_set_rotation(eyes, 0.0F, half, 0.0F, half, FBE_SPACE_WORLD);
+    const std::vector<fbe_draw_t> found = draws(eyes, 0.5F);
+    REQUIRE(found.size() == 1);
+    CHECK(found[0].entity == left);
+    CHECK(found[0].entity != ahead);
+    // 20 from where it's drawn, half way, not 22 from where it is.
+    CAPTURE(found[0].depth);
+    CHECK(near(found[0].depth, 20.0F));
+}
+
 TEST_CASE("a camera's draw projection holds with its far plane near float's top", "[render]") {
     const test_world_t world;
     const std::uint64_t camera = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);

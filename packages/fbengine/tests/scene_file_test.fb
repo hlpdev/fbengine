@@ -1384,3 +1384,41 @@ Function AMeshsSurfaceMaterialsComeBack() Throws IOError
                wrong)
     End For
 End Function
+
+// What of an entity drawing tweens comes back, and a file that doesn't say reads as all of it.
+@Test
+Function AnEntitysTweenedComesBack() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local rig = Pivot()
+    rig.SetName("rig")
+    Local eyes = Camera(rig)
+    eyes.SetName("eyes")
+    eyes.SetTweened(Tweened.PLACE)
+    Local turned = Pivot(rig)
+    turned.SetName("turned")
+    turned.SetTweened(Tweened.TURN)
+    Local still = Pivot(rig)
+    still.SetName("still")
+    still.SetTweened(Tweened.NONE)
+    Local text = Try Scene.Text([rig])
+    Expect(text.Contains("tweened = \"PLACE\"") && text.Contains("tweened = \"TURN\""), text)
+    Expect(text.Contains("tweened = \"NONE\"") && !text.Contains("\"ALL\""), text)
+    Local again = Fresh()
+    Defer again.Free()
+    Local read = Try Scene.FromText(text)
+    Expect(read[0].Tweened() == Tweened.ALL)
+    Expect(read[0].Find("eyes")?.Tweened() == Tweened.PLACE)
+    Expect(read[0].Find("turned")?.Tweened() == Tweened.TURN)
+    Expect(read[0].Find("still")?.Tweened() == Tweened.NONE)
+    Expect((Try Scene.Text(read)) == text, "written again, it changed")
+    // An old file, which doesn't say, and one that says what isn't one.
+    Local old = "format = 1\n[[entity]]\npath = \"a\"\nkind = \"PIVOT\"\n"
+    Local third = Fresh()
+    Defer third.Free()
+    Expect((Try Scene.FromText(old))[0].Tweened() == Tweened.ALL)
+    For wrong In ["tweened = \"SOME\"\n", "tweened = 1\n"]
+        Expect(ExpectThrows<IOError>(Scene.FromText(old + wrong))?.Kind == IOErrorKind.INVALID_DATA,
+               wrong)
+    End For
+End Function
