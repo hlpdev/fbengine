@@ -1057,11 +1057,11 @@ FBE_API bool fbe_particles_set_shape(uint64_t particles, float width, float heig
 FBE_API bool fbe_particles_set_steps(uint64_t particles, float seconds, bool held);
 // What each step does to its half-width and half-height: `added` to each, then each times
 // `multiplied`, above 0, from what its sizes and shape have it; 0 and 1 at first, for nothing. One
-// shrunk to nothing draws nothing.
+// shrunk to nothing draws nothing, and one grown is 1e9 at most, so it's finite whatever these are.
 FBE_API bool fbe_particles_set_growth(uint64_t particles, float added, float multiplied);
 // What each step takes off its alpha, 0 or more, 0 at first, from what its colors have it. One
 // that reaches none is gone then, before its life's end, and no longer counted alive; held, that's
-// at a whole step.
+// at a whole step, its first at the soonest, so one that starts with none shows through that.
 FBE_API bool fbe_particles_set_fade(uint64_t particles, float a_step);
 // Whether each is rolled the way it's moving in the view, its right along it, with its own roll
 // and spin added to that; not at first, when its roll and spin are all of it.
@@ -1069,7 +1069,8 @@ FBE_API bool fbe_particles_set_roll_along(uint64_t particles, bool along);
 // Bursts of `count`, as many as it holds at most, every `every` seconds from when this is called,
 // the first in the next step, for `lasts` seconds, 0 for as long as it's on, and set off again
 // `again` seconds after they were, 0 for never. 0 of them stops them. `every` is 0.001 or more, as
-// `again` is unless it's 0. Each is born where the emitter was then, in its step.
+// `again` is unless it's 0. Each is born where the emitter was then, in its step. A step longer
+// than its longest life has only the bursts that could be alive at its end.
 FBE_API bool fbe_particles_set_bursts(uint64_t particles, int32_t count, float every, float lasts,
                                       float again);
 // What those set, but the two boxes, and whether its bursts are set off and have more to come.

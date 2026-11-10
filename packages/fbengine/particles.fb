@@ -302,7 +302,7 @@ Public Final Class Particles Extends Entity
 
     /// Sets what each step does to each one's half-width and half-height: `added` to each, then
     /// each times `multiplied`, above 0; 0 and 1 at first, for nothing. One shrunk to nothing draws
-    /// nothing. Others panic.
+    /// nothing, and one grown is 1e9 at most. Others panic.
     @MainThread @PanicsAtCaller
     Public Method SetGrowth(added: Float, multiplied: Float = 1)
         If !fbe_particles_set_growth(Live("SetGrowth"), added, multiplied) Then Failed("SetGrowth")
@@ -317,7 +317,8 @@ Public Final Class Particles Extends Entity
     End Method
 
     /// Sets what each step takes off each one's alpha, 0 or more, 0 at first, from what its colors
-    /// have it. One that reaches none is gone then, before its life's end, and not counted alive.
+    /// have it. One that reaches none is gone then, before its life's end, and not counted alive;
+    /// with held steps that's at a whole step, its first at the soonest.
     /// Below 0 panics.
     @Limits(0)
     @MainThread @PanicsAtCaller

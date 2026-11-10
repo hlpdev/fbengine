@@ -114,13 +114,17 @@ good modern engine on its own. Every structural choice is checked against both.
   particleVertex) works out each one's place, size, color, and roll from its age by a closed
   formula, so nothing is stepped a frame and a million draw. What a game would step a tick at a
   time is in that formula by `SetSteps(seconds, held)`: `SetGrowth(added, multiplied)` adds to a
-  half-size and multiplies it each step, n steps at once as a geometric sum, and `SetFade(aStep)`
+  half-size and multiplies it each step, n steps at once as a geometric sum, worked out from the
+  power's logarithm so a multiple next to 1 loses nothing, and never past 1e9, so it's finite on
+  the CPU and the GPU alike; and `SetFade(aStep)`
   takes that off its alpha, one at none being gone then and no longer counted alive. Smooth, the
   steps are age over the step's length; held, its floor, as a game's ticks have it, and the two
   agree at each whole step. `SetStartBox`, `SetVelocityBox`, `SetSizeRange`, and `SetShape` are
   where it's born, a velocity added on the world's axes, its size's multiple, and a width and
   height of its own; `SetRollAlong` turns each to how it's moving in the view; `SetBursts` sets
-  off so many every so often, for so long, and again. Each takes random numbers only where it's
+  off so many every so often, for so long, and again: a long step walks its bursts twice, first
+  counting those sure to be alive at its end, and passes over one only if those after it fill the
+  emitter, or it's older than the longest life. Each takes random numbers only where it's
   set, so a seed's run without them is what it was. `Read()` gives each live particle's place,
   half-width, half-height, alpha, and age by the same formula on the CPU (particles.cpp's
   particle_state), for a server with no GPU or a game that wants them; it keeps the births only

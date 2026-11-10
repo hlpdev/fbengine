@@ -26,6 +26,11 @@ namespace {
 constexpr std::int32_t most_particles = 1048576;
 /// The most a step counts for: past a life's length it changes nothing but the clock's place.
 constexpr float most_step = 1000000.0F;
+/// The most steps an age counts as, and the biggest a grown half-size is, so both are finite
+/// whatever a step's length and growth are: the scene shader has the same.
+constexpr float most_steps = 1e9F;
+constexpr float most_grown = 1e9F;
+constexpr float most_term = 1e30F;
 
 float next_random(particles_t& found) {
     // xorshift32, so a seed's run is the same on every machine.
@@ -46,22 +51,35 @@ float steps_at(const particles_t& found, float age) {
     if (found.step <= 0.0F) {
         return 0.0F;
     }
-    return found.held ? std::floor(age / found.step) : age / found.step;
+    const float steps = found.held ? std::floor(age / found.step) : age / found.step;
+    return std::fmin(steps, most_steps);
 }
 
-/// A half-size after `steps` steps, each adding to it and then multiplying it: never below 0.
+/// A half-size after `steps` steps, each adding to it and then multiplying it: never below 0, and
+/// never past most_grown. What's added is times the sum of the multiple's powers below `steps`,
+/// which is worked out from the power's logarithm, so a multiple near 1 loses nothing to rounding.
 float grown(const particles_t& found, float size, float steps) {
-    const float times = found.grow_multiplied;
-    if (std::fabs(times - 1.0F) < 1e-6F) {
-        return std::fmax(size + (found.grow_added * steps), 0.0F);
+    if (steps <= 0.0F) {
+        return size;
     }
-    const float power = std::pow(times, steps);
-    const float added = found.grow_added * times * (power - 1.0F) / (times - 1.0F);
-    return std::fmax((size * power) + added, 0.0F);
+    const float times = found.grow_multiplied;
+    float power = 1.0F;
+    float sum = steps;
+    if (times != 1.0F) {
+        const float grows = std::clamp(steps * std::log(times), -100.0F, 41.0F);
+        power = std::exp(grows);
+        const float less = std::fabs(grows) < 0.01F
+                               ? grows * (1.0F + (grows * (0.5F + (grows / 6.0F))))
+                               : power - 1.0F;
+        sum = less / (times - 1.0F);
+    }
+    const float all = std::fmin(times * sum, most_term);
+    const float added = std::clamp(found.grow_added * all, -most_term, most_term);
+    return std::clamp(std::fmin(size * power, most_term) + added, 0.0F, most_grown);
 }
 
 /// When one of this life is gone: its life, or sooner if its alpha's faded to nothing by then,
-/// which, held, is at a whole step.
+/// which, held, is at the first whole step after its birth that has none left.
 float ends_at(const particles_t& found, float life) {
     if (found.step <= 0.0F || found.fade <= 0.0F) {
         return life;
@@ -73,7 +91,7 @@ float ends_at(const particles_t& found, float life) {
     }
     float gone = found.color_start[3] / falls;
     if (found.held) {
-        gone = std::ceil((gone / found.step) - 1e-4F) * found.step;
+        gone = std::fmax(std::ceil((gone / found.step) - 1e-4F), 1.0F) * found.step;
     }
     return std::fmin(life, gone);
 }
@@ -219,40 +237,66 @@ void step_bursts(particles_t& found, float seconds, vec3_t from, vec3_t across, 
     const auto again = static_cast<double>(found.burst_again);
     const auto lasts = static_cast<double>(found.burst_lasts);
     const auto wrap = [&](double since) { return again > 0.0 ? std::fmod(since, again) : since; };
-    // Only what's born a life before the step's end can live to it, and only as many bursts as
-    // it holds: the rest of the step goes by with nothing to show for it.
-    const double apart = again > 0.0 ? std::fmin(every, again) : every;
-    const double fit =
-        (std::floor(static_cast<double>(found.capacity) / found.burst_count) + 1.0) * apart;
+    // The bursts due in `left` seconds from `since`, `next` the next of them: each is given how
+    // long before the end it comes.
+    const auto walk = [&](double left, double& since, std::int64_t& next, const auto& burst) {
+        while (left > 0.0) {
+            const double at = static_cast<double>(next) * every;
+            const bool due = (lasts <= 0.0 || at < lasts) && (again <= 0.0 || at < again);
+            // How long till the next thing: a burst, or their being set off again.
+            const double until = (due ? at : again) - since;
+            if ((!due && again <= 0.0) || until >= left) {
+                since += left;
+                break;
+            }
+            left -= std::fmax(until, 0.0);
+            if (!due) {
+                since = 0.0;
+                next = 0;
+                continue;
+            }
+            since = at;
+            ++next;
+            burst(left);
+        }
+    };
+    // What's born a longest life before the step's end is dead by it: that much of a long step
+    // goes by with nothing to show for it.
     auto left = static_cast<double>(seconds);
-    const double shown = std::fmin(static_cast<double>(found.life_max), fit);
-    if (left > shown) {
-        found.burst_since = wrap(found.burst_since + (left - shown));
+    const auto window = static_cast<double>(found.life_max);
+    if (left > window) {
+        found.burst_since = wrap(found.burst_since + (left - window));
         found.burst_next = static_cast<std::int64_t>(std::ceil(found.burst_since / every));
-        left = shown;
+        left = window;
     }
-    while (left > 0.0) {
-        const double next = static_cast<double>(found.burst_next) * every;
-        const bool due = (lasts <= 0.0 || next < lasts) && (again <= 0.0 || next < again);
-        // How long till the next thing: a burst, or their being set off again.
-        const double until = (due ? next : again) - found.burst_since;
-        if ((!due && again <= 0.0) || until >= left) {
-            found.burst_since += left;
-            break;
+    // Of the rest, a burst is passed over only if those due after it fill the emitter with what's
+    // sure to be alive at the step's end, each of them younger than the shortest life there is,
+    // so it would be lost to them anyway: they're counted first.
+    const std::int32_t each = std::min(found.burst_count, found.capacity);
+    const std::int64_t needed = (static_cast<std::int64_t>(found.capacity) + each - 1) / each;
+    const double sure = 0.999 * static_cast<double>(std::fmin(ends_at(found, found.life_min),
+                                                              ends_at(found, found.life_max)));
+    std::int64_t all = 0;
+    std::int64_t alive = 0;
+    double since = found.burst_since;
+    std::int64_t next = found.burst_next;
+    walk(left, since, next, [&](double ago) {
+        ++all;
+        if (ago < sure) {
+            ++alive;
         }
-        left -= std::fmax(until, 0.0);
-        if (!due) {
-            found.burst_since = 0.0;
-            found.burst_next = 0;
-            continue;
+    });
+    std::int64_t passed = alive >= needed ? all - needed : 0;
+    walk(left, found.burst_since, found.burst_next, [&](double ago) {
+        if (passed > 0) {
+            --passed;
+            return;
         }
-        found.burst_since = next;
-        ++found.burst_next;
-        const float part = seconds > 0.0F ? 1.0F - static_cast<float>(left / seconds) : 1.0F;
-        for (std::int32_t i = 0; i < std::min(found.burst_count, found.capacity); ++i) {
-            spawn(found, from + across * part, turn, static_cast<float>(left));
+        const float part = seconds > 0.0F ? 1.0F - static_cast<float>(ago / seconds) : 1.0F;
+        for (std::int32_t i = 0; i < each; ++i) {
+            spawn(found, from + across * part, turn, static_cast<float>(ago));
         }
-    }
+    });
 }
 
 void step_one(particles_t& found, float seconds) {

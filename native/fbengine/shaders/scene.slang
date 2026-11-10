@@ -125,17 +125,29 @@ struct Emitter
     uint rollAlong;
 };
 
-// A particle's half-size after so many steps, each adding to it and then multiplying it, never below 0:
-// as particles.cpp's grown has it, which reads them without a GPU.
+// A particle's half-size after so many steps, each adding to it and then multiplying it, never below 0
+// and never past 1e9, so it's finite: as particles.cpp's grown has it, which reads them without a GPU.
+// What's added is times the sum of the multiple's powers below `steps`, worked out from the power's
+// logarithm, so a multiple near 1 loses nothing to rounding.
 float grownSize(Emitter emitter, float size, float steps)
 {
-    const float times = emitter.growMultiplied;
-    if (abs(times - 1.0) < 1e-6)
+    if (steps <= 0.0)
     {
-        return max(size + emitter.growAdded * steps, 0.0);
+        return size;
     }
-    const float power = pow(times, steps);
-    return max(size * power + emitter.growAdded * times * (power - 1.0) / (times - 1.0), 0.0);
+    const float times = emitter.growMultiplied;
+    float power = 1.0;
+    float sum = steps;
+    if (times != 1.0)
+    {
+        const float grows = clamp(steps * log(times), -100.0, 41.0);
+        power = exp(grows);
+        const float less = abs(grows) < 0.01 ? grows * (1.0 + grows * (0.5 + grows / 6.0)) : power - 1.0;
+        sum = less / (times - 1.0);
+    }
+    const float all = min(times * sum, 1e30);
+    const float added = clamp(emitter.growAdded * all, -1e30, 1e30);
+    return clamp(min(size * power, 1e30) + added, 0.0, 1e9);
 }
 
 // An instance: its matrix's three rows, and its color.
@@ -757,6 +769,7 @@ Corner particleVertex(uint index : SV_VulkanVertexID, uint instance : SV_VulkanI
     if (emitter.step > 0.0)
     {
         steps = emitter.held != 0 ? floor(age / emitter.step) : age / emitter.step;
+        steps = min(steps, 1e9);
     }
     const float size = lerp(emitter.sizeStart, emitter.sizeEnd, part) * particle.scale;
     const float2 halves = float2(grownSize(emitter, size * emitter.shape[0], steps),

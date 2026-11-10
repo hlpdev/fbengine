@@ -2337,6 +2337,48 @@ TEST_CASE("a particle's drawn as it's read as it grows and fades by steps, smoot
     CHECK(fbe_gpu_validation_errors() == 0);
 }
 
+TEST_CASE("a particle grown past all bounds is drawn as it's read, finite, and next to 1 too",
+          "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t emitter = read_emitter(scene, 0.2F);
+    // 300 steps of a hundredth added, then times a float just past 1.
+    require(fbe_particles_set_steps(emitter, 1.0F / 128.0F, false));
+    require(fbe_particles_set_growth(emitter, 0.01F, 1.000002F));
+    require(fbe_particles_burst(emitter, 1));
+    require(fbe_world_step_particles(scene.world, 300.0F / 128.0F));
+    std::vector<fbe_particle_t> all = particles_read(emitter);
+    REQUIRE(all.size() == 1);
+    double width = 0.2;
+    for (int step = 0; step < 300; ++step) {
+        width = (width + static_cast<double>(0.01F)) * static_cast<double>(1.000002F);
+    }
+    CHECK(std::fabs(static_cast<double>(all[0].half_width) - width) < 0.001);
+    drawn_as_read(scene, scene.drawn(), all);
+    // Half a step of the float next past 1, smooth: half of what a step adds, where a power less 1
+    // would have none of it or all.
+    require(fbe_particles_set_capacity(emitter, 16));
+    require(fbe_particles_set_steps(emitter, 1.0F, false));
+    require(fbe_particles_set_growth(emitter, 2.0F, std::nextafter(1.0F, 2.0F)));
+    require(fbe_particles_burst(emitter, 1));
+    require(fbe_world_step_particles(scene.world, 0.5F));
+    all = particles_read(emitter);
+    REQUIRE(all.size() == 1);
+    CHECK(std::fabs(all[0].half_width - 1.2F) < 0.001F);
+    drawn_as_read(scene, scene.drawn(), all);
+    // Doubled 300 times, it's as big as a size gets, and drawn, over half the frame at the least,
+    // as a rasterizer has what's that big; of no size, nothing.
+    require(fbe_particles_set_steps(emitter, 1.0F / 128.0F, false));
+    require(fbe_particles_set_growth(emitter, 0.0F, 2.0F));
+    all = particles_read(emitter);
+    CHECK(all[0].half_width == 1e9F);
+    CHECK(lit_pixels(scene.drawn()) >= frame_size * frame_size / 2);
+    require(fbe_particles_set_sizes(emitter, 0.0F, 0.0F));
+    CHECK(particles_read(emitter)[0].half_width == 0.0F);
+    CHECK(lit_pixels(scene.drawn()) == 0);
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
 TEST_CASE("a particle faded to nothing is gone, though what it's drawn in leaves its alpha out",
           "[gpu][scene]") {
     const scene_t scene;

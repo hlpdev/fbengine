@@ -319,3 +319,9 @@ docs, the website's included.
 coordinator reviews it (one review per step, about three reviewers and a skeptic each, as M6's),
 the lane fixes every confirmed finding with a test, and the coordinator lands it after verify
 passes on the branch rebased onto master, then CI. Nothing a review finds is left for later.
+
+## Deferred
+
+| What | Why it waits | Since |
+| --- | --- | --- |
+| A PARTICLES kind in scene files: an emitter and its settings, saved and loaded | Scene files have PIVOT, MESH, LIGHT, CAMERA, and SPRITE; an emitter is made in code. Not in 1.1.0 | 2026-11-10 |

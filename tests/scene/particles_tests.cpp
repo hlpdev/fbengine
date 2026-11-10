@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <numbers>
 #include <string_view>
 #include <vector>
@@ -595,4 +596,128 @@ TEST_CASE("a copy of an emitter that's bursting bursts from its own start", "[sc
     REQUIRE(fbe_world_step_particles(world.handle, 1.0F));
     CHECK(read(copy).size() == first);
     CHECK(read(emitter).size() == all);
+}
+
+TEST_CASE("a long step loses no burst that nothing after it takes the place of",
+          "[scene][particles]") {
+    const test_world_t world;
+    // One burst, as they last half a second of one every second: five seconds on, it's there.
+    const std::uint64_t once = still_emitter(world.handle);
+    REQUIRE(fbe_particles_set_capacity(once, 100));
+    REQUIRE(fbe_particles_read(once, nullptr, 0) == 0);
+    REQUIRE(fbe_particles_set_bursts(once, 100, 1.0F, 0.5F, 0.0F));
+    // The only one of the shortest bursts there are, in a step far longer than they last.
+    const std::uint64_t brief = still_emitter(world.handle);
+    REQUIRE(fbe_particles_set_capacity(brief, 16));
+    REQUIRE(fbe_particles_read(brief, nullptr, 0) == 0);
+    REQUIRE(fbe_particles_set_bursts(brief, 16, 0.001F, 0.001F, 0.0F));
+    REQUIRE(fbe_world_step_particles(world.handle, 5.0F));
+    const std::vector<fbe_particle_t> first = read(once);
+    REQUIRE(first.size() == 100);
+    CHECK(first[0].age == Approx(5.0F));
+    CHECK(first[99].age == Approx(5.0F));
+    const std::vector<fbe_particle_t> second = read(brief);
+    REQUIRE(second.size() == 16);
+    CHECK(second[0].age == Approx(5.0F));
+    REQUIRE(fbe_particles_set_bursts(once, 0, 1.0F, 0.0F, 0.0F));
+    REQUIRE(fbe_particles_set_bursts(brief, 0, 1.0F, 0.0F, 0.0F));
+    // Set off again every 100 seconds, one burst each time: 150 on, the second's 50 old.
+    const std::uint64_t again = still_emitter(world.handle);
+    REQUIRE(fbe_particles_set_capacity(again, 4));
+    REQUIRE(fbe_particles_read(again, nullptr, 0) == 0);
+    REQUIRE(fbe_particles_set_bursts(again, 4, 10.0F, 0.5F, 100.0F));
+    REQUIRE(fbe_world_step_particles(world.handle, 150.0F));
+    const std::vector<fbe_particle_t> third = read(again);
+    REQUIRE(third.size() == 4);
+    CHECK(third[0].age == Approx(50.0F));
+    // Lives of a tenth of a second to 100, and a burst of all it holds every 10: of the last, 5
+    // seconds old, some are dead already, and where they'd be are those of the one before, which
+    // no burst was sure to take the place of.
+    const std::uint64_t mixed = still_emitter(world.handle);
+    REQUIRE(fbe_particles_set_capacity(mixed, 64));
+    REQUIRE(fbe_particles_set_life(mixed, 0.1F, 100.0F));
+    REQUIRE(fbe_particles_set_seed(mixed, 5));
+    REQUIRE(fbe_particles_read(mixed, nullptr, 0) == 0);
+    REQUIRE(fbe_particles_set_bursts(mixed, 64, 10.0F, 0.0F, 0.0F));
+    REQUIRE(fbe_world_step_particles(world.handle, 55.0F));
+    const std::vector<fbe_particle_t> fourth = read(mixed);
+    CHECK(fourth.size() == 64);
+    std::size_t young = 0;
+    std::size_t older = 0;
+    for (const fbe_particle_t& one : fourth) {
+        young += one.age < 5.5F ? 1 : 0;
+        older += one.age > 14.5F ? 1 : 0;
+    }
+    CHECK(young > 48);
+    CHECK(young < 64);
+    CHECK(older == 64 - young);
+}
+
+TEST_CASE("a particle that starts with no alpha and fades by held steps shows through its first",
+          "[scene][particles]") {
+    const test_world_t world;
+    const std::uint64_t emitter = still_emitter(world.handle);
+    const fbe_color_t clear{ .r = 1.0F, .g = 1.0F, .b = 1.0F, .a = 0.0F };
+    const fbe_color_t white{ .r = 1.0F, .g = 1.0F, .b = 1.0F, .a = 1.0F };
+    REQUIRE(fbe_particles_set_colors(emitter, &clear, &white));
+    REQUIRE(fbe_particles_set_life(emitter, 1.0F, 1.0F));
+    REQUIRE(fbe_particles_set_steps(emitter, 0.5F, true));
+    REQUIRE(fbe_particles_set_fade(emitter, 0.6F));
+    REQUIRE(fbe_particles_burst(emitter, 1));
+    CHECK(fbe_particles_alive(emitter) == 1);
+    REQUIRE(fbe_world_step_particles(world.handle, 0.25F));
+    const std::vector<fbe_particle_t> all = read(emitter);
+    REQUIRE(all.size() == 1);
+    CHECK(all[0].alpha == Approx(0.25F));
+    // Its first whole step takes more than it has: gone then.
+    REQUIRE(fbe_world_step_particles(world.handle, 0.3F));
+    CHECK(read(emitter).empty());
+    CHECK(fbe_particles_alive(emitter) == 0);
+}
+
+TEST_CASE("a grown size is finite whatever its growth, and right for a multiple next to 1",
+          "[scene][particles]") {
+    const test_world_t world;
+    const std::uint64_t emitter = still_emitter(world.handle);
+    REQUIRE(fbe_particles_set_steps(emitter, 0.01F, false));
+    REQUIRE(fbe_particles_set_growth(emitter, 0.0F, 2.0F));
+    REQUIRE(fbe_particles_burst(emitter, 1));
+    REQUIRE(fbe_world_step_particles(world.handle, 2.0F));
+    std::vector<fbe_particle_t> all = read(emitter);
+    REQUIRE(all.size() == 1);
+    CHECK(all[0].half_width == 1e9F);
+    fbe_aabb_t bounds{};
+    REQUIRE(fbe_entity_bounds(emitter, &bounds));
+    CHECK((std::isfinite(bounds.min.x) && std::isfinite(bounds.max.y)));
+    // Of no size, times as much as there is: still none.
+    REQUIRE(fbe_particles_set_sizes(emitter, 0.0F, 0.0F));
+    all = read(emitter);
+    CHECK(all[0].half_width == 0.0F);
+    // A step too short to count, and all there is added a step.
+    REQUIRE(fbe_particles_set_steps(emitter, std::numeric_limits<float>::denorm_min(), true));
+    REQUIRE(fbe_particles_set_growth(emitter, 3e38F, 3e38F));
+    all = read(emitter);
+    CHECK(all[0].half_width == 1e9F);
+    CHECK(all[0].alpha == 1.0F);
+    REQUIRE(fbe_particles_set_growth(emitter, -3e38F, 3e38F));
+    CHECK(read(emitter)[0].half_width == 0.0F);
+    REQUIRE(fbe_entity_bounds(emitter, &bounds));
+    CHECK((std::isfinite(bounds.min.x) && std::isfinite(bounds.max.y)));
+    // 300 steps of a hundredth added, then times a float past 1: as stepping it by hand has it.
+    for (const float times : { 1.000002F, 0.999999F, 1.0001F, 1.01F }) {
+        CAPTURE(times);
+        REQUIRE(fbe_particles_set_sizes(emitter, 0.5F, 0.5F));
+        REQUIRE(fbe_particles_set_steps(emitter, 0.125F, true));
+        REQUIRE(fbe_particles_set_growth(emitter, 0.01F, times));
+        REQUIRE(fbe_particles_set_capacity(emitter, 16));
+        REQUIRE(fbe_particles_burst(emitter, 1));
+        REQUIRE(fbe_world_step_particles(world.handle, 37.5F));
+        double width = 0.5;
+        for (int step = 0; step < 300; ++step) {
+            width = (width + static_cast<double>(0.01F)) * static_cast<double>(times);
+        }
+        all = read(emitter);
+        REQUIRE(all.size() == 1);
+        CHECK(all[0].half_width == Approx(width).epsilon(0.00001));
+    }
 }
