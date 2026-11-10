@@ -297,6 +297,34 @@ TEST_CASE("a decal goes on what's opaque, so never on another", "[scene][decal]"
     fbe_material_release(glass);
 }
 
+TEST_CASE("a decal goes on a surface by the material its mesh has for it", "[scene][decal]") {
+    const test_world_t world;
+    const std::uint64_t mesh = cube_mesh(world.handle);
+    const std::uint64_t glass = fbe_material_create();
+    REQUIRE(fbe_material_set_blend(glass, FBE_BLEND_ALPHA));
+    const std::uint64_t solid = fbe_material_create();
+    const fbe_mat4_t box = box_at(0.0F, 0.0F, 1.0F, 0.5F, 0.5F, 0.5F);
+    const auto landed = [&] {
+        const std::uint64_t decal = fbe_geometry_decal(world.handle, &box, 0.01F, decal_limit);
+        const std::int32_t count = fbe_surface_vertex_count(decal, 0);
+        fbe_geometry_release(decal);
+        return count;
+    };
+    REQUIRE(landed() > 0);
+    // Glass for that surface alone: it skips it.
+    REQUIRE(fbe_mesh_set_surface_material(mesh, 0, glass));
+    CHECK(landed() == 0);
+    REQUIRE(fbe_mesh_set_surface_material(mesh, 0, 0));
+    CHECK(landed() > 0);
+    // Glass for all, and solid for that surface: it lands.
+    REQUIRE(fbe_mesh_set_material(mesh, glass));
+    CHECK(landed() == 0);
+    REQUIRE(fbe_mesh_set_surface_material(mesh, 0, solid));
+    CHECK(landed() > 0);
+    fbe_material_release(glass);
+    fbe_material_release(solid);
+}
+
 TEST_CASE("a decal goes on a terrain and a ground plane", "[scene][decal]") {
     const test_world_t world;
     // Facing up: its +Z is the world's +Y.

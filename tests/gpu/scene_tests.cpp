@@ -1943,6 +1943,33 @@ TEST_CASE("only what casts does, and only what's lit per pixel has shadows", "[g
     fbe_material_release(caster_paint);
 }
 
+TEST_CASE("a surface casts by the material its mesh has for it, not its own", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t paint = fbe_material_create();
+    wall(scene.world, -10.0F, 30.0F, paint);
+    sun_from_right(scene.world);
+    const std::uint64_t solid = fbe_material_create();
+    const std::uint64_t block = cube(scene.world, 5.0F, 0.0F, -5.0F, 0);
+    require(fbe_surface_set_material(fbe_mesh_geometry(block), 0, solid));
+    const std::uint8_t lit = srgb(sun_lit());
+    CHECK(near(middle(scene.drawn()), { 0, 0, 0 }));
+    // Its own for the surface blends, so it casts nothing, though the surface's own is solid.
+    const std::uint64_t glass = fbe_material_create();
+    require(fbe_material_set_blend(glass, FBE_BLEND_ALPHA));
+    require(fbe_mesh_set_surface_material(block, 0, glass));
+    CHECK(near(middle(scene.drawn()), { lit, lit, lit }));
+    require(fbe_mesh_set_surface_material(block, 0, 0));
+    CHECK(near(middle(scene.drawn()), { 0, 0, 0 }));
+    // And the other way: the mesh's for all blends, its own for the surface is solid, and casts.
+    require(fbe_mesh_set_material(block, glass));
+    CHECK(near(middle(scene.drawn()), { lit, lit, lit }));
+    require(fbe_mesh_set_surface_material(block, 0, solid));
+    CHECK(near(middle(scene.drawn()), { 0, 0, 0 }));
+    fbe_material_release(glass);
+    fbe_material_release(solid);
+    fbe_material_release(paint);
+}
+
 TEST_CASE("a terrain casts, and a skinned mesh where its joints have it", "[gpu][scene]") {
     const scene_t scene;
     const std::uint64_t paint = fbe_material_create();
@@ -7697,6 +7724,30 @@ TEST_CASE("what an occluder doesn't vouch for doesn't occlude", "[gpu][scene]") 
         require(fbe_entity_set_occluder(small, true));
         CHECK_FALSE(draws_entity(scene.camera, behind));
     }
+    fbe_material_release(paint);
+}
+
+TEST_CASE("an occluder's surface occludes by the material its mesh has for it", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t paint = unlit(1.0F, 0.0F, 0.0F);
+    const std::uint64_t behind = cube(scene.world, 0.0F, 0.0F, -20.0F, paint);
+    const std::uint64_t blocker = wall(scene.world, -5.0F, 1.0F, 0);
+    require(fbe_surface_set_material(fbe_mesh_geometry(blocker), 0, paint));
+    require(fbe_entity_set_occluder(blocker, true));
+    CHECK_FALSE(draws_entity(scene.camera, behind));
+    // A wireframe's mostly holes, and it's the mesh's own for that surface.
+    const std::uint64_t lines = unlit(1.0F, 0.0F, 0.0F);
+    require(fbe_material_set_wireframe(lines, true));
+    require(fbe_mesh_set_surface_material(blocker, 0, lines));
+    CHECK(draws_entity(scene.camera, behind));
+    require(fbe_mesh_set_surface_material(blocker, 0, 0));
+    CHECK_FALSE(draws_entity(scene.camera, behind));
+    // The other way: the mesh's for all is the wireframe, its own for the surface solid.
+    require(fbe_mesh_set_material(blocker, lines));
+    CHECK(draws_entity(scene.camera, behind));
+    require(fbe_mesh_set_surface_material(blocker, 0, paint));
+    CHECK_FALSE(draws_entity(scene.camera, behind));
+    fbe_material_release(lines);
     fbe_material_release(paint);
 }
 
