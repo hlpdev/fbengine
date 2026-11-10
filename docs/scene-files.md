@@ -68,7 +68,8 @@ material = "room/crate.material"
   its first is. A texture of neither can't be saved, and `Scene.Save` says which entity has it.
 - A **light**'s shadows are `shadows`, `shadow_size`, `shadow_bias`, `cascades`, and `shadow_distance`; a **camera**'s
   picture `hdr`, `exposure`, `tonemap`, `gamma`, `bloom`, `grade`, `occlusion`, `ambient_occlusion`,
-  `ambient_occlusion_radius`, `fxaa`, and `temporal_aa`; and any entity's `occluder` and `casts_shadows`. Each is
+  `ambient_occlusion_radius`, `fxaa`, and `temporal_aa`; and any entity's `occluder`, `casts_shadows`, and `tweened`
+  (ALL, PLACE, TURN, or NONE: what of its transform drawing tweens; a file without it reads as ALL). Each is
   written when it isn't what a new one has.
 - Numbers are Float32's shortest text, so read and written again they're the same to the byte. They're finite.
 

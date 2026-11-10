@@ -73,7 +73,7 @@ Extend Entity
     /// drawn at its place part way with the turn it has now: a player's eyes, which a fixed step
     /// walks and the mouse turns every frame, so the turn's seen the frame it's made. On NONE it's
     /// drawn as it is. What's under it takes what it's drawn with, and tweens its own as its own
-    /// setting says; a Copy keeps it, and a scene file doesn't.
+    /// setting says; a Copy keeps it, and so does a scene file.
     @MainThread @PanicsAtCaller
     Public Method SetTweened(tweened: Tweened)
         If !fbe_entity_set_tweened(Live("SetTweened"), tweened As Int32) Then Failed("SetTweened")
