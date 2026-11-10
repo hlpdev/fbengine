@@ -418,7 +418,8 @@ TEST_CASE("only VERTEX draws have lights of their own", "[render]") {
     fbe_material_release(retro);
 }
 
-TEST_CASE("a VERTEX draw's lights are the first eight in the tree's order", "[render]") {
+TEST_CASE("a VERTEX draw's eight lights are in the tree's order, one far off the ninth",
+          "[render]") {
     const test_world_t world;
     const std::uint64_t camera = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);
     const std::uint64_t retro = fbe_material_create();
@@ -427,7 +428,8 @@ TEST_CASE("a VERTEX draw's lights are the first eight in the tree's order", "[re
     fbe_entity_set_position(mesh, 0.0F, 0.0F, -6.0F, FBE_SPACE_WORLD);
     // Made first, a pivot, whose child is made last, so the child's first in the tree's order and
     // last as they were made; a directional one among the roots, not ahead of them as it is in the
-    // lights; one far off, which takes its place all the same; and a ninth, which isn't one.
+    // lights; one far off, which takes its place all the same; and a ninth, further still for
+    // its range, which isn't one.
     const std::uint64_t pivot = fbe_entity_create(world.handle, 0, FBE_ENTITY_PIVOT);
     std::vector<std::uint64_t> roots;
     roots.reserve(7);
@@ -456,5 +458,152 @@ TEST_CASE("a VERTEX draw's lights are the first eight in the tree's order", "[re
     // What no draw wants and no cluster has is left out.
     CHECK(std::ranges::none_of(got.found.lights,
                                [&](const fbe_draw_light_t& lit) { return lit.light == ninth; }));
+    fbe_material_release(retro);
+}
+
+TEST_CASE("of more than eight lights a VERTEX draw has the eight that light it most", "[render]") {
+    const test_world_t world;
+    const std::uint64_t camera = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);
+    const std::uint64_t retro = fbe_material_create();
+    fbe_material_set_shading(retro, FBE_SHADING_VERTEX);
+    const std::uint64_t mesh = mesh_in(world.handle, retro);
+    fbe_entity_set_position(mesh, 0.0F, 0.0F, -6.0F, FBE_SPACE_WORLD);
+    // Four far off, first in the tree's order; then seven by it; then a sun, last of all.
+    std::vector<std::uint64_t> far_off;
+    far_off.reserve(4);
+    for (int i = 0; i < 4; ++i) {
+        far_off.push_back(light(world.handle, FBE_LIGHT_POINT, 500.0F + static_cast<float>(i), 0.0F,
+                                -6.0F, 10.0F));
+    }
+    std::vector<std::uint64_t> expected;
+    expected.reserve(8);
+    for (int i = 0; i < 7; ++i) {
+        expected.push_back(light(world.handle, FBE_LIGHT_POINT, 0.25F * static_cast<float>(i), 2.0F,
+                                 -6.0F, 10.0F));
+    }
+    expected.push_back(light(world.handle, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F));
+    per_vertex_t got = per_vertex(camera);
+    REQUIRE(got.draws.size() == 1);
+    // Those, in the tree's order, wherever in it they are.
+    CHECK(got.of(0) == expected);
+    // And the same ones again while nothing moves.
+    for (int again = 0; again < 3; ++again) {
+        CHECK(per_vertex(camera).of(0) == expected);
+    }
+    // One of the far ones brought nearer than the nearest takes the place of the one furthest.
+    fbe_entity_set_position(far_off[1], 0.0F, 1.5F, -6.0F, FBE_SPACE_WORLD);
+    got = per_vertex(camera);
+    std::vector<std::uint64_t> swapped{ far_off[1] };
+    swapped.insert(swapped.end(), expected.begin(), expected.end());
+    // The seventh by it was furthest: 1.5 to the side of the cube's edge.
+    swapped.erase(std::ranges::find(swapped, expected[6]));
+    CHECK(got.of(0) == swapped);
+    // A light's range counts as its distance does: one twice as far that reaches four times as
+    // far lights it more.
+    fbe_entity_set_position(far_off[1], 500.0F, 0.0F, -6.0F, FBE_SPACE_WORLD);
+    fbe_entity_set_position(far_off[2], 0.0F, 6.0F, -6.0F, FBE_SPACE_WORLD);
+    fbe_light_set_range(far_off[2], 1000.0F);
+    got = per_vertex(camera);
+    CHECK(std::ranges::contains(got.of(0), far_off[2]));
+    CHECK(got.draws[0].light_count == FBE_DRAW_LIGHTS);
+    fbe_material_release(retro);
+}
+
+TEST_CASE("each VERTEX draw has its own eight, and two lit alike share them", "[render]") {
+    const test_world_t world;
+    const std::uint64_t camera = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);
+    const std::uint64_t retro = fbe_material_create();
+    fbe_material_set_shading(retro, FBE_SHADING_VERTEX);
+    const std::uint64_t left = mesh_in(world.handle, retro);
+    fbe_entity_set_position(left, -20.0F, 0.0F, -40.0F, FBE_SPACE_WORLD);
+    const std::uint64_t right = mesh_in(world.handle, retro);
+    fbe_entity_set_position(right, 20.0F, 0.0F, -40.0F, FBE_SPACE_WORLD);
+    const std::uint64_t by_the_right = mesh_in(world.handle, retro);
+    fbe_entity_set_position(by_the_right, 20.0F, 0.0F, -43.0F, FBE_SPACE_WORLD);
+    // Eight by each, made turn about, so neither's are together in the tree's order.
+    std::vector<std::uint64_t> by_left;
+    std::vector<std::uint64_t> by_right;
+    for (int i = 0; i < 8; ++i) {
+        const float along = 0.25F * static_cast<float>(i);
+        by_left.push_back(light(world.handle, FBE_LIGHT_POINT, -20.0F + along, 3.0F, -40.0F, 8.0F));
+        by_right.push_back(light(world.handle, FBE_LIGHT_POINT, 20.0F + along, 3.0F, -41.5F, 8.0F));
+    }
+    const per_vertex_t got = per_vertex(camera);
+    REQUIRE(got.draws.size() == 3);
+    std::uint32_t first_of_right = 0;
+    std::uint32_t first_of_by = 1;
+    for (std::size_t draw = 0; draw < got.draws.size(); ++draw) {
+        if (got.draws[draw].entity == left) {
+            CHECK(got.of(draw) == by_left);
+        } else {
+            CHECK(got.of(draw) == by_right);
+            (got.draws[draw].entity == right ? first_of_right : first_of_by) =
+                got.draws[draw].light_first;
+        }
+    }
+    CHECK(first_of_right == first_of_by);
+    CHECK(got.draw_lights.size() == 16);
+    // All sixteen are in the lights for them.
+    CHECK(got.found.lights.size() == 16);
+    fbe_material_release(retro);
+}
+
+TEST_CASE("lights that light a VERTEX draw alike are taken in the order they were made, each time",
+          "[render]") {
+    const test_world_t world;
+    const std::uint64_t camera = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);
+    const std::uint64_t retro = fbe_material_create();
+    fbe_material_set_shading(retro, FBE_SHADING_VERTEX);
+    const std::uint64_t mesh = mesh_in(world.handle, retro);
+    fbe_entity_set_position(mesh, 0.0F, 0.0F, -6.0F, FBE_SPACE_WORLD);
+    // Twelve at one place, so none lights it more than another; the last made is first in the
+    // tree's order, under a pivot made before them all.
+    const std::uint64_t pivot = fbe_entity_create(world.handle, 0, FBE_ENTITY_PIVOT);
+    std::vector<std::uint64_t> made;
+    made.reserve(11);
+    for (int i = 0; i < 11; ++i) {
+        made.push_back(light(world.handle, FBE_LIGHT_POINT, 0.0F, 3.0F, -6.0F, 8.0F));
+    }
+    const std::uint64_t child = fbe_entity_create(world.handle, pivot, FBE_ENTITY_LIGHT);
+    fbe_light_set_type(child, FBE_LIGHT_POINT);
+    fbe_light_set_range(child, 8.0F);
+    fbe_entity_set_position(child, 0.0F, 3.0F, -6.0F, FBE_SPACE_WORLD);
+    const std::vector<std::uint64_t> expected(made.begin(), made.begin() + 8);
+    for (int again = 0; again < 4; ++again) {
+        const per_vertex_t got = per_vertex(camera);
+        REQUIRE(got.draws.size() == 1);
+        CHECK(got.of(0) == expected);
+    }
+    // Another made, or one of the others freed, changes none of the eight.
+    light(world.handle, FBE_LIGHT_POINT, 0.0F, 3.0F, -6.0F, 8.0F);
+    fbe_entity_free(made[10]);
+    CHECK(per_vertex(camera).of(0) == expected);
+    fbe_material_release(retro);
+}
+
+TEST_CASE("a VERTEX draw's eight are by its bounds, so a light by a long mesh's end is one",
+          "[render]") {
+    const test_world_t world;
+    const std::uint64_t camera = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);
+    const std::uint64_t retro = fbe_material_create();
+    fbe_material_set_shading(retro, FBE_SHADING_VERTEX);
+    // A corridor's floor, 40 long, from 20 to the left to 20 to the right.
+    const std::uint64_t floor = mesh_in(world.handle, retro);
+    fbe_entity_set_position(floor, 0.0F, -2.0F, -30.0F, FBE_SPACE_WORLD);
+    fbe_entity_set_scale(floor, 20.0F, 1.0F, 1.0F, FBE_SPACE_LOCAL);
+    // Eight 5 above its middle, and one 1 above its right end: nearer the floor than any of
+    // them, and further from its middle than all.
+    std::vector<std::uint64_t> above;
+    above.reserve(8);
+    for (int i = 0; i < 8; ++i) {
+        above.push_back(light(world.handle, FBE_LIGHT_POINT, 0.0F, 4.0F, -30.0F, 10.0F));
+    }
+    const std::uint64_t at_the_end =
+        light(world.handle, FBE_LIGHT_POINT, 19.0F, 0.0F, -30.0F, 10.0F);
+    const per_vertex_t got = per_vertex(camera);
+    REQUIRE(got.draws.size() == 1);
+    std::vector<std::uint64_t> expected(above.begin(), above.begin() + 7);
+    expected.push_back(at_the_end);
+    CHECK(got.of(0) == expected);
     fbe_material_release(retro);
 }

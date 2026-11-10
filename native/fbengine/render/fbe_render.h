@@ -121,9 +121,13 @@ FBE_API bool fbe_render_lights(uint64_t camera, float target_width, float target
                                int32_t index_capacity, int32_t* index_count);
 
 // The lights of a camera's FBE_SHADING_VERTEX draws, by their indices in fbe_render_lights' lights:
-// the first FBE_DRAW_LIGHTS of its World's showing lights, in the tree's order, directional ones
-// among them, whatever they reach, which every such draw takes, from its `light_first`. Writes up
-// to `capacity` and gives how many there are, -1 for a freed camera, or a tween outside 0 to 1.
+// each such draw's own, `light_count` of them from its `light_first`, in the tree's order, whatever
+// they reach. With FBE_DRAW_LIGHTS or fewer of its World's lights showing, every draw has them
+// all. With more, each has the FBE_DRAW_LIGHTS that light it most: directional ones first, then
+// those nearest its entity's bounds for how far they reach, their distance from the box over
+// their range, and of those alike, the first made, so the choice is the same from frame to frame
+// while nothing moves. Draws lit by the same ones share them. Writes up to `capacity` and gives
+// how many there are, -1 for a freed camera, or a tween outside 0 to 1.
 FBE_API int32_t fbe_render_draw_lights(uint64_t camera, float target_width, float target_height,
                                        float tween, uint32_t* indices, int32_t capacity);
 

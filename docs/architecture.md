@@ -222,7 +222,10 @@ good modern engine on its own. Every structural choice is checked against both.
   and fog on what's stored, with only the final color converted to linear for the target; PBR is
   linear throughout. VERTEX's light is `range / distance` with no end, past 1 within its range, as
   DirectX 7's attenuation of `1 / range` alone is, and only the lights' sum is clamped, per vertex
-  before texturing, from the first 8 shown lights in the tree's order; PBR keeps
+  before texturing, from 8 shown lights at most: all of 8 or fewer, in the tree's order, and of
+  more, each draw's own 8 that light it most, directional ones first, then by a light's distance
+  from the draw's bounds over its range, which is what `range / distance` falls off by, and of
+  those alike the first made, so the choice holds from frame to frame (lights_for); PBR keeps
   KHR_lights_punctual's window, which clusters need. Range means each in its model. A Texture has
   an alpha flag, which AUTO blending honors. A Texture's mipmaps are made from its first level by
   the GPU, or a game writes a level of its own (`WriteLevel`), which leaves the others as they are,

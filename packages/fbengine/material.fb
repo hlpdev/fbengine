@@ -20,8 +20,11 @@ Public Enum Shading
     /// Not at all: its color is what's drawn, as full-bright signs and screens want. Its textures,
     /// doublings, adds, and fog work on what's stored, as VERTEX's do: 50 doubled is 100.
     UNLIT = 1
-    /// Per vertex, as fixed-function hardware lit, for an old look: by the first eight shown Lights
-    /// in the tree's order, whatever they reach, on what's stored, as UNLIT's are.
+    /// Per vertex, as fixed-function hardware lit, for an old look, on what's stored, as UNLIT's
+    /// are: by eight shown Lights at most, whatever they reach. With more than eight showing, each
+    /// mesh has the eight that light it most, directional ones first, then those nearest its bounds
+    /// for their range, so far lights needn't be hidden by hand; nothing changes while nothing
+    /// moves.
     VERTEX = 2
 End Enum
 

@@ -27,6 +27,8 @@ using scene::vec3_t;
 /// go by, and its index in the lists' lights, once it has one.
 struct lit_t {
     fbe_draw_light_t draw{};
+    /// Where it is in the world.
+    vec3_t place;
     std::uint64_t made = 0;
     std::uint32_t index = scene::none;
     bool wanted = false;
@@ -162,6 +164,7 @@ std::vector<lit_t> lights_lit(std::uint32_t world, const scene::view_t& view,
         const float green = light.color[1] * light.intensity;
         const float blue = light.color[2] * light.intensity;
         lit_t one;
+        one.place = place;
         one.made = s.entities.made[entity];
         one.draw = {
             .light = s.entities.slots.handle(entity),
@@ -177,6 +180,68 @@ std::vector<lit_t> lights_lit(std::uint32_t world, const scene::view_t& view,
         lit.push_back(one);
     }
     return lit;
+}
+
+/// The lights a draw lit per vertex takes, by their places in the lit, in the tree's order.
+struct chosen_t {
+    std::array<std::uint32_t, FBE_DRAW_LIGHTS> lights{};
+    std::uint32_t count = 0;
+
+    bool operator==(const chosen_t&) const = default;
+};
+
+/// The lights that light `item` most, of `lit`, eight at most: every one of eight or fewer; of
+/// more, directional ones first, then those nearest its entity's bounds for how far they reach,
+/// their distance from the box over their range, least first. What lights it alike is taken in
+/// the order it was made, so the eight are the same from frame to frame while nothing moves, and
+/// a light made or freed elsewhere changes none of them.
+chosen_t lights_for(const item_t& item, const std::vector<lit_t>& lit) {
+    chosen_t picked;
+    if (lit.size() <= FBE_DRAW_LIGHTS) {
+        picked.count = static_cast<std::uint32_t>(lit.size());
+        for (std::uint32_t at = 0; at < picked.count; ++at) {
+            picked.lights[at] = at;
+        }
+        return picked;
+    }
+    // Its bounds in the world, or where it is, as a box of no size.
+    fbe_aabb_t box{};
+    if (!fbe_entity_bounds(item.draw.entity, &box)) {
+        const float* at = &item.draw.matrix[12];
+        box = {
+            .min = { .x = at[0], .y = at[1], .z = at[2] },
+            .max = { .x = at[0], .y = at[1], .z = at[2] },
+        };
+    }
+    struct ranked_t {
+        float reach = 0.0F;
+        std::uint64_t made = 0;
+        std::uint32_t at = 0;
+    };
+    // Kept for the next.
+    static std::vector<ranked_t>& ranked = *new std::vector<ranked_t>();
+    ranked.clear();
+    for (std::uint32_t at = 0; at < lit.size(); ++at) {
+        const lit_t& one = lit[at];
+        float reach = -1.0F;
+        if (one.draw.type != FBE_LIGHT_DIRECTIONAL) {
+            const vec3_t nearest(std::clamp(one.place.x, box.min.x, box.max.x),
+                                 std::clamp(one.place.y, box.min.y, box.max.y),
+                                 std::clamp(one.place.z, box.min.z, box.max.z));
+            reach = scene::length(one.place - nearest) / std::fmax(one.draw.range, 1e-6F);
+        }
+        ranked.push_back({ .reach = reach, .made = one.made, .at = at });
+    }
+    const auto most = ranked.begin() + FBE_DRAW_LIGHTS;
+    std::ranges::partial_sort(ranked, most, [](const ranked_t& a, const ranked_t& b) {
+        return a.reach != b.reach ? a.reach < b.reach : a.made < b.made;
+    });
+    picked.count = FBE_DRAW_LIGHTS;
+    for (std::uint32_t i = 0; i < picked.count; ++i) {
+        picked.lights[i] = ranked[i].at;
+    }
+    std::ranges::sort(picked.lights);
+    return picked;
 }
 
 } // namespace
@@ -210,21 +275,25 @@ void read_view(const camera_t& camera, const scene::view_t& view, const scene::t
     lists.draw_lights.clear();
     lists.clusters.assign(FBE_CLUSTERS, fbe_cluster_t{ .first = 0, .count = 0 });
     std::vector<lit_t> lit = lights_lit(s.entities.world[camera.entity], view, tweened);
-    // What's lit per vertex takes the first lights in the tree's order, all of it the same ones,
-    // whatever they reach, as fixed-function hardware's did, so they stay in the lights though no
-    // cluster has them.
-    const std::size_t per_vertex = std::min<std::size_t>(lit.size(), FBE_DRAW_LIGHTS);
-    bool any_per_vertex = false;
-    for (item_t& item : lists.items) {
-        if (item.vertex_lit) {
-            item.draw.light_first = 0;
-            item.draw.light_count = static_cast<std::uint32_t>(per_vertex);
-            any_per_vertex = true;
+    // What's lit per vertex takes eight lights at most, as fixed-function hardware's did, whatever
+    // they reach, so they stay in the lights though no cluster has them: all of them when there
+    // are no more, and of more, each draw the eight that light it most. Draws lit by the same ones
+    // share them, each list in the tree's order.
+    std::vector<chosen_t> chosen;
+    std::vector<std::uint32_t> chosen_of(lists.items.size(), scene::none);
+    for (std::size_t at = 0; at < lists.items.size(); ++at) {
+        const item_t& item = lists.items[at];
+        if (!item.vertex_lit) {
+            continue;
         }
-    }
-    if (any_per_vertex) {
-        for (std::size_t at = 0; at < per_vertex; ++at) {
-            lit[at].wanted = true;
+        const chosen_t picked = lights_for(item, lit);
+        const auto found = std::ranges::find(chosen, picked);
+        chosen_of[at] = static_cast<std::uint32_t>(found - chosen.begin());
+        if (found == chosen.end()) {
+            chosen.push_back(picked);
+        }
+        for (std::uint32_t i = 0; i < picked.count; ++i) {
+            lit[picked.lights[i]].wanted = true;
         }
     }
     std::vector<std::uint32_t> ordered(lit.size());
@@ -258,10 +327,18 @@ void read_view(const camera_t& camera, const scene::view_t& view, const scene::t
         one.index = static_cast<std::uint32_t>(lists.lights.size());
         lists.lights.push_back(one.draw);
     }
-    if (any_per_vertex) {
-        lists.draw_lights.reserve(per_vertex);
-        for (std::size_t at = 0; at < per_vertex; ++at) {
-            lists.draw_lights.push_back(lit[at].index);
+    std::vector<std::uint32_t> firsts;
+    firsts.reserve(chosen.size());
+    for (const chosen_t& picked : chosen) {
+        firsts.push_back(static_cast<std::uint32_t>(lists.draw_lights.size()));
+        for (std::uint32_t i = 0; i < picked.count; ++i) {
+            lists.draw_lights.push_back(lit[picked.lights[i]].index);
+        }
+    }
+    for (std::size_t at = 0; at < lists.items.size(); ++at) {
+        if (chosen_of[at] != scene::none) {
+            lists.items[at].draw.light_first = firsts[chosen_of[at]];
+            lists.items[at].draw.light_count = chosen[chosen_of[at]].count;
         }
     }
     // Each cluster's lights together, in the lights' order.
