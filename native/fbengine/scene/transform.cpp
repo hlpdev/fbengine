@@ -192,6 +192,26 @@ pose_t tweened_t::pose(std::uint32_t entity) const {
     return s.poses[entity];
 }
 
+bool capture_one(std::uint32_t entity) {
+    entities_t& entities = scene().entities;
+    entities.captured_position[entity] = entities.position[entity];
+    entities.captured_rotation[entity] = entities.rotation[entity];
+    entities.captured_scale[entity] = entities.scale[entity];
+    entities.captured[entity] = true;
+    if (entities.kind[entity] == FBE_ENTITY_PARTICLES) {
+        capture_particles(entity);
+    }
+    if (entities.kind[entity] == FBE_ENTITY_MESH) {
+        mesh_t& mesh = scene().meshes[entities.component[entity]];
+        try {
+            mesh.captured_weights = mesh.weights;
+        } catch (const std::bad_alloc&) {
+            return fail("out of memory");
+        }
+    }
+    return true;
+}
+
 mat4_t tweened_matrix(std::uint32_t entity, float tween) {
     return tweened_t(tween).pose(entity).matrix;
 }
@@ -493,20 +513,8 @@ FBE_API bool fbe_world_capture(uint64_t world) {
             !entities.slots.find(entities.slots.handle(entity))) {
             continue;
         }
-        entities.captured_position[entity] = entities.position[entity];
-        entities.captured_rotation[entity] = entities.rotation[entity];
-        entities.captured_scale[entity] = entities.scale[entity];
-        entities.captured[entity] = true;
-        if (entities.kind[entity] == FBE_ENTITY_PARTICLES) {
-            fbe::scene::capture_particles(entity);
-        }
-        if (entities.kind[entity] == FBE_ENTITY_MESH) {
-            fbe::scene::mesh_t& mesh = scene().meshes[entities.component[entity]];
-            try {
-                mesh.captured_weights = mesh.weights;
-            } catch (const std::bad_alloc&) {
-                return fbe::fail("out of memory");
-            }
+        if (!fbe::scene::capture_one(entity)) {
+            return false;
         }
     }
     return true;

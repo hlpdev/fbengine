@@ -336,6 +336,54 @@ TEST_CASE("a camera's draws are seen from where it is between the steps, sprites
     CHECK(near(seen[0].matrix[10], 0.8660254F));
 }
 
+TEST_CASE("an entity captured on its own is drawn from where it is now, its children with it, "
+          "and the rest still tween",
+          "[render]") {
+    const test_world_t world;
+    const std::uint64_t camera = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);
+    // A crate teleported, with a cube on it, and another crate that only walks, under a pivot that
+    // walks too.
+    const std::uint64_t carried = fbe_entity_create(world.handle, 0, FBE_ENTITY_PIVOT);
+    const std::uint64_t teleported = cube(world.handle, 0.0F, 0.0F, -20.0F);
+    REQUIRE(fbe_entity_set_parent(teleported, carried, true));
+    const std::uint64_t on_it = cube(world.handle, 0.0F, 1.0F, -20.0F);
+    REQUIRE(fbe_entity_set_parent(on_it, teleported, true));
+    const std::uint64_t walking = cube(world.handle, -4.0F, 0.0F, -20.0F);
+    // And one at the top of the World, cut from one place to another.
+    const std::uint64_t cut = cube(world.handle, -8.0F, 0.0F, -20.0F);
+    REQUIRE(fbe_world_capture(world.handle));
+    fbe_entity_translate(carried, 2.0F, 0.0F, 0.0F, FBE_SPACE_WORLD);
+    fbe_entity_set_position(teleported, 6.0F, 0.0F, -20.0F, FBE_SPACE_WORLD);
+    fbe_entity_translate(walking, 2.0F, 0.0F, 0.0F, FBE_SPACE_WORLD);
+    // What's on it slides along it too, in the same step.
+    fbe_entity_translate(on_it, 0.0F, 0.0F, 3.0F, FBE_SPACE_LOCAL);
+    REQUIRE(fbe_entity_capture(teleported));
+    fbe_entity_set_position(cut, -8.0F, 5.0F, -20.0F, FBE_SPACE_WORLD);
+    REQUIRE(fbe_entity_capture(cut));
+    const auto at_of = [&](std::uint64_t entity, float tween, std::size_t axis) {
+        for (const fbe_draw_t& draw : draws(camera, tween)) {
+            if (draw.entity == entity) {
+                return draw.matrix[12 + axis];
+            }
+        }
+        return -1000.0F;
+    };
+    const auto x_of = [&](std::uint64_t entity, float tween) { return at_of(entity, tween, 0); };
+    for (const float tween : { 0.0F, 0.5F, 1.0F }) {
+        INFO("at " << tween);
+        CHECK(near(x_of(teleported, tween), 6.0F));
+        CHECK(near(x_of(on_it, tween), 6.0F));
+        CHECK(near(at_of(on_it, tween, 2), -17.0F));
+        CHECK(near(at_of(cut, tween, 1), 5.0F));
+        CHECK(near(x_of(walking, tween), -4.0F + (2.0F * tween)));
+    }
+    // Moved after, it tweens from where it was captured.
+    fbe_entity_set_position(teleported, 8.0F, 0.0F, -20.0F, FBE_SPACE_WORLD);
+    CHECK(near(x_of(teleported, 0.0F), 6.0F));
+    CHECK(near(x_of(teleported, 0.5F), 7.0F));
+    CHECK_FALSE(fbe_entity_capture(0));
+}
+
 TEST_CASE("a camera's draw projection holds with its far plane near float's top", "[render]") {
     const test_world_t world;
     const std::uint64_t camera = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);

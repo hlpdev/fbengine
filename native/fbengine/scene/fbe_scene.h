@@ -1151,6 +1151,11 @@ FBE_API int32_t fbe_world_pick(uint64_t world, const fbe_vec3_t* from, const fbe
 // now, for drawing between then and later: a fixed step captures before each step, and draws
 // part way between the last two.
 FBE_API bool fbe_world_capture(uint64_t world);
+// Keeps one entity's transform, and everything under it, as it is now, as fbe_world_capture does
+// for all: it's drawn from where it is now in the world, under its parent as that was captured,
+// not tweened from where it was, as for a camera cut somewhere or a sprite reused; the rest of its
+// World still tweens.
+FBE_API bool fbe_entity_capture(uint64_t entity);
 // An entity's matrix to the world `tween` of the way, 0 to 1, from its World's last capture to now,
 // each entity above it tweened too: positions and scales lerped, rotations slerped. One made since
 // the capture is where it is now. False for a tween outside 0 to 1.

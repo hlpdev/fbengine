@@ -101,6 +101,9 @@ good modern engine on its own. Every structural choice is checked against both.
 - `UpdateWorld(seconds)` steps animation and the scene's collisions; `RenderWorld()` draws every
   camera; both are the game's to call, in its own loop. A fixed-step helper (`FixedUpdate(rate)`)
   gives a game logic at a fixed rate with tweening between steps, as SCP:CB's needs.
+  `CaptureWorld()` keeps where everything is for that; `entity.Capture()` keeps one entity and
+  what's under it, so what's put somewhere, a camera cut or a sprite used again, is drawn there
+  and not tweened from where it was, with no second capture of the World.
 - **Collisions and picks** are the scene's own, for games that don't need a physics engine:
   swept spheres and ellipsoids against meshes, boxes, and spheres, with stop and slide responses,
   step-up, and ray and sphere picks, in C++ on the job system. SCP:CB's player and NPCs move this

@@ -575,6 +575,7 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_world_pick(world: UInt64, from: Ptr<fbe_vec3_t>, to: Ptr<fbe_vec3_t>,
                             radius: Float32, ignore: UInt64, pick: Ptr<fbe_pick_t>): Int32
     Function fbe_world_capture(world: UInt64): Bool
+    Function fbe_entity_capture(entity: UInt64): Bool
     Function fbe_entity_tweened_matrix(entity: UInt64, tween: Float32,
                                        matrix: Ptr<fbe_mat4_t>): Bool
     Function fbe_entity_copy(entity: UInt64, world: UInt64, parent: UInt64): UInt64

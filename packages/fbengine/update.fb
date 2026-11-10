@@ -48,6 +48,15 @@ Extend World
 End Extend
 
 Extend Entity
+    /// Keeps where the entity is, and everything under it, as World.Capture does for all: it's
+    /// drawn from where it is now, not tweened from where it was, the rest of its World tweening
+    /// still. For what's put somewhere, not moved there: a camera cut to another place, a sprite
+    /// used again, a player sent through a door.
+    @MainThread @PanicsAtCaller
+    Public Method Capture()
+        If !fbe_entity_capture(Live("Capture")) Then Failed("Capture")
+    End Method
+
     /// The entity's matrix to the world `tween` of the way, 0 to 1, from where its World was
     /// last captured to where it is now, everything above it tweened too: what drawing between
     /// steps draws. One made since the capture is where it is.

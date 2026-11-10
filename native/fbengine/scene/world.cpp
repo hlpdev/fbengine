@@ -527,6 +527,36 @@ FBE_API bool fbe_entity_set_parent(uint64_t entity, uint64_t parent, bool keep_w
     return true;
 }
 
+FBE_API bool fbe_entity_capture(uint64_t entity) {
+    const std::uint32_t slot = entity_slot(entity);
+    if (slot == none) {
+        return false;
+    }
+    fbe::scene::entities_t& entities = scene().entities;
+    fbe::scene::update_world(slot);
+    const fbe::scene::mat4_t now = entities.world_matrix[slot];
+    // By a stack of its own, so no tree is too deep, kept for the next.
+    static std::vector<std::uint32_t>& stack = *new std::vector<std::uint32_t>();
+    try {
+        stack.assign(1, slot);
+        while (!stack.empty()) {
+            const std::uint32_t at = stack.back();
+            stack.pop_back();
+            if (!fbe::scene::capture_one(at)) {
+                return false;
+            }
+            stack.insert(stack.end(), entities.children[at].begin(), entities.children[at].end());
+        }
+    } catch (const std::bad_alloc&) {
+        return fbe::fail("out of memory");
+    }
+    // Where it is now in the world, under where its parent was captured, so it's drawn from here.
+    if (entities.parent[slot] != none) {
+        fbe::scene::recapture(slot, now);
+    }
+    return true;
+}
+
 FBE_API bool fbe_entity_set_sibling_index(uint64_t entity, int32_t index) {
     const std::uint32_t slot = entity_slot(entity);
     if (slot == none) {

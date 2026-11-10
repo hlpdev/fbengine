@@ -762,6 +762,9 @@ private:
 
 /// An entity's matrix to the world `tween` of the way from its World's last capture to now.
 mat4_t tweened_matrix(std::uint32_t entity, float tween);
+/// Keeps an entity's local transform as it is now, as a World's capture does, its particles' and
+/// morph weights too; false if it's out of memory.
+bool capture_one(std::uint32_t entity);
 /// The FBE_BLEND_ something drawn in a material, or none for the default, at this alpha, its own
 /// times its material's, is drawn with, AUTO and OPAQUE settled.
 std::int32_t drawn_blend(std::uint32_t material, float alpha);
