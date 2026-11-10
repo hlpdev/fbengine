@@ -409,10 +409,12 @@ TEST_CASE("an entity's place, its turn, both, or neither is tweened, as it's set
         REQUIRE(fbe_entity_tweened_matrix(entity, 0.5F, &matrix));
         const float size = std::sqrt((matrix.m[0] * matrix.m[0]) + (matrix.m[1] * matrix.m[1]) +
                                      (matrix.m[2] * matrix.m[2]));
-        return drawn_t{ .x = matrix.m[12],
-                        .ahead_x = -matrix.m[8] / size,
-                        .ahead_z = -matrix.m[10] / size,
-                        .size = size };
+        return drawn_t{
+            .x = matrix.m[12],
+            .ahead_x = -matrix.m[8] / size,
+            .ahead_z = -matrix.m[10] / size,
+            .size = size,
+        };
     };
     // All of it, as ever: half way there, an eighth of a turn, twice the size.
     drawn_t found = drawn(eyes);
