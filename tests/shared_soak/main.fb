@@ -1,0 +1,143 @@
+// A soak of models sharing their image files' textures, on the GPU ctest's tests use: each round,
+// 24 glTFs naming 4 PNGs, the PNGs another color each round, so other files to share by, are
+// mounted, loaded, and freed, some in the order they were loaded and some against it,
+// FBENGINE_SOAK_ITERATIONS times, 400 unless it says. Each round the textures there are go up by
+// the 4, and come back to what there were, as the loads and the holds on assets do; and the
+// process's own memory, sampled every 20 rounds once the first quarter's warmed the caches,
+// doesn't rise steadily, by SOAK_RISE a round, as a leak's does. With the engine built under
+// AddressSanitizer, as its DLL says, its memory isn't judged: LeakSanitizer does that, at the
+// end. It prints how it went, and exits 1 if it didn't.
+
+Import std.collections
+Import std.core
+Import std.image.image
+Import std.image.png
+Import std.math
+Import std.os
+Import std.text
+Import std.time
+Import fbengine
+Import fbengine.c.fbe_assets
+
+// How much the process's memory may rise a round, steadily, in bytes: more than an allocator's
+// pages wander by, and less than a texture left behind, or a model's parts.
+Const SOAK_RISE: Float64 = 2048.0
+
+Const MODELS: Int = 24
+Const IMAGES: Int = 4
+
+// How steeply `samples` rise, by least squares, in bytes a round, each `every` rounds apart.
+Function Rise(samples: Int64[], every: Int): Float64
+    Local n = samples.Count As Float64
+    If n < 2.0 Then Return 0.0
+    Local meanX: Float64 = 0.0
+    Local meanY: Float64 = 0.0
+    For at = 0 Until samples.Count
+        meanX += (at As Float64) / n
+        meanY += (samples[at] As Float64) / n
+    End For
+    Local over: Float64 = 0.0
+    Local under: Float64 = 0.0
+    For at = 0 Until samples.Count
+        Local dx = (at As Float64) - meanX
+        over += dx * ((samples[at] As Float64) - meanY)
+        under += dx * dx
+    End For
+    Return over / under / (every As Float64)
+End Function
+
+// A triangle's glTF whose material's base color is the image at `uri`.
+Function Reading(uri: String): UInt8[]
+    Local buffer = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x80, 0x3F, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0x80, 0x3F, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 2, 0] As UInt8[]
+    Return ("{{\"asset\":{{\"version\":\"2.0\"}},\"buffers\":[{{\"byteLength\":66," +
+            "\"uri\":\"data:application/octet-stream;base64,{Base64.Encode(buffer)}\"}}]," +
+            "\"bufferViews\":[{{\"buffer\":0,\"byteLength\":36}}," +
+            "{{\"buffer\":0,\"byteOffset\":36,\"byteLength\":24}}," +
+            "{{\"buffer\":0,\"byteOffset\":60,\"byteLength\":6}}],\"accessors\":[" +
+            "{{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"," +
+            "\"min\":[0,0,0],\"max\":[1,1,0]}},{{\"bufferView\":1,\"componentType\":5126," +
+            "\"count\":3,\"type\":\"VEC2\"}},{{\"bufferView\":2,\"componentType\":5123," +
+            "\"count\":3,\"type\":\"SCALAR\"}}],\"images\":[{{\"uri\":\"{uri}\"}}]," +
+            "\"textures\":[{{\"source\":0}}],\"materials\":[{{\"pbrMetallicRoughness\":" +
+            "{{\"baseColorTexture\":{{\"index\":0}}}}}}],\"meshes\":[{{\"primitives\":[{{" +
+            "\"attributes\":{{\"POSITION\":0,\"TEXCOORD_0\":1}},\"indices\":2,\"material\":0}}]}}]," +
+            "\"nodes\":[{{\"mesh\":0}}],\"scenes\":[{{\"nodes\":[0]}}]}}").Bytes
+End Function
+
+// One round: the files mounted, the models loaded and freed. What went wrong, or "".
+Function Round(round: Int, textures: Int32): String Throws IOError
+    Local files = Map<String, UInt8[]>()
+    For at = 0 Until IMAGES
+        Local image = Image(2, 2)
+        image.Fill(Color32((round % 251) As UInt8, (round / 251) As UInt8, at As UInt8, 255))
+        files["t{at}.png"] = Png.Encode(image)
+    End For
+    For at = 0 Until MODELS
+        Local which = at % IMAGES
+        files["m{at}.gltf"] = Reading("t{which}.png")
+    End For
+    Assets.MountFiles("res://shared-soak", files)
+    Defer Assets.Unmount("res://shared-soak")
+    Local models: Model[] = []
+    For at = 0 Until MODELS
+        models.Add(Try Assets.Load<Model>("res://shared-soak/m{at}.gltf"))
+    End For
+    Local wrong = ""
+    If Texture.Count() != textures + (IMAGES As Int32)
+        wrong = "{Texture.Count() - textures} textures were made, not {IMAGES}"
+    End If
+    // The first to load isn't always the last to go.
+    If round % 2 == 1 Then models.Reverse()
+    For model In models
+        model.Free()
+    End For
+    If wrong == "" && Texture.Count() != textures
+        wrong = "{Texture.Count() - textures} textures are left"
+    End If
+    Return wrong
+End Function
+
+// The rounds, and what they leave.
+Window.SetHeadless(True)
+Local iterations = Int.Parse(Env.Get("FBENGINE_SOAK_ITERATIONS") ?? "400") ?? 400
+// One round first, which starts the GPU and makes what the engine keeps.
+Local wrong = Try Round(0, Texture.Count())
+Local textures = Texture.Count()
+Local loads = Assets.Loads()
+Local holds = Assets.Holds()
+Local samples: Int64[] = []
+Local started = Instant.Now()
+For round = 1 To iterations
+    If wrong != "" Then Break
+    wrong = Try Round(round, textures)
+    If wrong == "" && Assets.Loads() != loads
+        wrong = "{Assets.Loads()} loads are left, not {loads}"
+    End If
+    If wrong == "" && Assets.Holds() != holds
+        wrong = "{Assets.Holds()} holds on assets are left, not {holds}"
+    End If
+    If wrong != ""
+        wrong = "round {round}: {wrong}"
+        Break
+    End If
+    Flip()
+    If round >= iterations / 4 && round % 20 == 0 Then samples.Add(fbe_assets_resident_bytes())
+    If round % 50 == 0
+        Print("round {round}: {fbe_assets_resident_bytes() / 1024} KiB, {Texture.Count()} textures")
+    End If
+End For
+If wrong != ""
+    Print(wrong)
+    Process.Exit(1)
+End If
+Local rise = Rise(samples, 20)
+Print("{iterations} rounds in {Instant.Now() - started}; after the first quarter, memory rose " +
+      "{rise} bytes a round")
+If !fbe_assets_address_sanitized() && rise > SOAK_RISE
+    Print("it rose more than {SOAK_RISE} bytes a round")
+    Process.Exit(1)
+End If
+Print("soaked")

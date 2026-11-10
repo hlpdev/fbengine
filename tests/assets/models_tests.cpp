@@ -3,6 +3,7 @@
 
 #include "assets/loads.hpp"
 #include "assets/model.hpp"
+#include "assets/shared.hpp"
 #include "files.hpp"
 #include "jobs/jobs.hpp"
 
@@ -733,6 +734,79 @@ TEST_CASE("a glTF's images aren't decoded when it's asked not to", "[assets]") {
     REQUIRE(unread.images.size() == 1);
     REQUIRE(unread.images[0].width == 0);
     REQUIRE(unread.images[0].texels.size() == 0);
+}
+
+TEST_CASE("an image file a texture's shared of already is left undecoded", "[assets]") {
+    const test::temp_folder_t folder;
+    builder_t built;
+    built.positions({ 0, 0, 0 });
+    const std::string rest =
+        R"(,"images":[{"uri":"../wall.png"},{"uri":"data:image/png;base64,)" +
+        test::base64(test::png(2, 2, 4, std::vector<std::uint8_t>(16, 3))) +
+        R"("}],"textures":[{"source":0},{"source":1}],"materials":[{"pbrMetallicRoughness":)"
+        R"({"baseColorTexture":{"index":0}},"normalTexture":{"index":1}}])";
+    const std::vector<std::uint8_t> wall = test::png(2, 2, 4, std::vector<std::uint8_t>(16, 99));
+    folder.write("wall.png", wall);
+    vfs::vfs_t files;
+    files.mount(path("res://"), vfs::folder(folder.path));
+    const std::string json = built.json(rest, built.data_uri());
+    const std::string file =
+        assets::shared_file("res://wall.png", assets::shared_hash(wall.data(), wall.size()));
+
+    // With none shared, it's decoded, and says where it's from; one inside the file says nothing.
+    const assets::model_t first = decoded(json, files);
+    REQUIRE(first.image_sources.size() == 2);
+    REQUIRE(first.images[0].width == 2);
+    REQUIRE(first.image_sources[0].file == file);
+    REQUIRE(first.image_sources[0].path == "res://wall.png");
+    REQUIRE(first.image_sources[0].options.srgb);
+    REQUIRE(first.image_sources[0].encoded.empty());
+    REQUIRE(first.image_sources[1].file.empty());
+
+    // With one shared, it's asked of that file as a color, and left, its bytes kept; the one
+    // inside is decoded as ever.
+    std::vector<std::string> asked;
+    const assets::model_options_t options{
+        .shared =
+            [&](std::string_view of, bool srgb) {
+                asked.emplace_back(of);
+                return srgb;
+            },
+    };
+    const assets::model_t second = decoded(json, files, options);
+    REQUIRE(asked == std::vector<std::string>{ file });
+    REQUIRE(second.images[0].levels.empty());
+    REQUIRE(second.images[0].texels.size() == 0);
+    REQUIRE(second.image_sources[0].encoded == wall);
+    REQUIRE(second.images[1].width == 2);
+
+    // What's in the file is what it's known by: another's bytes are another's.
+    REQUIRE(assets::shared_file("res://wall.png", assets::shared_hash(wall.data(), 8)) != file);
+}
+
+TEST_CASE("shared textures are found by what they're of and how they're made", "[assets]") {
+    const std::string file = assets::shared_file("res://shared-tests/wall.png", 7);
+    const std::size_t before = assets::shared_count();
+    REQUIRE_FALSE(assets::shared_known(file, true));
+    assets::shared_add(file, true, "1 1 0 0 0", 41);
+    assets::shared_add(file, true, "1 1 1 0 0", 42);
+    REQUIRE(assets::shared_known(file, true));
+    REQUIRE_FALSE(assets::shared_known(file, false));
+    REQUIRE_FALSE(
+        assets::shared_known(assets::shared_file("res://shared-tests/wall.png", 8), true));
+    REQUIRE(assets::shared_find(file, true, "1 1 0 0 0") == 41);
+    REQUIRE(assets::shared_find(file, true, "1 1 1 0 0") == 42);
+    REQUIRE(assets::shared_find(file, true, "0 1 0 0 0") == 0);
+    REQUIRE(assets::shared_count() == before + 2);
+    // One made in another's place takes it, and the one it took it from being freed leaves it.
+    assets::shared_add(file, true, "1 1 0 0 0", 43);
+    assets::shared_forget(41);
+    REQUIRE(assets::shared_find(file, true, "1 1 0 0 0") == 43);
+    assets::shared_forget(43);
+    assets::shared_forget(42);
+    assets::shared_forget(42);
+    REQUIRE_FALSE(assets::shared_known(file, true));
+    REQUIRE(assets::shared_count() == before);
 }
 
 TEST_CASE("what fastgltf reads past a short string's end in is refused", "[assets]") {

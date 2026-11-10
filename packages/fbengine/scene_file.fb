@@ -51,8 +51,11 @@ Const OF_MATERIAL = ["id", "color", "shading", "blend", "alpha_cutoff", "shinine
                      "wireframe", "two_sided", "fogged", "order", "layers", "metallic",
                      "roughness", "emissive", "normal_scale", "occlusion_strength", "maps",
                      "shader", "parameters"]
-Const OF_MAP = ["map", "texture", "uv_set", "uv"]
-Const OF_LAYER = ["layer", "texture", "blend", "uv_set", "uv", "bump"]
+Const OF_MAP = ["map", "texture", "linear", "filter", "wrap_across", "wrap_down", "uv_set", "uv"]
+Const OF_LAYER = ["layer", "texture", "linear", "filter", "wrap_across", "wrap_down", "blend",
+                  "uv_set", "uv", "bump"]
+Const ALL_FILTERS = [TextureFilter.NEAREST, TextureFilter.LINEAR]
+Const ALL_WRAPS = [TextureWrap.REPEAT, TextureWrap.CLAMP, TextureWrap.MIRROR]
 Const OF_GEOMETRY = ["id", "source", "surfaces", "cull_box"]
 Const OF_SURFACE = ["material", "vertices", "triangles"]
 
@@ -258,8 +261,7 @@ Class Writing
             If texture == Null && uvSet == 0 && turn == plain.MapUv(map) Then Continue
             Local one = Value.Object()
             one["map"] = Value("{map}")
-            If texture != Null Then one["texture"] = Value(Try FileOf(texture, user,
-                                                                      "the {map} map"))
+            If texture != Null Then Try Textured(one, texture, user, "the {map} map")
             If uvSet != 0 Then one["uv_set"] = Value(uvSet)
             If turn != plain.MapUv(map)
                 one["uv"] = Try Numbers([turn.Scale.x, turn.Scale.y, turn.Angle, turn.Offset.x,
@@ -280,8 +282,7 @@ Class Writing
             End If
             Local layer = Value.Object()
             layer["layer"] = Value(at As Int32)
-            If texture != Null Then layer["texture"] = Value(Try FileOf(texture, user,
-                                                                        "layer {at}"))
+            If texture != Null Then Try Textured(layer, texture, user, "layer {at}")
             layer["blend"] = Value("{material.LayerBlend(at)}")
             layer["uv_set"] = Value(material.LayerUvSet(at) As Int32)
             layer["uv"] = Try Numbers([turn.Scale.x, turn.Scale.y, turn.Angle, turn.Offset.x,
@@ -322,6 +323,26 @@ Class Writing
         all.Add(table)
         MaterialIds[handle] = id
         Return id
+    End Method
+
+    // Says in `table` the file `texture` is from, which `slot` of the material of `user` has, and for
+    // an image's file, not a model's image, how it's read where that's not as a file's read by
+    // itself: not as a color, and filtered and wrapped other than LINEAR and REPEAT.
+    Method Textured(table: Value, texture: Texture, user: String, slot: String) Throws IOError
+        Local path = Try FileOf(texture, user, slot)
+        table["texture"] = Value(path)
+        If path.Contains("#") Then Return
+        If !texture.Srgb() && (texture.Format() == TextureFormat.RGBA8_LINEAR ||
+                               texture.Format() == TextureFormat.FROM_FILE)
+            table["linear"] = Value(True)
+        End If
+        If texture.Filter() != TextureFilter.LINEAR Then table["filter"] = Value("{texture.Filter()}")
+        If texture.WrapAcross() != TextureWrap.REPEAT
+            table["wrap_across"] = Value("{texture.WrapAcross()}")
+        End If
+        If texture.WrapDown() != TextureWrap.REPEAT
+            table["wrap_down"] = Value("{texture.WrapDown()}")
+        End If
     End Method
 
     // The res:// file `texture` is from, which `slot` of the material of `user` has it.
@@ -582,6 +603,8 @@ Class Reading
     Field Roots: Entity[] = []
     Field Tolerant: Bool
     Field Problems: String[] = []
+    // The wrappers this read made of Textures that models share, which what reads them keeps.
+    Field Held: Texture[] = []
     // What's to be attached once all's made: which, where it's from, its kind, and what it has.
     Field Attaching: (Entity, String, String, Value)[] = []
 
@@ -614,6 +637,10 @@ Class Reading
             each.Free()
         End For
         Models.Clear()
+        For each In Held
+            If !each.Freed() Then each.Free()
+        End For
+        Held.Clear()
     End Method
 
     // Each component on what it's for, as a game has them, and it's what can't be that's wrong.
@@ -680,7 +707,7 @@ Class Reading
             Local uvSet = Try IntOf(one, "uv_set", 0, where)
             Try Must(uvSet == 0 || uvSet == 1, where, "uv_set", "is 0 or 1")
             Local path = Try TextOf(one, "texture", where)
-            made.SetMap(map, path != Null ? Try MapTextureOf(map, path, where) : Null, uvSet)
+            made.SetMap(map, path != Null ? Try MapTextureOf(map, path, where, one) : Null, uvSet)
             Local uv = Try FloatsOf(one, "uv", 5, where)
             If uv != Null
                 Try Must(uv[0] != 0.0 && uv[1] != 0.0, where, "uv", "has a scale that isn't 0")
@@ -692,7 +719,9 @@ Class Reading
             Local index = Try IntOf(layer, "layer", -1, where)
             If index < 0 || index > 7 Then Throw Wrong("{where}: a layer's 0 to 7, not {index}")
             Local path = Try TextOf(layer, "texture", where)
-            If path != Null Then made.SetTexture(index, Try TextureOf(path, where))
+            If path != Null
+                made.SetTexture(index, Try TextureOf(path, where, TextureFormat.RGBA8, layer))
+            End If
             Local uvSet = Try IntOf(layer, "uv_set", 0, where)
             Try Must(uvSet == 0 || uvSet == 1, where, "uv_set", "is 0 or 1")
             made.SetLayer(index, Try Named<LayerBlend>(layer, "blend", LayerBlend.MULTIPLY,
@@ -736,8 +765,8 @@ Class Reading
 
     // The texture of the file at `path`, or of the model's image it says, or if it can't be and that's
     // allowed, one that says it's lost, of `format`.
-    Method TextureOf(path: String, at: String,
-                     format: TextureFormat = TextureFormat.RGBA8): Texture Throws IOError
+    Method TextureOf(path: String, at: String, format: TextureFormat = TextureFormat.RGBA8,
+                     said: Value? = Null): Texture Throws IOError
         Local file = ModelFileOf(path)
         If file != Null
             Try
@@ -749,11 +778,43 @@ Class Reading
                 Return Try LostTexture(path, at, error.Message, format)
             End Try
         End If
+        // How its table says it's read, if it does: one written before says its file and no more.
+        Local linear = said != Null ? Try BoolOf(said, "linear", False, at) : False
+        Local filter = TextureFilter.LINEAR
+        Local across = TextureWrap.REPEAT
+        Local down = TextureWrap.REPEAT
+        If said != Null
+            filter = Try Named<TextureFilter>(said, "filter", filter, ALL_FILTERS, at)
+            across = Try Named<TextureWrap>(said, "wrap_across", across, ALL_WRAPS, at)
+            down = Try Named<TextureWrap>(said, "wrap_down", down, ALL_WRAPS, at)
+        End If
+        Local plain = !linear && filter == TextureFilter.LINEAR && across == TextureWrap.REPEAT &&
+                      down == TextureWrap.REPEAT
         Try
-            Return Try Assets.Load<Texture>(path)
+            // The one the models naming the file share, read so, if there is one.
+            Local shared = Try SharedTexture(path, !linear, filter, across, down, False)
+            If shared != Null Then Return Sharing(shared)
+            // Or the file's as Assets loads it, as its import settings say, if that's read so, as
+            // one that says no more always was.
+            Local loaded = Try Assets.Load<Texture>(path)
+            If plain || (loaded.Srgb() == !linear && loaded.Filter() == filter &&
+                         loaded.WrapAcross() == across && loaded.WrapDown() == down)
+                Return loaded
+            End If
+            loaded.Free()
+            // Or one made of the file, read so, which the next to name it shares.
+            Local made = Try SharedTexture(path, !linear, filter, across, down, True)
+            If made != Null Then Return Sharing(made)
+            Return Try LostTexture(path, at, "{path} can't be read as its scene says", format)
         Catch error As IOError
             Return Try LostTexture(path, at, error.Message, format)
         End Try
+    End Method
+
+    // A shared Texture, its wrapper kept to let go of if it's this read's.
+    Method Sharing(shared: (Texture, Bool)): Texture
+        If shared.1 Then Held.Add(shared.0)
+        Return shared.0
     End Method
 
     Method LostTexture(path: String, at: String, says: String,
@@ -791,10 +852,11 @@ Class Reading
 
     // The texture of the file at `path` as `map`, for what SetMap would panic at otherwise: a color,
     // where what's wanted is numbers.
-    Method MapTextureOf(map: MaterialMap, path: String, at: String): Texture Throws IOError
+    Method MapTextureOf(map: MaterialMap, path: String, at: String,
+                        said: Value): Texture Throws IOError
         Local format =
             map == MaterialMap.EMISSIVE ? TextureFormat.RGBA8 : TextureFormat.RGBA8_LINEAR
-        Local read = Try TextureOf(path, at, format)
+        Local read = Try TextureOf(path, at, format, said)
         If Material.MapTakes(map, read) Then Return read
         Return Try LostTexture(path, at,
                                "{path} is stored as a color, and a {map} map's numbers: its import settings can say it isn't sRGB",

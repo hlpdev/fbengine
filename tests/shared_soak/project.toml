@@ -1,0 +1,6 @@
+[project]
+name = "shared_soak"
+version = "0.1.0"
+
+[dependencies]
+fbengine = { path = "../../packages/fbengine" }
