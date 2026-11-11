@@ -343,8 +343,7 @@ void limit_allocations(std::int64_t most) {
 }
 
 bool at_allocation_limit() {
-    return allocation_limit >= 0 &&
-           static_cast<std::int64_t>(allocations().count) >= allocation_limit;
+    return allocation_limit >= 0 && std::cmp_greater_equal(allocations().count, allocation_limit);
 }
 
 bool make_frame_commands(const device_t& gpu, frame_t& frame) {

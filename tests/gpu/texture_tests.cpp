@@ -1233,7 +1233,7 @@ namespace {
 /// A texture 16 on a side, every byte of it `value`, its upload recorded and not yet submitted.
 std::uint64_t written(std::uint8_t value) {
     const std::uint64_t texture = make(16, 16, FBE_TEXTURE_RGBA8, false);
-    const std::vector<std::uint8_t> pixels(16 * 16 * 4, value);
+    const std::vector<std::uint8_t> pixels(std::size_t{ 16 } * 16 * 4, value);
     require(fbe_texture_write(texture, 0, 0, 16, 16, pixels.data(), 64));
     return texture;
 }
@@ -1247,7 +1247,7 @@ std::uint32_t settled() {
 
 /// Whether every byte of a 16 by 16 texture reads as `value`.
 bool reads_as(std::uint64_t texture, std::uint8_t value) {
-    std::vector<std::uint8_t> read(16 * 16 * 4);
+    std::vector<std::uint8_t> read(std::size_t{ 16 } * 16 * 4);
     require(fbe_texture_read(texture, 0, read.data(), static_cast<std::int64_t>(read.size())));
     return std::ranges::all_of(read, [value](std::uint8_t byte) { return byte == value; });
 }
@@ -1308,6 +1308,41 @@ TEST_CASE("a buffer freed with its upload recorded waits for that, and no longer
     stop_gpu();
 }
 
+// A pass waits in the graph, which records at the frame's submit: nothing's begun, and it could
+// draw with anything.
+TEST_CASE("a texture freed with a pass waiting in the graph waits for the pass", "[gpu][frees]") {
+    start();
+    const std::uint64_t texture = written(5);
+    CHECK(reads_as(texture, 5));
+    const std::uint32_t none = settled();
+    constexpr VkFormat srgb = VK_FORMAT_R8G8B8A8_SRGB;
+    const VkExtent2D size{ .width = 8, .height = 8 };
+    fbe::gpu::image_t image = fbe::gpu::make_color_image(srgb, size);
+    REQUIRE(image.image != VK_NULL_HANDLE);
+    const fbe::gpu::resource_t into = fbe::gpu::external_resource({
+        .image = image.image,
+        .view = image.view,
+        .extent = size,
+        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .stages = flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_COPY_BIT),
+        .access = flag<VkAccessFlags2>(VK_ACCESS_2_TRANSFER_READ_BIT),
+    });
+    (void)settled();
+    require(fbe::gpu::add_pass({
+        .name = "a clear",
+        .colors = { { .target = into, .clear = true, .rgba = { 0.0F, 0.0F, 0.0F, 1.0F } } },
+        .record = [](VkCommandBuffer /*commands*/) {},
+    }));
+    const std::uint32_t with = fbe::gpu::allocations().count;
+    CHECK(fbe_texture_release(texture));
+    CHECK(fbe::gpu::waiting_frees() == 1);
+    CHECK(fbe::gpu::allocations().count == with);
+    REQUIRE(fbe::gpu::finish_frame());
+    fbe::gpu::destroy_image(image);
+    CHECK(settled() < none);
+    stop_gpu();
+}
+
 // As a game that builds a level and leaves it, over and over, with no Flip between.
 TEST_CASE("textures made and freed past the device's allocations with no Flip are all made",
           "[gpu][frees]") {
@@ -1331,8 +1366,10 @@ TEST_CASE("textures made and freed past the device's allocations with no Flip ar
     // What was written before all that was submitted with it, in its turn.
     CHECK(reads_as(kept, 42));
     // With every one of them alive there's nothing to free: the seventh isn't made, and says why.
-    CHECK(fbe::gpu::release_waiting() == (fbe::gpu::waiting_frees() > 0));
+    const bool waited = fbe::gpu::waiting_frees() > 0;
+    CHECK(fbe::gpu::release_waiting() == waited);
     std::vector<std::uint64_t> alive;
+    alive.reserve(6);
     for (int at = 0; at < 6; ++at) {
         alive.push_back(make(16, 16, FBE_TEXTURE_RGBA8, false));
     }
@@ -1346,6 +1383,7 @@ TEST_CASE("textures made and freed past the device's allocations with no Flip ar
     stop_gpu();
     start();
     std::vector<std::uint64_t> more;
+    more.reserve(12);
     for (int at = 0; at < 12; ++at) {
         more.push_back(make(16, 16, FBE_TEXTURE_RGBA8, false));
     }

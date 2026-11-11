@@ -177,6 +177,14 @@ good modern engine on its own. Every structural choice is checked against both.
 - **Vulkan 1.2** with dynamic rendering, synchronization2, descriptor indexing (bindless
   textures), and buffer device addresses (shaders read buffers through addresses in push
   constants), through volk and VMA; MoltenVK on macOS supports that set. Two frames in flight.
+  What's freed, a texture's image or a buffer, goes once nothing on the GPU can use it, and that
+  needs no Flip: with the frame being recorded if anything recorded could use it, or a pass waits
+  in the graph (gpu::after_use); at once if nothing is and the GPU's done with every frame; or
+  with the last frame submitted. And an allocation the device has no room for, as past NVIDIA's
+  4,096, submits what's recorded, waits for it, frees all that waited, and is tried once more
+  (gpu::allocated), so a game that builds a level and leaves it over and over with no Flip
+  between, a loader, a test, a server, runs out only of what's alive. Never in a frame's own
+  submit, where the graph makes its transient targets.
   The window's images and the screen are sRGB, so drawing is in linear light. A camera can draw in
   stored values instead, off by default: textures read as stored, lit and blended as stored, into
   a UNORM target, with no tonemap, and an HDR camera refuses it. DirectX 7 blended stored values,
