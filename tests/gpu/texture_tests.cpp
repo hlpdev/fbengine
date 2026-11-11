@@ -1444,6 +1444,18 @@ void free_with_a_frame(std::uint64_t texture) {
     REQUIRE(fbe::gpu::waiting_frees() == waiting + 1);
 }
 
+/// Leaves two textures' images, and what they were written through, with a frame submitted by a
+/// Flip, which nothing recorded after it uses: four allocations to free once it's done.
+void leave_with_a_frame() {
+    const std::size_t waiting = fbe::gpu::waiting_frees();
+    for (std::uint8_t at = 0; at < 2; ++at) {
+        REQUIRE(fbe_texture_release(written(at)));
+    }
+    REQUIRE(fbe::gpu::waiting_frees() == waiting + 4);
+    fbe_frame_flip(false);
+    REQUIRE(fbe::gpu::waiting_frees() == waiting + 4);
+}
+
 /// Leaves three textures' images, and what they were written through, to be freed with the frame
 /// being recorded, their uploads in it, and the device with room for nothing more.
 void full_but_for_the_frame() {
@@ -1511,8 +1523,103 @@ TEST_CASE("a texture made with no room frees what's done first, and submits only
         CHECK(said.contains("(VkResult -2)"));
         CHECK(fbe_texture_release(made));
     }
+    SECTION("a read, with what's freed left by a frame submitted: the copy's in what's read") {
+        CHECK(fbe_texture_release(freed));
+        leave_with_a_frame();
+        CHECK(fbe_texture_copy(kept, 4, 4, kept, 0, 0, 8, 8));
+        fbe::gpu::limit_allocations(static_cast<std::int64_t>(fbe::gpu::allocations().count));
+        // What that frame left is freed before the copy's recorded, so it has room for its image.
+        CHECK(shades_of(kept) == copied);
+        fbe::gpu::limit_allocations(-1);
+    }
+    SECTION("a read, with what's freed in the frame being recorded: read without the copy") {
+        CHECK(fbe_texture_copy(kept, 4, 4, kept, 0, 0, 8, 8));
+        CHECK(fbe_texture_release(freed));
+        fbe::gpu::limit_allocations(static_cast<std::int64_t>(fbe::gpu::allocations().count));
+        // The copy has no room for its own image as the read's submit records it, and is dropped,
+        // with its error; that submit run, what it left is freed for what the read goes through.
+        CHECK(shades_of(kept) == as_it_was);
+        CHECK(std::string_view(fbe_error()).contains("(VkResult -2)"));
+        fbe::gpu::limit_allocations(-1);
+    }
+    SECTION("a submit that passes over what it can't record isn't what a call's run again for") {
+        CHECK(fbe_texture_copy(kept, 4, 4, kept, 0, 0, 8, 8));
+        CHECK(fbe_texture_release(freed));
+        CHECK(fbe::gpu::waiting_frees() == 1);
+        fbe::gpu::limit_allocations(static_cast<std::int64_t>(fbe::gpu::allocations().count));
+        int runs = 0;
+        CHECK_FALSE(fbe::gpu::with_room([&] {
+            ++runs;
+            return fbe::gpu::finish_frame() && false;
+        }));
+        CHECK(runs == 1);
+        fbe::gpu::limit_allocations(-1);
+    }
     CHECK(fbe_gpu_validation_errors() == 0);
     CHECK(fbe_texture_release(kept));
+    stop_gpu();
+}
+
+// What a call that goes on couldn't send of a texture's CPU copy is dropped, as newer work has
+// gone after where it would have been: it isn't sent later, over that.
+TEST_CASE("pixels written on the CPU that a clear couldn't send first aren't sent after it",
+          "[gpu][frees]") {
+    start();
+    const std::uint64_t texture = written(1);
+    std::int64_t size = 0;
+    std::uint8_t* pixels = fbe_texture_pixels(texture, &size);
+    REQUIRE(pixels != nullptr);
+    (void)settled();
+    for (std::size_t y = 0; y < 4; ++y) {
+        std::fill_n(pixels + (y * 64), 16, std::uint8_t{ 50 });
+    }
+    require(fbe_texture_pixels_written(texture, 0, 0, 4, 4));
+    fbe::gpu::limit_allocations(static_cast<std::int64_t>(fbe::gpu::allocations().count));
+    require(fbe_texture_clear(texture, 1.0F, 1.0F, 1.0F, 1.0F));
+    fbe::gpu::limit_allocations(-1);
+    CHECK(reads_as(texture, 255));
+    // And the CPU's copy is read again from what the GPU has.
+    pixels = fbe_texture_pixels(texture, &size);
+    REQUIRE(pixels != nullptr);
+    CHECK(pixels[0] == 255);
+    CHECK(fbe_gpu_validation_errors() == 0);
+    CHECK(fbe_texture_release(texture));
+    stop_gpu();
+}
+
+// A write with no room, and nothing to free for it, fails, and leaves the texture as it was: the
+// GPU hasn't changed it, so more can be written into the CPU's copy, and with room it all goes.
+TEST_CASE("a write that fails for room leaves the CPU's pixels to send, and the texture unchanged",
+          "[gpu][frees]") {
+    start();
+    const std::uint64_t texture = written(1);
+    std::int64_t size = 0;
+    std::uint8_t* pixels = fbe_texture_pixels(texture, &size);
+    REQUIRE(pixels != nullptr);
+    (void)settled();
+    for (std::size_t y = 0; y < 4; ++y) {
+        std::fill_n(pixels + (y * 64), 16, std::uint8_t{ 50 });
+    }
+    require(fbe_texture_pixels_written(texture, 0, 0, 4, 4));
+    REQUIRE(fbe::gpu::waiting_frees() == 0);
+    fbe::gpu::limit_allocations(static_cast<std::int64_t>(fbe::gpu::allocations().count));
+    const std::vector<std::uint8_t> direct(std::size_t{ 4 } * 4 * 4, 99);
+    CHECK_FALSE(fbe_texture_write(texture, 8, 8, 4, 4, direct.data(), 16));
+    CHECK(std::string_view(fbe_error()).contains("(VkResult -2)"));
+    // Another rectangle of the same copy: the GPU hasn't changed the texture since it was read.
+    std::fill_n(pixels + (std::size_t{ 12 } * 64), 16, std::uint8_t{ 60 });
+    INFO(fbe_error());
+    CHECK(fbe_texture_pixels_written(texture, 0, 12, 4, 1));
+    CHECK(fbe_texture_pixels(texture, &size) == pixels);
+    fbe::gpu::limit_allocations(-1);
+    std::vector<std::uint8_t> expected(std::size_t{ 16 } * 16, 1);
+    for (std::size_t y = 0; y < 4; ++y) {
+        std::fill_n(expected.begin() + static_cast<std::ptrdiff_t>(y * 16), 4, std::uint8_t{ 50 });
+    }
+    std::fill_n(expected.begin() + std::ptrdiff_t{ 12 } * 16, 4, std::uint8_t{ 60 });
+    CHECK(shades_of(texture) == expected);
+    CHECK(fbe_gpu_validation_errors() == 0);
+    CHECK(fbe_texture_release(texture));
     stop_gpu();
 }
 
@@ -1597,6 +1704,15 @@ TEST_CASE("each call that makes or sends a texture's run again once there's room
         full_but_for_the_frame();
         CHECK(reads_as(texture, 1));
     }
+    SECTION("the CPU's copy") {
+        const std::uint64_t texture = written(1);
+        full_but_for_the_frame();
+        std::int64_t size = 0;
+        const std::uint8_t* pixels = fbe_texture_pixels(texture, &size);
+        INFO(fbe_error());
+        REQUIRE(pixels != nullptr);
+        CHECK(pixels[0] == 1);
+    }
     SECTION("a load's") {
         const std::uint64_t load = image_load(block_image(assets::formats::rgba8, 64), blue);
         full_but_for_the_frame();
@@ -1620,7 +1736,7 @@ TEST_CASE("each call that makes or sends a texture's run again once there's room
         INFO(fbe_error());
         CHECK(made != 0);
         CHECK(fbe_texture_release(made));
-        // And the model's own call for it, which shares it.
+        // And the model's own call for it.
         fbe::gpu::limit_allocations(-1);
         full_but_for_the_frame();
         const std::uint64_t shared = fbe_model_texture(load, 0, false);
