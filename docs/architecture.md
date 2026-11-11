@@ -194,8 +194,7 @@ good modern engine on its own. Every structural choice is checked against both.
   draws fail that frame as they did, the buffers a draw makes among them. 2D quads held in a
   batch with no room for them in the frame's memory stay held till there is: a Flip that still
   has none drops them and fails saying so, and any other submit fails without them. Never in a
-  frame's
-  submit, where the graph makes its transient targets. A shader's code and its pipelines, which
+  frame's submit, where the graph makes its transient targets. A shader's code and its pipelines, which
   hold none of the device's memory, wait for the next frame submitted without beginning it
   (gpu::after_next_frame), so a shader freed and made again before then has its pipelines still,
   and what's freed after it doesn't wait with it; they go too when room's wanted.
