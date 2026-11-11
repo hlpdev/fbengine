@@ -191,9 +191,12 @@ good modern engine on its own. Every structural choice is checked against both.
   and over with no Flip between, a loader, a test, a server, runs out only of what's alive. What
   that forced submit can't make for want of room is dropped as a Flip's is, with fbe_error's why.
   Nothing inside the engine runs itself again, a Flip's present least of all, and a frame's own
-  draws fail that frame as they did, the buffers a draw makes among them. 2D quads held in a
-  batch with no room for them in the frame's memory stay held till there is: a Flip that still
-  has none drops them and fails saying so, and any other submit fails without them. Never in a
+  draws fail that frame as they did, the buffers a draw makes among them: 2D quads with no room
+  in the frame's memory as their batch goes to the graph are dropped, with fbe_error's why, never
+  held to be drawn later, after what came after them. A submit that isn't a Flip's, as a read's
+  is, first frees what the frames before it left, so what it records has that room. What's
+  written into a texture's CPU copy and couldn't be sent is still to send only for the call that
+  fails for it, which run again sends it; a call that goes on drops it. Never in a
   frame's submit, where the graph makes its transient targets. A shader's code and its pipelines, which
   hold none of the device's memory, wait for the next frame submitted without beginning it
   (gpu::after_next_frame), so a shader freed and made again before then has its pipelines still,
