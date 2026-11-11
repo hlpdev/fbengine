@@ -14,6 +14,7 @@ Import std.text
 Import std.time
 Import fbengine
 Import "./watching"
+Import "./written"
 
 Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
 
@@ -712,7 +713,7 @@ Function AChangedFileMakesItsSpawnsAgain() Throws IOError
     Local texturesBefore = Texture.Count()
     Try WatcherStarted(folder.Path, "res://hot-model")
     Local old = model.Geometries()[0]
-    Try File.WriteBytesAtomic(folder.Path / "door.gltf", Door(2))
+    Try WriteChanged(folder.Path / "door.gltf", Door(2))
     FlipUntil(Function(): Bool => !RefEquals(model.Geometries()[0], old))
     Local geometry = model.Geometries()[0]
     Expect(!RefEquals(geometry, old))
@@ -725,7 +726,7 @@ Function AChangedFileMakesItsSpawnsAgain() Throws IOError
     Expect(door Is Mesh && RefEquals((door As Mesh).Geometry(), geometry))
     Expect(Texture.Count() == texturesBefore)
     // What doesn't load leaves it as it was.
-    Try File.WriteBytesAtomic(folder.Path / "door.gltf", "not a glTF".Bytes)
+    Try WriteChanged(folder.Path / "door.gltf", "not a glTF".Bytes)
     Local failed = False
     FlipUntil(Function(): Bool
         For reload In Assets.Reloaded()
@@ -960,7 +961,7 @@ Function WhatsReadOfItsTexturesFollowsItsFile() Throws IOError, GraphicsError
     Try WatcherStarted(folder.Path, "res://hot-paint")
 
     Local old = model.Geometries()[0]
-    Try File.WriteBytesAtomic(folder.Path / "it.gltf", Painted(file, Color32(255, 255, 0, 255)))
+    Try WriteChanged(folder.Path / "it.gltf", Painted(file, Color32(255, 255, 0, 255)))
     FlipUntil(Function(): Bool => !RefEquals(model.Geometries()[0], old))
     Local color = paint.Texture(0)
     Expect(color?.Path() == "res://hot-paint/it.gltf#1", color?.Path() ?? "no path")
@@ -984,8 +985,8 @@ Function WhatsReadOfItsTexturesFollowsItsFile() Throws IOError, GraphicsError
         "{{\"pbrMetallicRoughness\":{{\"baseColorTexture\":{{\"index\":0}}}}," +
         "\"emissiveTexture\":{{\"index\":1}},\"emissiveFactor\":[1,1,1]}}"
     old = model.Geometries()[0]
-    Try File.WriteBytesAtomic(folder.Path / "it.gltf",
-                              NamedImages(Dressed(otherwise, textures, samplers)))
+    Try WriteChanged(folder.Path / "it.gltf",
+                     NamedImages(Dressed(otherwise, textures, samplers)))
     FlipUntil(Function(): Bool => !RefEquals(model.Geometries()[0], old))
     Local emits = model.TextureOf(0, ModelMap.EMISSIVE)
     Expect(emits?.Path() == "res://hot-paint/it.gltf#1:1" && emits?.Format() == TextureFormat.RGBA8,
@@ -999,8 +1000,8 @@ Function WhatsReadOfItsTexturesFollowsItsFile() Throws IOError, GraphicsError
     // Its images saved in another order: what's read of one goes by its name, not its number, so it
     // isn't the red that's #1 now; and green, #0 now, is read by nothing, so it stays.
     old = model.Geometries()[0]
-    Try File.WriteBytesAtomic(folder.Path / "it.gltf",
-                              NamedImages(Dressed(otherwise, textures, samplers), True))
+    Try WriteChanged(folder.Path / "it.gltf",
+                     NamedImages(Dressed(otherwise, textures, samplers), True))
     FlipUntil(Function(): Bool => !RefEquals(model.Geometries()[0], old))
     Local kept = paint.Texture(0)
     Expect(kept?.ReadPixel(0, 0) == Color32(0, 255, 0, 255), "it's another image's")
@@ -1030,7 +1031,7 @@ Function AFreedTextureOfItsIsLeftOut() Throws IOError, GraphicsError
     Local count = Texture.Count()
     Try WatcherStarted(folder.Path, "res://freed-paint")
     Local old = model.Geometries()[0]
-    Try File.WriteBytesAtomic(folder.Path / "it.gltf", Painted(file, Color32(255, 255, 0, 255)))
+    Try WriteChanged(folder.Path / "it.gltf", Painted(file, Color32(255, 255, 0, 255)))
     FlipUntil(Function(): Bool => !RefEquals(model.Geometries()[0], old))
     Local reloaded = !RefEquals(model.Geometries()[0], old)
     Expect(reloaded, "it didn't reload")

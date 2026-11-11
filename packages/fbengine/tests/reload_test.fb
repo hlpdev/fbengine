@@ -12,6 +12,7 @@ Import std.text
 Import std.time
 Import fbengine
 Import "./watching"
+Import "./written"
 
 // An image's width, which its Reload takes in place, how many times it has, and how many of them
 // were after its last Free.
@@ -175,13 +176,16 @@ Function Failed(): IOError?
     Return Null
 End Function
 
+// A picture `side` texels a side, written over one that's there so it's seen as changed, as
+// WriteOver has it.
 Function WritePng(folder: Path, name: String, side: Int) Throws IOError
-    Try File.WriteBytes(folder / name, Png.Encode(Image(side, side)))
+    Try WriteOver(folder / name, Png.Encode(Image(side, side)))
 End Function
 
-// Writes it through a rename, so a load reading it meanwhile reads it whole, the old or the new.
+// Writes it through a rename, so a load reading it meanwhile reads it whole, the old or the new,
+// and so it's seen as changed.
 Function SwapPng(folder: Path, name: String, side: Int) Throws IOError
-    Try File.WriteBytesAtomic(folder / name, Png.Encode(Image(side, side)))
+    Try WriteChanged(folder / name, Png.Encode(Image(side, side)))
 End Function
 
 // A triangle's buffer alone, `name`.bin, as WriteTriangle writes it, its glTF left as it is.
@@ -189,7 +193,7 @@ Function WriteBuffer(folder: Path, name: String, second: UInt8) Throws IOError
     Local buffer = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x80, 0x3F, 0, 0, 0, 0, 0, 0, 0, 0,
                     0, 0, 0, 0, 0, 0, 0x80, 0x3F, 0, 0, 0, 0, 0, 0, second, 0, 3 - second,
                     0] As UInt8[]
-    Try File.WriteBytes(folder / "{name}.bin", buffer)
+    Try WriteOver(folder / "{name}.bin", buffer)
 End Function
 
 // A triangle's glTF, `name`.gltf, and its buffer beside it, `name`.bin, its three positions and
@@ -197,15 +201,15 @@ End Function
 // then 0, `second`, and 3 - `second` as UInt16s.
 Function WriteTriangle(folder: Path, name: String, second: UInt8) Throws IOError
     Try WriteBuffer(folder, name, second)
-    Try File.WriteText(folder / "{name}.gltf",
-                       "{{\"asset\":{{\"version\":\"2.0\"}},\"buffers\":[{{\"byteLength\":42," +
-                       "\"uri\":\"{name}.bin\"}}],\"bufferViews\":[{{\"buffer\":0,\"byteLength\":36}}," +
-                       "{{\"buffer\":0,\"byteOffset\":36,\"byteLength\":6}}],\"accessors\":[" +
-                       "{{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"," +
-                       "\"min\":[0,0,0],\"max\":[1,1,0]}},{{\"bufferView\":1,\"componentType\":5123," +
-                       "\"count\":3,\"type\":\"SCALAR\"}}],\"meshes\":[{{\"primitives\":[{{" +
-                       "\"attributes\":{{\"POSITION\":0}},\"indices\":1}}]}}],\"nodes\":[{{\"mesh\":0}}]," +
-                       "\"scenes\":[{{\"nodes\":[0]}}]}}")
+    Local text = "{{\"asset\":{{\"version\":\"2.0\"}},\"buffers\":[{{\"byteLength\":42," +
+                 "\"uri\":\"{name}.bin\"}}],\"bufferViews\":[{{\"buffer\":0,\"byteLength\":36}}," +
+                 "{{\"buffer\":0,\"byteOffset\":36,\"byteLength\":6}}],\"accessors\":[" +
+                 "{{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"," +
+                 "\"min\":[0,0,0],\"max\":[1,1,0]}},{{\"bufferView\":1,\"componentType\":5123," +
+                 "\"count\":3,\"type\":\"SCALAR\"}}],\"meshes\":[{{\"primitives\":[{{" +
+                 "\"attributes\":{{\"POSITION\":0}},\"indices\":1}}]}}],\"nodes\":[{{\"mesh\":0}}]," +
+                 "\"scenes\":[{{\"nodes\":[0]}}]}}"
+    Try WriteOver(folder / "{name}.gltf", text.Bytes)
 End Function
 
 // Links `link` to the folder `target`, as a junction on Windows, which needs no privilege.
@@ -295,7 +299,7 @@ Function AWatchedFolderReloadsWhatChangesInIt() Throws IOError
     // What doesn't load keeps what it had, and says why, after any reload the sidecar's change
     // left to finish.
     reloaded = []
-    Try File.WriteText(folder.Path / "a.png", "not an image")
+    Try WriteChangedText(folder.Path / "a.png", "not an image")
     FlipUntil(Function(): Bool => Failed() != Null)
     Expect(Failed()?.Kind == IOErrorKind.INVALID_DATA)
     Expect(a.Width == 4)
@@ -485,7 +489,8 @@ Function AFolderMadeAgainIsWatchedAgain() Throws IOError
     FlipFor(300.Milliseconds)
     Try Dir.CreateAll(folder.Path / "sub")
     Try WatcherStarted(folder.Path, "res://test-remade")
-    Try WritePng(folder.Path / "sub", "b.png", 4)
+    // Not there now, and there when it was loaded: written as what's changed.
+    Try WriteChanged(folder.Path / "sub" / "b.png", Png.Encode(Image(4, 4)))
     FlipUntil(Function(): Bool => picture.Width == 4)
     Expect(picture.Width == 4)
     // Its new watcher's, not one of the first's.
@@ -505,7 +510,7 @@ Function ATomlAssetReloadsItself() Throws IOError
     Defer Assets.StopWatching()
     Local level = Try Assets.Load<HotText>("res://test-toml/level.toml")
     Try WatcherStarted(folder.Path, "res://test-toml")
-    Try File.WriteText(folder.Path / "level.toml", "name = 'two'")
+    Try WriteChangedText(folder.Path / "level.toml", "name = 'two'")
     FlipUntil(Function(): Bool => level.Text == "name = 'two'")
     Expect(level.Text == "name = 'two'")
 End Function
@@ -644,13 +649,12 @@ Function AFileThatsOnlyReadIsntReloaded() Throws IOError
     Try Assets.Noticed("res://test-read/a.bin")
     FlipFor(400.Milliseconds)
     Expect(probe.Reloads == 0 && reloaded.Count == 0, "{probe.Reloads} reloads of a file told of")
-    // A write is a change, of other bytes as many, and of the same bytes again.
-    Try File.WriteBytes(file, [4, 5, 6] As UInt8[])
+    // A write is a change, of other bytes as many, and of the same bytes again, at another time.
+    Try WriteChanged(file, [4, 5, 6] As UInt8[])
     FlipUntil(Function(): Bool => probe.Reloads == 1)
     Expect(probe.Reloads == 1)
     FlipFor(300.Milliseconds)
-    Sleep(20.Milliseconds)
-    Try File.WriteBytes(file, [4, 5, 6] As UInt8[])
+    Try WriteChanged(file, [4, 5, 6] As UInt8[])
     FlipUntil(Function(): Bool => probe.Reloads == 2)
     Expect(probe.Reloads == 2)
     // And after that it's as it was read again.
@@ -705,7 +709,6 @@ Function WhatReadTheOldFileIsReloadedThoughAnotherReadTheNew() Throws IOError
     Try WatcherStarted(folder.Path, "res://test-read-two")
     Local old = Try Assets.Load<HotPicture>("res://test-read-two/a.png")
     Defer Assets.Release(old)
-    Sleep(20.Milliseconds)
     Try WritePng(folder.Path, "a.png", 4)
     Local fresh = Try Assets.Load<WidePicture>("res://test-read-two/a.png")
     Defer Assets.Release(fresh)
@@ -757,7 +760,7 @@ Function AnAssetIsReloadedForItsSidecarAlone() Throws IOError
     Local probe = Try Assets.Load<ReadBytes>("res://test-sidecar-alone/a.bin")
     Defer Assets.Release(probe)
     Expect(Assets.Unchanged("res://test-sidecar-alone/a.bin.toml"))
-    Try File.WriteText(folder.Path / "a.bin.toml", "speed = 22")
+    Try WriteChangedText(folder.Path / "a.bin.toml", "speed = 22")
     Expect(!Assets.Unchanged("res://test-sidecar-alone/a.bin.toml"))
     Expect(Assets.Unchanged("res://test-sidecar-alone/a.bin"))
     FlipUntil(Function(): Bool => probe.Reloads >= 1)
@@ -783,9 +786,9 @@ Function AWriteWhileItLoadsAgainLeavesItAsItsFileIs() Throws IOError
     Defer Assets.Unmount("res://test-write-loading")
     Local probe = Try Assets.Load<ReadBytes>("res://test-write-loading/a.bin")
     Defer Assets.Release(probe)
-    Try File.WriteBytes(file, [1, 2, 3, 4] As UInt8[])
+    Try WriteChanged(file, [1, 2, 3, 4] As UInt8[])
     Try Assets.Reload("res://test-write-loading/a.bin")
-    Try File.WriteBytes(file, [1, 2, 3, 4, 5] As UInt8[])
+    Try WriteChanged(file, [1, 2, 3, 4, 5] As UInt8[])
     Try Assets.Reload("res://test-write-loading/a.bin")
     FlipUntil(Function(): Bool => probe.Reloads >= 2)
     Expect(probe.Reloads == 2)
@@ -827,7 +830,7 @@ Function WhatAnAssetReadIsKeptOnlyWhileTheCacheHasIt() Throws IOError
 
     // Let go, written, and loaded again.
     Try WriteBuffer(folder.Path, "m", 2)
-    Try File.WriteText(folder.Path / "m.gltf", (Try File.ReadText(folder.Path / "m.gltf")) + " ")
+    Try WriteChangedText(folder.Path / "m.gltf", (Try File.ReadText(folder.Path / "m.gltf")) + " ")
     model = Try Assets.Load<HotModel>("res://test-kept/m.gltf")
     Expect(Assets.Unchanged("res://test-kept/m.gltf"))
     Expect(Assets.Unchanged("res://test-kept/m.bin"))
@@ -896,9 +899,9 @@ Function AFileThatDoesntLoadIsToldOfOnce() Throws IOError
     Local model = Try Assets.Load<HotModel>("res://test-broken/m.gltf")
     Defer Assets.Release(model)
     reloaded = []
-    Try File.WriteText(folder.Path / "a.png", "not a PNG")
+    Try WriteChangedText(folder.Path / "a.png", "not a PNG")
     // Short of what its glTF says it has.
-    Try File.WriteBytes(folder.Path / "m.bin", [0, 0, 0, 0] As UInt8[])
+    Try WriteChanged(folder.Path / "m.bin", [0, 0, 0, 0] As UInt8[])
     FlipUntil(Function(): Bool => reloaded.Count >= 2)
     FlipFor(300.Milliseconds)
     Local told = reloaded.Count
@@ -941,7 +944,7 @@ Function AnAssetThatsGoneDoesntKeepItsFileChanged() Throws IOError
     Local model = Try Assets.Load<HotModel>("res://test-gone/m.gltf")
     Defer Assets.Release(model)
     Try LoadedAndGone("res://test-gone/m.gltf")
-    Try File.WriteText(folder.Path / "m.gltf", (Try File.ReadText(folder.Path / "m.gltf")) + " ")
+    Try WriteChangedText(folder.Path / "m.gltf", (Try File.ReadText(folder.Path / "m.gltf")) + " ")
     FlipUntil(Function(): Bool => model.Reloads >= 1)
     FlipFor(300.Milliseconds)
     Expect(model.Reloads >= 1)
@@ -967,8 +970,8 @@ Function AModelThatNamesWhatIsntThereYetIsLoadedWhenItComes() Throws IOError
     Local model = Try Assets.Load<HotModel>("res://test-comes/m.gltf")
     Defer Assets.Release(model)
     reloaded = []
-    Try File.WriteText(folder.Path / "m.gltf",
-                       (Try File.ReadText(folder.Path / "m.gltf")).Replace("m.bin", "n.bin"))
+    Try WriteChangedText(folder.Path / "m.gltf",
+                         (Try File.ReadText(folder.Path / "m.gltf")).Replace("m.bin", "n.bin"))
     FlipUntil(Function(): Bool => Failed() != Null)
     FlipFor(300.Milliseconds)
     Expect(Failed() != Null && model.Reloads == 0)
@@ -1000,21 +1003,6 @@ Class Picky Implements Asset
     End Method
 End Class
 
-// Writes `bytes` to `file` as a file written at the first moment of 2020, whole and at once: made
-// beside `aside`, and moved in.
-Function WriteAt2020(file: Path, aside: Path, bytes: UInt8[]) Throws IOError
-    Local made = aside / "made.bin"
-    Try File.WriteBytes(made, bytes)
-    If System.Platform == Platform.WINDOWS
-        Try Command("powershell").Args(["-NoProfile", "-Command",
-                                        "(Get-Item -LiteralPath '{made.Text}').LastWriteTimeUtc = " +
-                                        "[DateTime]::new(2020, 1, 1, 0, 0, 0, [DateTimeKind]::Utc)"]).Output()
-    Else
-        Try Command("touch").Args(["-m", "-t", "202001010000.00", made.Text]).Output()
-    End If
-    Try File.Move(made, file)
-End Function
-
 // The limit of going by a file's size and write time, which a reload that failed shares: a file
 // that didn't load, written again as many bytes at the same moment of the file system's clock,
 // isn't seen to have changed, and is loaded when it's asked for.
@@ -1022,8 +1010,6 @@ End Function
 Function AFixOfTheSameSizeAtTheSameMomentIsntSeen() Throws IOError
     Local folder = Try TempDir()
     Defer Try? folder.Close()
-    Local aside = Try TempDir()
-    Defer Try? aside.Close()
     Local file = folder.Path / "a.bin"
     Try File.WriteBytes(file, [1, 2, 3] As UInt8[])
     Assets.MountFolder("res://test-moment", folder.Path)
@@ -1034,12 +1020,13 @@ Function AFixOfTheSameSizeAtTheSameMomentIsntSeen() Throws IOError
     Local picky = Try Assets.Load<Picky>("res://test-moment/a.bin")
     Defer Assets.Release(picky)
     reloaded = []
-    Try WriteAt2020(file, aside.Path, [0, 2, 3] As UInt8[])
+    // Both at one moment, 2021's first, which no other write here is given.
+    Try WriteAtMoment(file, [0, 2, 3] As UInt8[], 0)
     FlipUntil(Function(): Bool => Failed() != Null)
     FlipFor(300.Milliseconds)
     Local told = reloaded.Count
     Expect(told >= 1 && picky.Reloads == 0)
-    Try WriteAt2020(file, aside.Path, [1, 2, 4] As UInt8[])
+    Try WriteAtMoment(file, [1, 2, 4] As UInt8[], 0)
     Expect(Assets.Unchanged("res://test-moment/a.bin"))
     Try Assets.Noticed("res://test-moment/a.bin")
     FlipFor(500.Milliseconds)
@@ -1066,7 +1053,7 @@ Function AFileWrittenWhileItFirstLoadsIsLoadedAgain() Throws IOError
     Local loading = Assets.LoadAsync<HotText>("res://test-first/a.txt")
     // Long enough for a worker to have read it, with nothing handed over.
     Sleep(100.Milliseconds)
-    Try File.WriteText(file, "new!")
+    Try WriteChangedText(file, "new!")
     Local other = Try Assets.Load<ReadBytes>("res://test-first/a.txt")
     Defer Assets.Release(other)
     Expect(!Assets.Unchanged("res://test-first/a.txt"))

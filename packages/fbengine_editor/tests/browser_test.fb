@@ -16,6 +16,7 @@ Import fbengine
 Import fbengine_editor
 Import fbengine_ui
 Import "./watching"
+Import "./written"
 
 Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
 
@@ -403,7 +404,7 @@ Function WhatChangesOnDiskIsSeen() Throws IOError, GraphicsError
     If thumb == Null Then Panic("a picture's thumbnail")
     Expect(thumb.Texture().ReadPixel(0, 0) == Color32(200, 20, 30, 255))
     PastALook(editor)
-    Try File.WriteBytes(assets / "wall.png", Picture(90))
+    Try WriteChanged(assets / "wall.png", Picture(90))
     StepUntil(editor, Function() => RowPixel(editor, "res://wall.png") == Color32(90, 20, 30, 255))
     Expect(RowPixel(editor, "res://wall.png") == Color32(90, 20, 30, 255))
     // New, and gone.
@@ -431,7 +432,7 @@ Function WhatChangesOnDiskIsSeen() Throws IOError, GraphicsError
     editor.Step()
     Local placed = editor.Edited.Entities()[0]
     Local reloads = editor.Files.Reloads()
-    Try File.WriteText(assets / "sub" / "ball.gltf", TRIANGLE.Replace("\"blade\"", "\"sharper\""))
+    Try WriteChangedText(assets / "sub" / "ball.gltf", TRIANGLE.Replace("\"blade\"", "\"sharper\""))
     StepUntil(editor, Function() => editor.Files.Reloads() > reloads)
     Expect(placed.ChildCount() == 1 && placed.Child(0).Name() == "sharper")
     // Its thumbnail's the file's as it is now: the triangle turned away from above is none of it drawn.
@@ -439,9 +440,9 @@ Function WhatChangesOnDiskIsSeen() Throws IOError, GraphicsError
     If seen == Null Then Panic("a model's thumbnail")
     Expect(Differing(seen.Texture().ToImage()) > 40)
     reloads = editor.Files.Reloads()
-    Try File.WriteText(assets / "sub" / "ball.gltf",
-                       TRIANGLE.Replace("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAIA/AACAPwAAAAAAAAAA",
-                                        "AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/"))
+    Try WriteChangedText(assets / "sub" / "ball.gltf",
+                         TRIANGLE.Replace("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAIA/AACAPwAAAAAAAAAA",
+                                          "AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/"))
     StepUntil(editor, Function() => editor.Files.Reloads() > reloads)
     Local after = Thumb(editor, "res://sub/ball.gltf")
     If after == Null Then Panic("a model's thumbnail")
@@ -809,13 +810,13 @@ Function WhatChangesShowsInItsRow() Throws IOError, GraphicsError
     If shown == Null Then Panic("a model's")
     Expect(Differing(shown.Texture().ToImage()) > 40)
     PastALook(editor)
-    Try File.WriteBytes(assets / "wall.png", Picture(90))
-    Try File.WriteBytes(assets / "Wall2.png", Picture(95))
-    Try File.WriteBytes(assets / "bad.png", Picture(77))
+    Try WriteChanged(assets / "wall.png", Picture(90))
+    Try WriteChanged(assets / "Wall2.png", Picture(95))
+    Try WriteChanged(assets / "bad.png", Picture(77))
     // Turned away from above: none of it's drawn.
-    Try File.WriteText(assets / "sub" / "ball.gltf",
-                       TRIANGLE.Replace("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAIA/AACAPwAAAAAAAAAA",
-                                        "AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/"))
+    Try WriteChangedText(assets / "sub" / "ball.gltf",
+                         TRIANGLE.Replace("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAIA/AACAPwAAAAAAAAAA",
+                                          "AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/"))
     Local changed = Function(): Bool
         Local model = editor.Files.ThumbOf("res://sub/ball.gltf")
         Local fixed = editor.Files.ThumbOf("res://bad.png")
@@ -839,11 +840,11 @@ Function AFailedReloadKeepsItsThumbnail() Throws IOError, GraphicsError
     Defer editor.Finish()
     If Thumb(editor, "res://wall.png") == Null Then Panic("a picture")
     PastALook(editor)
-    Try File.WriteText(game / "assets" / "wall.png", "garbage now")
+    Try WriteChangedText(game / "assets" / "wall.png", "garbage now")
     StepUntil(editor, Function() => editor.Files.Problem() != "")
     Expect(editor.Files.Problem().Contains("wall.png"), editor.Files.Problem())
     Expect(RowPixel(editor, "res://wall.png") == Color32(200, 20, 30, 255))
-    Try File.WriteBytes(game / "assets" / "wall.png", Picture(66))
+    Try WriteChanged(game / "assets" / "wall.png", Picture(66))
     StepUntil(editor, Function() => RowPixel(editor, "res://wall.png") == Color32(66, 20, 30, 255))
     Expect(editor.Files.Problem() == "", editor.Files.Problem())
 End Function
@@ -867,7 +868,7 @@ Function AModelReloadedKeepsItsEntitiesAndWhatsUnderThem() Throws IOError, Graph
     Local own = Pivot(blade)
     own.SetName("own")
     Local reloads = editor.Files.Reloads()
-    Try File.WriteText(file, TRIANGLE.Replace("\"mesh\":0", "\"mesh\":0,\"translation\":[3,0,0]"))
+    Try WriteChangedText(file, TRIANGLE.Replace("\"mesh\":0", "\"mesh\":0,\"translation\":[3,0,0]"))
     StepUntil(editor, Function() => editor.Files.Reloads() > reloads)
     Expect(RefEquals(spawned.Child(0), blade) && spawned.ChildCount() == 1)
     Expect(blade.Name() == "mine" && blade.Position() == Vec3(3, 0, 0))
@@ -880,7 +881,7 @@ Function AModelReloadedKeepsItsEntitiesAndWhatsUnderThem() Throws IOError, Graph
     // Lost: what was under it's kept, where it was in the world, and the edit's harmless.
     own.SetPosition(Vec3(0, 1, 0))
     reloads = editor.Files.Reloads()
-    Try File.WriteText(file, TRIANGLE.Replace("\"blade\"", "\"other\""))
+    Try WriteChangedText(file, TRIANGLE.Replace("\"blade\"", "\"other\""))
     StepUntil(editor, Function() => editor.Files.Reloads() > reloads)
     Expect(blade.Freed() && !own.Freed())
     Expect(RefEquals(own.Parent(), spawned))
@@ -909,9 +910,9 @@ Function AnOpenedSceneFollowsItsModels() Throws IOError, GraphicsError
     If held == Null Then Panic("it holds its model")
     Expect(was == held.Geometries()[0])
     Local reloads = editor.Files.Reloads()
-    Try File.WriteText(game / "assets" / "sub" / "ball.gltf",
-                       TRIANGLE.Replace("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAIA/AACAPwAAAAAAAAAA",
-                                        "AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/"))
+    Try WriteChangedText(game / "assets" / "sub" / "ball.gltf",
+                         TRIANGLE.Replace("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAIA/AACAPwAAAAAAAAAA",
+                                          "AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/"))
     StepUntil(editor, Function() => editor.Files.Reloads() > reloads)
     Expect(mesh.Geometry() != was)
     Expect(mesh.Geometry() == held.Geometries()[0])
@@ -1255,7 +1256,7 @@ Function WhatsSmallInTheBrowser() Throws IOError, GraphicsError
     editor.Files.Choose("res://wall.png")
     editor.Step()
     (Found(editor, "assets.quality") As? Slider)?.SetValue(2.0)
-    Try File.WriteText(sidecar, "srgb = false\n")
+    Try WriteChangedText(sidecar, "srgb = false\n")
     editor.Files.Choose(Null)
     editor.Files.Choose("res://wall.png")
     editor.Step()
