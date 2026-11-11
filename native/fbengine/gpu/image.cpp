@@ -127,6 +127,8 @@ void stop_immediate() {
 }
 
 bool run_now(const std::function<void(VkCommandBuffer)>& record) {
+    // MoltenVK makes a Metal command buffer of each submit, handed back to be let go of later.
+    const fbe::autoreleased_t autoreleased;
     const device_t* gpu = device();
     if (gpu == nullptr) {
         return fail("the GPU hasn't started");

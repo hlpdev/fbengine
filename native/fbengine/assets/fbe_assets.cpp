@@ -284,9 +284,29 @@ FBE_API int64_t fbe_assets_heap_blocks(void) {
     }
     return blocks;
 #elifdef __APPLE__
-    malloc_statistics_t statistics{};
-    malloc_zone_statistics(nullptr, &statistics);
-    return static_cast<int64_t>(statistics.blocks_in_use);
+    // Each zone's blocks in use, walked, as `heap` counts them: a zone's own count of them,
+    // malloc_zone_statistics', goes up with what's freed and kept for the next of its size.
+    vm_address_t* zones = nullptr;
+    unsigned count = 0;
+    if (malloc_get_all_zones(mach_task_self(), nullptr, &zones, &count) != KERN_SUCCESS) {
+        return -1;
+    }
+    int64_t blocks = 0;
+    for (unsigned at = 0; at < count; ++at) {
+        auto* zone = reinterpret_cast<malloc_zone_t*>(zones[at]);
+        if (zone == nullptr || zone->introspect == nullptr ||
+            zone->introspect->enumerator == nullptr) {
+            continue;
+        }
+        zone->introspect->force_lock(zone);
+        zone->introspect->enumerator(
+            mach_task_self(), &blocks, MALLOC_PTR_IN_USE_RANGE_TYPE, zones[at], nullptr,
+            [](task_t, void* counted, unsigned, vm_range_t*, unsigned ranges) {
+                *static_cast<int64_t*>(counted) += ranges;
+            });
+        zone->introspect->force_unlock(zone);
+    }
+    return blocks;
 #else
     return -1;
 #endif

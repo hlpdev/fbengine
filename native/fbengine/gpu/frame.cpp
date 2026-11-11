@@ -108,6 +108,8 @@ void drop(const fbe::gpu::device_t& gpu, const carried_t& carry) {
 /// semaphore again and, unless the device was lost, carries the frame's uploads to the next.
 bool submit(const fbe::gpu::device_t& gpu, fbe::gpu::frame_t& frame, VkSemaphore wait,
             VkSemaphore signal) {
+    // MoltenVK makes a Metal command buffer of each submit, handed back to be let go of later.
+    const fbe::autoreleased_t autoreleased;
     if (frame.timer != VK_NULL_HANDLE) {
         vkCmdWriteTimestamp(frame.commands, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, frame.timer, 1);
     }

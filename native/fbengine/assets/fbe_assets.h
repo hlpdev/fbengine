@@ -110,9 +110,10 @@ FBE_API int64_t fbe_assets_resident_bytes(void);
 // none of them left there are none.
 FBE_API int64_t fbe_assets_shared_count(void);
 // How many blocks the process's heaps have in use now, whoever asked for them, the engine, the
-// program, or a driver: every heap's busy blocks on Windows, the malloc zones' on macOS; -1 where
-// that can't be told, as on Linux, whose malloc counts its free ones. A leak adds to them each
-// time round, where the pages a process holds also rise as its heaps are cut up.
+// program, or a driver: every heap's busy blocks on Windows, and every malloc zone's blocks in use
+// on macOS, walked as `heap` walks them; -1 where that can't be told, as on Linux, whose malloc
+// counts its free ones. A leak adds to them each time round, where the pages a process holds also
+// rise as its heaps are cut up.
 FBE_API int64_t fbe_assets_heap_blocks(void);
 // Whether this DLL's built with AddressSanitizer, whose memory a soak doesn't judge, as
 // LeakSanitizer does.
