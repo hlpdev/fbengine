@@ -2366,13 +2366,13 @@ TEST_CASE("a particle grown past all bounds is drawn as it's read, finite, and n
     REQUIRE(all.size() == 1);
     CHECK(std::fabs(all[0].half_width - 1.2F) < 0.001F);
     drawn_as_read(scene, scene.drawn(), all);
-    // Doubled 300 times, it's as big as a size gets, and drawn, over half the frame at the least,
-    // as a rasterizer has what's that big; of no size, nothing.
+    // Doubled 300 times, it's as big as a size gets, and drawn, over all the frame, as no more of
+    // it is drawn than covers that, which every rasterizer takes; of no size, nothing.
     require(fbe_particles_set_steps(emitter, 1.0F / 128.0F, false));
     require(fbe_particles_set_growth(emitter, 0.0F, 2.0F));
     all = particles_read(emitter);
     CHECK(all[0].half_width == 1e9F);
-    CHECK(lit_pixels(scene.drawn()) >= frame_size * frame_size / 2);
+    CHECK(lit_pixels(scene.drawn()) == frame_size * frame_size);
     require(fbe_particles_set_sizes(emitter, 0.0F, 0.0F));
     CHECK(particles_read(emitter)[0].half_width == 0.0F);
     CHECK(lit_pixels(scene.drawn()) == 0);

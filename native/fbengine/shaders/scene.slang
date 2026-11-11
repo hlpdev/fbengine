@@ -125,10 +125,15 @@ struct Emitter
     uint rollAlong;
 };
 
+// How many times its distance from the eye a particle's quad reaches at the most, which covers the
+// frame of any camera, to 179.9 degrees.
+static const float mostQuadsReach = 4096.0;
+
 // A particle's half-size after so many steps, each adding to it and then multiplying it, never below 0
 // and never past 1e9, so it's finite: as particles.cpp's grown has it, which reads them without a GPU.
 // What's added is times the sum of the multiple's powers below `steps`, worked out from the power's
-// logarithm, so a multiple near 1 loses nothing to rounding.
+// logarithm, so a multiple near 1 loses nothing to rounding; and the logarithm of one near 1 from
+// its series, as a GPU's log needn't be right to the last bit there, where it's all there is.
 float grownSize(Emitter emitter, float size, float steps)
 {
     if (steps <= 0.0)
@@ -140,10 +145,12 @@ float grownSize(Emitter emitter, float size, float steps)
     float sum = steps;
     if (times != 1.0)
     {
-        const float grows = clamp(steps * log(times), -100.0, 41.0);
+        const float past = times - 1.0;
+        const float logarithm = abs(past) < 0.01 ? past * (1.0 - past * (0.5 - past / 3.0)) : log(times);
+        const float grows = clamp(steps * logarithm, -100.0, 41.0);
         power = exp(grows);
         const float less = abs(grows) < 0.01 ? grows * (1.0 + grows * (0.5 + grows / 6.0)) : power - 1.0;
-        sum = less / (times - 1.0);
+        sum = less / past;
     }
     const float all = min(times * sum, 1e30);
     const float added = clamp(emitter.growAdded * all, -1e30, 1e30);
@@ -772,8 +779,13 @@ Corner particleVertex(uint index : SV_VulkanVertexID, uint instance : SV_VulkanI
         steps = min(steps, 1e9);
     }
     const float size = lerp(emitter.sizeStart, emitter.sizeEnd, part) * particle.scale;
-    const float2 halves = float2(grownSize(emitter, size * emitter.shape[0], steps),
-                                 grownSize(emitter, size * emitter.shape[1], steps));
+    const float3 middle = mul(draw.toView, float4(place, 1.0)).xyz;
+    // No more of it than covers the frame from where it is, whatever the camera's angle: a quad of
+    // a size past what a rasterizer takes is drawn as nothing by some, and the rest of it is seen
+    // by none.
+    const float2 halves = min(float2(grownSize(emitter, size * emitter.shape[0], steps),
+                                     grownSize(emitter, size * emitter.shape[1], steps)),
+                              mostQuadsReach * length(middle));
     float turned = particle.roll + particle.spin * age;
     if (emitter.rollAlong != 0)
     {
@@ -797,7 +809,7 @@ Corner particleVertex(uint index : SV_VulkanVertexID, uint instance : SV_VulkanI
     const float2 unit = float2(float(bits & 1) * 2.0 - 1.0, float(bits >> 1) * 2.0 - 1.0);
     const float2 reach = unit * halves;
     const float3 offset = float3(reach.x * along - reach.y * across, reach.x * across + reach.y * along, 0.0);
-    const float3 seen = mul(draw.toView, float4(place, 1.0)).xyz + offset;
+    const float3 seen = middle + offset;
     corner.position = mul(camera.projection, float4(seen, 1.0));
     corner.place = seen;
     corner.uv0 = float2(unit.x * 0.5 + 0.5, 0.5 - unit.y * 0.5);
