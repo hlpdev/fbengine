@@ -110,6 +110,7 @@ void run_load_here(load_t& load, jobs_t* jobs) {
     }
     case load_kind_t::MODEL: {
         load.progress = read_part;
+        std::vector<std::string> tried;
         const model_options_t options{
             .transcode = load.options.transcode,
             .jobs = jobs,
@@ -118,12 +119,15 @@ void run_load_here(load_t& load, jobs_t* jobs) {
             .shared = shared_known,
             // Its buffers' and images', each from before it's read, whether it decodes or not.
             .stamps = &load.stamps,
+            .tried = &tried,
         };
         result_t<model_t> model = decode_model(load.path, *bytes, load.files, options);
         if (model) {
             load.reads.insert(load.reads.end(), model->reads.begin(), model->reads.end());
             load.model = std::move(*model);
         } else {
+            // What broke it may be a file it names that isn't there yet, which reloads it.
+            load.reads.insert(load.reads.end(), tried.begin(), tried.end());
             load.error = std::move(model.error());
         }
         break;

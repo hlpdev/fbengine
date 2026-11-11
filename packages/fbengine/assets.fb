@@ -82,6 +82,10 @@ Interface AnyCache
     // Loads `key`'s asset again, if it has one, as a changed file's is.
     Async Method Reload(key: String)
 
+    // Whether `key`'s asset is loading for the first time, or being made of its load: what it
+    // read isn't kept yet, so its file can't be said to be what it read.
+    Method Loading(key: String): Bool
+
     // Lets go of what it has under `place`, so the next load of it loads it again.
     Method Forget(place: String)
 End Interface
@@ -126,7 +130,12 @@ Final Class TypedCache<T> Implements AnyCache
             Return
         End If
         Local before = cached.Made
-        If before == Null || before.Stale() Then Return
+        If before == Null || before.Stale()
+            // It's gone, and reads its files no more: what's kept of what it read would have them
+            // changed for good.
+            Assets.Dropped(Id, key)
+            Return
+        End If
         cached.Reloading = True
         Local load = fbe_assets_load_async(T.LoadKind() As Int32, key, False, True)
         If load == 0
@@ -138,8 +147,10 @@ Final Class TypedCache<T> Implements AnyCache
         cached.Reloading = False
         Local current = Entries.Get(key)
         Local made = cached.Made
-        If cached.Released || current == Null || !RefEquals(current, cached) || made == Null ||
-           made.Stale()
+        If cached.Released || current == Null || !RefEquals(current, cached) Then Return
+        If made == Null || made.Stale()
+            // Gone while it loaded, as above.
+            Assets.Dropped(Id, key)
             Return
         End If
         If fbe_assets_failed(load)
@@ -172,6 +183,11 @@ Final Class TypedCache<T> Implements AnyCache
             cached.Again = False
             Reload(key)
         End If
+    End Method
+
+    Method Loading(key: String): Bool
+        Local cached = Entries.Get(key)
+        Return cached != Null && !cached.Released && (cached.Load != 0 || cached.Making)
     End Method
 
     // What it has under `place`, a normalized path, is let go of; holds of it go on being good.
@@ -543,20 +559,21 @@ Public Final Class Assets
     /// for a path that isn't a res:// path.
     @MainThread
     Public Static Method Reload(path: String) Throws IOError
-        ReloadPath(Try Normalize(path))
+        ReloadPath(Try Normalize(path), Set<String>())
     End Method
 
-    // Loads `key`'s assets again, of every type, and those whose loads read it.
+    // Loads `key`'s assets again, of every type, and those whose loads read it: each once, as
+    // `done` has those loaded again already for what's being done, by Reader, and gets these.
     @MainThread
-    Static Method ReloadPath(key: String)
-        For cache In caches
-            cache.Reload(key)
+    Static Method ReloadPath(key: String, done: Set<String>)
+        For cache = 0 Until caches.Count
+            If done.Add(Reader(cache, key)) Then caches[cache].Reload(key)
         End For
         Local reading = dependents.Get(key)
         If reading == Null Then Return
         Local those: (Int, String)[] = []
         For dependent In reading
-            those.Add(dependent.1)
+            If done.Add(dependent.0) Then those.Add(dependent.1)
         End For
         For that In those
             caches[that.0].Reload(that.1)
@@ -574,6 +591,15 @@ Public Final Class Assets
         Dropped(cache, key)
         Local reader = Reader(cache, key)
         Local files = Set<String>()
+        Named(reader, cache, key, load, files)
+        Stamped(reader, load, files)
+        If files.Count > 0 Then read[reader] = files
+    End Method
+
+    // Keeps `key`'s asset in cache `cache` as depending on what `load` read besides its file, or
+    // tried to, and adds them to `files`.
+    @MainThread
+    Static Method Named(reader: String, cache: Int, key: String, load: UInt64, files: Set<String>)
         For at = 0 Until fbe_assets_reads(load)
             Local file = ""
             Unsafe
@@ -588,8 +614,6 @@ Public Final Class Assets
             reading[reader] = (cache, key)
             files.Add(file)
         End For
-        Stamped(reader, load, files)
-        If files.Count > 0 Then read[reader] = files
     End Method
 
     // Keeps what each file on the disk was as `load`, `reader`'s, read it, its own, its sidecar,
@@ -616,12 +640,15 @@ Public Final Class Assets
 
     // Keeps what a load that failed read, over what the asset's last load read of the same files:
     // the asset has the old file still, and the file as it is now doesn't load, which it's been
-    // told once, and isn't again until the file's written.
+    // told once, and isn't again until the file's written. And what it read besides, or tried to,
+    // is added to what the asset depends on: what broke it may be a file it names now that isn't
+    // there yet, or isn't whole, and it's loaded again when that comes.
     @MainThread
     Static Method Restamped(cache: Int, key: String, load: UInt64)
         Local reader = Reader(cache, key)
         Local files = read.Get(reader)
         If files == Null Then files = Set<String>()
+        Named(reader, cache, key, load, files)
         Stamped(reader, load, files)
         If files.Count > 0 Then read[reader] = files
     End Method
@@ -650,9 +677,20 @@ Public Final Class Assets
 
     // Whether the file at `key` on the disk is what every asset that read it read: as many bytes,
     // written when it was. A watcher tells of more than writes, as Windows' does of a file that's
-    // read, which is no reason to load it again. One nothing's kept of, or that's gone, isn't.
+    // read, which is no reason to load it again. One nothing's kept of, or that's gone, isn't; nor
+    // is one an asset of it, or one that read it, is loading for the first time, or being made,
+    // which may have read it before it was written, with nothing kept of that yet.
     @MainThread
     Package Static Method Unchanged(key: String): Bool
+        For cache In caches
+            If cache.Loading(key) Then Return False
+        End For
+        Local reading = dependents.Get(key)
+        If reading != Null
+            For dependent In reading
+                If caches[dependent.1.0].Loading(dependent.1.1) Then Return False
+            End For
+        End If
         Local readers = stamps.Get(key)
         If readers == Null || readers.Count == 0 Then Return False
         Local size: Int64 = 0
@@ -1071,12 +1109,14 @@ Public Final Class Assets
             // Told of, and not written: its assets have what's in it, or have been told it
             // doesn't load.
             If Unchanged(path) Then Continue
-            ReloadPath(path)
-            // A sidecar's file is loaded again with its new settings.
+            Local done = Set<String>()
+            ReloadPath(path, done)
+            // A sidecar's file is loaded again with its new settings, if it wasn't just now, as
+            // what read the sidecar.
             If path.EndsWith(".toml")
                 Local bytes = path.Bytes
                 Local stem = String.FromUtf8(bytes[0..bytes.Count - 5])
-                If stem != Null Then ReloadPath(stem)
+                If stem != Null Then ReloadPath(stem, done)
             End If
         End For
     End Method

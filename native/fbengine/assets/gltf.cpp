@@ -132,6 +132,16 @@ public:
     decoder_t(const vfs::path_t& path, const vfs::view_t& files, const model_options_t& options)
         : m_path(path), m_files(files), m_options(options) {}
 
+    // What it's read, or tried to, so far, each once.
+    std::vector<std::string> tried() const {
+        const std::scoped_lock lock(m_reads_mutex);
+        std::vector<std::string> reads = m_reads;
+        std::ranges::sort(reads);
+        const auto repeated = std::ranges::unique(reads);
+        reads.erase(repeated.begin(), repeated.end());
+        return reads;
+    }
+
     result_t<model_t> decode(std::span<const std::uint8_t> bytes) {
         if (bytes.empty()) {
             return fail("it's empty");
@@ -1558,7 +1568,11 @@ std::optional<bool> sidecar_srgb(std::string_view text) {
 result_t<model_t> decode_model(const vfs::path_t& path, std::span<const std::uint8_t> bytes,
                                const vfs::view_t& files, const model_options_t& options) {
     decoder_t decoder(path, files, options);
-    return decoder.decode(bytes);
+    result_t<model_t> model = decoder.decode(bytes);
+    if (!model && options.tried != nullptr) {
+        *options.tried = decoder.tried();
+    }
+    return model;
 }
 
 } // namespace fbe::assets

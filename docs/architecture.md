@@ -338,10 +338,15 @@ good modern engine on its own. Every structural choice is checked against both.
   two types' assets of one path, which may read other files and at other times, are each loaded
   again until each has read it as it is, and it goes with the asset's entry from the cache. A
   reload that fails keeps what it read too, so a file that doesn't load is told of once, not at
-  each thing its watcher tells, until it's written. The write time is the file system's own,
+  each thing its watcher tells, until it's written, and it depends besides on what it tried to
+  read, so a model naming a buffer that isn't there yet is loaded when that comes. An asset that's
+  gone without the cache being told has what it read let go at the next reload of its path. A
+  file isn't said to be what its assets read while one of them is loading for the first time,
+  which may have read it before a write. A sidecar's write loads its asset again once. The write
+  time is the file system's own,
   100 ns on Windows and nanoseconds elsewhere, not the C++ library's, which is whole seconds on
   Windows; a write that keeps the size and lands in the same tick of it as the load's read isn't
-  seen; `Assets.Reload` loads a path again whatever's changed. An asset taken in place is what
+  seen, a fix of a file that didn't load among them, the failed reload's stamp being kept; `Assets.Reload` loads a path again whatever's changed. An asset taken in place is what
   its file says again: a Model's materials have the
   file's shading, layers, maps, and textures, and its surfaces the file's materials, so what a
   game set on them after loading is the game's to set again, from `Assets.Reloaded()`. The

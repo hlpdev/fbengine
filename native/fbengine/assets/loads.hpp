@@ -57,7 +57,8 @@ struct load_t {
     std::optional<std::string> settings;
     std::optional<error_t> settings_error;
     /// The res:// paths, normalized, of what it read besides its file: its sidecar, if it reads
-    /// one, and a model's buffers and images.
+    /// one, and a model's buffers and images; for a model that failed, what it read or tried to,
+    /// one that isn't there too.
     std::vector<std::string> reads;
     /// The stamp of each file on the disk it read, its own and those, by its res:// path,
     /// normalized, each from before it was read, a model's buffers' and images' too, and whether

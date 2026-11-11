@@ -249,6 +249,10 @@ struct model_options_t {
     /// before the file's read, the first time it is, whether the model decodes or not: what hot
     /// reload holds the file's against, so one written as it decodes is loaded again.
     std::vector<std::pair<std::string, vfs::stamp_t>>* stamps = nullptr;
+    /// Given, for a model that doesn't decode, the res:// paths, normalized, of what it read or
+    /// tried to, a file that isn't there too, as a decoded model's reads has them: hot reload
+    /// loads it again when one of those changes, or comes.
+    std::vector<std::string>* tried = nullptr;
 };
 
 /// The glTF (or binary glTF) at `path`, whose `bytes` are read, with the buffers and images it

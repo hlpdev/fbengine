@@ -814,6 +814,9 @@ TEST_CASE("a load's stamps are each file's from before it was read, a model's bu
         REQUIRE(stamp_of(bad, "res://models/bad.gltf").written == 0);
         REQUIRE(stamp_of(bad, "res://models/tri.bin").size == triangle.built.buffer.size());
         REQUIRE(stamp_of(bad, "res://textures/none.png") == none);
+        // And what it read, or tried to, which reloads it when it changes, or comes.
+        REQUIRE(std::ranges::contains(bad.reads, "res://models/tri.bin"));
+        REQUIRE(std::ranges::contains(bad.reads, "res://textures/none.png"));
     }
 
     // One that isn't there has none.
