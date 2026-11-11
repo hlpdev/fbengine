@@ -8,6 +8,7 @@ Import std.time
 Import fbengine
 Import fbengine_audio
 Import "./watching"
+Import "./written"
 Import "./wav"
 
 // Flips until `done` says so, or 30 seconds have gone.
@@ -89,13 +90,13 @@ Function AChangedFileReloadsItsSoundInPlace() Throws IOError
     Local rate = sound.SampleRate()
     Local frames = sound.Frames()
     Try WatcherStarted(folder.Path, "res://hot-sound")
-    Try File.WriteBytesAtomic(folder.Path / "door.wav", Wav(Constant(0, 100)))
+    Try WriteChanged(folder.Path / "door.wav", Wav(Constant(0, 100)))
     FlipUntil(Function(): Bool => sound.Frames() != frames || sound.SampleRate() != rate)
     Expect(sound.Frames() != frames || sound.SampleRate() != rate)
     Expect(sound.Volume() == 0.5)
     // What doesn't load leaves it as it was.
     Local now = sound.Frames()
-    Try File.WriteBytesAtomic(folder.Path / "door.wav", "not a sound".Bytes)
+    Try WriteChanged(folder.Path / "door.wav", "not a sound".Bytes)
     Local failed = False
     FlipUntil(Function(): Bool
         For reload In Assets.Reloaded()

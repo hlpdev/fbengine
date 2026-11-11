@@ -28,12 +28,14 @@ End Class
 
 // Writes a file in the watched `folder`, which is `place` in res://, again and again until hot
 // reload's told of it, and once more after that, so what was told of late, ahead of it, is done
-// and forgotten; then takes it away. It throws an IOError of OTHER if 10 seconds aren't enough,
+// and forgotten; then takes it away. Each write is a byte longer than the last, so it's another
+// file to hot reload whatever the clock gave it. It throws an IOError of OTHER if 10 seconds aren't enough,
 // which is the watcher's fault, not the test's.
 Package Function WatcherStarted(folder: Path, place: String) Throws IOError
     Local name = "watcher-probe.bin"
     Local file = folder / name
-    Try File.WriteBytes(file, [1] As UInt8[])
+    Local bytes = [1] As UInt8[]
+    Try File.WriteBytes(file, bytes)
     Local path = place.EndsWith("/") ? place + name : place + "/" + name
     Local probe = Try Assets.Load<Probe>(path)
     Local since = Instant.Now()
@@ -43,7 +45,8 @@ Package Function WatcherStarted(folder: Path, place: String) Throws IOError
                 Throw IOError(IOErrorKind.OTHER, "the watcher of {folder} told of nothing in " +
                               "10 seconds, {probe.Reloads} times", path)
             End If
-            Try File.WriteBytes(file, [1] As UInt8[])
+            bytes.Add(1)
+            Try File.WriteBytes(file, bytes)
             Local wrote = Instant.Now()
             While probe.Reloads < round && (Instant.Now() - wrote) < 250.Milliseconds
                 Flip()

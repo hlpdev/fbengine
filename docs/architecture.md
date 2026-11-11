@@ -364,10 +364,16 @@ good modern engine on its own. Every structural choice is checked against both.
   gone without the cache being told has what it read let go at the next reload of its path. A
   file isn't said to be what its assets read while one of them is loading for the first time,
   which may have read it before a write. A sidecar's write loads its asset again once. The write
-  time is the file system's own,
-  100 ns on Windows and nanoseconds elsewhere, not the C++ library's, which is whole seconds on
-  Windows; a write that keeps the size and lands in the same tick of it as the load's read isn't
-  seen, a fix of a file that didn't load among them, the failed reload's stamp being kept; `Assets.Reload` loads a path again whatever's changed. An asset taken in place is what
+  time is the file system's own, 100 ns on Windows and nanoseconds elsewhere, not the C++
+  library's, which is whole seconds on Windows. That's how finely it's kept, not how finely it's
+  given: Linux gives a write the kernel's clock as of its last tick, 1 to 4 ms before (kernels
+  from 6.13 a finer one, once the last has been read), so two writes within a tick have one
+  write time. A write that keeps the size and has the write time the load read isn't seen, then,
+  a fix of a file that didn't load among them, the failed reload's stamp being kept: an editor's
+  save, long after the last, is seen; a tool's two writes of one size in a row may not be. The
+  tests' writes that must be seen are given a write time of their own (tests/written.fb), not
+  left to fall in another tick. `Assets.Reload` loads a path again whatever's changed. An asset
+  taken in place is what
   its file says again: a Model's materials have the
   file's shading, layers, maps, and textures, and its surfaces the file's materials, so what a
   game set on them after loading is the game's to set again, from `Assets.Reloaded()`. The

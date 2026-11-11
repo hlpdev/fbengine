@@ -1,0 +1,68 @@
+// Files a test of hot reload writes, to be seen as changed. Hot reload goes by a file's size and
+// its write time, and two writes a moment apart can have both the same: Linux stamps a write with
+// the kernel's clock as of its last tick, 1 to 4 ms ago, whatever the file system keeps. So a
+// test's write that must be seen is given a write time no other has, not left to fall in a tick
+// of its own.
+
+Import std.core
+Import std.io
+Import std.os
+Import std.text
+
+// How many moments WriteChanged has given.
+Global moments: Int = 0
+
+// A number under 100 as two digits.
+Function TwoDigits(number: Int): String => number < 10 ? "0{number}" : "{number}"
+
+// Writes `bytes` to `file` whole and at once, as a file last written `moment` seconds into 2021,
+// under a day of them: made beside it under a hidden name, which no mount has and no watcher tells
+// of, given its write time, and moved in, so a watcher's told once, of the file as it'll be.
+Package Function WriteAtMoment(file: Path, bytes: UInt8[], moment: Int) Throws IOError
+    Local made = file.Parent() / ".{file.FileName()}.written"
+    Try File.WriteBytes(made, bytes)
+    Local hours = 0
+    Local minutes = 0
+    Local seconds = moment
+    While seconds >= 3600
+        seconds -= 3600
+        hours += 1
+    End While
+    While seconds >= 60
+        seconds -= 60
+        minutes += 1
+    End While
+    If System.Platform == Platform.WINDOWS
+        Try Command("powershell").Args(["-NoProfile", "-Command",
+                                        "(Get-Item -LiteralPath '{made.Text}' -Force).LastWriteTimeUtc = " +
+                                        "[DateTime]::new(2021, 1, 1, {hours}, {minutes}, {seconds}, " +
+                                        "[DateTimeKind]::Utc)"]).Output()
+    Else
+        Try Command("touch").Args(["-m", "-t",
+                                   "20210101{TwoDigits(hours)}{TwoDigits(minutes)}.{TwoDigits(seconds)}",
+                                   made.Text]).Output()
+    End If
+    Try File.Move(made, file)
+End Function
+
+// Writes `bytes` to `file`, whole and at once, with a write time no other write of these has had,
+// nor any the clock gives: what's written is seen as changed, whatever was there, by construction.
+Package Function WriteChanged(file: Path, bytes: UInt8[]) Throws IOError
+    moments += 1
+    Try WriteAtMoment(file, bytes, moments)
+End Function
+
+// WriteChanged, of text.
+Package Function WriteChangedText(file: Path, text: String) Throws IOError
+    Try WriteChanged(file, text.Bytes)
+End Function
+
+// Writes `bytes` to `file`: as WriteChanged does over a file that's there, and plainly a new one,
+// which has no write before it to be told from.
+Package Function WriteOver(file: Path, bytes: UInt8[]) Throws IOError
+    If File.Exists(file)
+        Try WriteChanged(file, bytes)
+    Else
+        Try File.WriteBytes(file, bytes)
+    End If
+End Function

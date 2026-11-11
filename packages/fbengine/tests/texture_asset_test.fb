@@ -13,6 +13,7 @@ Import std.test
 Import std.time
 Import fbengine
 Import "./watching"
+Import "./written"
 
 Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
 
@@ -220,7 +221,7 @@ Function AChangedFileReloadsItsTextureInPlace() Throws IOError, GraphicsError
     Local pixels = texture.LockPixels()
     pixels.Unlock()
     Try WatcherStarted(folder.Path, "res://hot")
-    Try File.WriteBytesAtomic(folder.Path / "hero.png", Filled(4, Color32(0, 255, 0, 255)))
+    Try WriteChanged(folder.Path / "hero.png", Filled(4, Color32(0, 255, 0, 255)))
     FlipUntil(Function(): Bool => texture.Width() == 4)
     Expect(texture.Width() == 4)
     Expect(texture.Levels() == 3)
@@ -234,7 +235,7 @@ Function AChangedFileReloadsItsTextureInPlace() Throws IOError, GraphicsError
     Canvas(target).Draw(sprite, 0, 0)
     Expect(target.ToImage()[3, 3] == Color32(0, 255, 0, 255))
     // What doesn't load leaves it as it was.
-    Try File.WriteBytesAtomic(folder.Path / "hero.png", "not an image".Bytes)
+    Try WriteChanged(folder.Path / "hero.png", "not an image".Bytes)
     Local failed = False
     FlipUntil(Function(): Bool
         For reload In Assets.Reloaded()
@@ -261,8 +262,8 @@ Function ReloadsLeaveNoSlotBehind() Throws IOError, GraphicsError
     Defer texture.Free()
     Local count = Texture.Count()
     For side = 3 To 6
-        Try File.WriteBytesAtomic(folder.Path / "a.png",
-                                  Filled(side, Color32(side As UInt8, 0, 0, 255)))
+        Try WriteChanged(folder.Path / "a.png",
+                         Filled(side, Color32(side As UInt8, 0, 0, 255)))
         FlipUntil(Function(): Bool => texture.Width() == side)
         Expect(texture.Width() == side)
         Expect(texture.ToImage()[0, 0].r == side)

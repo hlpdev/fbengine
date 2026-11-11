@@ -12,6 +12,7 @@ Import std.text
 Import std.time
 Import fbengine
 Import fbengine_tools
+Import "./written"
 
 Function NoSlangc(): Bool => Env.Get("FBENGINE_SLANGC") == Null
 
@@ -447,7 +448,7 @@ Function AShaderCookedAgainReloads() Throws IOError, GraphicsError
                        "float4 shade(Surface surface)\n{{\n    return float4(0, 1, 0, 1);\n}}\n")
     Local again = source.Path / "again"
     Try Cooker.CookShader(from, again)
-    Try File.WriteBytesAtomic(cooked, Try File.ReadBytes(again))
+    Try WriteChanged(cooked, Try File.ReadBytes(again))
     Local since = Instant.Now()
     Local green = False
     While !green && (Instant.Now() - since) < 20.Seconds
