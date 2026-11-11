@@ -5,6 +5,7 @@
 #include "core/engine.hpp"
 #include "fbengine.h"
 #include "gpu/vulkan.hpp"
+#include "texture/texture.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -70,9 +71,9 @@ std::uint64_t update_screen(VkExtent2D window) {
         return screen;
     }
     // A screen that can't be made leaves the old one, if there is one, which Flip shows.
-    const std::uint64_t made_now = fbe_texture_create_target(static_cast<std::int32_t>(size.width),
-                                                             static_cast<std::int32_t>(size.height),
-                                                             FBE_TEXTURE_RGBA8, count, true);
+    const std::uint64_t made_now = fbe::texture::create_target_once(
+        static_cast<std::int32_t>(size.width), static_cast<std::int32_t>(size.height),
+        FBE_TEXTURE_RGBA8, count, true);
     if (made_now == 0) {
         return screen;
     }

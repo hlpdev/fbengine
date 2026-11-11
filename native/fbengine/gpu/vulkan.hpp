@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <string_view>
 #include <vector>
 #include <volk.h>
@@ -191,8 +192,36 @@ void say_no_room();
 /// again. And ends it.
 bool enter_edge();
 void leave_edge();
-/// Whether the call that's failed did for want of room, and what waited was freed for it.
-bool made_room();
+/// Frees what the frames already submitted left, waiting for each, and what waits for the next
+/// frame if nothing's recorded for one: nothing's submitted for it, so nothing recorded is cut
+/// short. Whether anything was freed.
+bool release_done();
+/// Whether the call that's failed did for want of room, and what waited was freed for it: what
+/// the frames submitted left, or, if `submits`, what's recorded too, submitted first.
+bool made_room(bool submits);
+/// Whether an allocation's said it had no room since the outermost call began, and forgets it, as
+/// what passes over such a failure does, so the call isn't run again for it.
+bool said_no_room();
+void forget_no_room();
+/// Whether a frame's being submitted now.
+bool in_submit();
+/// Says what a submit was to record couldn't be, and why: the submit fails saying so, once it's
+/// run the rest.
+void spoil_frame(std::string why);
+/// An exported call's length, for one that isn't run again, as a Flip's present isn't: no call
+/// within it frees what waits.
+struct edge_t {
+    edge_t() {
+        enter_edge();
+    }
+    edge_t(const edge_t&) = delete;
+    edge_t& operator=(const edge_t&) = delete;
+    edge_t(edge_t&&) = delete;
+    edge_t& operator=(edge_t&&) = delete;
+    ~edge_t() {
+        leave_edge();
+    }
+};
 /// Lets the device have `most` allocations, as its maxMemoryAllocationCount would, for the tests:
 /// one past that fails as the device's would. Below 0 is all it has.
 void limit_allocations(std::int64_t most);
@@ -210,15 +239,20 @@ VkResult allocated(const Make& make) {
     return result;
 }
 
-/// A public call that can allocate, `call`, which gives 0 or false having undone what it began:
-/// if it failed for want of room with frees waiting, they're freed, and it's run once more from
-/// the top. Only the outermost of them tries again, as nothing's held across that one, and a
-/// frame's own draws never do.
+/// An exported call that can allocate, `call`, which gives 0 or false having undone what it began:
+/// if it failed for want of room, what the frames submitted left is freed and it's run again from
+/// the top; and if that has no room either, what's recorded is submitted and waited for, what it
+/// left freed, and it's run a last time. Only in the exported functions, and only the outermost
+/// of them, as nothing's held across that one; nothing inside the engine does, and a frame's own
+/// draws never do.
 template <typename Call>
 auto with_room(const Call& call) {
     const bool outermost = enter_edge();
     auto result = call();
-    if (!result && outermost && made_room()) {
+    if (!result && outermost && made_room(false)) {
+        result = call();
+    }
+    if (!result && outermost && made_room(true)) {
         result = call();
     }
     leave_edge();

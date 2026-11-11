@@ -5,8 +5,10 @@
 // writes the graph recorded as passes into it again, so a texture written then still gets its
 // pixels; a lost GPU runs nothing, freeing what each frame leaves at once. What's left to free with
 // nothing recorded that could use it doesn't wait for a Flip: it's freed at once if the GPU's done
-// with every frame, or with the last one submitted; and an allocation the device has no room for
-// submits what's recorded, waits for it, frees all that waited, and is tried again. And the
+// with every frame, or with the last one submitted. An allocation the device has no room for frees
+// nothing itself: the exported call it failed, holding nothing, frees what the frames submitted
+// left and runs again, and only if there's still no room submits what's recorded, waits, frees
+// that too, and runs a last time. And the
 // counters of what the last frame did, its GPU time read from its timestamps once the GPU's done
 // with it.
 
@@ -17,6 +19,7 @@
 
 #include <array>
 #include <functional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -43,6 +46,9 @@ int submitting = 0;
 /// many of those calls are begun.
 bool no_room = false;
 int edges = 0;
+/// Why what a submit was to record couldn't be, for want of the frame's memory, if it couldn't:
+/// the submit goes on with the rest, and fails saying so.
+std::string spoiled;
 
 /// In a frame's submit for as long as it lives.
 struct submitting_t {
@@ -269,6 +275,16 @@ bool give_up(const fbe::gpu::device_t& gpu, fbe::gpu::frame_t& frame) {
     return fbe::gpu::fail_lost();
 }
 
+/// False, with fbe_error's why, if what the submit was to record couldn't all be.
+bool unspoiled() {
+    if (spoiled.empty()) {
+        return true;
+    }
+    const std::string why = std::move(spoiled);
+    spoiled.clear();
+    return fbe::fail(why);
+}
+
 } // namespace
 
 namespace fbe::gpu {
@@ -307,7 +323,9 @@ void after_frame(std::function<void()> free) {
 
 void after_use(std::function<void()> free) {
     device_t& gpu = *device();
-    if (gpu.frames[gpu.frame].begun || !carried.empty() || submitting > 0 || graph_waits()) {
+    // The graph's asked first, as what's held back for it can begin the frame as it's sent.
+    const bool waits = graph_waits();
+    if (waits || gpu.frames[gpu.frame].begun || !carried.empty() || submitting > 0) {
         // Something recorded and not yet submitted may use it: it goes with that.
         after_frame(std::move(free));
         return;
@@ -347,13 +365,46 @@ void after_next_frame(std::function<void()> free) {
     with_next.push_back(std::move(free));
 }
 
+bool release_done() {
+    device_t* gpu = device();
+    if (gpu == nullptr || submitting > 0 || lost()) {
+        return false;
+    }
+    const std::size_t waited_for = waiting_frees();
+    // Asked first, as what's held back for the graph can begin the frame as it's sent.
+    const bool waits = graph_waits();
+    const frame_t& recording = gpu->frames[gpu->frame];
+    const bool recorded = waits || recording.begun || !carried.empty();
+    for (frame_t& frame : gpu->frames) {
+        if (frame.begun) {
+            continue;
+        }
+        const VkResult waited = vkWaitForFences(gpu->device, 1, &frame.done, VK_TRUE, UINT64_MAX);
+        if (lose(waited) || waited != VK_SUCCESS) {
+            return false;
+        }
+        collect(frame);
+    }
+    // What waited for the next frame has nothing to wait for if nothing's recorded for one.
+    if (!recorded) {
+        const std::vector<std::function<void()>> next = std::move(with_next);
+        with_next.clear();
+        for (const std::function<void()>& free : next) {
+            free();
+        }
+    }
+    return waiting_frees() < waited_for;
+}
+
 bool release_waiting() {
     device_t* gpu = device();
     if (gpu == nullptr || submitting > 0 || lost() || waiting_frees() == 0) {
         return false;
     }
-    // What's recorded may use what waits: it's submitted.
-    if ((gpu->frames[gpu->frame].begun || !carried.empty() || graph_waits()) && !finish_frame()) {
+    // What's recorded may use what waits: it's submitted. The graph's asked first, as what's held
+    // back for it can begin the frame as it's sent.
+    const bool waits = graph_waits();
+    if ((waits || gpu->frames[gpu->frame].begun || !carried.empty()) && !finish_frame()) {
         return false;
     }
     // Each frame's is freed once its own fence says the GPU's done with it, whatever finishing the
@@ -393,10 +444,32 @@ void leave_edge() {
     --edges;
 }
 
-bool made_room() {
-    const bool wanted = no_room;
+bool made_room(bool submits) {
+    if (!no_room) {
+        return false;
+    }
+    const bool made = submits ? release_waiting() : release_done();
+    // Asked for once more by the call's next try, if that has no room either.
+    if (made || submits) {
+        no_room = false;
+    }
+    return made;
+}
+
+bool said_no_room() {
+    return no_room;
+}
+
+void forget_no_room() {
     no_room = false;
-    return wanted && release_waiting();
+}
+
+bool in_submit() {
+    return submitting > 0;
+}
+
+void spoil_frame(std::string why) {
+    spoiled = std::move(why);
 }
 
 void limit_allocations(std::int64_t most) {
@@ -485,7 +558,7 @@ bool submit_frame(VkSemaphore wait, VkSemaphore signal) {
                 collect(finished);
             }
         }
-        return true;
+        return unspoiled();
     }
     begin();
     const bool submitted = submit(gpu, frame, wait, signal);
@@ -493,7 +566,7 @@ bool submit_frame(VkSemaphore wait, VkSemaphore signal) {
     // submit, mid-frame, leaves it, as slices handed out before are still the frame's.
     frame.ring_used = 0;
     gpu.frame = (gpu.frame + 1) % frames_in_flight;
-    return submitted;
+    return submitted && unspoiled();
 }
 
 bool finish_frame() {
@@ -505,7 +578,7 @@ bool finish_frame() {
     }
     record_graph();
     if (!frame.begun && carried.empty()) {
-        return true;
+        return unspoiled();
     }
     begin();
     if (!submit(gpu, frame, VK_NULL_HANDLE, VK_NULL_HANDLE)) {
@@ -515,7 +588,10 @@ bool finish_frame() {
     if (lose(waited)) {
         return fail_lost();
     }
-    return waited == VK_SUCCESS ? true : fail_vulkan("the GPU couldn't finish the frame", waited);
+    if (waited != VK_SUCCESS) {
+        return fail_vulkan("the GPU couldn't finish the frame", waited);
+    }
+    return unspoiled();
 }
 
 void stop_frames() {
@@ -547,6 +623,7 @@ void stop_frames() {
     carried.clear();
     gpu.frame = 0;
     allocation_limit = -1;
+    spoiled.clear();
     counting = {};
     counted = { .gpu_milliseconds = -1.0F };
     gpu_time = -1.0F;

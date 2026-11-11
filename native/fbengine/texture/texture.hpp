@@ -100,7 +100,14 @@ std::vector<std::uint8_t> read(std::uint64_t handle, std::uint32_t level);
 
 /// Sends what was written into a texture's CPU copy of its pixels (fbe_texture_pixels) to the GPU,
 /// if anything was, as a write in its turn: what uses a texture on the GPU calls it first.
-void send_pixels(std::uint64_t handle);
+bool send_pixels(std::uint64_t handle);
+
+/// fbe_texture_create_target, fbe_texture_from_load and fbe_texture_from_model, run once, as the
+/// engine calls them: only an exported call runs itself again for want of room.
+std::uint64_t create_target_once(std::int32_t width, std::int32_t height, std::int32_t format,
+                                 std::int32_t samples, bool depth);
+std::uint64_t from_load_once(std::uint64_t load, bool srgb, bool mipmaps);
+std::uint64_t from_model_once(std::uint64_t load, std::int32_t index, bool srgb, bool mipmaps);
 
 /// Counts a change the GPU makes to a texture's pixels, which a CPU copy of them is then older
 /// than: what writes a texture on the GPU calls it.

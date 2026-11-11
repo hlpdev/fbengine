@@ -561,6 +561,8 @@ void gpu_present(bool wait) {
         return;
     }
     gpu::save_pipeline_cache();
+    // Nothing within a present frees what waits by submitting, as the screen made again would.
+    const gpu::edge_t edge;
     const gpu::device_t& gpu = *found;
     // A frame with nowhere to present still runs what it recorded; a lost GPU's runs nothing.
     if (gpu::lost() || !presentable(gpu, wait)) {

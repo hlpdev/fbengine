@@ -7,6 +7,7 @@
 #include "assets/shared.hpp"
 #include "core/engine.hpp"
 #include "fbengine.h"
+#include "texture/texture.hpp"
 #include "vfs/vfs.hpp"
 
 #include <algorithm>
@@ -333,7 +334,7 @@ std::uint64_t texture_of(std::uint64_t load, std::int32_t index, bool srgb, bool
             source->encoded = {};
         }
     }
-    const std::uint64_t texture = fbe_texture_from_model(load, index, srgb, mipmaps);
+    const std::uint64_t texture = fbe::texture::from_model_once(load, index, srgb, mipmaps);
     if (texture == 0) {
         invalid = fbe_texture_load_invalid();
         return 0;
@@ -717,72 +718,76 @@ FBE_API uint64_t fbe_model_texture(uint64_t load, int32_t index, bool mipmaps) {
     if (model == nullptr) {
         return 0;
     }
-    return texture_of(load, index, true, mipmaps, first_sampling(*model, index));
+    // Its own call, holding nothing: with no room it frees what waits and runs again.
+    return fbe::gpu::with_room(
+        [&] { return texture_of(load, index, true, mipmaps, first_sampling(*model, index)); });
 }
 
 FBE_API uint64_t fbe_model_image_texture(const char* path, bool srgb, int32_t filter,
                                          int32_t wrap_u, int32_t wrap_v, bool make) {
-    invalid = false;
-    if (path == nullptr) {
-        fbe::fail("no path was given");
-        return 0;
-    }
-    const fbe::vfs::result_t<fbe::vfs::path_t> named = fbe::vfs::parse(path);
-    if (!named) {
-        fbe::fail(named.error().message);
-        return 0;
-    }
-    const fbe::vfs::result_t<fbe::vfs::bytes_t> bytes = fbe::vfs::files().view().read(*named);
-    if (!bytes) {
-        fbe::fail(bytes.error().message);
-        return 0;
-    }
-    const std::string file =
-        assets::shared_file(named->key(), assets::shared_hash(bytes->data(), bytes->size()));
-    const sampling_t sampled{ .filter = filter, .wrap_u = wrap_u, .wrap_v = wrap_v };
-    // A model's that isn't sRGB is of an image decoded as no color, or of a color's, read as
-    // none by a map.
-    const std::string made = made_as(true, true, sampled);
-    if (const std::uint64_t shared = shared_held(file, srgb, made, sampled); shared != 0) {
-        return shared;
-    }
-    if (!srgb) {
-        if (const std::uint64_t shared =
-                shared_held(file, true, made_as(false, true, sampled), sampled);
-            shared != 0) {
+    return fbe::gpu::with_room([&] -> std::uint64_t {
+        invalid = false;
+        if (path == nullptr) {
+            fbe::fail("no path was given");
+            return 0;
+        }
+        const fbe::vfs::result_t<fbe::vfs::path_t> named = fbe::vfs::parse(path);
+        if (!named) {
+            fbe::fail(named.error().message);
+            return 0;
+        }
+        const fbe::vfs::result_t<fbe::vfs::bytes_t> bytes = fbe::vfs::files().view().read(*named);
+        if (!bytes) {
+            fbe::fail(bytes.error().message);
+            return 0;
+        }
+        const std::string file =
+            assets::shared_file(named->key(), assets::shared_hash(bytes->data(), bytes->size()));
+        const sampling_t sampled{ .filter = filter, .wrap_u = wrap_u, .wrap_v = wrap_v };
+        // A model's that isn't sRGB is of an image decoded as no color, or of a color's, read as
+        // none by a map.
+        const std::string made = made_as(true, true, sampled);
+        if (const std::uint64_t shared = shared_held(file, srgb, made, sampled); shared != 0) {
             return shared;
         }
-    }
-    if (!make) {
-        return 0;
-    }
-    if (!fbe_texture_start_loads()) {
-        return 0;
-    }
-    const std::uint64_t load = fbe_assets_load(FBE_ASSETS_IMAGE, path, !srgb, false);
-    if (load == 0) {
-        return 0;
-    }
-    if (fbe_assets_failed(load)) {
-        invalid = fbe_assets_failure(load) == FBE_ASSETS_INVALID_DATA;
-        const std::string why = fbe_assets_error(load);
+        if (!srgb) {
+            if (const std::uint64_t shared =
+                    shared_held(file, true, made_as(false, true, sampled), sampled);
+                shared != 0) {
+                return shared;
+            }
+        }
+        if (!make) {
+            return 0;
+        }
+        if (!fbe_texture_start_loads()) {
+            return 0;
+        }
+        const std::uint64_t load = fbe_assets_load(FBE_ASSETS_IMAGE, path, !srgb, false);
+        if (load == 0) {
+            return 0;
+        }
+        if (fbe_assets_failed(load)) {
+            invalid = fbe_assets_failure(load) == FBE_ASSETS_INVALID_DATA;
+            const std::string why = fbe_assets_error(load);
+            fbe_assets_free(load);
+            fbe::fail(why);
+            return 0;
+        }
+        const std::uint64_t texture = fbe::texture::from_load_once(load, srgb, true);
+        if (texture == 0) {
+            invalid = fbe_texture_load_invalid();
+            const std::string why = fbe_error();
+            fbe_assets_free(load);
+            fbe::fail(why);
+            return 0;
+        }
         fbe_assets_free(load);
-        fbe::fail(why);
-        return 0;
-    }
-    const std::uint64_t texture = fbe_texture_from_load(load, srgb, true);
-    if (texture == 0) {
-        invalid = fbe_texture_load_invalid();
-        const std::string why = fbe_error();
-        fbe_assets_free(load);
-        fbe::fail(why);
-        return 0;
-    }
-    fbe_assets_free(load);
-    set_sampling(texture, sampled);
-    fbe_texture_set_path(texture, named->key().c_str());
-    assets::shared_add(file, srgb, made, texture);
-    return texture;
+        set_sampling(texture, sampled);
+        fbe_texture_set_path(texture, named->key().c_str());
+        assets::shared_add(file, srgb, made, texture);
+        return texture;
+    });
 }
 
 FBE_API int32_t fbe_model_material_image(uint64_t load, int32_t material, int32_t map) {

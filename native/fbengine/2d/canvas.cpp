@@ -166,12 +166,31 @@ void record(VkCommandBuffer commands, const push_t& push, const std::vector<draw
 }
 
 /// Sends the batch to the frame graph as a pass into its target, its quads copied into the
-/// frame's ring; a target freed since is drawn into no more.
+/// frame's ring; a target freed since is drawn into no more. With no room for them in the frame's
+/// memory they stay held, for the next time there is, and nothing's said of it, as nothing's lost;
+/// but in a frame's submit, which is the last there is for them, they're dropped, and the submit
+/// fails saying so.
 void flush() {
     ready = false;
     if (quads.empty()) {
         draws.clear();
         return;
+    }
+    // The frame's memory first, before anything's taken from the batch.
+    fbe::gpu::slice_t slice{};
+    if (fbe::texture::find(batch_target) != nullptr) {
+        const bool said = fbe::gpu::said_no_room();
+        slice = fbe::gpu::frame_memory(quads.size() * sizeof(quad_t), 16);
+        if (slice.data == nullptr && !fbe::gpu::in_submit()) {
+            // Passed over, so it's not what a call that goes on to fail is run again for.
+            if (!said) {
+                fbe::gpu::forget_no_room();
+            }
+            return;
+        }
+        if (slice.data == nullptr) {
+            fbe::gpu::spoil_frame(std::format("what was drawn in 2D wasn't: {}", fbe_error()));
+        }
     }
     // Taken from the batch first, so adding the pass, which sends what's held back, finds it
     // empty.
@@ -192,9 +211,7 @@ void flush() {
     const bool data = found->format == FBE_TEXTURE_RGBA8_LINEAR || found->format == FBE_TEXTURE_R8;
     const fbe::gpu::resource_t target = fbe::gpu::texture_resource(batch_target);
     const VkDeviceSize bytes = sent.size() * sizeof(quad_t);
-    const fbe::gpu::slice_t slice =
-        target != fbe::gpu::no_resource ? fbe::gpu::frame_memory(bytes, 16) : fbe::gpu::slice_t{};
-    if (slice.data != nullptr) {
+    if (target != fbe::gpu::no_resource && slice.data != nullptr) {
         std::memcpy(slice.data, sent.data(), bytes);
         const push_t push{
             .quads = slice.address,
@@ -286,6 +303,10 @@ bool begin(std::uint64_t target, const fbe_2d_pen_t* pen, std::int32_t blend = p
     const std::int64_t height = found->height;
     if (handle != batch_target) {
         flush();
+        // Still held, for want of the frame's memory: another target's can't join them.
+        if (!quads.empty()) {
+            return false;
+        }
         batch_target = handle;
     }
     const bool whole = pen->viewport_width == 0 && pen->viewport_height == 0;
