@@ -42,6 +42,6 @@ A saved state is for rewinding and replays: it restores only in the build that s
 fbengine_physics and Jolt, and `Restore` refuses one from any other, a patch release's included.
 It isn't a save file, so a game keeps its own save of what a player's done.
 
-Released with fbengine at the same version, and needs fb 1.2.3 or later. Apache-2.0; in its DLL,
+Released with fbengine at the same version, and needs fb 1.3.0 or later. Apache-2.0; in its DLL,
 Jolt is MIT (notices/jolt.txt), and on Windows MinGW-w64's winpthreads is MIT and BSD-style
 (notices/winpthreads.txt).

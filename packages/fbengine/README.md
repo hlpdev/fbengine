@@ -26,7 +26,7 @@ macOS arm64 and x64 through MoltenVK. On macOS, a player needs MoltenVK and Vulk
 the package doesn't ship: Homebrew's `molten-vk` and `vulkan-loader` are what its tests use, and
 they're found where Homebrew puts them. A game that ships its own puts `libvulkan.1.dylib` and
 `libMoltenVK.dylib` in its app's Frameworks, or beside the program, and MoltenVK's
-`MoltenVK_icd.json` in Resources/vulkan/icd.d. It needs fb 1.2.3 or later. How it fits together is in
+`MoltenVK_icd.json` in Resources/vulkan/icd.d. It needs fb 1.3.0 or later. How it fits together is in
 [docs/architecture.md](https://github.com/hlpdev/fbengine/blob/master/docs/architecture.md), and
 its scene files in [docs/scene-files.md](https://github.com/hlpdev/fbengine/blob/master/docs/scene-files.md).
 

@@ -16,7 +16,7 @@ Or, from a clone of the repository:
 fb run packages/fbengine_editor -- <a game's folder>
 ```
 
-Either way, it needs fb 1.2.3 or later on the PATH, which it builds and runs a game's code with.
+Either way, it needs fb 1.3.0 or later on the PATH, which it builds and runs a game's code with.
 
 Its panes dock and resize, what's open in a project is kept between runs, in the user's folder for
 settings and not in the project, and everything it does is a command in one list, which its menus
