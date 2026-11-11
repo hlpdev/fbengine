@@ -50,6 +50,7 @@ constexpr std::uint32_t op_entry_point = 15;
 constexpr std::uint32_t op_decorate = 71;
 constexpr std::uint32_t decoration_binding = 33;
 constexpr std::uint32_t decoration_set = 34;
+constexpr std::uint32_t op_constant = 43;
 constexpr std::uint32_t op_type_float = 22;
 constexpr std::uint32_t op_type_image = 25;
 constexpr std::uint32_t op_type_array = 28;
@@ -166,8 +167,8 @@ bool has_entry(std::span<const std::uint32_t> words, std::string_view name, std:
 /// of them there; 0 for none, or if an instruction before it, or it, runs past the words.
 std::pair<std::size_t, std::uint32_t> made_by(std::span<const std::uint32_t> words,
                                               std::uint32_t code, std::uint32_t id) {
-    // A variable says its type first, then itself; a type says itself first.
-    const std::size_t own = code == op_variable ? 2 : 1;
+    // A variable and a constant say their type first, then themselves; a type says itself first.
+    const std::size_t own = code == op_variable || code == op_constant ? 2 : 1;
     std::size_t at = 5;
     while (at < words.size()) {
         const std::uint32_t count = words[at] >> 16U;
@@ -210,9 +211,29 @@ bool multisampled_images(std::span<const std::uint32_t> words, std::uint32_t id)
            made_by(words, op_type_float, words[image + 2]).second >= 3;
 }
 
+/// Whether the variable `id`, if it's an array of a length, is of no more than `most`, as a
+/// binding of the set holds: one of more is what no pipeline's layout has, and reads past it. A
+/// length that isn't a constant of one word there is counted as too many.
+bool holds_no_more(std::span<const std::uint32_t> words, std::uint32_t id, std::uint32_t most) {
+    const auto [variable, variable_words] = made_by(words, op_variable, id);
+    if (variable_words < 4) {
+        return true;
+    }
+    const auto [pointer, pointer_words] = made_by(words, op_type_pointer, words[variable + 1]);
+    if (pointer_words < 4) {
+        return true;
+    }
+    const auto [array, array_words] = made_by(words, op_type_array, words[pointer + 3]);
+    if (array_words < 4) {
+        return true;
+    }
+    const auto [length, length_words] = made_by(words, op_constant, words[array + 3]);
+    return length_words == 4 && words[length + 3] <= most;
+}
+
 /// Whether SPIR-V binds only what the scene's pipelines' layout has: the bindless set, each binding
-/// what the set has there. A game's global that isn't static is one more, or its own texture, which
-/// no pipeline could be made with.
+/// what the set has there, and no more of it than it holds. A game's global that isn't static is
+/// one more, or its own texture, which no pipeline could be made with.
 bool binds_only_the_scene(std::span<const std::uint32_t> words) {
     std::size_t at = 5;
     while (at < words.size()) {
@@ -229,6 +250,16 @@ bool binds_only_the_scene(std::span<const std::uint32_t> words) {
                 (kind == decoration_binding && value == gpu::samples_binding &&
                  !multisampled_images(words, words[at + 1]))) {
                 return false;
+            }
+            if (kind == decoration_binding) {
+                // How many the set holds at each of its bindings, which `value` is one of.
+                std::array<std::uint32_t, 3> held{};
+                held.at(gpu::sampler_binding) = gpu::sampler_slots;
+                held.at(gpu::samples_binding) = gpu::samples_slots;
+                held.at(gpu::texture_binding) = gpu::fewest_textures;
+                if (!holds_no_more(words, words[at + 1], held.at(value))) {
+                    return false;
+                }
             }
         }
         at += count;
@@ -324,7 +355,8 @@ std::optional<std::vector<std::uint32_t>> words_of(const std::uint8_t* bytes, st
     if (!binds_only_the_scene(words)) {
         fail(
             "the shader has what fbengine's pipelines don't bind, a texture or a global that isn't "
-            "static: it reads only what a Surface and its material's parameters have");
+            "static, or more of the set's samplers or textures than it holds: it reads only what a "
+            "Surface and its material's parameters have");
         return std::nullopt;
     }
     // Once a code: words a shader has already were valid when it was made.
