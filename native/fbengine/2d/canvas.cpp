@@ -167,9 +167,9 @@ void record(VkCommandBuffer commands, const push_t& push, const std::vector<draw
 
 /// Sends the batch to the frame graph as a pass into its target, its quads copied into the
 /// frame's ring; a target freed since is drawn into no more. With no room for them in the frame's
-/// memory they stay held, for the next time there is, and nothing's said of it, as nothing's lost;
-/// but in a frame's submit, which is the last there is for them, they're dropped, and the submit
-/// fails saying so.
+/// memory they stay held, for the next time there is: nothing's said of it, as nothing's lost,
+/// unless it's in a submit, which fails, as what it submits is without them; and a Flip's, which
+/// is the last there is for them, drops them, and fails saying so.
 void flush() {
     ready = false;
     if (quads.empty()) {
@@ -186,6 +186,11 @@ void flush() {
             if (!said) {
                 fbe::gpu::forget_no_room();
             }
+            return;
+        }
+        if (slice.data == nullptr && !fbe::gpu::in_flip()) {
+            fbe::gpu::spoil_frame(
+                std::format("what's drawn in 2D couldn't be yet: {}", fbe_error()));
             return;
         }
         if (slice.data == nullptr) {

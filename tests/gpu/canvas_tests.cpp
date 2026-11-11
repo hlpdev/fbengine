@@ -813,12 +813,13 @@ TEST_CASE("a line going back across its longer axis has the CPU's pixels, ties t
 }
 
 // Quads held in a batch go to the graph before a texture's written, which takes memory of the
-// frame's: with no room for it they aren't drawn, and fbe_error has why, as a frame's own draws
-// fail and nothing's freed for them in the middle of one. The write's made all the same, through
-// what it had, and nothing's freed under either.
-TEST_CASE("a texture written with a batch held and no room for the batch is written", "[gpu]") {
+// frame's. With no room for it they stay held, the write's made all the same, and they're drawn
+// once there's room; a Flip that still has none drops them, and says so.
+TEST_CASE("a batch with no room for its quads keeps them, till a Flip that has none says so",
+          "[gpu][frees]") {
     start();
     const std::uint64_t made = target(16, 12);
+    const std::uint64_t another = target(16, 12);
     const std::uint64_t other = fbe_texture_create(16, 16, FBE_TEXTURE_RGBA8, false);
     REQUIRE(other != 0);
     // The first quads of a GPU just started, so the frame has no memory for them yet, and makes
@@ -828,23 +829,154 @@ TEST_CASE("a texture written with a batch held and no room for the batch is writ
     // Room for what the write goes through, and none for the batch's quads.
     fbe::gpu::limit_allocations(static_cast<std::int64_t>(fbe::gpu::allocations().count) + 1);
     const std::vector<std::uint8_t> pixels(std::size_t{ 16 } * 16 * 4, 9);
-    const bool written = fbe_texture_write(other, 0, 0, 16, 16, pixels.data(), 64);
-    const std::string said = fbe_error();
-    fbe::gpu::limit_allocations(-1);
-    CAPTURE(written, said);
-    CHECK(written);
+    CHECK(fbe_texture_write(other, 0, 0, 16, 16, pixels.data(), 64));
+    // Another target's quads can't join them, and that draw says why.
+    CHECK_FALSE(fbe_2d_rect(another, &solid, 0, 0, 2, 2, true));
+    CHECK(std::string_view(fbe_error()).contains("(VkResult -2)"));
+    // A call that passes over the batch's want of room and fails for something else is run once,
+    // though what the first write went through waits to be freed.
+    CHECK(fbe::gpu::waiting_frees() > 0);
+    fbe::gpu::limit_allocations(static_cast<std::int64_t>(fbe::gpu::allocations().count) + 1);
+    int runs = 0;
+    CHECK_FALSE(fbe::gpu::with_room([&] {
+        ++runs;
+        return fbe_texture_write(other, 0, 0, 16, 16, pixels.data(), 64) && false;
+    }));
+    CHECK(runs == 1);
+    SECTION("with room again before the Flip, they're drawn") {
+        fbe::gpu::limit_allocations(-1);
+        fbe_frame_flip(false);
+        CHECK(pixels_of(read(made), red).size() == 20);
+    }
+    SECTION("with none at the Flip, they're dropped, and it says so") {
+        fbe_frame_flip(false);
+        CHECK(std::string_view(fbe_error()).contains("what was drawn in 2D wasn't"));
+        fbe::gpu::limit_allocations(-1);
+        CHECK(pixels_of(read(made), red).empty());
+        // And what's drawn after is.
+        require(fbe_2d_rect(made, &solid, 2, 3, 5, 4, true));
+        CHECK(pixels_of(read(made), red).size() == 20);
+    }
+    SECTION("a read finds none, frees what the writes went through, and has them") {
+        // Its submit has no room for them and fails, keeping them; the read, an exported call,
+        // then submits what's recorded for room, and run again has room for them.
+        CHECK(pixels_of(read(made), red).size() == 20);
+        fbe::gpu::limit_allocations(-1);
+    }
     std::vector<std::uint8_t> back(pixels.size());
     require(fbe_texture_read(other, 0, back.data(), static_cast<std::int64_t>(back.size())));
     CHECK(back == pixels);
-    CHECK(said.contains("couldn't make a buffer the CPU reaches (VkResult -2)"));
-    CHECK(pixels_of(read(made), red).empty());
-    // And with room they're drawn.
+    CHECK(fbe_gpu_validation_errors() == 0);
+    stop_gpu();
+}
+
+// What's held back for the graph can begin the frame as it's sent, taking what waited for the
+// next frame with it: asked before the frame's looked at, so nothing of a frame just begun is
+// freed under the frames in flight, and a call with no room still submits it for room.
+TEST_CASE("a batch that begins the frame as it's sent is seen before the frame's asked after",
+          "[gpu][frees]") {
+    start();
+    const std::uint64_t made = target(16, 12);
+    const std::uint64_t texture = fbe_texture_create(16, 16, FBE_TEXTURE_RGBA8, false);
+    REQUIRE(texture != 0);
+    // A frame submitted, with no 2D in it, so the next has no memory of its own yet.
+    const std::vector<std::uint8_t> pixels(std::size_t{ 16 } * 16 * 4, 9);
+    require(fbe_texture_write(texture, 0, 0, 16, 16, pixels.data(), 64));
+    fbe_frame_flip(false);
+    (void)fbe::gpu::release_waiting();
+    REQUIRE(fbe::gpu::waiting_frees() == 0);
+    // As a shader's code waits, for the next frame.
+    int freed = 0;
+    fbe::gpu::after_next_frame([&freed] { ++freed; });
+    const fbe_2d_pen_t solid = pen(red);
     require(fbe_2d_rect(made, &solid, 2, 3, 5, 4, true));
+    fbe::gpu::limit_allocations(static_cast<std::int64_t>(fbe::gpu::allocations().count));
+    // The first frame's asked whether it's done, and isn't; the one just begun isn't asked.
+    fbe::gpu::inject(fbe::gpu::fault_t::NOT_DONE);
+    CHECK(fbe_texture_release(texture));
+    CHECK(freed == 0);
+    CHECK(fbe::gpu::waiting_frees() == 2);
+    (void)fbe::gpu::faulted(fbe::gpu::fault_t::NOT_DONE);
+    // No room, and what's to free is in the frame the batch began: it's submitted for it.
+    const std::uint64_t more = fbe_texture_create(16, 16, FBE_TEXTURE_RGBA8, false);
+    INFO(fbe_error());
+    CHECK(more != 0);
+    CHECK(freed == 1);
+    fbe::gpu::limit_allocations(-1);
+    // And the quads, held through it all, are drawn.
     CHECK(pixels_of(read(made), red).size() == 20);
     CHECK(fbe_gpu_validation_errors() == 0);
-    CHECK(fbe_texture_release(other));
-    CHECK(fbe_texture_release(made));
     stop_gpu();
+}
+
+// A texture a held batch draws with is freed, and then there's no room: what's recorded, the
+// batch's pass among it, is submitted and waited for before the texture's image goes.
+TEST_CASE("a texture a held batch draws with outlives the batch's pass when room's made",
+          "[gpu][frees]") {
+    start();
+    const std::uint64_t made = target(16, 12);
+    const fbe_2d_pen_t clear = pen(black);
+    const fbe_2d_pen_t ink = pen({ 255, 255, 255, 255 });
+    // Both frames have their memory for quads.
+    for (int frame = 0; frame < 2; ++frame) {
+        require(fbe_2d_clear(made, &clear));
+        fbe_frame_flip(false);
+    }
+    const std::uint64_t drawn = fbe_texture_create(4, 4, FBE_TEXTURE_RGBA8, false);
+    REQUIRE(drawn != 0);
+    const std::vector<std::uint8_t> reds(std::size_t{ 4 } * 4 * 4, 255);
+    require(fbe_texture_write(drawn, 0, 0, 4, 4, reds.data(), 16));
+    CHECK(pixels_of(read(made), red).empty());
+    const fbe_2d_sprite_t whole{ .scale_x = 1.0F, .scale_y = 1.0F };
+    require(fbe_2d_texture(made, &ink, drawn, &whole, 2.0F, 3.0F));
+    CHECK(fbe_texture_release(drawn));
+    CHECK(fbe::gpu::waiting_frees() > 0);
+    fbe::gpu::limit_allocations(static_cast<std::int64_t>(fbe::gpu::allocations().count));
+    const std::uint64_t more = fbe_texture_create(16, 16, FBE_TEXTURE_RGBA8, false);
+    INFO(fbe_error());
+    CHECK(more != 0);
+    CHECK(fbe::gpu::waiting_frees() == 0);
+    fbe::gpu::limit_allocations(-1);
+    CHECK(pixels_of(read(made), { 255, 255, 255, 255 }).size() == 16);
+    CHECK(fbe_gpu_validation_errors() == 0);
+    stop_gpu();
+}
+
+// A Flip makes the screen again when its size has changed, between adding the present and the
+// frame's submit: with no room it isn't made, and nothing's submitted for room in the middle of
+// the present, so the frame's given to the queue once.
+TEST_CASE("a Flip that can't make its new screen for want of room submits the frame once",
+          "[gpu][frees]") {
+    REQUIRE(fbe_window_set_headless(true));
+    fbe_gpu_set_pipeline_cache("");
+    require(fbe_window_open(32, 16, FBE_WINDOW_WINDOWED));
+    require(fbe_gpu_start());
+    const fbe_2d_pen_t clear = pen(black);
+    require(fbe_2d_clear(0, &clear));
+    fbe_frame_flip(false);
+    const std::uint64_t screen = fbe_gpu_screen();
+    REQUIRE(screen != 0);
+    REQUIRE(fbe_texture_width(screen) == 32);
+    require(fbe_window_set_size(64, 32));
+    // Something's recorded, and something waits with it.
+    const std::uint64_t texture = fbe_texture_create(16, 16, FBE_TEXTURE_RGBA8, false);
+    REQUIRE(texture != 0);
+    const std::vector<std::uint8_t> pixels(std::size_t{ 16 } * 16 * 4, 9);
+    require(fbe_texture_write(texture, 0, 0, 16, 16, pixels.data(), 64));
+    CHECK(fbe_texture_release(texture));
+    CHECK(fbe::gpu::waiting_frees() > 0);
+    fbe::gpu::limit_allocations(static_cast<std::int64_t>(fbe::gpu::allocations().count));
+    const std::uint64_t before = fbe::gpu::frame_submits();
+    fbe_frame_flip(false);
+    CHECK(fbe::gpu::frame_submits() == before + 1);
+    // The old screen's kept, as one that can't be made leaves it.
+    CHECK(fbe_gpu_screen() == screen);
+    fbe::gpu::limit_allocations(-1);
+    fbe_frame_flip(false);
+    CHECK(fbe_texture_width(fbe_gpu_screen()) == 64);
+    CHECK(fbe_gpu_validation_errors() == 0);
+    stop_gpu();
+    fbe_window_close();
 }
 
 TEST_CASE("a rectangle covers exactly its pixels, and its outline each once", "[gpu]") {

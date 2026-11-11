@@ -46,6 +46,24 @@ int submitting = 0;
 /// many of those calls are begun.
 bool no_room = false;
 int edges = 0;
+/// How many times a frame's been given to the queue.
+std::uint64_t submits = 0;
+/// Whether the submit being made is a Flip's, the last there is for what the frame's to draw.
+bool flipping = false;
+
+struct flipping_t {
+    flipping_t() {
+        flipping = true;
+    }
+    flipping_t(const flipping_t&) = delete;
+    flipping_t& operator=(const flipping_t&) = delete;
+    flipping_t(flipping_t&&) = delete;
+    flipping_t& operator=(flipping_t&&) = delete;
+    ~flipping_t() {
+        flipping = false;
+    }
+};
+
 /// Why what a submit was to record couldn't be, for want of the frame's memory, if it couldn't:
 /// the submit goes on with the rest, and fails saying so.
 std::string spoiled;
@@ -203,6 +221,7 @@ bool submit(const fbe::gpu::device_t& gpu, fbe::gpu::frame_t& frame, VkSemaphore
         result = VK_ERROR_DEVICE_LOST;
     } else if (!fbe::gpu::faulted(fbe::gpu::fault_t::SUBMIT)) {
         result = gpu.queue_submit(gpu.queue, 1, &info, frame.done);
+        ++submits;
     }
     frame.timed = result == VK_SUCCESS && frame.timer != VK_NULL_HANDLE;
     if (result != VK_SUCCESS) {
@@ -401,17 +420,22 @@ bool release_waiting() {
     if (gpu == nullptr || submitting > 0 || lost() || waiting_frees() == 0) {
         return false;
     }
+    const std::size_t waited_for = waiting_frees();
     // What's recorded may use what waits: it's submitted. The graph's asked first, as what's held
     // back for it can begin the frame as it's sent.
     const bool waits = graph_waits();
-    if ((waits || gpu->frames[gpu->frame].begun || !carried.empty()) && !finish_frame()) {
-        return false;
+    if (waits || gpu->frames[gpu->frame].begun || !carried.empty()) {
+        // Whatever it says: a frame it couldn't submit stays begun, and isn't freed below, and
+        // what it couldn't record for want of room is in fbe_error.
+        (void)finish_frame();
     }
     // Each frame's is freed once its own fence says the GPU's done with it, whatever finishing the
     // frame said, which submits nothing if the graph recorded nothing.
+    bool all = true;
     for (frame_t& frame : gpu->frames) {
         if (frame.begun) {
-            return false;
+            all = false;
+            continue;
         }
         const VkResult waited = vkWaitForFences(gpu->device, 1, &frame.done, VK_TRUE, UINT64_MAX);
         if (lose(waited) || waited != VK_SUCCESS) {
@@ -420,12 +444,14 @@ bool release_waiting() {
         collect(frame);
     }
     // Every frame's done and none's begun, so what waited for the next has nothing to wait for.
-    const std::vector<std::function<void()>> next = std::move(with_next);
-    with_next.clear();
-    for (const std::function<void()>& free : next) {
-        free();
+    if (all && carried.empty()) {
+        const std::vector<std::function<void()>> next = std::move(with_next);
+        with_next.clear();
+        for (const std::function<void()>& free : next) {
+            free();
+        }
     }
-    return true;
+    return waiting_frees() < waited_for;
 }
 
 void say_no_room() {
@@ -466,6 +492,14 @@ void forget_no_room() {
 
 bool in_submit() {
     return submitting > 0;
+}
+
+bool in_flip() {
+    return flipping;
+}
+
+std::uint64_t frame_submits() {
+    return submits;
 }
 
 void spoil_frame(std::string why) {
@@ -529,6 +563,7 @@ std::uint64_t submitted_frames() {
 
 bool submit_frame(VkSemaphore wait, VkSemaphore signal) {
     const submitting_t in_submit;
+    const flipping_t in_flip;
     device_t& gpu = *device();
     frame_t& frame = gpu.frames[gpu.frame];
     if (lost()) {
