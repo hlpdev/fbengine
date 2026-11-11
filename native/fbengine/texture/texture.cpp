@@ -1524,7 +1524,7 @@ bool read_once(uint64_t texture, int32_t level, uint8_t* pixels, int64_t size) {
 
 bool write_once(uint64_t texture, int32_t x, int32_t y, int32_t width, int32_t height,
                 const uint8_t* pixels, int32_t pitch) {
-    texture_t* found = fbe::texture::find(texture);
+    const texture_t* found = fbe::texture::find(texture);
     if (found == nullptr || !has_pixels(*found)) {
         return false;
     }

@@ -858,8 +858,11 @@ TEST_CASE("a batch with no room for its quads keeps them, till a Flip that has n
         CHECK(pixels_of(read(made), red).size() == 20);
     }
     SECTION("a read finds none, frees what the writes went through, and has them") {
-        // Its submit has no room for them and fails, keeping them; the read, an exported call,
-        // then submits what's recorded for room, and run again has room for them.
+        // A submit that isn't a Flip's has no room for them and fails, saying so, and keeps them.
+        CHECK_FALSE(fbe::gpu::finish_frame());
+        CHECK(std::string_view(fbe_error()).contains("what's drawn in 2D couldn't be yet"));
+        // So a read fails there the first time; an exported call, it frees what the writes went
+        // through, which that submit ran, and run again has room for them.
         CHECK(pixels_of(read(made), red).size() == 20);
         fbe::gpu::limit_allocations(-1);
     }
@@ -891,17 +894,26 @@ TEST_CASE("a batch that begins the frame as it's sent is seen before the frame's
     const fbe_2d_pen_t solid = pen(red);
     require(fbe_2d_rect(made, &solid, 2, 3, 5, 4, true));
     fbe::gpu::limit_allocations(static_cast<std::int64_t>(fbe::gpu::allocations().count));
-    // The first frame's asked whether it's done, and isn't; the one just begun isn't asked.
-    fbe::gpu::inject(fbe::gpu::fault_t::NOT_DONE);
-    CHECK(fbe_texture_release(texture));
-    CHECK(freed == 0);
-    CHECK(fbe::gpu::waiting_frees() == 2);
-    (void)fbe::gpu::faulted(fbe::gpu::fault_t::NOT_DONE);
-    // No room, and what's to free is in the frame the batch began: it's submitted for it.
-    const std::uint64_t more = fbe_texture_create(16, 16, FBE_TEXTURE_RGBA8, false);
-    INFO(fbe_error());
-    CHECK(more != 0);
-    CHECK(freed == 1);
+    SECTION("a texture freed, and then one made") {
+        // The first frame's asked whether it's done, and isn't; the one just begun isn't asked.
+        fbe::gpu::inject(fbe::gpu::fault_t::NOT_DONE);
+        CHECK(fbe_texture_release(texture));
+        CHECK(freed == 0);
+        CHECK(fbe::gpu::waiting_frees() == 2);
+        (void)fbe::gpu::faulted(fbe::gpu::fault_t::NOT_DONE);
+        // No room, and what's to free is in the frame the batch began: it's submitted for it.
+        const std::uint64_t more = fbe_texture_create(16, 16, FBE_TEXTURE_RGBA8, false);
+        INFO(fbe_error());
+        CHECK(more != 0);
+        CHECK(freed == 1);
+    }
+    SECTION("room asked for") {
+        // The batch begins the frame as it's asked after, so the frame's submitted, and what
+        // it took from the next frame's goes with it.
+        CHECK(fbe::gpu::release_waiting());
+        CHECK(freed == 1);
+        CHECK(fbe::gpu::waiting_frees() == 0);
+    }
     fbe::gpu::limit_allocations(-1);
     // And the quads, held through it all, are drawn.
     CHECK(pixels_of(read(made), red).size() == 20);

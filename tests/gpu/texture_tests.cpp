@@ -1479,14 +1479,20 @@ TEST_CASE("a texture made with no room frees what's done first, and submits only
     }
     SECTION("what's freed was left by a frame submitted: the copy's there after") {
         free_with_a_frame(freed);
+        // What waits for the next frame waits for the copy's, which is recorded for it.
+        int next = 0;
+        fbe::gpu::after_next_frame([&next] { ++next; });
         CHECK(fbe_texture_copy(kept, 4, 4, kept, 0, 0, 8, 8));
         fbe::gpu::limit_allocations(static_cast<std::int64_t>(fbe::gpu::allocations().count));
         const std::uint64_t made = fbe_texture_create(16, 16, FBE_TEXTURE_RGBA8, false);
         INFO(fbe_error());
         REQUIRE(made != 0);
-        CHECK(fbe::gpu::waiting_frees() == 0);
+        CHECK(next == 0);
+        CHECK(fbe::gpu::waiting_frees() == 1);
         fbe::gpu::limit_allocations(-1);
         CHECK(shades_of(kept) == copied);
+        (void)settled();
+        CHECK(next == 1);
         CHECK(fbe_texture_release(made));
     }
     SECTION("what's freed is in the frame being recorded: it's submitted, the copy dropped") {

@@ -102,8 +102,16 @@ std::vector<std::uint8_t> read(std::uint64_t handle, std::uint32_t level);
 /// if anything was, as a write in its turn: what uses a texture on the GPU calls it first.
 bool send_pixels(std::uint64_t handle);
 
-/// fbe_texture_create_target, fbe_texture_from_load and fbe_texture_from_model, run once, as the
-/// engine calls them: only an exported call runs itself again for want of room.
+/// The exported calls that can allocate, run once, as the engine calls them: only an exported
+/// call runs itself again for want of room.
+std::uint64_t create_once(std::int32_t width, std::int32_t height, std::int32_t format,
+                          bool mipmaps);
+bool read_once(std::uint64_t texture, std::int32_t level, std::uint8_t* pixels, std::int64_t size);
+bool write_once(std::uint64_t texture, std::int32_t x, std::int32_t y, std::int32_t width,
+                std::int32_t height, const std::uint8_t* pixels, std::int32_t pitch);
+bool write_level_once(std::uint64_t texture, std::int32_t level, std::int32_t width,
+                      std::int32_t height, const std::uint8_t* pixels, std::int32_t pitch);
+bool reload_once(std::uint64_t texture, std::uint64_t load, bool srgb, bool mipmaps);
 std::uint64_t create_target_once(std::int32_t width, std::int32_t height, std::int32_t format,
                                  std::int32_t samples, bool depth);
 std::uint64_t from_load_once(std::uint64_t load, bool srgb, bool mipmaps);
