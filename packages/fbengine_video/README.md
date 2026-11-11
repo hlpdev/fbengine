@@ -35,6 +35,6 @@ intro.Free()
 `Texture` has its frame for anything else that draws, as a Mesh's material, and `SetSound` plays a
 Sound of the game's beside a video with none. A game makes its videos MPEG-1, with ffmpeg as
 `ffmpeg -i in.mp4 -c:v mpeg1video -q:v 4 -c:a mp2 -b:a 192k -f mpeg out.mpg`. Released with
-fbengine at the same version, and needs fb 1.2.3 or later. Apache-2.0; in its DLL, pl_mpeg is MIT
+fbengine at the same version, and needs fb 1.3.0 or later. Apache-2.0; in its DLL, pl_mpeg is MIT
 (notices/pl_mpeg.txt), and on Windows MinGW-w64's winpthreads is MIT and BSD-style
 (notices/winpthreads.txt).

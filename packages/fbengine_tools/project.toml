@@ -1,17 +1,17 @@
 [project]
 name = "fbengine_tools"
-version = "1.0.0"
+version = "1.1.0"
 type = "library"
 license = "Apache-2.0"
 description = "fbengine's tools: the cooker, which makes a game's files into what its release loads fastest, in a pak."
 readme = "README.md"
 repository = "https://github.com/hlpdev/fbengine"
 keywords = ["engine", "game", "assets", "cooker", "tools"]
-fb = ">=1.2.3"
+fb = ">=1.3.0"
 
 # By its folder here, and published by the version, which the folder's has to be in.
 [dependencies]
-fbengine = { path = "../fbengine", version = "1.0" }
+fbengine = { path = "../fbengine", version = "1.1" }
 
 # fbengine_tools' own DLL, native/fbengine_tools, built for each target into native/<target>/,
 # with libktx's encoder and meshoptimizer in it.

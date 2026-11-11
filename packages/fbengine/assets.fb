@@ -65,9 +65,12 @@ Final Class Cached<T> Implements HeldAsset
         Holds -= 1
         If Holds > 0 Then Return False
         Released = True
-        Local entries = TypedCache<T>.Of().Entries
-        Local kept = entries.Get(Key)
-        If kept != Null && RefEquals(kept, Self) Then entries.Remove(Key)
+        Local cache = TypedCache<T>.Of()
+        Local kept = cache.Entries.Get(Key)
+        If kept != Null && RefEquals(kept, Self)
+            cache.Entries.Remove(Key)
+            Assets.Dropped(cache.Id, Key)
+        End If
         Return True
     End Method
 
@@ -79,20 +82,27 @@ Interface AnyCache
     // Loads `key`'s asset again, if it has one, as a changed file's is.
     Async Method Reload(key: String)
 
+    // Whether `key`'s asset is loading for the first time, or being made of its load: what it
+    // read isn't kept yet, so its file can't be said to be what it read.
+    Method Loading(key: String): Bool
+
     // Lets go of what it has under `place`, so the next load of it loads it again.
     Method Forget(place: String)
 End Interface
 
 // The cache of one type's assets, by normalized path, one a type, as a generic Class's Static Field
-// is; and how big it grows before what's gone is taken out of it.
+// is; which of the caches it is, by which what its assets read is kept apart from another type's of
+// the same path; and how big it grows before what's gone is taken out of it.
 Final Class TypedCache<T> Implements AnyCache
     Where T: Asset & Class & Hashable
     Static Field shared: TypedCache<T>? = Null
     Field Entries: Map<String, Cached<T>>
+    Field Id: Int
     Field PruneAt: Int
 
     New()
         Entries = Map<String, Cached<T>>()
+        Id = 0
         PruneAt = 64
     End New
 
@@ -102,13 +112,14 @@ Final Class TypedCache<T> Implements AnyCache
         If found != Null Then Return found
         Local made = TypedCache<T>()
         shared = made
-        Assets.Track(made)
+        made.Id = Assets.Track(made)
         Return made
     End Method
 
     // Loads `key`'s asset again, if it's made, on the workers; then its Reload takes it in place,
     // or the cache lets go of it, so the next Load makes a new one. What doesn't load keeps what it
-    // had. One that's loading, or loading again, is loaded again once that's done, so the last
+    // had, and what its load read is kept as what it is, so the same broken file isn't loaded again
+    // until it's written. One that's loading, or loading again, is loaded again once that's done, so the last
     // change wins; and one let go of meanwhile, whose Free may have freed what it holds, isn't
     // touched.
     Async Method Reload(key: String)
@@ -119,7 +130,12 @@ Final Class TypedCache<T> Implements AnyCache
             Return
         End If
         Local before = cached.Made
-        If before == Null || before.Stale() Then Return
+        If before == Null || before.Stale()
+            // It's gone, and reads its files no more: what's kept of what it read would have them
+            // changed for good.
+            Assets.Dropped(Id, key)
+            Return
+        End If
         cached.Reloading = True
         Local load = fbe_assets_load_async(T.LoadKind() As Int32, key, False, True)
         If load == 0
@@ -131,11 +147,14 @@ Final Class TypedCache<T> Implements AnyCache
         cached.Reloading = False
         Local current = Entries.Get(key)
         Local made = cached.Made
-        If cached.Released || current == Null || !RefEquals(current, cached) || made == Null ||
-           made.Stale()
+        If cached.Released || current == Null || !RefEquals(current, cached) Then Return
+        If made == Null || made.Stale()
+            // Gone while it loaded, as above.
+            Assets.Dropped(Id, key)
             Return
         End If
         If fbe_assets_failed(load)
+            Assets.Restamped(Id, key, load)
             Assets.Reported(AssetReload(key, False, Assets.LoadFailed(load, key)))
         Else
             Try
@@ -148,13 +167,15 @@ Final Class TypedCache<T> Implements AnyCache
                         cached.Hash = hash
                         Assets.Index(cached)
                     End If
-                    Assets.Depends(key, load)
+                    Assets.Depends(Id, key, load)
                 Else
                     cached.Released = True
                     Entries.Remove(key)
+                    Assets.Dropped(Id, key)
                 End If
                 Assets.Reported(AssetReload(key, inPlace, Null))
             Catch e As IOError
+                Assets.Restamped(Id, key, load)
                 Assets.Reported(AssetReload(key, False, e))
             End Try
         End If
@@ -164,21 +185,34 @@ Final Class TypedCache<T> Implements AnyCache
         End If
     End Method
 
+    Method Loading(key: String): Bool
+        Local cached = Entries.Get(key)
+        Return cached != Null && !cached.Released && (cached.Load != 0 || cached.Making)
+    End Method
+
     // What it has under `place`, a normalized path, is let go of; holds of it go on being good.
     Method Forget(place: String)
         Local under = place.EndsWith("/") ? place : place + "/"
+        Local id = Id
         Entries.RemoveWhere(Function(key: String, cached: Cached<T>): Bool
             Local going = key == place || key.StartsWith(under)
-            If going Then cached.Released = True
+            If going
+                cached.Released = True
+                Assets.Dropped(id, key)
+            End If
             Return going
         End Function)
     End Method
 
     // Takes out what's gone: made, and its asset let go, from here and the index.
     Method Prune()
+        Local id = Id
         Entries.RemoveWhere(Function(key: String, cached: Cached<T>): Bool
             Local gone = !cached.Making && cached.Load == 0 && cached.Made == Null
-            If gone Then Assets.Unindex(cached)
+            If gone
+                Assets.Unindex(cached)
+                Assets.Dropped(id, key)
+            End If
             Return gone
         End Function)
         PruneAt = Max(64, Entries.Count * 2)
@@ -262,8 +296,18 @@ Public Final Class Assets
     Static Field watch: FolderWatch? = Null
     Static Field fromSource: Bool = False
     Static Field reloads: AssetReload[] = []
-    // The assets whose loads read a file besides their own, by its path, as a glTF's buffers.
-    Static Field dependents: Map<String, Set<String>> = Map<String, Set<String>>()
+    // The assets whose loads read a file besides their own, as a glTF's buffers, by the file's
+    // path: each by its type and its path, as Reader has them, with its type's cache and its path.
+    // One type's asset of a path is apart from another's of it, which may read other files.
+    Static Field dependents: Map<String, Map<String, (Int, String)>> =
+        Map<String, Map<String, (Int, String)>>()
+    // What each file on the disk was when what read it was loaded, by the file's path and then by
+    // the asset that read it, as Reader has it: its size, and when it was written. Hot reload
+    // loads a file's assets again only when it isn't what they all read.
+    Static Field stamps: Map<String, Map<String, (Int64, Int64)>> =
+        Map<String, Map<String, (Int64, Int64)>>()
+    // The files each asset is under in those two, by Reader, which go with its cache's entry.
+    Static Field read: Map<String, Set<String>> = Map<String, Set<String>>()
 
     Private New()
     End New
@@ -471,6 +515,8 @@ Public Final Class Assets
     /// them, all the way down, for a game's development builds. At each Flip, the assets of a file
     /// that changed, or whose sidecar did, once neither has for a tenth of a second, are loaded
     /// again on the workers, and so are those whose loads read it, as a glTF's do its buffers. A
+    /// file's changed when it has another size, or was written at another time, than when its
+    /// assets were loaded: one that's only been read, which Windows tells of too, isn't. A
     /// `.toml` file is loaded again as its own file and as its stem's sidecar. Then each one's
     /// Reload takes it in place, or the cache lets go of it, so the next Load makes a new one; one
     /// that doesn't load keeps what it had. Reloaded gives what was. Unmount stops watching what it
@@ -513,47 +559,165 @@ Public Final Class Assets
     /// for a path that isn't a res:// path.
     @MainThread
     Public Static Method Reload(path: String) Throws IOError
-        ReloadPath(Try Normalize(path))
+        ReloadPath(Try Normalize(path), Set<String>())
     End Method
 
-    // Loads `key`'s assets again, of every type, and those whose loads read it.
+    // Loads `key`'s assets again, of every type, and those whose loads read it: each once, as
+    // `done` has those loaded again already for what's being done, by Reader, and gets these.
     @MainThread
-    Static Method ReloadPath(key: String)
-        For cache In caches
-            cache.Reload(key)
+    Static Method ReloadPath(key: String, done: Set<String>)
+        For cache = 0 Until caches.Count
+            If done.Add(Reader(cache, key)) Then caches[cache].Reload(key)
         End For
         Local reading = dependents.Get(key)
         If reading == Null Then Return
-        For dependent In reading.ToArray()
-            For cache In caches
-                cache.Reload(dependent)
-            End For
+        Local those: (Int, String)[] = []
+        For dependent In reading
+            If done.Add(dependent.0) Then those.Add(dependent.1)
+        End For
+        For that In those
+            caches[that.0].Reload(that.1)
         End For
     End Method
 
-    // Keeps what `load`, `key`'s, read besides its file, for hot reload to load it again when one
-    // of those changes.
+    // An asset as what it read is kept by: its type's cache, and its path.
+    Static Method Reader(cache: Int, key: String): String => "{cache} {key}"
+
+    // Keeps what `load`, the load of `key`'s asset in cache `cache`, read: what besides its file,
+    // for hot reload to load it again when one of those changes, and what each was, in place of
+    // what its last load read.
     @MainThread
-    Static Method Depends(key: String, load: UInt64)
-        // What it read before it was loaded again, which it doesn't depend on now if it isn't below.
-        For reading In dependents
-            reading.1.Remove(key)
-        End For
+    Static Method Depends(cache: Int, key: String, load: UInt64)
+        Dropped(cache, key)
+        Local reader = Reader(cache, key)
+        Local files = Set<String>()
+        Named(reader, cache, key, load, files)
+        Stamped(reader, load, files)
+        If files.Count > 0 Then read[reader] = files
+    End Method
+
+    // Keeps `key`'s asset in cache `cache` as depending on what `load` read besides its file, or
+    // tried to, and adds them to `files`.
+    @MainThread
+    Static Method Named(reader: String, cache: Int, key: String, load: UInt64, files: Set<String>)
         For at = 0 Until fbe_assets_reads(load)
-            Local read = ""
+            Local file = ""
             Unsafe
-                read = fbe_assets_read(load, at).ToString()
+                file = fbe_assets_read(load, at).ToString()
             End Unsafe
-            If read == key || read == "" Then Continue
-            Local reading = dependents.Get(read)
+            If file == key || file == "" Then Continue
+            Local reading = dependents.Get(file)
             If reading == Null
-                Local made = Set<String>()
-                made.Add(key)
-                dependents[read] = made
-            Else
-                reading.Add(key)
+                reading = Map<String, (Int, String)>()
+                dependents[file] = reading
+            End If
+            reading[reader] = (cache, key)
+            files.Add(file)
+        End For
+    End Method
+
+    // Keeps what each file on the disk was as `load`, `reader`'s, read it, its own, its sidecar,
+    // and what its file names, and adds them to `files`.
+    @MainThread
+    Static Method Stamped(reader: String, load: UInt64, files: Set<String>)
+        For at = 0 Until fbe_assets_stamps(load)
+            Local size: Int64 = 0
+            Local written: Int64 = 0
+            Local file = ""
+            Unsafe
+                file = fbe_assets_stamp(load, at, AddressOf(size), AddressOf(written)).ToString()
+            End Unsafe
+            If file == "" Then Continue
+            Local readers = stamps.Get(file)
+            If readers == Null
+                readers = Map<String, (Int64, Int64)>()
+                stamps[file] = readers
+            End If
+            readers[reader] = (size, written)
+            files.Add(file)
+        End For
+    End Method
+
+    // Keeps what a load that failed read, over what the asset's last load read of the same files:
+    // the asset has the old file still, and the file as it is now doesn't load, which it's been
+    // told once, and isn't again until the file's written. And what it read besides, or tried to,
+    // is added to what the asset depends on: what broke it may be a file it names now that isn't
+    // there yet, or isn't whole, and it's loaded again when that comes.
+    @MainThread
+    Static Method Restamped(cache: Int, key: String, load: UInt64)
+        Local reader = Reader(cache, key)
+        Local files = read.Get(reader)
+        If files == Null Then files = Set<String>()
+        Named(reader, cache, key, load, files)
+        Stamped(reader, load, files)
+        If files.Count > 0 Then read[reader] = files
+    End Method
+
+    // Lets go of what's kept of what `key`'s asset in cache `cache` read, as its entry goes from
+    // the cache, or as it's loaded again.
+    @MainThread
+    Static Method Dropped(cache: Int, key: String)
+        Local reader = Reader(cache, key)
+        Local files = read.Get(reader)
+        If files == Null Then Return
+        read.Remove(reader)
+        For file In files
+            Local reading = dependents.Get(file)
+            If reading != Null
+                reading.Remove(reader)
+                If reading.Count == 0 Then dependents.Remove(file)
+            End If
+            Local readers = stamps.Get(file)
+            If readers != Null
+                readers.Remove(reader)
+                If readers.Count == 0 Then stamps.Remove(file)
             End If
         End For
+    End Method
+
+    // Whether the file at `key` on the disk is what every asset that read it read: as many bytes,
+    // written when it was. A watcher tells of more than writes, as Windows' does of a file that's
+    // read, which is no reason to load it again. One nothing's kept of, or that's gone, isn't; nor
+    // is one an asset of it, or one that read it, is loading for the first time, or being made,
+    // which may have read it before it was written, with nothing kept of that yet.
+    @MainThread
+    Package Static Method Unchanged(key: String): Bool
+        For cache In caches
+            If cache.Loading(key) Then Return False
+        End For
+        Local reading = dependents.Get(key)
+        If reading != Null
+            For dependent In reading
+                If caches[dependent.1.0].Loading(dependent.1.1) Then Return False
+            End For
+        End If
+        Local readers = stamps.Get(key)
+        If readers == Null || readers.Count == 0 Then Return False
+        Local size: Int64 = 0
+        Local written: Int64 = 0
+        Local there = False
+        Unsafe
+            there = fbe_vfs_stamp(key, AddressOf(size), AddressOf(written))
+        End Unsafe
+        If !there Then Return False
+        For reader In readers
+            If reader.1.0 != size || reader.1.1 != written Then Return False
+        End For
+        Return True
+    End Method
+
+    // How much is kept of what the cache's assets read, for the tests: each asset under each file
+    // it depends on, and under each it's stamped by, and each asset that has any.
+    @MainThread
+    Package Static Method ReadsKept(): Int
+        Local count = read.Count
+        For reading In dependents
+            count += reading.1.Count
+        End For
+        For readers In stamps
+            count += readers.1.Count
+        End For
+        Return count
     End Method
 
     /// How many loads there are, not freed: what's loading, and what's loaded but not yet made.
@@ -570,7 +734,10 @@ Public Final Class Assets
     End Method
 
     /// What hot reload, or Reload, has loaded again since this was last asked, in the order each
-    /// was done.
+    /// was done. An asset taken in place is what its file says again: a Model's Materials have the
+    /// file's shading, layers, maps, and textures, and its Geometries' surfaces the file's
+    /// Materials, so what a game set on them after loading is the game's to set again, for each
+    /// Model here.
     @MainThread
     Public Static Method Reloaded(): AssetReload[]
         Local done = reloads
@@ -792,10 +959,11 @@ Public Final Class Assets
         Return Try SettingsOf<S>(text, sidecar)
     End Method
 
-    // Keeps `cache` with every type's.
+    // Keeps `cache` with every type's, and gives which of them it is.
     @MainThread
-    Static Method Track(cache: AnyCache)
+    Static Method Track(cache: AnyCache): Int
         caches.Add(cache)
+        Return caches.Count - 1
     End Method
 
     // Keeps what a reload did, for Reloaded.
@@ -938,12 +1106,17 @@ Public Final Class Assets
         End For
         For path In settled
             made.Changed.Remove(path)
-            ReloadPath(path)
-            // A sidecar's file is loaded again with its new settings.
+            // Told of, and not written: its assets have what's in it, or have been told it
+            // doesn't load.
+            If Unchanged(path) Then Continue
+            Local done = Set<String>()
+            ReloadPath(path, done)
+            // A sidecar's file is loaded again with its new settings, if it wasn't just now, as
+            // what read the sidecar.
             If path.EndsWith(".toml")
                 Local bytes = path.Bytes
                 Local stem = String.FromUtf8(bytes[0..bytes.Count - 5])
-                If stem != Null Then ReloadPath(stem)
+                If stem != Null Then ReloadPath(stem, done)
             End If
         End For
     End Method
@@ -982,6 +1155,14 @@ Public Final Class Assets
         Unsafe
             Return Path(fbe_vfs_normalized().ToString())
         End Unsafe
+    End Method
+
+    // Has hot reload told that the file at `path` changed, as a watcher of its folder tells it, for
+    // the tests: a watcher tells of more than writes, as Windows' does of a file that's only read.
+    @MainThread
+    Package Static Method Noticed(path: String) Throws IOError
+        Local made = watch
+        If made != Null Then made.Changed[Try Normalize(path)] = Instant.Now()
     End Method
 
     // How many folders hot reload is watching, for the tests.
@@ -1059,7 +1240,7 @@ Public Final Class Assets
             cached.Hash = making.Hash()
             cached.Holds += 1
             Index(cached)
-            Depends(key, loaded.Handle)
+            Depends(TypedCache<T>.Of().Id, key, loaded.Handle)
             // What changed while it loaded is loaded again now.
             If cached.Again
                 cached.Again = False
@@ -1094,9 +1275,12 @@ Public Final Class Assets
     @MainThread
     Static Method Forget<T>(key: String, cached: Cached<T>)
         Where T: Asset & Class & Hashable
-        Local entries = TypedCache<T>.Of().Entries
-        Local kept = entries.Get(key)
-        If kept != Null && RefEquals(kept, cached) Then entries.Remove(key)
+        Local cache = TypedCache<T>.Of()
+        Local kept = cache.Entries.Get(key)
+        If kept != Null && RefEquals(kept, cached)
+            cache.Entries.Remove(key)
+            Dropped(cache.Id, key)
+        End If
     End Method
 
     // Puts a made asset in the index, by its Hash.

@@ -13,6 +13,8 @@ Import std.text
 Import std.time
 Import fbengine
 Import fbengine.c.fbe_assets
+Import fbengine.c.fbe_core
+Import fbengine.c.fbe_vfs
 
 // An Asset of an image load: its size and format, as a texture would take them.
 Class Picture Implements Asset
@@ -304,4 +306,52 @@ Function APakBesideThatsOlderThanTheBuiltOneIsStale() Throws IOError
     Expect(!Assets.StalePak(beside, beside))
     Expect(!Assets.StalePak(beside, Path("")))
     Expect(!Assets.StalePak(folder.Path / "none.pak", built))
+End Function
+
+// What a file is on the disk, and what a load read it as, for a file of a mounted folder alone:
+// not for one in memory, or that isn't there, or a path that isn't one, or an index that isn't.
+@Test
+Function AStampIsOfAFolderFileAndALoadsAreWhatItRead() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "a.bin", [1, 2, 3, 4, 5] As UInt8[])
+    Assets.MountFolder("res://test-stamp", folder.Path)
+    Defer Assets.Unmount("res://test-stamp")
+    Assets.MountFiles("res://test-stamp-memory", {"a.bin": "x".Bytes})
+    Defer Assets.Unmount("res://test-stamp-memory")
+    Local size: Int64 = -1
+    Local written: Int64 = -1
+    Local load = fbe_assets_load(AssetKind.BYTES As Int32, "res://Test-Stamp/A.bin", False, True)
+    Expect(load != 0)
+    Unsafe
+        Expect(fbe_vfs_stamp("res://Test-Stamp/A.bin", AddressOf(size), AddressOf(written)))
+        Expect(size == 5 && written > 0)
+        Expect(!fbe_vfs_stamp("res://test-stamp-memory/a.bin", AddressOf(size), AddressOf(written)))
+        Expect(fbe_vfs_failure() == FBE_VFS_NOT_FOUND)
+        Expect(!fbe_vfs_stamp("not a path", AddressOf(size), AddressOf(written)))
+        Expect(fbe_vfs_failure() == FBE_VFS_INVALID_PATH)
+        Expect(fbe_error().ToString().Contains("not a path"))
+        Expect(!fbe_vfs_stamp("res://test-stamp/none.bin", AddressOf(size), AddressOf(written)))
+        Expect(!fbe_vfs_stamp("res://test-stamp", AddressOf(size), AddressOf(written)))
+
+        // Its own file, which has no sidecar.
+        Expect(fbe_assets_stamps(load) == 1)
+        Local read: Int64 = -1
+        Local at: Int64 = -1
+        Expect(fbe_assets_stamp(load, 0, AddressOf(read), AddressOf(at)).ToString() ==
+               "res://test-stamp/a.bin")
+        Expect(read == 5 && at == written)
+        Expect(fbe_assets_stamp(load, 1, AddressOf(read), AddressOf(at)).ToString() == "")
+        Expect(fbe_assets_stamp(load, -1, AddressOf(read), AddressOf(at)).ToString() == "")
+        Expect(fbe_assets_free(load))
+        Expect(fbe_assets_stamps(load) == -1)
+        Expect(fbe_assets_stamp(load, 0, AddressOf(read), AddressOf(at)).ToString() == "")
+        Expect(fbe_assets_stamps(0) == -1)
+
+        // One in memory has none.
+        Local memory = fbe_assets_load(AssetKind.BYTES As Int32, "res://test-stamp-memory/a.bin",
+                                       False, True)
+        Expect(memory != 0 && fbe_assets_stamps(memory) == 0)
+        Expect(fbe_assets_free(memory))
+    End Unsafe
 End Function

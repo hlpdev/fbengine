@@ -42,4 +42,4 @@ A widget of a game's own overrides Draw, and draws in its box through the Painte
 UI's units, on whole pixels of the screen. Styles name a widget's parts, as `slider.thumb`, with the
 theme; `Theme.Dark` has them all. With no font, the first Draw takes the engine's own, Font.BuiltIn.
 
-Released with fbengine at the same version, and needs fb 1.2.3 or later. Apache-2.0.
+Released with fbengine at the same version, and needs fb 1.3.0 or later. Apache-2.0.

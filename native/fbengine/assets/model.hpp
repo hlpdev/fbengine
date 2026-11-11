@@ -15,6 +15,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace fbe::assets {
@@ -244,6 +245,14 @@ struct model_options_t {
     /// Whether a texture of a file, shared_file's, decoded as a color or not, is there already, on
     /// the threads that decode: then the image is left undecoded, its file's bytes in its source.
     std::function<bool(std::string_view file, bool srgb)> shared;
+    /// Given the stamp of each file on the disk it reads, by its res:// path, normalized, from
+    /// before the file's read, the first time it is, whether the model decodes or not: what hot
+    /// reload holds the file's against, so one written as it decodes is loaded again.
+    std::vector<std::pair<std::string, vfs::stamp_t>>* stamps = nullptr;
+    /// Given, for a model that doesn't decode, the res:// paths, normalized, of what it read or
+    /// tried to, a file that isn't there too, as a decoded model's reads has them: hot reload
+    /// loads it again when one of those changes, or comes.
+    std::vector<std::string>* tried = nullptr;
 };
 
 /// The glTF (or binary glTF) at `path`, whose `bytes` are read, with the buffers and images it

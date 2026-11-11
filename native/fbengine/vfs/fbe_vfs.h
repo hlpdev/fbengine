@@ -49,6 +49,11 @@ FBE_API bool fbe_vfs_normalize(const char* path);
 FBE_API const char* fbe_vfs_normalized(void);
 // What's at `path`, FBE_VFS_NONE, FBE_VFS_FILE, or FBE_VFS_FOLDER; -1 if it can't tell.
 FBE_API int32_t fbe_vfs_kind(const char* path);
+// How many bytes the file at `path` has now, and when it was last written, in its file system's
+// own count, for a file on the disk, in a folder that's mounted: what hot reload goes by, with a
+// load's fbe_assets_stamp. False, with fbe_vfs_failure's why, for a path that isn't one, and
+// false, as FBE_VFS_NOT_FOUND, for no file there, or one in a pak or in memory.
+FBE_API bool fbe_vfs_stamp(const char* path, int64_t* size, int64_t* written);
 // The folder or file at `path` on the disk, UTF-8, through every link to it, or `path` when the OS
 // can't say, kept for fbe_vfs_normalized to give; false without the memory for it.
 FBE_API bool fbe_vfs_real_path(const char* path);

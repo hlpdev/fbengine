@@ -25,6 +25,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <optional>
 #include <random>
 #include <string>
 #include <thread>
@@ -870,6 +871,75 @@ TEST_CASE("reading each file of a big folder takes a stat of each folder on its 
     }
     // Listing the folder at each read takes minutes.
     REQUIRE(std::chrono::steady_clock::now() - start < std::chrono::seconds(20));
+}
+
+TEST_CASE("a file's stamp is its size and write time on the disk, and only a folder's has one",
+          "[vfs]") {
+    const temp_folder_t folder;
+    folder.write("data/a.txt", "one");
+    const std::filesystem::path file = folder.path / "data" / "a.txt";
+    vfs::vfs_t files;
+    files.mount(path("res://"), vfs::folder(folder.path));
+
+    std::uint64_t size = 0;
+    std::int64_t written = 0;
+    REQUIRE(vfs::disk_stamp(file, size, written));
+    REQUIRE(size == 3);
+    // What one that has none is here.
+    const vfs::stamp_t none{ .size = UINT64_MAX, .written = -1 };
+    const vfs::stamp_t first = files.view().stamp(path(R"(res://Data\A.TXT)")).value_or(none);
+    REQUIRE(first == vfs::stamp_t{ .size = 3, .written = written });
+    // Read, it's the same.
+    REQUIRE(read(files, "res://data/a.txt") == "one");
+    REQUIRE(files.view().stamp(path("res://data/a.txt")).value_or(none) == first);
+    // As many bytes written at another time aren't, nor more bytes.
+    std::filesystem::last_write_time(file, std::filesystem::last_write_time(file) +
+                                               std::chrono::seconds(2));
+    const vfs::stamp_t later = files.view().stamp(path("res://data/a.txt")).value_or(none);
+    REQUIRE(later.size == 3);
+    REQUIRE(later.written != first.written);
+    folder.write("data/a.txt", "three");
+    REQUIRE(files.view().stamp(path("res://data/a.txt")).value_or(none).size == 5);
+#ifdef _WIN32
+    // Finer than a second, which the C++ library's own isn't here: of 20 writes, one isn't on one.
+    bool finer = false;
+    for (int i = 0; i < 20 && !finer; ++i) {
+        folder.write("data/a.txt", "again");
+        REQUIRE(vfs::disk_stamp(file, size, written));
+        finer = written % 10'000'000 != 0;
+        std::this_thread::sleep_for(std::chrono::milliseconds(3));
+    }
+    REQUIRE(finer);
+#endif
+
+    // What isn't a file there has none, on the disk or in the mounts.
+    REQUIRE_FALSE(vfs::disk_stamp(folder.path / "data" / "none.txt", size, written));
+    REQUIRE_FALSE(files.view().stamp(path("res://data/none.txt")).has_value());
+    REQUIRE_FALSE(files.view().stamp(path("res://data")).has_value());
+    REQUIRE_FALSE(files.view().stamp(path("res://")).has_value());
+    REQUIRE_FALSE(vfs::view_t().stamp(path("res://data/a.txt")).has_value());
+
+    // A pak's file has none, on its own or over the folder's, which is the one read; a newer pak
+    // without the file leaves the folder's.
+    vfs::vfs_t packed;
+    packed.mount(path("res://"), pak_of({ { .name = "data/a.txt", .data = "packed" } }));
+    REQUIRE_FALSE(packed.view().stamp(path("res://data/a.txt")).has_value());
+    files.mount(path("res://"), pak_of({ { .name = "data/b.txt", .data = "other" } }));
+    REQUIRE(files.view().stamp(path("res://data/a.txt")).has_value());
+    REQUIRE_FALSE(files.view().stamp(path("res://data/b.txt")).has_value());
+    files.mount(path("res://"), pak_of({ { .name = "data/a.txt", .data = "packed" } }));
+    REQUIRE(read(files, "res://data/a.txt") == "packed");
+    REQUIRE_FALSE(files.view().stamp(path("res://data/a.txt")).has_value());
+    REQUIRE(files.unmount(path("res://")));
+    REQUIRE(files.view().stamp(path("res://data/a.txt")).has_value());
+
+    // A newer mount at the path, or under it, makes it a folder, which has none.
+    files.mount(path("res://data/a.txt"), pak_of({ { .name = "in.txt", .data = "in" } }));
+    REQUIRE_FALSE(files.view().stamp(path("res://data/a.txt")).has_value());
+    REQUIRE(files.unmount(path("res://data/a.txt")));
+    REQUIRE(files.view().stamp(path("res://data/a.txt")).has_value());
+    files.mount(path("res://data/a.txt/deeper"), pak_of({ { .name = "in.txt", .data = "in" } }));
+    REQUIRE_FALSE(files.view().stamp(path("res://data/a.txt")).has_value());
 }
 
 TEST_CASE("a read with no memory for a file's bytes fails as OTHER", "[vfs]") {

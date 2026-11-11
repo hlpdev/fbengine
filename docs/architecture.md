@@ -344,6 +344,29 @@ good modern engine on its own. Every structural choice is checked against both.
   zips, a file at a time, with Zip64 where sizes or counts need it. Names starting with '.' aren't
   in a folder mount, a pak, or the references, and Thumbs.db and desktop.ini aren't in the last
   two.
+- Hot reload loads a watched file's assets again only when the file's size or its write time isn't
+  what their loads read: each load keeps, for every file on the disk it read, its own, its sidecar,
+  and what its file names, the size and write time it had just before it was read, a model's
+  buffers and images too, so one written as it's decoded is loaded again; and what a watcher
+  tells of is checked against those once it's settled. A watcher tells of more than writes, as
+  std's on Windows did of a file that was only read, which reloaded it and all that read it; that
+  changes neither, and does nothing. What a load read is kept by its asset's type and path, so
+  two types' assets of one path, which may read other files and at other times, are each loaded
+  again until each has read it as it is, and it goes with the asset's entry from the cache. A
+  reload that fails keeps what it read too, so a file that doesn't load is told of once, not at
+  each thing its watcher tells, until it's written, and it depends besides on what it tried to
+  read, so a model naming a buffer that isn't there yet is loaded when that comes. An asset that's
+  gone without the cache being told has what it read let go at the next reload of its path. A
+  file isn't said to be what its assets read while one of them is loading for the first time,
+  which may have read it before a write. A sidecar's write loads its asset again once. The write
+  time is the file system's own,
+  100 ns on Windows and nanoseconds elsewhere, not the C++ library's, which is whole seconds on
+  Windows; a write that keeps the size and lands in the same tick of it as the load's read isn't
+  seen, a fix of a file that didn't load among them, the failed reload's stamp being kept; `Assets.Reload` loads a path again whatever's changed. An asset taken in place is what
+  its file says again: a Model's materials have the
+  file's shading, layers, maps, and textures, and its surfaces the file's materials, so what a
+  game set on them after loading is the game's to set again, from `Assets.Reloaded()`. The
+  coordinator's decision, 2026-11-10, for 1.1.0, whatever std's watcher reports.
 - A model's image that's a file of its own has the color space the model reads it in, in a debug
   build and a release alike: a color for a base color or emissive texture, numbers for the rest. A
   debug build decodes the PNG or JPEG so; the cooker, for an image whose sidecar doesn't say

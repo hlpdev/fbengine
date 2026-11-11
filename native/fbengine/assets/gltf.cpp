@@ -132,6 +132,16 @@ public:
     decoder_t(const vfs::path_t& path, const vfs::view_t& files, const model_options_t& options)
         : m_path(path), m_files(files), m_options(options) {}
 
+    // What it's read, or tried to, so far, each once.
+    std::vector<std::string> tried() const {
+        const std::scoped_lock lock(m_reads_mutex);
+        std::vector<std::string> reads = m_reads;
+        std::ranges::sort(reads);
+        const auto repeated = std::ranges::unique(reads);
+        reads.erase(repeated.begin(), repeated.end());
+        return reads;
+    }
+
     result_t<model_t> decode(std::span<const std::uint8_t> bytes) {
         if (bytes.empty()) {
             return fail("it's empty");
@@ -345,6 +355,23 @@ private:
         }
     }
 
+    // Keeps the stamp of the file at `named` as it is now, before it's read, if it's on the disk
+    // and has none yet: the oldest, so a file written between two reads of it isn't its stamp's.
+    void stamp(const vfs::path_t& named) const {
+        if (m_options.stamps == nullptr) {
+            return;
+        }
+        const std::scoped_lock lock(m_reads_mutex);
+        std::string key = named.key();
+        if (std::ranges::contains(m_stamped, key)) {
+            return;
+        }
+        if (const std::optional<vfs::stamp_t> now = m_files.stamp(named)) {
+            m_options.stamps->emplace_back(key, *now);
+        }
+        m_stamped.push_back(std::move(key));
+    }
+
     // What a URI names, read from res://: a path from the glTF's folder, or a res:// one. A URI of
     // any other scheme, or a path from the root of a disk, isn't one of the game's files.
     // With `after`, it's the file of that name and `after`, which needn't be there, and is one
@@ -370,6 +397,7 @@ private:
             if (!named) {
                 return std::unexpected(std::move(named.error()));
             }
+            stamp(*named);
             result_t<bytes_t> beside = m_files.read(*named);
             if (beside) {
                 const std::scoped_lock lock(m_reads_mutex);
@@ -384,6 +412,7 @@ private:
         if (key != nullptr) {
             *key = named->key();
         }
+        stamp(*named);
         result_t<bytes_t> bytes = m_files.read(*named);
         if (!bytes) {
             return std::unexpected(error_t{
@@ -1486,6 +1515,7 @@ private:
     // What it's read, by key, which images' decodes on the jobs add to too.
     mutable std::mutex m_reads_mutex;
     mutable std::vector<std::string> m_reads;
+    mutable std::vector<std::string> m_stamped;
     std::size_t m_steps = 1;
     std::atomic<std::size_t> m_done = 0;
 };
@@ -1538,7 +1568,11 @@ std::optional<bool> sidecar_srgb(std::string_view text) {
 result_t<model_t> decode_model(const vfs::path_t& path, std::span<const std::uint8_t> bytes,
                                const vfs::view_t& files, const model_options_t& options) {
     decoder_t decoder(path, files, options);
-    return decoder.decode(bytes);
+    result_t<model_t> model = decoder.decode(bytes);
+    if (!model && options.tried != nullptr) {
+        *options.tried = decoder.tried();
+    }
+    return model;
 }
 
 } // namespace fbe::assets

@@ -86,6 +86,22 @@ public:
         return found.empty() ? kind_t::NONE : found.front().kind;
     }
 
+    std::optional<stamp_t> stamp(std::span<const std::string> /*names*/,
+                                 std::span<const std::string> keys) override {
+        if (keys.empty()) {
+            return std::nullopt;
+        }
+        const std::vector<found_t> found = find(keys);
+        if (found.empty() || found.front().kind != kind_t::FILE) {
+            return std::nullopt;
+        }
+        stamp_t stamp;
+        if (!disk_stamp(found.front().path, stamp.size, stamp.written)) {
+            return std::nullopt;
+        }
+        return stamp;
+    }
+
     result_t<std::optional<std::vector<entry_t>>> list(std::span<const std::string> /*names*/,
                                                        std::span<const std::string> keys) override {
         std::vector<found_t> found;

@@ -258,6 +258,26 @@ FBE_API int32_t fbe_vfs_kind(const char* path) {
     return guarded(-1, [&] { return kind(path); });
 }
 
+FBE_API bool fbe_vfs_stamp(const char* path, int64_t* size, int64_t* written) {
+    return guarded(false, [&] {
+        if (path == nullptr || size == nullptr || written == nullptr) {
+            return false;
+        }
+        const fbe::vfs::result_t<fbe::vfs::path_t> named = fbe::vfs::parse(path);
+        if (!named) {
+            return failed(named.error());
+        }
+        const std::optional<fbe::vfs::stamp_t> stamp = fbe::vfs::files().view().stamp(*named);
+        if (!stamp) {
+            last_failure = FBE_VFS_NOT_FOUND;
+            return false;
+        }
+        *size = static_cast<int64_t>(stamp->size);
+        *written = stamp->written;
+        return true;
+    });
+}
+
 FBE_API int64_t fbe_vfs_read(const char* path) {
     return guarded<int64_t>(-1, [&] { return read(path, false); });
 }

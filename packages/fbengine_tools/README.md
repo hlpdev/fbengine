@@ -71,7 +71,7 @@ Local wall = Try Assets.Load<Texture>(Res.Textures.Wall)
 ```
 
 A game's release ships fbengine's DLL, never this one. Released with fbengine at the same version,
-and needs fb 1.2.3 or later. Apache-2.0. In its DLL:
+and needs fb 1.3.0 or later. Apache-2.0. In its DLL:
 - KTX-Software's writer is Apache-2.0 (notices/ktx.txt), with Basis Universal's encoder
   (notices/basisu.txt), the ASTC encoder, Apache-2.0 (notices/astc-encoder.txt), and zstd,
   BSD-3-Clause (notices/zstd.txt);

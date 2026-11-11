@@ -66,7 +66,16 @@ void read_sidecar(load_t& load) {
     load.settings = std::move(text);
 }
 
+/// Keeps the stamp of the file at `path` as it is now, if it's one on the disk.
+void stamp(load_t& load, const vfs::path_t& path) {
+    if (const std::optional<vfs::stamp_t> now = load.files.stamp(path)) {
+        load.stamps.emplace_back(path.key(), *now);
+    }
+}
+
 void run_load_here(load_t& load, jobs_t* jobs) {
+    // Before it's read, so one written as it's read has another stamp after, and is loaded again.
+    stamp(load, load.path);
     result_t<bytes_t> bytes = load.files.read(load.path, load.options.most);
     if (!bytes) {
         load.error = std::move(bytes.error());
@@ -74,8 +83,12 @@ void run_load_here(load_t& load, jobs_t* jobs) {
         return;
     }
     if (load.options.settings) {
+        const std::optional<vfs::path_t> sidecar = sidecar_of(load.path);
+        if (sidecar) {
+            stamp(load, *sidecar);
+        }
         read_sidecar(load);
-        if (const std::optional<vfs::path_t> sidecar = sidecar_of(load.path)) {
+        if (sidecar) {
             load.reads.push_back(sidecar->key());
         }
     }
@@ -97,18 +110,24 @@ void run_load_here(load_t& load, jobs_t* jobs) {
     }
     case load_kind_t::MODEL: {
         load.progress = read_part;
+        std::vector<std::string> tried;
         const model_options_t options{
             .transcode = load.options.transcode,
             .jobs = jobs,
             .progress =
                 [&load](float done) { load.progress = read_part + ((1 - read_part) * done); },
             .shared = shared_known,
+            // Its buffers' and images', each from before it's read, whether it decodes or not.
+            .stamps = &load.stamps,
+            .tried = &tried,
         };
         result_t<model_t> model = decode_model(load.path, *bytes, load.files, options);
         if (model) {
             load.reads.insert(load.reads.end(), model->reads.begin(), model->reads.end());
             load.model = std::move(*model);
         } else {
+            // What broke it may be a file it names that isn't there yet, which reloads it.
+            load.reads.insert(load.reads.end(), tried.begin(), tried.end());
             load.error = std::move(model.error());
         }
         break;

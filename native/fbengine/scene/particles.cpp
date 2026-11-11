@@ -66,12 +66,17 @@ float grown(const particles_t& found, float size, float steps) {
     float power = 1.0F;
     float sum = steps;
     if (times != 1.0F) {
-        const float grows = std::clamp(steps * std::log(times), -100.0F, 41.0F);
+        // Near 1 its logarithm's from its series, as the shader has it.
+        const float past = times - 1.0F;
+        const float logarithm = std::fabs(past) < 0.01F
+                                    ? past * (1.0F - (past * (0.5F - (past / 3.0F))))
+                                    : std::log(times);
+        const float grows = std::clamp(steps * logarithm, -100.0F, 41.0F);
         power = std::exp(grows);
         const float less = std::fabs(grows) < 0.01F
                                ? grows * (1.0F + (grows * (0.5F + (grows / 6.0F))))
                                : power - 1.0F;
-        sum = less / (times - 1.0F);
+        sum = less / past;
     }
     const float all = std::fmin(times * sum, most_term);
     const float added = std::clamp(found.grow_added * all, -most_term, most_term);
