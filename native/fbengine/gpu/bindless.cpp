@@ -18,8 +18,6 @@ namespace {
 
 /// The most textures there can be, unless the device holds fewer.
 constexpr std::uint32_t most_textures = 16384;
-/// The fewest textures fbengine needs a device to hold.
-constexpr std::uint32_t fewest_textures = 1024;
 /// The filters and wraps, as fbe_texture.h numbers them.
 constexpr std::int32_t filters = 2;
 constexpr std::int32_t wraps = 3;

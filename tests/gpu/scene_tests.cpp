@@ -6445,6 +6445,55 @@ TEST_CASE("a game's shader's mutants the validator takes are drawn", "[gpu][scen
     CAPTURE(refused_by_validator, drawn);
     CHECK(refused_by_validator > 0);
     CHECK(drawn > 0);
+    // What the validation layer said of one that was drawn, if it said anything.
+    INFO(fbe::gpu::first_validation_error());
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+// The mutant CI found once particles moved the shader's words: the count of the set's samplers, 32,
+// with a bit flipped, 65568, which is valid SPIR-V and reads past what any pipeline's layout has
+// there. It's refused as it's made, with no driver or validation layer told of it.
+TEST_CASE("a game's shader with more samplers than the set holds is refused", "[gpu][scene]") {
+    const scene_t scene;
+    const std::span<const std::uint32_t> seed = fbe::test_shaders::game_shader.code;
+    // The array's type that the variable at binding 0 points to, and the constant of its length.
+    const auto made = [&](std::uint32_t code, std::size_t own, std::uint32_t id) {
+        for (std::size_t word = 5; word < seed.size();) {
+            const std::uint32_t count = seed[word] >> 16U;
+            if ((seed[word] & 0xFFFFU) == code && count > own && seed[word + own] == id) {
+                return word;
+            }
+            word += std::max(count, 1U);
+        }
+        return std::size_t{ 0 };
+    };
+    std::uint32_t samplers = 0;
+    for (std::size_t word = 5; word < seed.size();) {
+        const std::uint32_t count = seed[word] >> 16U;
+        // A decoration, of a binding, 0.
+        if ((seed[word] & 0xFFFFU) == 71 && count == 4 && seed[word + 2] == 33 &&
+            seed[word + 3] == 0) {
+            samplers = seed[word + 1];
+        }
+        word += std::max(count, 1U);
+    }
+    REQUIRE(samplers != 0);
+    const std::size_t variable = made(59, 2, samplers);
+    REQUIRE(variable != 0);
+    const std::size_t pointer = made(32, 1, seed[variable + 1]);
+    REQUIRE(pointer != 0);
+    const std::size_t array = made(28, 1, seed[pointer + 3]);
+    REQUIRE(array != 0);
+    const std::size_t length = made(43, 2, seed[array + 3]);
+    REQUIRE(length != 0);
+    REQUIRE(seed[length + 3] == 32);
+    std::vector<std::uint32_t> words(seed.begin(), seed.end());
+    words[length + 3] ^= 1U << 16U;
+    const std::vector<std::uint8_t> bytes = cooked_shader(words);
+    CHECK(fbe_shader_create(bytes.data(), static_cast<std::int64_t>(bytes.size()), "a mutant") ==
+          0);
+    CHECK(std::string_view(fbe_error()).contains("than it holds"));
+    CHECK_FALSE(fbe_shader_check(bytes.data(), static_cast<std::int64_t>(bytes.size())));
     CHECK(fbe_gpu_validation_errors() == 0);
 }
 

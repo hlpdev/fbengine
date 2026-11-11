@@ -19,7 +19,8 @@ extern "C" {
 FBE_API const char* fbe_shader_stamp(void);
 // Whether a cooked file's `size` bytes would load; false for what isn't one, what's cooked for
 // another version of the engine or other sources, SPIR-V without the scene's entry points, or with
-// what the scene's pipelines don't bind, as fbe_error says. Nothing's kept.
+// what the scene's pipelines don't bind, more of the set's samplers, multisampled images, or
+// textures than it holds (32, 64, and 1024) among it, as fbe_error says. Nothing's kept.
 FBE_API bool fbe_shader_check(const uint8_t* bytes, int64_t size);
 // A new shader of a cooked file's `size` bytes; 0 for what fbe_shader_check refuses, or more
 // different shaders than a game can have, 4095. `name` says which it is, where an error does. The
