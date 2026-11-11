@@ -216,6 +216,8 @@ Public Final Class GameRun
     // How many reads have brought something, and how many had by the last Update.
     Field reads: Int = 0
     Field readsBefore: Int = 0
+    // How many of them a frame went back for, past what it had as it began.
+    Field readsAgain: Int = 0
     // What's to start once what's been killed has gone.
     Field nextProject: GameProject? = Null
     Field nextScene: String = ""
@@ -241,6 +243,10 @@ Public Final Class GameRun
     /// How many reads of its processes' pipes there have been, each of what one held, for a test that
     /// what comes fast is read faster than once a frame.
     Public Method Reads(): Int => reads
+
+    /// How many of those a frame went back for, having read already, in the little longer it gives
+    /// what's coming fast: none, if a frame read once and left the rest to the next.
+    Public Method ReadsAgain(): Int => readsAgain
 
     /// Where its program's built to, once it's started.
     Public Method Program(): Path? => program
@@ -389,10 +395,12 @@ Public Final Class GameRun
     // Gives what's coming fast a little longer, and what's quiet nothing.
     Method ReadMore()
         If reading > 0 && reads != readsBefore
+            Local had = reads
             Local since = Stopwatch.StartNew()
             While since.Elapsed.TotalSeconds < READ_WAIT
                 Scheduler.Main.Step()
             End While
+            readsAgain += reads - had
         End If
         readsBefore = reads
     End Method
