@@ -60,8 +60,8 @@ struct load_t {
     /// one, and a model's buffers and images.
     std::vector<std::string> reads;
     /// The stamp of each file on the disk it read, its own and those, by its res:// path,
-    /// normalized: its own and its sidecar's from before they were read, and a model's buffers'
-    /// and images' from after. One whose stamp's the same now hasn't been written since.
+    /// normalized, each from before it was read, a model's buffers' and images' too, and whether
+    /// the load failed or not. One whose stamp's the same now hasn't been written since.
     std::vector<std::pair<std::string, vfs::stamp_t>> stamps;
     bytes_t bytes;
     image_t image;

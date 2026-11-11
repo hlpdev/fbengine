@@ -330,14 +330,19 @@ good modern engine on its own. Every structural choice is checked against both.
   two.
 - Hot reload loads a watched file's assets again only when the file's size or its write time isn't
   what their loads read: each load keeps, for every file on the disk it read, its own, its sidecar,
-  and what its file names, the size and write time it had, and what a watcher tells of is checked
-  against those once it's settled. A watcher tells of more than writes, as std's on Windows did of a
-  file that was only read, which reloaded it and all that read it; that changes neither, and does
-  nothing. Two assets of one path that read the file at different times are loaded again until
-  both have read it as it is. The write time is the file system's own, 100 ns on Windows and
-  nanoseconds elsewhere, not the C++ library's, which is whole seconds on Windows; a write that
-  keeps the size and lands in the same tick of it as the load's read isn't seen; `Assets.Reload` loads a path again whatever's
-  changed. An asset taken in place is what its file says again: a Model's materials have the
+  and what its file names, the size and write time it had just before it was read, a model's
+  buffers and images too, so one written as it's decoded is loaded again; and what a watcher
+  tells of is checked against those once it's settled. A watcher tells of more than writes, as
+  std's on Windows did of a file that was only read, which reloaded it and all that read it; that
+  changes neither, and does nothing. What a load read is kept by its asset's type and path, so
+  two types' assets of one path, which may read other files and at other times, are each loaded
+  again until each has read it as it is, and it goes with the asset's entry from the cache. A
+  reload that fails keeps what it read too, so a file that doesn't load is told of once, not at
+  each thing its watcher tells, until it's written. The write time is the file system's own,
+  100 ns on Windows and nanoseconds elsewhere, not the C++ library's, which is whole seconds on
+  Windows; a write that keeps the size and lands in the same tick of it as the load's read isn't
+  seen; `Assets.Reload` loads a path again whatever's changed. An asset taken in place is what
+  its file says again: a Model's materials have the
   file's shading, layers, maps, and textures, and its surfaces the file's materials, so what a
   game set on them after loading is the game's to set again, from `Assets.Reloaded()`. The
   coordinator's decision, 2026-11-10, for 1.1.0, whatever std's watcher reports.

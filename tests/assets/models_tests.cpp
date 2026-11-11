@@ -15,7 +15,11 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
+#include <memory>
 #include <mutex>
+#include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -691,6 +695,136 @@ TEST_CASE("a load reads its file and its sidecar through one view of the mounts"
     REQUIRE_FALSE(load.error.has_value());
     REQUIRE(load.settings == "optimize = false\n");
     REQUIRE(load.model.meshes.size() == 1);
+}
+
+namespace {
+
+// A folder whose files' stamps count how many times each has been read, as a file written just
+// after each read of it would: what's stamped before it's read is 0.
+class counting_source_t final : public vfs::source_t {
+public:
+    explicit counting_source_t(const std::filesystem::path& folder)
+        : m_inner(vfs::folder(folder)) {}
+
+    vfs::result_t<std::optional<bytes_t>> read(std::span<const std::string> names,
+                                               std::span<const std::string> keys,
+                                               std::uint64_t most) override {
+        vfs::result_t<std::optional<bytes_t>> bytes = m_inner->read(names, keys, most);
+        if (bytes && *bytes) {
+            const std::scoped_lock lock(m_mutex);
+            ++m_reads[joined(keys)];
+        }
+        return bytes;
+    }
+    vfs::result_t<vfs::kind_t> kind(std::span<const std::string> names,
+                                    std::span<const std::string> keys) override {
+        return m_inner->kind(names, keys);
+    }
+    vfs::result_t<std::optional<std::vector<vfs::entry_t>>>
+    list(std::span<const std::string> names, std::span<const std::string> keys) override {
+        return m_inner->list(names, keys);
+    }
+    std::optional<vfs::stamp_t> stamp(std::span<const std::string> names,
+                                      std::span<const std::string> keys) override {
+        std::optional<vfs::stamp_t> stamp = m_inner->stamp(names, keys);
+        if (stamp) {
+            const std::scoped_lock lock(m_mutex);
+            stamp->written = m_reads[joined(keys)];
+        }
+        return stamp;
+    }
+
+private:
+    static std::string joined(std::span<const std::string> keys) {
+        std::string text;
+        for (const std::string& key : keys) {
+            text += "/" + key;
+        }
+        return text;
+    }
+
+    std::shared_ptr<vfs::source_t> m_inner;
+    std::mutex m_mutex;
+    std::map<std::string, std::int64_t> m_reads;
+};
+
+} // namespace
+
+TEST_CASE("a load's stamps are each file's from before it was read, a model's buffers' and "
+          "images' too, and a failed load's",
+          "[assets]") {
+    const test::temp_folder_t folder;
+    const triangle_t triangle;
+    const std::string rest =
+        R"(,"images":[{"uri":"../textures/wall.png"}],"textures":[{"source":0}],)"
+        R"("materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}}}],)"
+        R"("meshes":[{"primitives":[{"attributes":{"POSITION":0,"TEXCOORD_0":2},)"
+        R"("indices":3,"material":0}]}])";
+    folder.write("models/tri.gltf", triangle.built.json(rest, "tri.bin"));
+    folder.write("models/tri.gltf.toml", "optimize = false\n");
+    folder.write("models/tri.bin", triangle.built.buffer);
+    folder.write("textures/wall.png", test::png(2, 2, 4, std::vector<std::uint8_t>(16, 99)));
+    // One whose image isn't there, read after its buffer.
+    std::string missing = rest;
+    missing.replace(missing.find("wall.png"), 8, "none.png");
+    folder.write("models/bad.gltf", triangle.built.json(missing, "tri.bin"));
+
+    // What one that has none is here.
+    const vfs::stamp_t none{ .size = UINT64_MAX, .written = -1 };
+    const auto stamp_of = [&](const assets::load_t& load, std::string_view key) {
+        for (const auto& [read, stamp] : load.stamps) {
+            if (read == key) {
+                return stamp;
+            }
+        }
+        return none;
+    };
+    for (const bool with_jobs : { false, true }) {
+        fbe::jobs_t jobs(2);
+        vfs::vfs_t files;
+        files.mount(path("res://"), std::make_shared<counting_source_t>(folder.path));
+        assets::load_t load;
+        load.kind = assets::load_kind_t::MODEL;
+        load.path = path("res://models/tri.gltf");
+        load.options.settings = true;
+        load.files = files.view();
+        assets::run_load(load, with_jobs ? &jobs : nullptr);
+        REQUIRE_FALSE(load.error.has_value());
+        REQUIRE(load.stamps.size() == 4);
+        for (const char* key : {
+                 "res://models/tri.gltf",
+                 "res://models/tri.gltf.toml",
+                 "res://models/tri.bin",
+                 "res://textures/wall.png",
+             }) {
+            INFO(key);
+            // Before its read, where it's 1 after.
+            REQUIRE(stamp_of(load, key).written == 0);
+            REQUIRE(files.view().stamp(path(key)).value_or(none).written == 1);
+        }
+        REQUIRE(stamp_of(load, "res://models/tri.bin").size == triangle.built.buffer.size());
+
+        // One that doesn't decode has what it read's stamps still.
+        assets::load_t bad;
+        bad.kind = assets::load_kind_t::MODEL;
+        bad.path = path("res://models/bad.gltf");
+        bad.files = files.view();
+        assets::run_load(bad, with_jobs ? &jobs : nullptr);
+        REQUIRE(bad.error.has_value());
+        REQUIRE(stamp_of(bad, "res://models/bad.gltf").written == 0);
+        REQUIRE(stamp_of(bad, "res://models/tri.bin").size == triangle.built.buffer.size());
+        REQUIRE(stamp_of(bad, "res://textures/none.png") == none);
+    }
+
+    // One that isn't there has none.
+    const vfs::vfs_t empty;
+    assets::load_t absent;
+    absent.kind = assets::load_kind_t::BYTES;
+    absent.path = path("res://models/tri.bin");
+    absent.files = empty.view();
+    assets::run_load(absent, nullptr);
+    REQUIRE(absent.error.has_value());
+    REQUIRE(absent.stamps.empty());
 }
 
 TEST_CASE("a clip's frame rate is its animation's extras'", "[assets]") {

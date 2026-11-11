@@ -116,14 +116,11 @@ void run_load_here(load_t& load, jobs_t* jobs) {
             .progress =
                 [&load](float done) { load.progress = read_part + ((1 - read_part) * done); },
             .shared = shared_known,
+            // Its buffers' and images', each from before it's read, whether it decodes or not.
+            .stamps = &load.stamps,
         };
         result_t<model_t> model = decode_model(load.path, *bytes, load.files, options);
         if (model) {
-            for (const std::string& read : model->reads) {
-                if (const result_t<vfs::path_t> named = vfs::parse(read)) {
-                    stamp(load, *named);
-                }
-            }
             load.reads.insert(load.reads.end(), model->reads.begin(), model->reads.end());
             load.model = std::move(*model);
         } else {

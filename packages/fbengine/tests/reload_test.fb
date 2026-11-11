@@ -184,14 +184,19 @@ Function SwapPng(folder: Path, name: String, side: Int) Throws IOError
     Try File.WriteBytesAtomic(folder / name, Png.Encode(Image(side, side)))
 End Function
 
-// A triangle's glTF, `name`.gltf, and its buffer beside it, `name`.bin, its three positions and
-// three indices: (0, 0, 0), (1, 0, 0), (0, 1, 0), as little-endian Float32s, 1 being 0x3F800000,
-// then 0, `second`, and 3 - `second` as UInt16s.
-Function WriteTriangle(folder: Path, name: String, second: UInt8) Throws IOError
+// A triangle's buffer alone, `name`.bin, as WriteTriangle writes it, its glTF left as it is.
+Function WriteBuffer(folder: Path, name: String, second: UInt8) Throws IOError
     Local buffer = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x80, 0x3F, 0, 0, 0, 0, 0, 0, 0, 0,
                     0, 0, 0, 0, 0, 0, 0x80, 0x3F, 0, 0, 0, 0, 0, 0, second, 0, 3 - second,
                     0] As UInt8[]
     Try File.WriteBytes(folder / "{name}.bin", buffer)
+End Function
+
+// A triangle's glTF, `name`.gltf, and its buffer beside it, `name`.bin, its three positions and
+// three indices: (0, 0, 0), (1, 0, 0), (0, 1, 0), as little-endian Float32s, 1 being 0x3F800000,
+// then 0, `second`, and 3 - `second` as UInt16s.
+Function WriteTriangle(folder: Path, name: String, second: UInt8) Throws IOError
+    Try WriteBuffer(folder, name, second)
     Try File.WriteText(folder / "{name}.gltf",
                        "{{\"asset\":{{\"version\":\"2.0\"}},\"buffers\":[{{\"byteLength\":42," +
                        "\"uri\":\"{name}.bin\"}}],\"bufferViews\":[{{\"buffer\":0,\"byteLength\":36}}," +
@@ -419,9 +424,7 @@ Function AModelReloadsWhenItsBufferDoes() Throws IOError
     Defer Assets.StopWatching()
     Try WatcherStarted(folder.Path, "res://test-buffer")
     Local reloads = model.Reloads
-    Local before = Try File.ReadText(folder.Path / "tri.gltf")
-    Try WriteTriangle(folder.Path, "tri", 2)
-    Expect((Try File.ReadText(folder.Path / "tri.gltf")) == before)
+    Try WriteBuffer(folder.Path, "tri", 2)
     FlipUntil(Function(): Bool => model.Reloads > reloads)
     Expect(model.Reloads > reloads)
 End Function
@@ -708,4 +711,209 @@ Function WhatReadTheOldFileIsReloadedThoughAnotherReadTheNew() Throws IOError
     Defer Assets.Release(fresh)
     FlipUntil(Function(): Bool => old.Width == 4)
     Expect(old.Width == 4)
+End Function
+
+// A model's buffer written, and nothing else of it: the model's loaded again. Told of after, with
+// nothing written, it isn't.
+@Test
+Function AModelIsReloadedForItsBufferAlone() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try WriteTriangle(folder.Path, "m", 1)
+    Assets.MountFolder("res://test-buffer-alone", folder.Path)
+    Defer Assets.Unmount("res://test-buffer-alone")
+    Try Assets.WatchFolders()
+    Defer Assets.StopWatching()
+    Try WatcherStarted(folder.Path, "res://test-buffer-alone")
+    Local model = Try Assets.Load<HotModel>("res://test-buffer-alone/m.gltf")
+    Defer Assets.Release(model)
+    Expect(Assets.Unchanged("res://test-buffer-alone/m.bin"))
+    Try WriteBuffer(folder.Path, "m", 2)
+    Expect(!Assets.Unchanged("res://test-buffer-alone/m.bin"))
+    Expect(Assets.Unchanged("res://test-buffer-alone/m.gltf"))
+    FlipUntil(Function(): Bool => model.Reloads >= 1)
+    Expect(model.Reloads >= 1 && Failed() == Null)
+    FlipFor(300.Milliseconds)
+    Local before = model.Reloads
+    Expect(Assets.Unchanged("res://test-buffer-alone/m.bin"))
+    Try Assets.Noticed("res://test-buffer-alone/m.bin")
+    FlipFor(400.Milliseconds)
+    Expect(model.Reloads == before)
+End Function
+
+// An asset's sidecar written, and not its file: it's loaded again. Told of after, with nothing
+// written, it isn't.
+@Test
+Function AnAssetIsReloadedForItsSidecarAlone() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "a.bin", [1, 2, 3] As UInt8[])
+    Try File.WriteText(folder.Path / "a.bin.toml", "speed = 1")
+    Assets.MountFolder("res://test-sidecar-alone", folder.Path)
+    Defer Assets.Unmount("res://test-sidecar-alone")
+    Try Assets.WatchFolders()
+    Defer Assets.StopWatching()
+    Try WatcherStarted(folder.Path, "res://test-sidecar-alone")
+    Local probe = Try Assets.Load<ReadBytes>("res://test-sidecar-alone/a.bin")
+    Defer Assets.Release(probe)
+    Expect(Assets.Unchanged("res://test-sidecar-alone/a.bin.toml"))
+    Try File.WriteText(folder.Path / "a.bin.toml", "speed = 22")
+    Expect(!Assets.Unchanged("res://test-sidecar-alone/a.bin.toml"))
+    Expect(Assets.Unchanged("res://test-sidecar-alone/a.bin"))
+    FlipUntil(Function(): Bool => probe.Reloads >= 1)
+    Expect(probe.Reloads >= 1)
+    FlipFor(300.Milliseconds)
+    Local before = probe.Reloads
+    Expect(Assets.Unchanged("res://test-sidecar-alone/a.bin.toml"))
+    Try Assets.Noticed("res://test-sidecar-alone/a.bin.toml")
+    FlipFor(400.Milliseconds)
+    Expect(probe.Reloads == before)
+End Function
+
+// A file written while its asset's loading again: both loads done, the asset's read the file as
+// it is, whichever the first read, and isn't loaded a third time for being told of it.
+@Test
+Function AWriteWhileItLoadsAgainLeavesItAsItsFileIs() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Local file = folder.Path / "a.bin"
+    Try File.WriteBytes(file, [1, 2, 3] As UInt8[])
+    Assets.MountFolder("res://test-write-loading", folder.Path)
+    Defer Assets.Unmount("res://test-write-loading")
+    Local probe = Try Assets.Load<ReadBytes>("res://test-write-loading/a.bin")
+    Defer Assets.Release(probe)
+    Try File.WriteBytes(file, [1, 2, 3, 4] As UInt8[])
+    Try Assets.Reload("res://test-write-loading/a.bin")
+    Try File.WriteBytes(file, [1, 2, 3, 4, 5] As UInt8[])
+    Try Assets.Reload("res://test-write-loading/a.bin")
+    FlipUntil(Function(): Bool => probe.Reloads >= 2)
+    Expect(probe.Reloads == 2)
+    Expect(Assets.Unchanged("res://test-write-loading/a.bin"))
+    // And watched, told of it with nothing written.
+    Try Assets.WatchFolders()
+    Defer Assets.StopWatching()
+    Try WatcherStarted(folder.Path, "res://test-write-loading")
+    FlipFor(300.Milliseconds)
+    Local before = probe.Reloads
+    Try Assets.Noticed("res://test-write-loading/a.bin")
+    FlipFor(400.Milliseconds)
+    Expect(probe.Reloads == before, "{probe.Reloads - before} more")
+End Function
+
+// What's kept of what an asset read goes with it from the cache, however it goes: let go, forgotten,
+// or loaded again and not taken in place. And one let go, its file written, and loaded again has
+// read the file as it is.
+@Test
+Function WhatAnAssetReadIsKeptOnlyWhileTheCacheHasIt() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try WriteTriangle(folder.Path, "m", 1)
+    Try WritePng(folder.Path, "a.png", 2)
+    Assets.MountFolder("res://test-kept", folder.Path)
+    Defer Assets.Unmount("res://test-kept")
+    Local kept = Assets.ReadsKept()
+    Local model = Try Assets.Load<HotModel>("res://test-kept/m.gltf")
+    // Itself; under its buffer, and its sidecar, which it would read were it there, as what depends
+    // on them; and under its file's and its buffer's stamps.
+    Expect(Assets.ReadsKept() == kept + 5, "{Assets.ReadsKept() - kept} kept")
+    Local bytes = Try Assets.Load<ReadBytes>("res://test-kept/m.gltf")
+    Expect(Assets.ReadsKept() == kept + 8)
+    Expect(Assets.Release(bytes))
+    Expect(Assets.ReadsKept() == kept + 5)
+    Expect(Assets.Release(model))
+    Expect(Assets.ReadsKept() == kept, "{Assets.ReadsKept() - kept} kept of one let go")
+    Expect(!Assets.Unchanged("res://test-kept/m.bin"))
+
+    // Let go, written, and loaded again.
+    Try WriteBuffer(folder.Path, "m", 2)
+    Try File.WriteText(folder.Path / "m.gltf", (Try File.ReadText(folder.Path / "m.gltf")) + " ")
+    model = Try Assets.Load<HotModel>("res://test-kept/m.gltf")
+    Expect(Assets.Unchanged("res://test-kept/m.gltf"))
+    Expect(Assets.Unchanged("res://test-kept/m.bin"))
+    Assets.ForgetLoaded("res://test-kept")
+    Expect(Assets.ReadsKept() == kept, "{Assets.ReadsKept() - kept} kept of one forgotten")
+    Assets.Release(model)
+
+    // Loaded again, and not taken in place.
+    Local cold = Try Assets.Load<ColdPicture>("res://test-kept/a.png")
+    Expect(Assets.ReadsKept() == kept + 3)
+    reloaded = []
+    Try Assets.Reload("res://test-kept/a.png")
+    FlipUntil(Function(): Bool => reloaded.Count > 0)
+    Expect(reloaded.Count == 1 && !reloaded[0].InPlace)
+    Expect(Assets.ReadsKept() == kept, "{Assets.ReadsKept() - kept} kept of one not taken")
+    Assets.Release(cold)
+End Function
+
+// A glTF loaded as a model, and then as its bytes, which read its file alone: the model's still
+// loaded again for its buffer, and the bytes aren't.
+@Test
+Function AModelLoadedAsBytesTooIsReloadedForItsBuffer() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try WriteTriangle(folder.Path, "m", 1)
+    Assets.MountFolder("res://test-two-types", folder.Path)
+    Defer Assets.Unmount("res://test-two-types")
+    Local model = Try Assets.Load<HotModel>("res://test-two-types/m.gltf")
+    Defer Assets.Release(model)
+    Local bytes = Try Assets.Load<ReadBytes>("res://test-two-types/m.gltf")
+    Defer Assets.Release(bytes)
+    Try WriteBuffer(folder.Path, "m", 2)
+    Expect(!Assets.Unchanged("res://test-two-types/m.bin"))
+    reloaded = []
+    Try Assets.Reload("res://test-two-types/m.bin")
+    FlipUntil(Function(): Bool => model.Reloads >= 1)
+    FlipFor(100.Milliseconds)
+    Expect(model.Reloads == 1 && bytes.Reloads == 0,
+           "{model.Reloads} of the model, {bytes.Reloads} of the bytes")
+    Expect(Assets.Unchanged("res://test-two-types/m.bin"))
+    // And the other way: the bytes loaded again, the model depends on its buffer still.
+    Try Assets.Reload("res://test-two-types/m.gltf")
+    FlipUntil(Function(): Bool => model.Reloads >= 2 && bytes.Reloads >= 1)
+    Try Assets.Reload("res://test-two-types/m.bin")
+    FlipUntil(Function(): Bool => model.Reloads >= 3)
+    FlipFor(100.Milliseconds)
+    Expect(model.Reloads == 3 && bytes.Reloads == 1,
+           "{model.Reloads} of the model, {bytes.Reloads} of the bytes")
+End Function
+
+// A file written that doesn't load is told of once: its asset keeps what it had, and isn't loaded
+// again for being told of the file, until it's written. A model's buffer is the same.
+@Test
+Function AFileThatDoesntLoadIsToldOfOnce() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try WritePng(folder.Path, "a.png", 2)
+    Try WriteTriangle(folder.Path, "m", 1)
+    Assets.MountFolder("res://test-broken", folder.Path)
+    Defer Assets.Unmount("res://test-broken")
+    Try Assets.WatchFolders()
+    Defer Assets.StopWatching()
+    Try WatcherStarted(folder.Path, "res://test-broken")
+    Local picture = Try Assets.Load<HotPicture>("res://test-broken/a.png")
+    Defer Assets.Release(picture)
+    Local model = Try Assets.Load<HotModel>("res://test-broken/m.gltf")
+    Defer Assets.Release(model)
+    reloaded = []
+    Try File.WriteText(folder.Path / "a.png", "not a PNG")
+    // Short of what its glTF says it has.
+    Try File.WriteBytes(folder.Path / "m.bin", [0, 0, 0, 0] As UInt8[])
+    FlipUntil(Function(): Bool => reloaded.Count >= 2)
+    FlipFor(300.Milliseconds)
+    Local told = reloaded.Count
+    Expect(told >= 2 && picture.Reloads == 0 && picture.Width == 2 && model.Reloads == 0)
+    For each In reloaded
+        Expect(each.Error != Null, "{each.Path} loaded")
+    End For
+    Expect(Assets.Unchanged("res://test-broken/a.png"))
+    Expect(Assets.Unchanged("res://test-broken/m.bin"))
+    Try Assets.Noticed("res://test-broken/a.png")
+    Try Assets.Noticed("res://test-broken/m.bin")
+    FlipFor(400.Milliseconds)
+    Expect(reloaded.Count == told, "{reloaded.Count - told} told of again")
+    // Written whole, they load.
+    Try WritePng(folder.Path, "a.png", 4)
+    Try WriteBuffer(folder.Path, "m", 2)
+    FlipUntil(Function(): Bool => picture.Width == 4 && model.Reloads >= 1)
+    Expect(picture.Width == 4 && model.Reloads >= 1)
 End Function

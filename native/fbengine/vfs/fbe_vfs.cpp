@@ -265,10 +265,11 @@ FBE_API bool fbe_vfs_stamp(const char* path, int64_t* size, int64_t* written) {
         }
         const fbe::vfs::result_t<fbe::vfs::path_t> named = fbe::vfs::parse(path);
         if (!named) {
-            return false;
+            return failed(named.error());
         }
         const std::optional<fbe::vfs::stamp_t> stamp = fbe::vfs::files().view().stamp(*named);
         if (!stamp) {
+            last_failure = FBE_VFS_NOT_FOUND;
             return false;
         }
         *size = static_cast<int64_t>(stamp->size);
