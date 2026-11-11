@@ -33,6 +33,8 @@ struct carried_t {
 };
 
 std::vector<carried_t> carried;
+/// What's freed with the next frame begun, which holds no memory of the device: after_next_frame.
+std::vector<std::function<void()>> with_next;
 
 /// How deep in a frame's submit the engine is: what's freed or made in there, as the graph's
 /// transient targets are, leaves the frame alone.
@@ -117,6 +119,10 @@ fbe::gpu::frame_t& begin() {
         vkCmdWriteTimestamp(frame.timing, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, frame.timer, 0);
     }
     frame.begun = true;
+    for (std::function<void()>& free : with_next) {
+        frame.garbage.push_back(std::move(free));
+    }
+    with_next.clear();
     return frame;
 }
 
@@ -274,7 +280,7 @@ std::size_t waiting_frees() {
     for (const carried_t& carry : carried) {
         waiting += carry.garbage.size();
     }
-    return waiting;
+    return waiting + with_next.size();
 }
 
 void after_frame(std::function<void()> free) {
@@ -308,6 +314,15 @@ void after_use(std::function<void()> free) {
     gpu.frames[last].garbage.push_back(std::move(free));
 }
 
+void after_next_frame(std::function<void()> free) {
+    const device_t& gpu = *device();
+    if (gpu.frames[gpu.frame].begun) {
+        after_frame(std::move(free));
+        return;
+    }
+    with_next.push_back(std::move(free));
+}
+
 bool release_waiting() {
     device_t* gpu = device();
     if (gpu == nullptr || submitting > 0 || lost() || waiting_frees() == 0) {
@@ -334,6 +349,12 @@ bool release_waiting() {
         if (!frame.begun) {
             collect(frame);
         }
+    }
+    // Every frame's done and none's begun, so what waited for the next has nothing to wait for.
+    const std::vector<std::function<void()>> next = std::move(with_next);
+    with_next.clear();
+    for (const std::function<void()>& free : next) {
+        free();
     }
     return true;
 }
@@ -460,6 +481,11 @@ bool finish_frame() {
 void stop_frames() {
     device_t& gpu = *device();
     vkDeviceWaitIdle(gpu.device);
+    const std::vector<std::function<void()>> next = std::move(with_next);
+    with_next.clear();
+    for (const std::function<void()>& free : next) {
+        free();
+    }
     for (frame_t& frame : gpu.frames) {
         if (frame.begun) {
             vkEndCommandBuffer(frame.timing);

@@ -184,7 +184,10 @@ good modern engine on its own. Every structural choice is checked against both.
   4,096, submits what's recorded, waits for it, frees all that waited, and is tried once more
   (gpu::allocated), so a game that builds a level and leaves it over and over with no Flip
   between, a loader, a test, a server, runs out only of what's alive. Never in a frame's own
-  submit, where the graph makes its transient targets.
+  submit, where the graph makes its transient targets. A shader's code and its pipelines, which
+  hold none of the device's memory, wait for the next frame submitted without beginning it
+  (gpu::after_next_frame), so a shader freed and made again before then has its pipelines still,
+  and what's freed after it doesn't wait with it; they go too when room's wanted.
   The window's images and the screen are sRGB, so drawing is in linear light. A camera can draw in
   stored values instead, off by default: textures read as stored, lit and blended as stored, into
   a UNORM target, with no tonemap, and an HDR camera refuses it. DirectX 7 blended stored values,

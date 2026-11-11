@@ -13438,6 +13438,82 @@ std::uint64_t shader_of_generation(std::uint32_t generation) {
 
 } // namespace
 
+// A shader's code and its pipelines hold none of the device's memory, and a shader made again
+// before the next frame has them still, so they wait for that frame without beginning it: what's
+// freed after them, with nothing recorded, doesn't wait with them.
+TEST_CASE("a shader freed with nothing recorded waits for the next frame, and begins none",
+          "[gpu][scene][frees]") {
+    const unvalidated_t unvalidated;
+    const scene_t scene;
+    const std::vector<std::uint8_t> pixels(std::size_t{ 16 } * 16 * 4, 200);
+    const std::uint64_t texture = fbe_texture_create(16, 16, FBE_TEXTURE_RGBA8, true);
+    require(texture != 0);
+    require(fbe_texture_write(texture, 0, 0, 16, 16, pixels.data(), 16 * 4));
+    const auto drawn_with = [&](std::uint64_t material) {
+        const std::uint64_t mesh = cube(scene.world, 0.0F, 0.0F, -6.0F, material);
+        static_cast<void>(scene.drawn());
+        require(fbe_entity_free(mesh));
+        for (int frame = 0; frame < 4; ++frame) {
+            static_cast<void>(scene.drawn());
+        }
+        while (fbe::gpu::release_waiting()) {}
+    };
+    const std::uint64_t first = by_game_shader();
+    drawn_with(first);
+    const std::int32_t with = fbe_gpu_pipelines();
+    REQUIRE(fbe::gpu::waiting_frees() == 0);
+    fbe_material_release(first);
+    CHECK(fbe::gpu::waiting_frees() == 1);
+    CHECK(fbe_gpu_pipelines() == with);
+    // No frame's begun by it, so a texture's image goes as it's freed.
+    const std::uint32_t held = fbe::gpu::allocations().count;
+    require(fbe_texture_release(texture));
+    CHECK(fbe::gpu::allocations().count < held);
+    CHECK(fbe::gpu::waiting_frees() == 1);
+    // Made again, it has its pipelines, and what waited frees nothing of it.
+    const std::uint64_t again = by_game_shader();
+    CHECK(fbe_gpu_pipelines() == with);
+    drawn_with(again);
+    CHECK(fbe_gpu_pipelines() == with);
+    CHECK(fbe::gpu::waiting_frees() == 0);
+    // Freed and not made again, it goes with the next frame, or when room's wanted.
+    fbe_material_release(again);
+    CHECK(fbe_gpu_pipelines() == with);
+    SECTION("with the next frame") {
+        for (int frame = 0; frame < 4; ++frame) {
+            static_cast<void>(scene.drawn());
+        }
+    }
+    SECTION("when room's wanted") {
+        CHECK(fbe::gpu::release_waiting());
+    }
+    CHECK(fbe_gpu_pipelines() < with);
+    CHECK(fbe::gpu::waiting_frees() == 0);
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+// What waits for a frame that never comes goes as the GPU stops, not into the next one started.
+TEST_CASE("a shader freed and never drawn after goes as the GPU stops", "[gpu][scene][frees]") {
+    const unvalidated_t unvalidated;
+    // What starting leaves waiting, each time.
+    std::size_t started = 0;
+    {
+        const scene_t scene;
+        started = fbe::gpu::waiting_frees();
+        const std::uint64_t material = by_game_shader();
+        const std::uint64_t mesh = cube(scene.world, 0.0F, 0.0F, -6.0F, material);
+        static_cast<void>(scene.drawn());
+        require(fbe_entity_free(mesh));
+        while (fbe::gpu::release_waiting()) {}
+        fbe_material_release(material);
+        CHECK(fbe::gpu::waiting_frees() == 1);
+    }
+    const scene_t scene;
+    CHECK(fbe::gpu::waiting_frees() == started);
+    static_cast<void>(scene.drawn());
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
 // A game's shader cooked again, as a game's hot reload does, each time of new code, drawn with,
 // then freed or replaced: once nothing draws with an old one, its pipelines go, and its code with
 // them, so there's no more of either after many than after one.

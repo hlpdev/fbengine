@@ -173,6 +173,10 @@ void after_frame(std::function<void()> free);
 /// that could, as after_frame has it; at once if nothing is and the GPU's done with every frame;
 /// or else with the last frame submitted, and no Flip is needed for any of them.
 void after_use(std::function<void()> free);
+/// Has `free` run once the GPU is done with the next frame submitted, without beginning it: for
+/// what holds none of the device's memory and may be wanted again by then, as a shader's code and
+/// its pipelines are when the shader's made again.
+void after_next_frame(std::function<void()> free);
 /// How many of those wait now.
 std::size_t waiting_frees();
 /// Frees what waits, when an allocation's failed for want of room on the device: submits what's
