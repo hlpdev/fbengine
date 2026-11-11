@@ -58,6 +58,11 @@ std::optional<std::vector<listed_t>> list_folder(const std::filesystem::path& pa
 /// A file open for reading at any offset, from several threads at once, which can be replaced,
 /// renamed, or removed while it's open, as an updater does to a mounted pak, while what's open
 /// stays readable.
+/// How many bytes the file at `path` has, and when it was last written, as finely as its file
+/// system keeps it: in 100 ns on Windows, whose C++ library's own gives whole seconds, and in
+/// nanoseconds elsewhere. False if it can't be told, as for what isn't there.
+bool disk_stamp(const std::filesystem::path& path, std::uint64_t& size, std::int64_t& written);
+
 class read_file_t {
 public:
     /// The file at `path`, or null, with `missing` saying whether that's because nothing's there.

@@ -51,6 +51,9 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_assets_settings_error(load: UInt64): CString
     Function fbe_assets_reads(load: UInt64): Int32
     Function fbe_assets_read(load: UInt64, index: Int32): CString
+    Function fbe_assets_stamps(load: UInt64): Int32
+    Function fbe_assets_stamp(load: UInt64, index: Int32, size: Ptr<Int64>,
+                              written: Ptr<Int64>): CString
     Function fbe_assets_wait(load: UInt64): Bool
     Function fbe_assets_free(load: UInt64): Bool
     Function fbe_assets_count(): Int64

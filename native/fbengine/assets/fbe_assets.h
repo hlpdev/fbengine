@@ -94,6 +94,13 @@ FBE_API const char* fbe_assets_settings_error(uint64_t load);
 // a load that isn't done, or freed.
 FBE_API int32_t fbe_assets_reads(uint64_t load);
 FBE_API const char* fbe_assets_read(uint64_t load, int32_t index);
+// How many of the files the load read are on the disk, its own among them, done, and the one at
+// `index`: its res:// path, normalized, how many bytes it had, and when it was last written, in its
+// file system's own count, as the load read it. A file whose fbe_vfs_stamp is the same hasn't been
+// written since, which is what hot reload loads it again for. -1 and "" for a load that isn't
+// done, or freed, and "" for an index that isn't one.
+FBE_API int32_t fbe_assets_stamps(uint64_t load);
+FBE_API const char* fbe_assets_stamp(uint64_t load, int32_t index, int64_t* size, int64_t* written);
 // Waits for a load on the workers to be done, and runs its hand-over, as fbe_frame_flip does, so
 // it's done when this returns; false for a load that's freed.
 FBE_API bool fbe_assets_wait(uint64_t load);

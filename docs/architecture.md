@@ -308,6 +308,19 @@ good modern engine on its own. Every structural choice is checked against both.
   zips, a file at a time, with Zip64 where sizes or counts need it. Names starting with '.' aren't
   in a folder mount, a pak, or the references, and Thumbs.db and desktop.ini aren't in the last
   two.
+- Hot reload loads a watched file's assets again only when the file's size or its write time isn't
+  what their loads read: each load keeps, for every file on the disk it read, its own, its sidecar,
+  and what its file names, the size and write time it had, and what a watcher tells of is checked
+  against those once it's settled. A watcher tells of more than writes, as std's on Windows did of a
+  file that was only read, which reloaded it and all that read it; that changes neither, and does
+  nothing. Two assets of one path that read the file at different times are loaded again until
+  both have read it as it is. The write time is the file system's own, 100 ns on Windows and
+  nanoseconds elsewhere, not the C++ library's, which is whole seconds on Windows; a write that
+  keeps the size and lands in the same tick of it as the load's read isn't seen; `Assets.Reload` loads a path again whatever's
+  changed. An asset taken in place is what its file says again: a Model's materials have the
+  file's shading, layers, maps, and textures, and its surfaces the file's materials, so what a
+  game set on them after loading is the game's to set again, from `Assets.Reloaded()`. The
+  coordinator's decision, 2026-11-10, for 1.1.0, whatever std's watcher reports.
 - A model's image that's a file of its own has the color space the model reads it in, in a debug
   build and a release alike: a color for a base color or emissive texture, numbers for the rest. A
   debug build decodes the PNG or JPEG so; the cooker, for an image whose sidecar doesn't say

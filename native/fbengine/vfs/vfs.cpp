@@ -263,6 +263,35 @@ result_t<kind_t> view_t::kind(const path_t& path) const {
     return kind_t::NONE;
 }
 
+std::optional<stamp_t> view_t::stamp(const path_t& path) const {
+    if (path.keys.empty()) {
+        return std::nullopt;
+    }
+    // As read finds it: the newest mount that has a file there.
+    for (const mount_t& mount : std::views::reverse(*m_mounts)) {
+        if (starts(mount.at.keys, path.keys)) {
+            return std::nullopt;
+        }
+        if (!starts(path.keys, mount.at.keys)) {
+            continue;
+        }
+        const std::size_t depth = mount.at.keys.size();
+        const std::span<const std::string> names = std::span(path.names).subspan(depth);
+        const std::span<const std::string> keys = std::span(path.keys).subspan(depth);
+        const result_t<kind_t> kind = mount.source->kind(names, keys);
+        if (!kind) {
+            return std::nullopt;
+        }
+        if (*kind == kind_t::FILE) {
+            return mount.source->stamp(names, keys);
+        }
+        if (*kind != kind_t::NONE) {
+            return std::nullopt;
+        }
+    }
+    return std::nullopt;
+}
+
 result_t<std::vector<entry_t>> view_t::list(const path_t& path) const {
     // A later mount's file where an earlier one has a folder is the file, as kind says.
     const result_t<kind_t> there = kind(path);

@@ -264,6 +264,12 @@ Public Final Class Assets
     Static Field reloads: AssetReload[] = []
     // The assets whose loads read a file besides their own, by its path, as a glTF's buffers.
     Static Field dependents: Map<String, Set<String>> = Map<String, Set<String>>()
+    // What each file on the disk was when what read it was loaded, by the file's path and then by
+    // the path of the asset that read it: its size, when it was written, and whether another asset
+    // of that path read it as something else, so one of them has an old one. Hot reload loads a
+    // file's assets again only when it isn't what they all read.
+    Static Field stamps: Map<String, Map<String, (Int64, Int64, Bool)>> =
+        Map<String, Map<String, (Int64, Int64, Bool)>>()
 
     Private New()
     End New
@@ -471,6 +477,8 @@ Public Final Class Assets
     /// them, all the way down, for a game's development builds. At each Flip, the assets of a file
     /// that changed, or whose sidecar did, once neither has for a tenth of a second, are loaded
     /// again on the workers, and so are those whose loads read it, as a glTF's do its buffers. A
+    /// file's changed when it has another size, or was written at another time, than when its
+    /// assets were loaded: one that's only been read, which Windows tells of too, isn't. A
     /// `.toml` file is loaded again as its own file and as its stem's sidecar. Then each one's
     /// Reload takes it in place, or the cache lets go of it, so the next Load makes a new one; one
     /// that doesn't load keeps what it had. Reloaded gives what was. Unmount stops watching what it
@@ -554,6 +562,59 @@ Public Final Class Assets
                 reading.Add(key)
             End If
         End For
+        Stamped(key, load)
+    End Method
+
+    // Keeps what each file on the disk was as `load`, `key`'s, read it: its own, its sidecar, and
+    // what its file names.
+    @MainThread
+    Static Method Stamped(key: String, load: UInt64)
+        Local read = Map<String, (Int64, Int64)>()
+        For at = 0 Until fbe_assets_stamps(load)
+            Local size: Int64 = 0
+            Local written: Int64 = 0
+            Local path = ""
+            Unsafe
+                path = fbe_assets_stamp(load, at, AddressOf(size), AddressOf(written)).ToString()
+            End Unsafe
+            If path != "" Then read[path] = (size, written)
+        End For
+        // What it read before and doesn't now is no longer its.
+        For readers In stamps
+            If read.Get(readers.0) == Null Then readers.1.Remove(key)
+        End For
+        For each In read
+            Local readers = stamps.Get(each.0)
+            If readers == Null
+                readers = Map<String, (Int64, Int64, Bool)>()
+                stamps[each.0] = readers
+            End If
+            // Another asset of this path, of another type, that read it as it was before still
+            // has that.
+            Local was = readers.Get(key)
+            Local old = was != Null && (was.0 != each.1.0 || was.1 != each.1.1 || was.2)
+            readers[key] = (each.1.0, each.1.1, old)
+        End For
+    End Method
+
+    // Whether the file at `key` on the disk is what every asset that read it read: as many bytes,
+    // written when it was. A watcher tells of more than writes, as Windows' does of a file that's
+    // read, which is no reason to load it again. One nothing's kept of, or that's gone, isn't.
+    @MainThread
+    Static Method Unchanged(key: String): Bool
+        Local readers = stamps.Get(key)
+        If readers == Null || readers.Count == 0 Then Return False
+        Local size: Int64 = 0
+        Local written: Int64 = 0
+        Local there = False
+        Unsafe
+            there = fbe_vfs_stamp(key, AddressOf(size), AddressOf(written))
+        End Unsafe
+        If !there Then Return False
+        For reader In readers
+            If reader.1.0 != size || reader.1.1 != written || reader.1.2 Then Return False
+        End For
+        Return True
     End Method
 
     /// How many loads there are, not freed: what's loading, and what's loaded but not yet made.
@@ -570,7 +631,10 @@ Public Final Class Assets
     End Method
 
     /// What hot reload, or Reload, has loaded again since this was last asked, in the order each
-    /// was done.
+    /// was done. An asset taken in place is what its file says again: a Model's Materials have the
+    /// file's shading, layers, maps, and textures, and its Geometries' surfaces the file's
+    /// Materials, so what a game set on them after loading is the game's to set again, for each
+    /// Model here.
     @MainThread
     Public Static Method Reloaded(): AssetReload[]
         Local done = reloads
@@ -938,6 +1002,9 @@ Public Final Class Assets
         End For
         For path In settled
             made.Changed.Remove(path)
+            // Told of, and not written: its assets have what's in it.
+            If Unchanged(path) Then Continue
+            stamps.Remove(path)
             ReloadPath(path)
             // A sidecar's file is loaded again with its new settings.
             If path.EndsWith(".toml")
@@ -982,6 +1049,14 @@ Public Final Class Assets
         Unsafe
             Return Path(fbe_vfs_normalized().ToString())
         End Unsafe
+    End Method
+
+    // Has hot reload told that the file at `path` changed, as a watcher of its folder tells it, for
+    // the tests: a watcher tells of more than writes, as Windows' does of a file that's only read.
+    @MainThread
+    Package Static Method Noticed(path: String) Throws IOError
+        Local made = watch
+        If made != Null Then made.Changed[Try Normalize(path)] = Instant.Now()
     End Method
 
     // How many folders hot reload is watching, for the tests.

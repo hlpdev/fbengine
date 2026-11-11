@@ -586,3 +586,126 @@ Function TwoLinksThatGoRoundEndWhenWatched() Throws IOError
     FlipUntil(Function(): Bool => picture.Width == 4)
     Expect(picture.Width == 4)
 End Function
+
+// A file's bytes, and how many times it's been loaded again.
+Class ReadBytes Implements Asset
+    Field Reloads: Int
+
+    New()
+        Reloads = 0
+    End New
+
+    Public Static Method LoadKind(): AssetKind => AssetKind.BYTES
+
+    Public Static Method FromLoad(load: AssetLoad): ReadBytes Throws IOError => ReadBytes()
+
+    Method Reload(load: AssetLoad): Bool Throws IOError
+        Reloads += 1
+        Return True
+    End Method
+End Class
+
+// Sets a file's access time to now, and no more of it, as reading it does where that's kept.
+Function TouchAccess(file: Path)
+    If System.Platform == Platform.WINDOWS
+        Try? Command("powershell").Args(["-NoProfile", "-Command",
+                                         "(Get-Item -LiteralPath '{file.Text}').LastAccessTime = Get-Date"]).Output()
+    Else
+        Try? Command("touch").Args(["-a", file.Text]).Output()
+    End If
+End Function
+
+// A watcher tells of more than writes: Windows' tells of a file that's read. What hot reload's told
+// changed is loaded again only if its size or its write time isn't what its load read.
+@Test
+Function AFileThatsOnlyReadIsntReloaded() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Local file = folder.Path / "a.bin"
+    Try File.WriteBytes(file, [1, 2, 3] As UInt8[])
+    Assets.MountFolder("res://test-read", folder.Path)
+    Defer Assets.Unmount("res://test-read")
+    Try Assets.WatchFolders()
+    Defer Assets.StopWatching()
+    Try WatcherStarted(folder.Path, "res://test-read")
+    Local probe = Try Assets.Load<ReadBytes>("res://test-read/a.bin")
+    Defer Assets.Release(probe)
+    reloaded = []
+    // Read, by the game, a test beside it, or a tool, and its access time set, as a read sets it.
+    Expect((Try File.ReadBytes(file)).Count == 3)
+    TouchAccess(file)
+    Expect((Try File.ReadBytes(file)).Count == 3)
+    FlipFor(400.Milliseconds)
+    Expect(probe.Reloads == 0 && reloaded.Count == 0, "{probe.Reloads} reloads of a file read")
+    // And told of by its watcher with nothing of it changed, whatever the watcher's reason.
+    Try Assets.Noticed("res://test-read/a.bin")
+    FlipFor(400.Milliseconds)
+    Expect(probe.Reloads == 0 && reloaded.Count == 0, "{probe.Reloads} reloads of a file told of")
+    // A write is a change, of other bytes as many, and of the same bytes again.
+    Try File.WriteBytes(file, [4, 5, 6] As UInt8[])
+    FlipUntil(Function(): Bool => probe.Reloads == 1)
+    Expect(probe.Reloads == 1)
+    FlipFor(300.Milliseconds)
+    Sleep(20.Milliseconds)
+    Try File.WriteBytes(file, [4, 5, 6] As UInt8[])
+    FlipUntil(Function(): Bool => probe.Reloads == 2)
+    Expect(probe.Reloads == 2)
+    // And after that it's as it was read again.
+    FlipFor(300.Milliseconds)
+    Local before = probe.Reloads
+    Try Assets.Noticed("res://test-read/a.bin")
+    FlipFor(400.Milliseconds)
+    Expect(probe.Reloads == before)
+    // Reload asks for it whatever's changed.
+    Try Assets.Reload("res://test-read/a.bin")
+    FlipUntil(Function(): Bool => probe.Reloads == before + 1)
+    Expect(probe.Reloads == before + 1)
+End Function
+
+// What a model read besides its file is the same: its buffer told of and not changed leaves the
+// model, and written, loads it again.
+@Test
+Function AModelIsntReloadedForWhatItReadThatsOnlyRead() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try WriteTriangle(folder.Path, "m", 1)
+    Assets.MountFolder("res://test-read-model", folder.Path)
+    Defer Assets.Unmount("res://test-read-model")
+    Try Assets.WatchFolders()
+    Defer Assets.StopWatching()
+    Try WatcherStarted(folder.Path, "res://test-read-model")
+    Local model = Try Assets.Load<HotModel>("res://test-read-model/m.gltf")
+    Defer Assets.Release(model)
+    reloaded = []
+    Expect((Try File.ReadBytes(folder.Path / "m.bin")).Count == 42)
+    TouchAccess(folder.Path / "m.bin")
+    Try Assets.Noticed("res://test-read-model/m.bin")
+    Try Assets.Noticed("res://test-read-model/m.gltf")
+    FlipFor(400.Milliseconds)
+    Expect(model.Reloads == 0 && reloaded.Count == 0, "{model.Reloads} reloads")
+    Try WriteTriangle(folder.Path, "m", 2)
+    FlipUntil(Function(): Bool => model.Reloads >= 1)
+    Expect(model.Reloads >= 1 && Failed() == Null)
+End Function
+
+// Two kinds of asset of one file, one loaded before it was written and one after: the one that
+// read the old file is loaded again, though the other read the new one.
+@Test
+Function WhatReadTheOldFileIsReloadedThoughAnotherReadTheNew() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try WritePng(folder.Path, "a.png", 2)
+    Assets.MountFolder("res://test-read-two", folder.Path)
+    Defer Assets.Unmount("res://test-read-two")
+    Try Assets.WatchFolders()
+    Defer Assets.StopWatching()
+    Try WatcherStarted(folder.Path, "res://test-read-two")
+    Local old = Try Assets.Load<HotPicture>("res://test-read-two/a.png")
+    Defer Assets.Release(old)
+    Sleep(20.Milliseconds)
+    Try WritePng(folder.Path, "a.png", 4)
+    Local fresh = Try Assets.Load<WidePicture>("res://test-read-two/a.png")
+    Defer Assets.Release(fresh)
+    FlipUntil(Function(): Bool => old.Width == 4)
+    Expect(old.Width == 4)
+End Function

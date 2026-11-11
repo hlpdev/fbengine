@@ -28,6 +28,33 @@
 
 namespace fbe::vfs {
 
+bool disk_stamp(const std::filesystem::path& path, std::uint64_t& size, std::int64_t& written) {
+#ifdef _WIN32
+    WIN32_FILE_ATTRIBUTE_DATA found{};
+    if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &found) == 0) {
+        return false;
+    }
+    size = (std::uint64_t{ found.nFileSizeHigh } << 32U) | found.nFileSizeLow;
+    written =
+        static_cast<std::int64_t>((std::uint64_t{ found.ftLastWriteTime.dwHighDateTime } << 32U) |
+                                  found.ftLastWriteTime.dwLowDateTime);
+    return true;
+#else
+    struct stat found{};
+    if (stat(path.c_str(), &found) != 0) {
+        return false;
+    }
+    size = static_cast<std::uint64_t>(found.st_size);
+#ifdef __APPLE__
+    const timespec at = found.st_mtimespec;
+#else
+    const timespec at = found.st_mtim;
+#endif
+    written = (static_cast<std::int64_t>(at.tv_sec) * 1'000'000'000) + at.tv_nsec;
+    return true;
+#endif
+}
+
 namespace {
 
 constexpr char32_t replacement = 0xFFFD;

@@ -81,6 +81,16 @@ struct entry_t {
 };
 
 /// Where a mount's files come from. Its paths are the folded names inside it, and its root, no
+/// A file on the disk as it was at a moment: how many bytes it has, and when it was last written,
+/// in its file system's own count. Two that are the same are of a file not written between them,
+/// as far as the disk says; hot reload loads again only a file whose stamp isn't its load's.
+struct stamp_t {
+    std::uint64_t size = 0;
+    std::int64_t written = 0;
+
+    bool operator==(const stamp_t&) const = default;
+};
+
 /// names, is a folder. What isn't there is nullopt; what can't be read is an error. Any thread
 /// calls it, several at once.
 class source_t {
@@ -102,6 +112,12 @@ public:
     /// What's in the folder there, in any order, or nullopt when there's no folder there.
     virtual result_t<std::optional<std::vector<entry_t>>>
     list(std::span<const std::string> names, std::span<const std::string> keys) = 0;
+    /// The stamp of the file there now, for a source whose files are on the disk and can change;
+    /// nullopt for any other's, and for what isn't a file there.
+    virtual std::optional<stamp_t> stamp(std::span<const std::string> /*names*/,
+                                         std::span<const std::string> /*keys*/) {
+        return std::nullopt;
+    }
 };
 
 /// A folder on the disk, read as it's asked, so it sees what changes in it; it's empty while the
@@ -131,6 +147,9 @@ public:
     /// and one of more than `most` bytes OTHER, before they're allocated.
     [[nodiscard]] result_t<bytes_t> read(const path_t& path, std::uint64_t most = UINT64_MAX) const;
     [[nodiscard]] result_t<kind_t> kind(const path_t& path) const;
+    /// The stamp of the file read would read, if it's a file on the disk; nullopt for none, and
+    /// for a pak's or a memory mount's, which don't change.
+    [[nodiscard]] std::optional<stamp_t> stamp(const path_t& path) const;
     /// What's in the folder, sorted by folded names. A folder no mount has is NOT_FOUND, and a
     /// file NOT_A_FOLDER.
     [[nodiscard]] result_t<std::vector<entry_t>> list(const path_t& path) const;

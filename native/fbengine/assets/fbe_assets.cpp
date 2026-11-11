@@ -235,6 +235,24 @@ FBE_API const char* fbe_assets_read(uint64_t load, int32_t index) {
     return found->reads[static_cast<std::size_t>(index)].c_str();
 }
 
+FBE_API int32_t fbe_assets_stamps(uint64_t load) {
+    const assets::load_t* found = assets::loads().get(load);
+    return found != nullptr && found->done ? static_cast<int32_t>(found->stamps.size()) : -1;
+}
+
+FBE_API const char* fbe_assets_stamp(uint64_t load, int32_t index, int64_t* size,
+                                     int64_t* written) {
+    const assets::load_t* found = assets::loads().get(load);
+    if (found == nullptr || !found->done || index < 0 || size == nullptr || written == nullptr ||
+        std::cmp_greater_equal(index, found->stamps.size())) {
+        return "";
+    }
+    const auto& [path, stamp] = found->stamps[static_cast<std::size_t>(index)];
+    *size = static_cast<int64_t>(stamp.size);
+    *written = stamp.written;
+    return path.c_str();
+}
+
 FBE_API bool fbe_assets_wait(uint64_t load) {
     return guarded(false, [&] {
         const assets::load_t* found = assets::loads().get(load);
