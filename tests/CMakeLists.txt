@@ -2323,15 +2323,28 @@ if(FBENGINE_FB_TESTS)
 endif()
 
 # A soak of models sharing their image files' textures, on the GPU the tests use: 24 glTFs naming 4
-# PNGs, loaded and freed, 400 times, the textures there are going up by the 4 and coming back each
-# round, and the process's memory not rising by more than 2 KiB a round; tests/shared_soak says
-# how it went.
+# PNGs, loaded and freed, 400 times, each round leaving as many of what the engine keeps as the
+# first did, by count, the heaps' blocks in use not rising by half a block a round, and the
+# process's memory not by more than 2 KiB a round; tests/shared_soak says how it went. It's run
+# with the validation layers off, as what's counted is every heap's blocks, the layers' too, and
+# the layer MSYS2 gives CI's Windows runner, vulkan-validation-layers 1.4.357.0, keeps 28 blocks
+# for each texture made and freed, 112 a round here, where the Vulkan SDK's 1.4.350 keeps none,
+# nor Ubuntu 24.04's (Targeted run 42927016193,
+# 2026-11-10: its rounds of textures alone 112.07 blocks a round, the whole round 112.07, and the
+# whole round with the layers off 0.005). The layers' messages are the second test's: 40 rounds
+# with them on, what's kept counted each round, and a message of theirs a failure.
 if(FBENGINE_FB_TESTS)
   add_test(NAME soak.shared_textures COMMAND "${FBENGINE_FB}" --color never run
            "${CMAKE_CURRENT_SOURCE_DIR}/shared_soak")
   set_tests_properties(soak.shared_textures PROPERTIES TIMEOUT 1800 LABELS "gpu;stability"
-                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment};FBE_GPU_VALIDATION=0"
                        PASS_REGULAR_EXPRESSION "\nsoaked\r?\n$")
+  add_test(NAME soak.shared_textures_validated COMMAND "${FBENGINE_FB}" --color never run
+           "${CMAKE_CURRENT_SOURCE_DIR}/shared_soak")
+  set_tests_properties(soak.shared_textures_validated PROPERTIES TIMEOUT 600 LABELS "gpu;stability"
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment};FBE_GPU_VALIDATION=1;FBENGINE_SOAK_ITERATIONS=40;FBENGINE_SOAK_COUNTS=1"
+                       PASS_REGULAR_EXPRESSION "\nsoaked\r?\n$"
+                       FAIL_REGULAR_EXPRESSION "Vulkan validation")
 endif()
 
 # The job system's threads, started as the process ends, which mustn't hang its exit.

@@ -48,6 +48,10 @@ typedef struct fbe_gpu_counters_t {
 #define FBE_GPU_VIRTUAL    3
 #define FBE_GPU_CPU        4
 
+// A test hook, for a soak that counts what's kept: how many things wait for the GPU to be done
+// with a frame before they're freed, as a texture's image and a buffer are; 0 with no GPU started.
+// Each Flip frees what the frame before it left, so it comes back to what it was.
+FBE_API int32_t fbe_gpu_waiting_frees(void);
 // The devices Vulkan has, in its order; -1 if Vulkan can't start.
 FBE_API int32_t fbe_gpu_device_count(void);
 // A device's name, "" if there's no such device.

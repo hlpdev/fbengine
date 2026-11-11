@@ -108,6 +108,8 @@ void drop(const fbe::gpu::device_t& gpu, const carried_t& carry) {
 /// semaphore again and, unless the device was lost, carries the frame's uploads to the next.
 bool submit(const fbe::gpu::device_t& gpu, fbe::gpu::frame_t& frame, VkSemaphore wait,
             VkSemaphore signal) {
+    // MoltenVK makes a Metal command buffer of each submit, handed back to be let go of later.
+    const fbe::autoreleased_t autoreleased;
     if (frame.timer != VK_NULL_HANDLE) {
         vkCmdWriteTimestamp(frame.commands, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, frame.timer, 1);
     }
@@ -235,6 +237,21 @@ VkCommandBuffer upload_commands() {
 
 frame_t& recording_frame() {
     return begin();
+}
+
+std::size_t waiting_frees() {
+    const device_t* gpu = device();
+    if (gpu == nullptr) {
+        return 0;
+    }
+    std::size_t waiting = 0;
+    for (const frame_t& frame : gpu->frames) {
+        waiting += frame.garbage.size();
+    }
+    for (const carried_t& carry : carried) {
+        waiting += carry.garbage.size();
+    }
+    return waiting;
 }
 
 void after_frame(std::function<void()> free) {
@@ -382,6 +399,10 @@ void stop_frames() {
 } // namespace fbe::gpu
 
 extern "C" {
+
+FBE_API int32_t fbe_gpu_waiting_frees(void) {
+    return static_cast<int32_t>(fbe::gpu::waiting_frees());
+}
 
 FBE_API bool fbe_gpu_counters(fbe_gpu_counters_t* counters) {
     if (counters == nullptr) {

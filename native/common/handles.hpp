@@ -8,6 +8,7 @@
 // of its own (docs/architecture.md): fbengine 1 to 63, fbengine_audio 64 to 95, fbengine_physics
 // 96 to 127, fbengine_video 128 to 143.
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -101,6 +102,11 @@ public:
     /// How many slots there are, live or free, which the field arrays are sized to.
     [[nodiscard]] std::uint32_t size() const {
         return static_cast<std::uint32_t>(m_generations.size());
+    }
+
+    /// How many of them are live.
+    [[nodiscard]] std::uint32_t live() const {
+        return static_cast<std::uint32_t>(std::ranges::count(m_live, true));
     }
 
 private:

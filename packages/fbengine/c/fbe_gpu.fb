@@ -29,6 +29,7 @@ Public Const FBE_GPU_VIRTUAL: Int32 = 3
 Public Const FBE_GPU_CPU: Int32 = 4
 
 Public Extern "C" Lib "fbengine_native"
+    Function fbe_gpu_waiting_frees(): Int32
     Function fbe_gpu_device_count(): Int32
     Function fbe_gpu_device_name(device: Int32): CString
     Function fbe_gpu_device_kind(device: Int32): Int32

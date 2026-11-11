@@ -3,6 +3,7 @@
 // throwing through extern "C".
 
 #include "assets/loads.hpp"
+#include "assets/shared.hpp"
 #include "core/engine.hpp"
 #include "fbengine.h"
 #include "jobs/jobs.hpp"
@@ -22,10 +23,12 @@
 // clang-format on
 #elifdef __APPLE__
 #include <mach/mach.h>
+#include <malloc/malloc.h>
 #else
 #include <unistd.h>
 #endif
 
+#include <array>
 #include <cstdio>
 #include <exception>
 #include <format>
@@ -253,6 +256,60 @@ FBE_API bool fbe_assets_free(uint64_t load) {
 
 FBE_API int64_t fbe_assets_count(void) {
     return static_cast<int64_t>(assets::loads().count());
+}
+
+FBE_API int64_t fbe_assets_shared_count(void) {
+    return static_cast<int64_t>(assets::shared_count());
+}
+
+FBE_API int64_t fbe_assets_heap_blocks(void) {
+#ifdef _WIN32
+    std::array<HANDLE, 256> heaps{};
+    const DWORD count = GetProcessHeaps(static_cast<DWORD>(heaps.size()), heaps.data());
+    if (count == 0 || count > heaps.size()) {
+        return -1;
+    }
+    int64_t blocks = 0;
+    for (DWORD at = 0; at < count; ++at) {
+        if (HeapLock(heaps[at]) == 0) {
+            continue;
+        }
+        PROCESS_HEAP_ENTRY entry{};
+        while (HeapWalk(heaps[at], &entry) != 0) {
+            if ((entry.wFlags & PROCESS_HEAP_ENTRY_BUSY) != 0) {
+                ++blocks;
+            }
+        }
+        HeapUnlock(heaps[at]);
+    }
+    return blocks;
+#elifdef __APPLE__
+    // Each zone's blocks in use, walked, as `heap` counts them: a zone's own count of them,
+    // malloc_zone_statistics', goes up with what's freed and kept for the next of its size.
+    vm_address_t* zones = nullptr;
+    unsigned count = 0;
+    if (malloc_get_all_zones(mach_task_self(), nullptr, &zones, &count) != KERN_SUCCESS) {
+        return -1;
+    }
+    int64_t blocks = 0;
+    for (unsigned at = 0; at < count; ++at) {
+        auto* zone = reinterpret_cast<malloc_zone_t*>(zones[at]);
+        if (zone == nullptr || zone->introspect == nullptr ||
+            zone->introspect->enumerator == nullptr) {
+            continue;
+        }
+        zone->introspect->force_lock(zone);
+        zone->introspect->enumerator(
+            mach_task_self(), &blocks, MALLOC_PTR_IN_USE_RANGE_TYPE, zones[at], nullptr,
+            [](task_t, void* counted, unsigned, vm_range_t*, unsigned ranges) {
+                *static_cast<int64_t*>(counted) += ranges;
+            });
+        zone->introspect->force_unlock(zone);
+    }
+    return blocks;
+#else
+    return -1;
+#endif
 }
 
 FBE_API int64_t fbe_assets_resident_bytes(void) {

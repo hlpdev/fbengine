@@ -18,6 +18,24 @@ SDL_Window* window();
 /// Keeps `message` for fbe_error(), and returns false, for a call that failed.
 bool fail(std::string_view message) noexcept;
 
+/// On macOS, a pool of what the system's Objective-C side hands back to be let go of later, as
+/// Metal's command buffers are under MoltenVK: what's handed back while one's there goes with it.
+/// A thread that no event loop drains keeps them all otherwise, as a program that loads and frees
+/// and never Flips does, and a server. One goes round each piece of the engine's work that makes
+/// them. Elsewhere it's nothing.
+class autoreleased_t {
+public:
+    autoreleased_t() noexcept;
+    ~autoreleased_t();
+    autoreleased_t(const autoreleased_t&) = delete;
+    autoreleased_t& operator=(const autoreleased_t&) = delete;
+    autoreleased_t(autoreleased_t&&) = delete;
+    autoreleased_t& operator=(autoreleased_t&&) = delete;
+
+private:
+    void* m_pool = nullptr;
+};
+
 /// SDL's last error, for fbe_error(), with what was being done, and returns false.
 bool fail_sdl(std::string_view doing);
 

@@ -332,6 +332,21 @@ using fbe::scene::world_slot;
 
 extern "C" {
 
+FBE_API int64_t fbe_scene_live(int32_t what) {
+    switch (what) {
+    case 0:
+        return scene().world_slots.live();
+    case 1:
+        return scene().geometry_slots.live();
+    case 2:
+        return scene().material_slots.live();
+    case 3:
+        return scene().entities.slots.live();
+    default:
+        return -1;
+    }
+}
+
 FBE_API uint64_t fbe_world_create(void) {
     return scene().world_slots.handle(fbe::scene::make_world());
 }

@@ -16,7 +16,28 @@ bool video = false;
 
 } // namespace
 
+#ifdef __APPLE__
+// The Objective-C runtime's own, which `@autoreleasepool` compiles to.
+extern "C" void* objc_autoreleasePoolPush(void);
+extern "C" void objc_autoreleasePoolPop(void* pool);
+#endif
+
 namespace fbe {
+
+#ifdef __APPLE__
+autoreleased_t::autoreleased_t() noexcept : m_pool(objc_autoreleasePoolPush()) {}
+
+autoreleased_t::~autoreleased_t() {
+    objc_autoreleasePoolPop(m_pool);
+}
+#else
+autoreleased_t::autoreleased_t() noexcept = default;
+
+autoreleased_t::~autoreleased_t() {
+    // There's none here to let go of.
+    m_pool = nullptr;
+}
+#endif
 
 // NOLINTNEXTLINE(bugprone-exception-escape): what it assigns second fits in any string as it is.
 bool fail(std::string_view message) noexcept {
