@@ -33,6 +33,7 @@ bool vsync = true;
 extern "C" {
 
 FBE_API void fbe_frame_flip(bool wait_for_vsync) {
+    const fbe::autoreleased_t autoreleased;
     vsync = wait_for_vsync;
     fbe::gpu_present(wait_for_vsync);
 

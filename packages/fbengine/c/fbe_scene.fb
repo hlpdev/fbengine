@@ -193,6 +193,7 @@ End Struct
 End Struct
 
 Public Extern "C" Lib "fbengine_native"
+    Function fbe_scene_live(what: Int32): Int64
     Function fbe_world_create(): UInt64
     Function fbe_world_main(): UInt64
     Function fbe_world_free(world: UInt64): Bool

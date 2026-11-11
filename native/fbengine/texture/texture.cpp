@@ -807,6 +807,7 @@ bool checked(std::int32_t width, std::int32_t height, std::int32_t format) {
 
 /// A new texture of `spec`, its handle, or 0, with fbe_error's why.
 std::uint64_t create(const spec_t& spec) {
+    const fbe::autoreleased_t autoreleased;
     const std::uint32_t slot = take_slot();
     if (slot == UINT32_MAX) {
         return 0;
@@ -1700,6 +1701,7 @@ FBE_API bool fbe_texture_retain(uint64_t texture) {
 }
 
 FBE_API bool fbe_texture_release(uint64_t texture) {
+    const fbe::autoreleased_t autoreleased;
     const std::uint32_t slot = slot_of(texture);
     if (slot == UINT32_MAX) {
         return false;
