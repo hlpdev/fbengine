@@ -132,6 +132,10 @@ void hold_back(void (*flush)(), void (*drop)());
 /// done with it next, as a write of its pixels, is a pass after those.
 bool in_graph(std::uint64_t handle);
 
+/// Whether the graph has passes that wait to be recorded, or is recording them, what a batch
+/// holds back counted in.
+bool graph_waits();
+
 /// Adds a pass to the graph, after those added before, which it runs after; false, with
 /// fbe_error's why, if what it uses isn't in the graph, isn't a target where it draws, is used
 /// twice, or its targets don't match.

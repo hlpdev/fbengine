@@ -294,7 +294,9 @@ bool make_attachment(const texture_t& texture, VkFormat format, VkImageUsageFlag
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
     };
     const VmaAllocationCreateInfo allocation{ .usage = VMA_MEMORY_USAGE_AUTO };
-    VkResult result = vmaCreateImage(gpu.allocator, &info, &allocation, &image, &memory, nullptr);
+    VkResult result = fbe::gpu::allocated([&] {
+        return vmaCreateImage(gpu.allocator, &info, &allocation, &image, &memory, nullptr);
+    });
     if (result != VK_SUCCESS) {
         image = VK_NULL_HANDLE;
         return fbe::gpu::fail_vulkan("couldn't make a target's attachment", result);
@@ -420,10 +422,13 @@ staging_t make_staging(VkDeviceSize size) {
     };
     staging_t staging;
     VmaAllocationInfo mapped{};
-    const VkResult made = fbe::gpu::faulted(fbe::gpu::fault_t::UPLOAD)
-                              ? VK_ERROR_OUT_OF_DEVICE_MEMORY
-                              : vmaCreateBuffer(gpu.allocator, &buffer_info, &allocation_info,
-                                                &staging.buffer, &staging.memory, &mapped);
+    const VkResult made =
+        fbe::gpu::faulted(fbe::gpu::fault_t::UPLOAD)
+            ? VK_ERROR_OUT_OF_DEVICE_MEMORY
+            : fbe::gpu::allocated([&] {
+                  return vmaCreateBuffer(gpu.allocator, &buffer_info, &allocation_info,
+                                         &staging.buffer, &staging.memory, &mapped);
+              });
     if (made != VK_SUCCESS) {
         fbe::gpu::fail_vulkan("couldn't make a buffer to upload a texture through", made);
         return {};
@@ -522,8 +527,10 @@ bool make(std::uint32_t slot, const spec_t& spec) {
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
     };
     const VmaAllocationCreateInfo allocation{ .usage = VMA_MEMORY_USAGE_AUTO };
-    VkResult result =
-        vmaCreateImage(gpu.allocator, &info, &allocation, &texture.image, &texture.memory, nullptr);
+    VkResult result = fbe::gpu::allocated([&] {
+        return vmaCreateImage(gpu.allocator, &info, &allocation, &texture.image, &texture.memory,
+                              nullptr);
+    });
     if (result != VK_SUCCESS) {
         texture = {};
         return fbe::gpu::fail_vulkan("couldn't make a texture", result);
@@ -1711,7 +1718,7 @@ FBE_API bool fbe_texture_release(uint64_t texture) {
     live[slot] = false;
     ++generations[slot];
     textures_made -= textures[slot].engine ? 0 : 1;
-    fbe::gpu::after_frame([slot] {
+    fbe::gpu::after_use([slot] {
         fbe::gpu::write_texture(slot, textures[fbe::texture::white].view);
         destroy(textures[slot]);
         if (generations[slot] < (1U << 24U)) {

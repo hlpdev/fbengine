@@ -866,6 +866,11 @@ bool in_graph(std::uint64_t handle) {
     return by_handle().contains(handle);
 }
 
+bool graph_waits() {
+    flush_held_back();
+    return recording || flushing || !added.empty();
+}
+
 bool reserve_transient(const transient_t& target, std::uint32_t count) {
     auto have = static_cast<std::uint32_t>(std::ranges::count_if(
         pool, [&target](const pooled_t& pooled) { return pooled.target == target; }));

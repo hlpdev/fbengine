@@ -81,8 +81,10 @@ image_t make_color_image(VkFormat format, VkExtent2D extent) {
     };
     const VmaAllocationCreateInfo allocation{ .usage = VMA_MEMORY_USAGE_AUTO };
     image_t image{ .format = format, .extent = extent };
-    VkResult result =
-        vmaCreateImage(gpu->allocator, &info, &allocation, &image.image, &image.memory, nullptr);
+    VkResult result = allocated([&] {
+        return vmaCreateImage(gpu->allocator, &info, &allocation, &image.image, &image.memory,
+                              nullptr);
+    });
     if (result != VK_SUCCESS) {
         fail_vulkan("couldn't make an image", result);
         return {};
@@ -192,8 +194,10 @@ std::vector<std::uint8_t> read_pixels(VkImage image, VkExtent2D extent, std::uin
     VkBuffer buffer = VK_NULL_HANDLE;
     VmaAllocation memory = VK_NULL_HANDLE;
     VmaAllocationInfo mapped{};
-    const VkResult made =
-        vmaCreateBuffer(gpu->allocator, &buffer_info, &allocation_info, &buffer, &memory, &mapped);
+    const VkResult made = allocated([&] {
+        return vmaCreateBuffer(gpu->allocator, &buffer_info, &allocation_info, &buffer, &memory,
+                               &mapped);
+    });
     if (made != VK_SUCCESS) {
         fail_vulkan("couldn't make a buffer to read an image back through", made);
         return {};

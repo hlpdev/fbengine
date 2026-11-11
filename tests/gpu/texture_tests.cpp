@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstdint>
 #include <fbengine.h>
+#include <gpu/buffer.hpp>
 #include <gpu/graph.hpp>
 #include <gpu/image.hpp>
 #include <gpu/pipeline.hpp>
@@ -1224,5 +1225,152 @@ TEST_CASE("textures replaced in every material are held as given, and none is re
     CHECK(fbe_texture_release(numbers));
     CHECK(fbe_texture_release(color));
     CHECK(fbe_texture_count() == 0);
+    stop_gpu();
+}
+
+namespace {
+
+/// A texture 16 on a side, every byte of it `value`, its upload recorded and not yet submitted.
+std::uint64_t written(std::uint8_t value) {
+    const std::uint64_t texture = make(16, 16, FBE_TEXTURE_RGBA8, false);
+    const std::vector<std::uint8_t> pixels(16 * 16 * 4, value);
+    require(fbe_texture_write(texture, 0, 0, 16, 16, pixels.data(), 64));
+    return texture;
+}
+
+/// How many allocations there are once what starting the GPU left to free is freed.
+std::uint32_t settled() {
+    (void)fbe::gpu::release_waiting();
+    REQUIRE(fbe::gpu::waiting_frees() == 0);
+    return fbe::gpu::allocations().count;
+}
+
+/// Whether every byte of a 16 by 16 texture reads as `value`.
+bool reads_as(std::uint64_t texture, std::uint8_t value) {
+    std::vector<std::uint8_t> read(16 * 16 * 4);
+    require(fbe_texture_read(texture, 0, read.data(), static_cast<std::int64_t>(read.size())));
+    return std::ranges::all_of(read, [value](std::uint8_t byte) { return byte == value; });
+}
+
+} // namespace
+
+// No Flip, and nothing to wait for: its image goes as it's released.
+TEST_CASE("a texture freed with nothing recorded and no frame in flight is freed at once",
+          "[gpu][frees]") {
+    start();
+    const std::uint32_t none = settled();
+    const std::uint64_t texture = written(7);
+    // Its read submits what's recorded and waits for it.
+    CHECK(reads_as(texture, 7));
+    CHECK(fbe::gpu::allocations().count > none);
+    CHECK(fbe_texture_release(texture));
+    CHECK(fbe::gpu::waiting_frees() == 0);
+    CHECK(fbe::gpu::allocations().count == none);
+    // And after Flips, with none between it and its release.
+    const std::uint64_t flipped = written(8);
+    fbe_frame_flip(false);
+    fbe_frame_flip(false);
+    CHECK(reads_as(flipped, 8));
+    CHECK(fbe_texture_release(flipped));
+    CHECK(fbe::gpu::waiting_frees() == 0);
+    CHECK(fbe::gpu::allocations().count == none);
+    stop_gpu();
+}
+
+// Its upload's recorded and not yet submitted, so it's the frame's until that's run.
+TEST_CASE("a buffer freed with its upload recorded waits for that, and no longer", "[gpu][frees]") {
+    start();
+    constexpr auto storage = flag<VkBufferUsageFlags>(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    const std::uint32_t none = settled();
+    fbe::gpu::buffer_t buffer = fbe::gpu::make_buffer(4096, storage);
+    const std::vector<std::byte> data(4096, std::byte{ 3 });
+    require(fbe::gpu::write_buffer(buffer, 0, data));
+    const std::uint32_t before = fbe::gpu::allocations().count;
+    CHECK(before > none);
+    const std::size_t waiting = fbe::gpu::waiting_frees();
+    fbe::gpu::free_buffer(buffer);
+    CHECK(fbe::gpu::waiting_frees() == waiting + 1);
+    CHECK(fbe::gpu::allocations().count == before);
+    // What an allocation the device has no room for does: submits it, waits, and frees.
+    CHECK(fbe::gpu::release_waiting());
+    CHECK(fbe::gpu::waiting_frees() == 0);
+    CHECK(fbe::gpu::allocations().count == none);
+    // With nothing waiting there's nothing to try again for.
+    CHECK_FALSE(fbe::gpu::release_waiting());
+    // One that's never written, or whose write's been run, goes as it's freed.
+    fbe::gpu::buffer_t read = fbe::gpu::make_buffer(4096, storage);
+    require(fbe::gpu::write_buffer(read, 0, data));
+    CHECK(fbe::gpu::read_buffer(read).size() == 4096);
+    const std::uint32_t with = fbe::gpu::allocations().count;
+    fbe::gpu::free_buffer(read);
+    CHECK(fbe::gpu::allocations().count < with);
+    CHECK(fbe::gpu::waiting_frees() == 0);
+    stop_gpu();
+}
+
+// As a game that builds a level and leaves it, over and over, with no Flip between.
+TEST_CASE("textures made and freed past the device's allocations with no Flip are all made",
+          "[gpu][frees]") {
+    start();
+    const std::uint32_t none = settled();
+    const std::uint64_t kept = written(42);
+    // The one that's kept, and what its write waits to free, which goes when there's no room.
+    const std::uint32_t base = none + 1;
+    fbe::gpu::limit_allocations(static_cast<std::int64_t>(base) + 6);
+    std::size_t most_waiting = 0;
+    for (int round = 0; round < 40; ++round) {
+        CAPTURE(round);
+        const std::uint64_t texture = written(static_cast<std::uint8_t>(round));
+        CHECK(fbe_texture_release(texture));
+        most_waiting = std::max(most_waiting, fbe::gpu::waiting_frees());
+    }
+    // They waited, till there was no room, and never more than there was room for.
+    CHECK(most_waiting > 0);
+    CHECK(most_waiting <= 8);
+    CHECK(fbe::gpu::allocations().count <= base + 6);
+    // What was written before all that was submitted with it, in its turn.
+    CHECK(reads_as(kept, 42));
+    // With every one of them alive there's nothing to free: the seventh isn't made, and says why.
+    CHECK(fbe::gpu::release_waiting() == (fbe::gpu::waiting_frees() > 0));
+    std::vector<std::uint64_t> alive;
+    for (int at = 0; at < 6; ++at) {
+        alive.push_back(make(16, 16, FBE_TEXTURE_RGBA8, false));
+    }
+    CHECK(fbe_texture_create(16, 16, FBE_TEXTURE_RGBA8, false) == 0);
+    CHECK(std::string_view(fbe_error()).contains("couldn't make a texture (VkResult -2)"));
+    for (const std::uint64_t texture : alive) {
+        CHECK(fbe_texture_release(texture));
+    }
+    // The limit is the tests', and goes with the GPU.
+    CHECK(fbe_texture_release(kept));
+    stop_gpu();
+    start();
+    std::vector<std::uint64_t> more;
+    for (int at = 0; at < 12; ++at) {
+        more.push_back(make(16, 16, FBE_TEXTURE_RGBA8, false));
+    }
+    for (const std::uint64_t texture : more) {
+        CHECK(fbe_texture_release(texture));
+    }
+    stop_gpu();
+}
+
+TEST_CASE("buffers made and freed past the device's allocations with no Flip are all made",
+          "[gpu][frees]") {
+    start();
+    constexpr auto storage = flag<VkBufferUsageFlags>(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    const std::uint32_t base = settled();
+    fbe::gpu::limit_allocations(static_cast<std::int64_t>(base) + 6);
+    const std::vector<std::byte> data(4096, std::byte{ 3 });
+    for (int round = 0; round < 40; ++round) {
+        CAPTURE(round);
+        fbe::gpu::buffer_t buffer = fbe::gpu::make_buffer(4096, storage);
+        INFO(fbe_error());
+        REQUIRE(buffer.buffer != VK_NULL_HANDLE);
+        require(fbe::gpu::write_buffer(buffer, 0, data));
+        fbe::gpu::free_buffer(buffer);
+    }
+    CHECK(fbe::gpu::allocations().count <= base + 6);
+    fbe::gpu::limit_allocations(-1);
     stop_gpu();
 }

@@ -391,7 +391,7 @@ void forget(std::uint32_t code) {
         shaders.free_codes.push_back(code);
     };
     if (gpu::device() != nullptr) {
-        gpu::after_frame(gone);
+        gpu::after_use(gone);
     } else {
         gone();
     }

@@ -168,6 +168,38 @@ frame_t& recording_frame();
 
 /// Has `free` run once the GPU is done with the frame being recorded, and every frame before it.
 void after_frame(std::function<void()> free);
+/// Has `free` run once nothing on the GPU can use what it frees, which nothing uses from now on,
+/// as a texture's image once it's released: with the frame being recorded if anything's recorded
+/// that could, as after_frame has it; at once if nothing is and the GPU's done with every frame;
+/// or else with the last frame submitted, and no Flip is needed for any of them.
+void after_use(std::function<void()> free);
+/// How many of those wait now.
+std::size_t waiting_frees();
+/// Frees what waits, when an allocation's failed for want of room on the device: submits what's
+/// recorded, if anything is, waits for the GPU to be done with it, and frees what every frame
+/// left. Whether it could, and so whether the allocation's worth trying again; never in a frame's
+/// submit, or with nothing waiting.
+bool release_waiting();
+/// Lets the device have `most` allocations, as its maxMemoryAllocationCount would, for the tests:
+/// one past that fails as the device's would. Below 0 is all it has.
+void limit_allocations(std::int64_t most);
+/// Whether the tests' limit has no room for one more.
+bool at_allocation_limit();
+
+/// Makes something with VMA by `make`, which gives its VkResult; if the device has no room, frees
+/// what waited to be freed and tries once more.
+template <typename Make>
+VkResult allocated(const Make& make) {
+    const auto once = [&make] {
+        return at_allocation_limit() ? VK_ERROR_OUT_OF_DEVICE_MEMORY : make();
+    };
+    VkResult result = once();
+    if ((result == VK_ERROR_OUT_OF_DEVICE_MEMORY || result == VK_ERROR_TOO_MANY_OBJECTS) &&
+        release_waiting()) {
+        result = once();
+    }
+    return result;
+}
 
 /// Has `free` run each time the GPU stops, before it finishes what's freed after frames: what's
 /// kept on the GPU from frame to frame goes there. Asked for twice, it's still once.

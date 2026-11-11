@@ -97,8 +97,10 @@ bool make_host_buffer(VkDeviceSize size, VkBufferUsageFlags usage, bool reading,
                          flag<VkMemoryPropertyFlags>(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
     };
     VmaAllocationInfo found{};
-    const VkResult result =
-        vmaCreateBuffer(gpu.allocator, &info, &allocation, &made.buffer, &made.memory, &found);
+    const VkResult result = fbe::gpu::allocated([&] {
+        return vmaCreateBuffer(gpu.allocator, &info, &allocation, &made.buffer, &made.memory,
+                               &found);
+    });
     if (result != VK_SUCCESS) {
         made = {};
         return fbe::gpu::fail_vulkan("couldn't make a buffer the CPU reaches", result);
@@ -143,8 +145,10 @@ buffer_t make_buffer(VkDeviceSize size, VkBufferUsageFlags usage) {
     };
     const VmaAllocationCreateInfo allocation{ .usage = VMA_MEMORY_USAGE_AUTO };
     buffer_t made{ .size = size, .usage = usage };
-    const VkResult result =
-        vmaCreateBuffer(gpu->allocator, &info, &allocation, &made.buffer, &made.memory, nullptr);
+    const VkResult result = allocated([&] {
+        return vmaCreateBuffer(gpu->allocator, &info, &allocation, &made.buffer, &made.memory,
+                               nullptr);
+    });
     if (result != VK_SUCCESS) {
         fail_vulkan("couldn't make a buffer", result);
         return {};
@@ -165,7 +169,7 @@ buffer_t make_buffer(VkDeviceSize size, VkBufferUsageFlags usage) {
 
 void free_buffer(buffer_t& buffer) {
     if (buffer.buffer != VK_NULL_HANDLE && device() != nullptr) {
-        after_frame(
+        after_use(
             [made = buffer] { vmaDestroyBuffer(device()->allocator, made.buffer, made.memory); });
     }
     buffer = {};

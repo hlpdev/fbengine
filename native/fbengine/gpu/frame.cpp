@@ -3,8 +3,12 @@
 // flight leaves to free once the GPU's done with it. A submit that fails for want of memory keeps
 // the frame's uploads, and what they copy from, for the next submit to run first, and puts the
 // writes the graph recorded as passes into it again, so a texture written then still gets its
-// pixels; a lost GPU runs nothing, freeing what each frame leaves at once. And the counters of what
-// the last frame did, its GPU time read from its timestamps once the GPU's done with it.
+// pixels; a lost GPU runs nothing, freeing what each frame leaves at once. What's left to free with
+// nothing recorded that could use it doesn't wait for a Flip: it's freed at once if the GPU's done
+// with every frame, or with the last one submitted; and an allocation the device has no room for
+// submits what's recorded, waits for it, frees all that waited, and is tried again. And the
+// counters of what the last frame did, its GPU time read from its timestamps once the GPU's done
+// with it.
 
 #include "core/engine.hpp"
 #include "fbengine.h"
@@ -29,6 +33,27 @@ struct carried_t {
 };
 
 std::vector<carried_t> carried;
+
+/// How deep in a frame's submit the engine is: what's freed or made in there, as the graph's
+/// transient targets are, leaves the frame alone.
+int submitting = 0;
+
+/// In a frame's submit for as long as it lives.
+struct submitting_t {
+    submitting_t() {
+        ++submitting;
+    }
+    submitting_t(const submitting_t&) = delete;
+    submitting_t& operator=(const submitting_t&) = delete;
+    submitting_t(submitting_t&&) = delete;
+    submitting_t& operator=(submitting_t&&) = delete;
+    ~submitting_t() {
+        --submitting;
+    }
+};
+
+/// The most allocations a test lets the device have, below 0 for all it has.
+std::int64_t allocation_limit = -1;
 
 /// What the frame being recorded has done so far, what the last frame did, and how long the GPU
 /// took over the last frame its timestamps were read for, -1 before.
@@ -237,9 +262,89 @@ frame_t& recording_frame() {
     return begin();
 }
 
+std::size_t waiting_frees() {
+    const device_t* gpu = device();
+    if (gpu == nullptr) {
+        return 0;
+    }
+    std::size_t waiting = 0;
+    for (const frame_t& frame : gpu->frames) {
+        waiting += frame.garbage.size();
+    }
+    for (const carried_t& carry : carried) {
+        waiting += carry.garbage.size();
+    }
+    return waiting;
+}
+
 void after_frame(std::function<void()> free) {
     // Begun first, so what's left goes with this frame, not one whose beginning frees it now.
     begin().garbage.push_back(std::move(free));
+}
+
+void after_use(std::function<void()> free) {
+    device_t& gpu = *device();
+    if (gpu.frames[gpu.frame].begun || !carried.empty() || submitting > 0 || graph_waits()) {
+        // Something recorded and not yet submitted may use it: it goes with that.
+        after_frame(std::move(free));
+        return;
+    }
+    // Only a frame in flight could use it: none, if the GPU's done with them all, and then it's
+    // freed now, with what they left.
+    bool all_done = true;
+    for (frame_t& frame : gpu.frames) {
+        if (vkGetFenceStatus(gpu.device, frame.done) == VK_SUCCESS) {
+            collect(frame);
+        } else {
+            all_done = false;
+        }
+    }
+    if (all_done) {
+        free();
+        return;
+    }
+    // Or it goes with the last frame submitted, which is done after every one before it.
+    const std::uint32_t last = (gpu.frame + frames_in_flight - 1) % frames_in_flight;
+    gpu.frames[last].garbage.push_back(std::move(free));
+}
+
+bool release_waiting() {
+    device_t* gpu = device();
+    if (gpu == nullptr || submitting > 0 || lost() || waiting_frees() == 0) {
+        return false;
+    }
+    if (gpu->frames[gpu->frame].begun || !carried.empty() || graph_waits()) {
+        // What's recorded may use what waits: it's submitted, and waited for, which every frame
+        // before it is done by too.
+        if (!finish_frame()) {
+            return false;
+        }
+    } else {
+        std::array<VkFence, frames_in_flight> fences{};
+        for (std::uint32_t at = 0; at < frames_in_flight; ++at) {
+            fences[at] = gpu->frames[at].done;
+        }
+        const VkResult waited =
+            vkWaitForFences(gpu->device, frames_in_flight, fences.data(), VK_TRUE, UINT64_MAX);
+        if (lose(waited) || waited != VK_SUCCESS) {
+            return false;
+        }
+    }
+    for (frame_t& frame : gpu->frames) {
+        if (!frame.begun) {
+            collect(frame);
+        }
+    }
+    return true;
+}
+
+void limit_allocations(std::int64_t most) {
+    allocation_limit = most;
+}
+
+bool at_allocation_limit() {
+    return allocation_limit >= 0 &&
+           static_cast<std::int64_t>(allocations().count) >= allocation_limit;
 }
 
 bool make_frame_commands(const device_t& gpu, frame_t& frame) {
@@ -290,6 +395,7 @@ std::uint64_t submitted_frames() {
 }
 
 bool submit_frame(VkSemaphore wait, VkSemaphore signal) {
+    const submitting_t in_submit;
     device_t& gpu = *device();
     frame_t& frame = gpu.frames[gpu.frame];
     if (lost()) {
@@ -331,6 +437,7 @@ bool submit_frame(VkSemaphore wait, VkSemaphore signal) {
 }
 
 bool finish_frame() {
+    const submitting_t in_submit;
     device_t& gpu = *device();
     frame_t& frame = gpu.frames[gpu.frame];
     if (lost()) {
@@ -374,6 +481,7 @@ void stop_frames() {
     }
     carried.clear();
     gpu.frame = 0;
+    allocation_limit = -1;
     counting = {};
     counted = { .gpu_milliseconds = -1.0F };
     gpu_time = -1.0F;
@@ -382,6 +490,10 @@ void stop_frames() {
 } // namespace fbe::gpu
 
 extern "C" {
+
+FBE_API int32_t fbe_gpu_waiting_frees(void) {
+    return static_cast<int32_t>(fbe::gpu::waiting_frees());
+}
 
 FBE_API bool fbe_gpu_counters(fbe_gpu_counters_t* counters) {
     if (counters == nullptr) {
