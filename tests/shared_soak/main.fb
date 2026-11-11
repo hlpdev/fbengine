@@ -8,8 +8,9 @@
 // every 20 rounds once the first quarter's warmed the caches, don't rise by SOAK_BLOCKS a round,
 // as a leak's do, where they can be counted. The process's own memory mustn't rise steadily
 // either, by SOAK_RISE a round. With the engine built under AddressSanitizer, as its DLL says,
-// neither's judged: LeakSanitizer does that, at the end. It prints how it went, and exits 1 if it
-// didn't.
+// neither's judged: LeakSanitizer does that, at the end; nor with FBENGINE_SOAK_COUNTS set, for a
+// run with the validation layers on, whose blocks are in the heaps' too. It prints how it went,
+// and exits 1 if it didn't.
 
 Import std.collections
 Import std.core
@@ -181,6 +182,12 @@ Print("{iterations} rounds in {Instant.Now() - started}; after the first quarter
       "{rise} bytes a round, and the heaps' blocks in use {more} a round")
 // A leak leaves blocks behind each round, one at the least, where they can be counted.
 Local counted = blocks.Count > 0 && blocks[0] >= 0
+// With FBENGINE_SOAK_COUNTS, what's kept is all that's judged, as it is each round: for a short
+// run with the validation layers on, whose own blocks are in the heaps'.
+If Env.Get("FBENGINE_SOAK_COUNTS") == "1"
+    Print("soaked")
+    Process.Exit(0)
+End If
 If !fbe_assets_address_sanitized() && counted && more > SOAK_BLOCKS
     Print("its blocks rose more than {SOAK_BLOCKS} a round")
     Process.Exit(1)
