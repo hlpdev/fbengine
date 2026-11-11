@@ -48,25 +48,6 @@ bool no_room = false;
 int edges = 0;
 /// How many times a frame's been given to the queue.
 std::uint64_t submits = 0;
-/// Whether the submit being made is a Flip's, the last there is for what the frame's to draw.
-bool flipping = false;
-
-struct flipping_t {
-    flipping_t() {
-        flipping = true;
-    }
-    flipping_t(const flipping_t&) = delete;
-    flipping_t& operator=(const flipping_t&) = delete;
-    flipping_t(flipping_t&&) = delete;
-    flipping_t& operator=(flipping_t&&) = delete;
-    ~flipping_t() {
-        flipping = false;
-    }
-};
-
-/// Why what a submit was to record couldn't be, for want of the frame's memory, if it couldn't:
-/// the submit goes on with the rest, and fails saying so.
-std::string spoiled;
 
 /// In a frame's submit for as long as it lives.
 struct submitting_t {
@@ -294,16 +275,6 @@ bool give_up(const fbe::gpu::device_t& gpu, fbe::gpu::frame_t& frame) {
     return fbe::gpu::fail_lost();
 }
 
-/// False, with fbe_error's why, if what the submit was to record couldn't all be.
-bool unspoiled() {
-    if (spoiled.empty()) {
-        return true;
-    }
-    const std::string why = std::move(spoiled);
-    spoiled.clear();
-    return fbe::fail(why);
-}
-
 } // namespace
 
 namespace fbe::gpu {
@@ -490,20 +461,8 @@ void forget_no_room() {
     no_room = false;
 }
 
-bool in_submit() {
-    return submitting > 0;
-}
-
-bool in_flip() {
-    return flipping;
-}
-
 std::uint64_t frame_submits() {
     return submits;
-}
-
-void spoil_frame(std::string why) {
-    spoiled = std::move(why);
 }
 
 void limit_allocations(std::int64_t most) {
@@ -563,7 +522,6 @@ std::uint64_t submitted_frames() {
 
 bool submit_frame(VkSemaphore wait, VkSemaphore signal) {
     const submitting_t in_submit;
-    const flipping_t in_flip;
     device_t& gpu = *device();
     frame_t& frame = gpu.frames[gpu.frame];
     if (lost()) {
@@ -593,7 +551,7 @@ bool submit_frame(VkSemaphore wait, VkSemaphore signal) {
                 collect(finished);
             }
         }
-        return unspoiled();
+        return true;
     }
     begin();
     const bool submitted = submit(gpu, frame, wait, signal);
@@ -601,7 +559,7 @@ bool submit_frame(VkSemaphore wait, VkSemaphore signal) {
     // submit, mid-frame, leaves it, as slices handed out before are still the frame's.
     frame.ring_used = 0;
     gpu.frame = (gpu.frame + 1) % frames_in_flight;
-    return submitted && unspoiled();
+    return submitted;
 }
 
 bool finish_frame() {
@@ -611,9 +569,28 @@ bool finish_frame() {
     if (lost()) {
         return give_up(gpu, frame);
     }
+    // What the frames already submitted left is freed first, each once the GPU's done with it,
+    // as this waits for its own submit, which is after theirs: so what's recorded now, which may
+    // make an image of its own, has the room.
+    for (frame_t& submitted : gpu.frames) {
+        if (submitted.begun) {
+            continue;
+        }
+        const VkResult done = vkWaitForFences(gpu.device, 1, &submitted.done, VK_TRUE, UINT64_MAX);
+        if (lose(done)) {
+            return give_up(gpu, frame);
+        }
+        if (done == VK_SUCCESS) {
+            collect(submitted);
+        }
+    }
+    // What the graph can't record for want of room it drops, with fbe_error's why, and this goes
+    // on: passed over, so it isn't what a call that then fails for something else runs again for.
+    const bool said = no_room;
     record_graph();
+    no_room = said;
     if (!frame.begun && carried.empty()) {
-        return unspoiled();
+        return true;
     }
     begin();
     if (!submit(gpu, frame, VK_NULL_HANDLE, VK_NULL_HANDLE)) {
@@ -623,10 +600,7 @@ bool finish_frame() {
     if (lose(waited)) {
         return fail_lost();
     }
-    if (waited != VK_SUCCESS) {
-        return fail_vulkan("the GPU couldn't finish the frame", waited);
-    }
-    return unspoiled();
+    return waited == VK_SUCCESS ? true : fail_vulkan("the GPU couldn't finish the frame", waited);
 }
 
 void stop_frames() {
@@ -658,7 +632,6 @@ void stop_frames() {
     carried.clear();
     gpu.frame = 0;
     allocation_limit = -1;
-    spoiled.clear();
     counting = {};
     counted = { .gpu_milliseconds = -1.0F };
     gpu_time = -1.0F;

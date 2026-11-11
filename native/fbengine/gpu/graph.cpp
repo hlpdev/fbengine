@@ -745,7 +745,13 @@ void flush_held_back() {
         return;
     }
     flushing = true;
+    // What it can't send for want of room it drops, with fbe_error's why, and whatever asked
+    // goes on: passed over, so it isn't what a call that then fails is run again for.
+    const bool said = fbe::gpu::said_no_room();
     held_back();
+    if (!said) {
+        fbe::gpu::forget_no_room();
+    }
     flushing = false;
 }
 

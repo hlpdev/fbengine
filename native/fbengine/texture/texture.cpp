@@ -680,12 +680,13 @@ bool make(std::uint32_t slot, const spec_t& spec) {
 bool upload(std::uint64_t handle, const texture_t& texture, std::uint32_t x, std::uint32_t y,
             std::uint32_t width, std::uint32_t height, const std::uint8_t* pixels,
             std::uint32_t pitch, bool ahead = false) {
-    fbe::texture::changed_on_gpu(handle);
     const std::uint32_t row = width * fbe::texture::pixel_size(texture.format);
     const staging_t staging = make_staging(VkDeviceSize{ row } * height);
     if (staging.buffer == VK_NULL_HANDLE) {
         return false;
     }
+    // Changed only once there's what it's sent through: one that isn't sent is as it was.
+    fbe::texture::changed_on_gpu(handle);
     VkBuffer buffer = staging.buffer;
     for (std::uint32_t line = 0; line < height; ++line) {
         std::memcpy(staging.to + (std::size_t{ line } * row),
@@ -728,13 +729,13 @@ bool upload(std::uint64_t handle, const texture_t& texture, std::uint32_t x, std
 bool upload_level(std::uint64_t handle, const texture_t& texture, std::uint32_t level,
                   std::uint32_t width, std::uint32_t height, const std::uint8_t* pixels,
                   std::uint32_t pitch) {
-    if (level == 0) {
-        fbe::texture::changed_on_gpu(handle);
-    }
     const std::uint32_t row = width * fbe::texture::pixel_size(texture.format);
     const staging_t staging = make_staging(VkDeviceSize{ row } * height);
     if (staging.buffer == VK_NULL_HANDLE) {
         return false;
+    }
+    if (level == 0) {
+        fbe::texture::changed_on_gpu(handle);
     }
     VkBuffer buffer = staging.buffer;
     for (std::uint32_t line = 0; line < height; ++line) {
@@ -1131,7 +1132,7 @@ std::uint32_t sampler_of(const texture_t& texture) {
 }
 
 std::vector<std::uint8_t> read(std::uint64_t handle, std::uint32_t level) {
-    if (!send_pixels(handle)) {
+    if (!send_pixels(handle, true)) {
         return {};
     }
     const texture_t* texture = find(handle);
@@ -1159,7 +1160,7 @@ std::vector<std::uint8_t> read(std::uint64_t handle, std::uint32_t level) {
                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, level);
 }
 
-bool send_pixels(std::uint64_t handle) {
+bool send_pixels(std::uint64_t handle, bool keeps) {
     if (written_copies == 0) {
         return true;
     }
@@ -1185,9 +1186,10 @@ bool send_pixels(std::uint64_t handle) {
     const std::size_t at =
         (std::size_t{ top } * pitch) + (std::size_t{ left } * pixel_size(texture->format));
     if (!upload(handle, *texture, left, top, width, height, kept.pixels.data() + at, pitch)) {
-        // Not sent, so it's still to send: by this call run again, or whatever next sends it.
+        // Not sent. A caller that fails for it keeps it to send, as run again it does; one that
+        // goes on has put newer work after where it would have gone, so it's dropped.
         const auto still = copies().find(slot);
-        if (still != copies().end() && find(handle) != nullptr) {
+        if (keeps && still != copies().end() && find(handle) != nullptr) {
             still->second.right = right;
             ++written_copies;
         }
@@ -1540,7 +1542,7 @@ bool write_once(uint64_t texture, int32_t x, int32_t y, int32_t width, int32_t h
                                      width, row, pitch));
     }
     // What the CPU wrote into its copy goes first, so this, written after, goes over it.
-    if (!fbe::texture::send_pixels(texture)) {
+    if (!fbe::texture::send_pixels(texture, true)) {
         return false;
     }
     found = fbe::texture::find(texture);
@@ -1584,7 +1586,7 @@ bool write_level_once(uint64_t texture, int32_t level, int32_t width, int32_t he
     }
     // What the CPU wrote into its copy goes first, making the levels from it, so this goes
     // over.
-    if (!fbe::texture::send_pixels(texture)) {
+    if (!fbe::texture::send_pixels(texture, true)) {
         return false;
     }
     found = fbe::texture::find(texture);
@@ -1799,40 +1801,46 @@ FBE_API bool fbe_texture_copy(uint64_t to, int32_t x, int32_t y, uint64_t from, 
 }
 
 FBE_API uint8_t* fbe_texture_pixels(uint64_t texture, int64_t* size) {
-    const texture_t* found = fbe::texture::find(texture);
-    if (found == nullptr || !has_pixels(*found)) {
-        return nullptr;
-    }
-    if (found->msaa != VK_NULL_HANDLE) {
-        fbe::fail("a multisampled target's pixels are only drawn");
-        return nullptr;
-    }
-    // A 2D batch drawing into it goes to the graph first, so its version counts it.
-    fbe::gpu::in_graph(texture);
-    found = fbe::texture::find(texture);
-    const auto slot = static_cast<std::uint32_t>(texture);
-    cpu_copy_t& kept = copies()[slot];
-    if (kept.version != found->version) {
-        // Nothing's written into a kept older than the texture: what uses it on the GPU sends the
-        // kept's writes first. Read back into where it is, so it stays there.
-        std::vector<std::uint8_t> read = fbe::texture::read(texture, 0);
-        if (read.empty()) {
-            drop_copy(slot);
+    // It reads back through a buffer of its own, at an exported call's edge.
+    return fbe::gpu::with_room([&] -> std::uint8_t* {
+        const texture_t* found = fbe::texture::find(texture);
+        if (found == nullptr || !has_pixels(*found)) {
             return nullptr;
         }
-        if (kept.pixels.size() == read.size()) {
-            std::memcpy(kept.pixels.data(), read.data(), read.size());
-        } else {
-            kept.pixels = std::move(read);
+        if (found->msaa != VK_NULL_HANDLE) {
+            fbe::fail("a multisampled target's pixels are only drawn");
+            return nullptr;
         }
+        // A 2D batch drawing into it goes to the graph first, so its version counts it.
+        fbe::gpu::in_graph(texture);
         found = fbe::texture::find(texture);
-        kept.version = found->version;
-        ++readbacks;
-    }
-    if (size != nullptr) {
-        *size = static_cast<std::int64_t>(kept.pixels.size());
-    }
-    return kept.pixels.data();
+        const auto slot = static_cast<std::uint32_t>(texture);
+        cpu_copy_t& kept = copies()[slot];
+        if (kept.version != found->version) {
+            // Nothing's written into a kept older than the texture: what uses it on the GPU sends
+            // the kept's writes first. Read back into where it is, so it stays there.
+            std::vector<std::uint8_t> read = fbe::texture::read(texture, 0);
+            if (read.empty()) {
+                // What's written into it and still to send stays, for this call run again.
+                if (kept.right <= kept.left) {
+                    drop_copy(slot);
+                }
+                return nullptr;
+            }
+            if (kept.pixels.size() == read.size()) {
+                std::memcpy(kept.pixels.data(), read.data(), read.size());
+            } else {
+                kept.pixels = std::move(read);
+            }
+            found = fbe::texture::find(texture);
+            kept.version = found->version;
+            ++readbacks;
+        }
+        if (size != nullptr) {
+            *size = static_cast<std::int64_t>(kept.pixels.size());
+        }
+        return kept.pixels.data();
+    });
 }
 
 FBE_API const uint64_t* fbe_texture_pixels_stamp(uint64_t texture) {

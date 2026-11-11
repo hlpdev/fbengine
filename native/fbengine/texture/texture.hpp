@@ -99,8 +99,11 @@ constexpr std::uint32_t white = 0;
 std::vector<std::uint8_t> read(std::uint64_t handle, std::uint32_t level);
 
 /// Sends what was written into a texture's CPU copy of its pixels (fbe_texture_pixels) to the GPU,
-/// if anything was, as a write in its turn: what uses a texture on the GPU calls it first.
-bool send_pixels(std::uint64_t handle);
+/// if anything was, as a write in its turn: what uses a texture on the GPU calls it first. False,
+/// with fbe_error's why, if it couldn't: what wasn't sent is still to send if the caller `keeps`
+/// it, as one does that fails its own call for it and is run again; or it's dropped, as for a
+/// caller that goes on, whose work would otherwise be gone over by it later.
+bool send_pixels(std::uint64_t handle, bool keeps = false);
 
 /// The exported calls that can allocate, run once, as the engine calls them: only an exported
 /// call runs itself again for want of room.

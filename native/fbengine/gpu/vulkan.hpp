@@ -203,15 +203,8 @@ bool made_room(bool submits);
 /// what passes over such a failure does, so the call isn't run again for it.
 bool said_no_room();
 void forget_no_room();
-/// Whether a frame's being submitted now, and whether by a Flip, which is the last there is for
-/// what the frame's to draw.
-bool in_submit();
-bool in_flip();
 /// How many times a frame's been given to the queue, for the tests.
 std::uint64_t frame_submits();
-/// Says what a submit was to record couldn't be, and why: the submit fails saying so, once it's
-/// run the rest.
-void spoil_frame(std::string why);
 /// An exported call's length, for one that isn't run again, as a Flip's present isn't: no call
 /// within it frees what waits.
 struct edge_t {
