@@ -109,6 +109,26 @@ good modern engine on its own. Every structural choice is checked against both.
   about, NONE draws it as it is, and ALL, as at first, tweens both. It's one branch where a drawn
   pose is worked out (tweened_t::pose), so cameras, lights, culling, and what's under it all see
   the same.
+- **Particles** are records on the GPU, each a birth: where, when, its velocity, life, roll, spin,
+  its size's multiple, and when it's gone, 48 bytes. The vertex shader (scene.slang's
+  particleVertex) works out each one's place, size, color, and roll from its age by a closed
+  formula, so nothing is stepped a frame and a million draw. What a game would step a tick at a
+  time is in that formula by `SetSteps(seconds, held)`: `SetGrowth(added, multiplied)` adds to a
+  half-size and multiplies it each step, n steps at once as a geometric sum, worked out from the
+  power's logarithm so a multiple next to 1 loses nothing, and never past 1e9, so it's finite on
+  the CPU and the GPU alike; and `SetFade(aStep)`
+  takes that off its alpha, one at none being gone then and no longer counted alive. Smooth, the
+  steps are age over the step's length; held, its floor, as a game's ticks have it, and the two
+  agree at each whole step. `SetStartBox`, `SetVelocityBox`, `SetSizeRange`, and `SetShape` are
+  where it's born, a velocity added on the world's axes, its size's multiple, and a width and
+  height of its own; `SetRollAlong` turns each to how it's moving in the view; `SetBursts` sets
+  off so many every so often, for so long, and again: a long step walks its bursts twice, first
+  counting those sure to be alive at its end, and passes over one only if those after it fill the
+  emitter, or it's older than the longest life. Each takes random numbers only where it's
+  set, so a seed's run without them is what it was. `Read()` gives each live particle's place,
+  half-width, half-height, alpha, and age by the same formula on the CPU (particles.cpp's
+  particle_state), for a server with no GPU or a game that wants them; it keeps the births only
+  from its first call on. The GPU tests hold the pixels to what it reads.
 - **Collisions and picks** are the scene's own, for games that don't need a physics engine:
   swept spheres and ellipsoids against meshes, boxes, and spheres, with stop and slide responses,
   step-up, and ray and sphere picks, in C++ on the job system. SCP:CB's player and NPCs move this

@@ -194,6 +194,8 @@ constexpr std::uint32_t samples_binding = 1;
 constexpr std::uint32_t texture_binding = 2;
 /// How many samplers the set has: one for each filter and wrap in U and V, and room.
 constexpr std::uint32_t sampler_slots = 32;
+/// The fewest textures fbengine needs a device's set to hold, which every device's set has.
+constexpr std::uint32_t fewest_textures = 1024;
 /// How many multisampled images the set has, the engine's own whose samples a shader reads: one for
 /// each size of an HDR camera's image at once, but for one with temporal antialiasing; what's past
 /// that reads its average.
@@ -316,6 +318,9 @@ bool fail_vulkan(std::string_view doing, VkResult result);
 /// Whether the GPU was lost, as a driver's crash or reset loses it: nothing runs on it from then
 /// on, and what needs it fails, saying so, until it's stopped and started again.
 bool lost();
+/// The first error the validation layer gave since the program started, as it said it, "" if it's
+/// given none: what a test that counts them says when its count's not 0.
+const char* first_validation_error();
 /// Whether the validation layer checks the GPU's synchronization too, as it does wherever it
 /// validates and can.
 bool validating_synchronization();

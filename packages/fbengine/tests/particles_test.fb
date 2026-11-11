@@ -24,3 +24,80 @@ Function WhatsSetCanBeReadBack()
     Expect(particles.StartColor() == Color(0.1, 0.2, 0.3, 0.4))
     Expect(particles.EndColor() == Color(0.5, 0.6, 0.7, 0.8))
 End Function
+
+// What's new of how they're born and go reads back, each as nothing at first.
+@Test
+Function WhatsNewIsNothingAtFirstAndReadsBack()
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local particles = Particles()
+    Expect(particles.StartBox() == Vec3(0, 0, 0) && particles.SizeRange() == Vec2(1, 1))
+    Expect(particles.Shape() == Vec2(1, 1) && particles.Step() == 0 && !particles.StepsHeld())
+    Expect(particles.Growth() == Vec2(0, 1) && particles.Fade() == 0 && !particles.RollAlong())
+    Expect(!particles.Bursting())
+    particles.SetStartBox(Vec3(1, 2, 3))
+    particles.SetVelocityBox(Vec3(-1, -2, -3), Vec3(4, 5, 6))
+    particles.SetSizeRange(0.5, 2)
+    particles.SetShape(3, 0.25)
+    particles.SetSteps(0.1, True)
+    particles.SetGrowth(0.02, 1.5)
+    particles.SetFade(0.125)
+    particles.SetRollAlong(True)
+    particles.SetBursts(3, 0.5, 2, 4)
+    Expect(particles.StartBox() == Vec3(1, 2, 3))
+    Local least, most = particles.VelocityBox()
+    Expect(least == Vec3(-1, -2, -3) && most == Vec3(4, 5, 6))
+    Expect(particles.SizeRange() == Vec2(0.5, 2) && particles.Shape() == Vec2(3, 0.25))
+    Expect(particles.Step() == 0.1 && particles.StepsHeld())
+    Expect(particles.Growth() == Vec2(0.02, 1.5) && particles.Fade() == 0.125)
+    Expect(particles.RollAlong() && particles.Bursting())
+    particles.SetBursts(0, 1)
+    Expect(!particles.Bursting())
+End Function
+
+// A tick at a time, as a game steps a sprite by hand, and as a server reads them, with no GPU.
+@Test
+Function ParticlesAreReadAsAGameStepsThemByHand()
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local smoke = Particles()
+    smoke.SetRate(0)
+    smoke.SetMotion(0, 0, 0)
+    smoke.SetLife(100, 100)
+    smoke.SetSizes(0.5, 0.5)
+    smoke.SetColors(Color(1, 1, 1, 1), Color(1, 1, 1, 1))
+    smoke.SetShape(1, 2)
+    smoke.SetVelocityBox(Vec3(0, 1, 0), Vec3(0, 1, 0))
+    smoke.SetSteps(0.1, True)
+    smoke.SetGrowth(0.02, 1.1)
+    smoke.SetFade(0.125)
+    Expect(smoke.Read().Count == 0, "the first read has none")
+    smoke.SetBursts(2, 0.3)
+    Local half = Vec2(0.5, 1)
+    Local alpha: Float = 1
+    Local at: Float = 0
+    world.Update(0.05)
+    Expect(smoke.Read().Count == 2)
+    For tick = 1 To 6
+        world.Update(0.1)
+        half = Vec2((half.x + 0.02) * 1.1, (half.y + 0.02) * 1.1)
+        alpha -= 0.125
+        at += 0.1
+        // The first two, the oldest, among those of the bursts since.
+        Local oldest = smoke.Read()[0]
+        For one In smoke.Read()
+            If one.Age > oldest.Age Then oldest = one
+        End For
+        Expect(IsClose(oldest.HalfWidth, half.x, 0.001),
+               "tick {tick}: {oldest.HalfWidth}, {half.x}")
+        Expect(IsClose(oldest.HalfHeight, half.y, 0.001))
+        Expect(IsClose(oldest.Alpha, alpha, 0.001), "tick {tick}: {oldest.Alpha}, {alpha}")
+        Expect(IsClose(oldest.Position.y, at + 0.05, 0.001))
+    End For
+    // Three bursts by now, at 0, 0.3, and 0.6 seconds; the first is gone at its eighth tick.
+    Expect(smoke.Read().Count == 6 && smoke.Alive() == 6)
+    world.Update(0.2)
+    Expect(smoke.Read().Count == 4 && smoke.Alive() == 4, "{smoke.Read().Count}")
+End Function

@@ -70,6 +70,8 @@ bool validating = false;
 /// Whether the validation layer checks synchronization too.
 bool synchronizing = false;
 std::int32_t validation_errors = 0;
+/// The first of them, as the layer said it, as far as fits, for a test's failure to say.
+std::array<char, 2048> first_error{};
 /// Whether the GPU was lost, until it's stopped.
 bool gpu_lost = false;
 VkDebugUtilsMessengerEXT messenger = VK_NULL_HANDLE;
@@ -125,6 +127,10 @@ VKAPI_ATTR VkBool32 VKAPI_CALL on_validation(VkDebugUtilsMessageSeverityFlagBits
                                              void* /*user*/) {
     const bool error = severity == VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
     if (error) {
+        if (validation_errors == 0) {
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg): nothing here may allocate.
+            std::snprintf(first_error.data(), first_error.size(), "%s", data->pMessage);
+        }
         ++validation_errors;
     }
     // Nothing that can throw or allocate: this is inside the layer, holding its locks, and what's
@@ -832,6 +838,10 @@ allocations_t allocations() {
         .count = statistics.total.statistics.allocationCount,
         .bytes = statistics.total.statistics.allocationBytes,
     };
+}
+
+const char* first_validation_error() {
+    return first_error.data();
 }
 
 bool remake_frame(const device_t& gpu, frame_t& frame) {

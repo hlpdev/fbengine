@@ -1487,6 +1487,7 @@ add_executable(fbengine_scene_tests scene/world_tests.cpp scene/transform_tests.
                scene/handles_tests.cpp scene/pick_tests.cpp scene/sprite_tests.cpp
                scene/plane_tests.cpp scene/draw_tests.cpp
                scene/terrain_tests.cpp scene/clusters_tests.cpp scene/effects_tests.cpp
+               scene/particles_tests.cpp
                scene/stability_tests.cpp "${PROJECT_SOURCE_DIR}/native/fbengine/scene/bvh.cpp")
 target_link_libraries(fbengine_scene_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
 if(WIN32)

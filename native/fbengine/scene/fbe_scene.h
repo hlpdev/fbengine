@@ -259,6 +259,36 @@ typedef struct fbe_pose_t {
     fbe_vec3_t position;
     fbe_quat_t rotation;
 } fbe_pose_t;
+
+// What fbe_particles_settings reads: what a Particles' size range, shape, steps, growth, fade,
+// roll along, and bursts are set to, and whether its bursts are set off and have more to come.
+typedef struct fbe_particles_settings_t {
+    float size_least;
+    float size_most;
+    float width;
+    float height;
+    float step;
+    float added;
+    float multiplied;
+    float fade;
+    float burst_every;
+    float burst_lasts;
+    float burst_again;
+    int32_t burst_count;
+    bool held;
+    bool roll_along;
+    bool bursting;
+} fbe_particles_settings_t;
+
+// A live particle as it is at the emitter's clock now, by the formula it's drawn by: where, in the
+// world, its half-width and half-height, its alpha, and its age in seconds.
+typedef struct fbe_particle_t {
+    fbe_vec3_t position;
+    float half_width;
+    float half_height;
+    float alpha;
+    float age;
+} fbe_particle_t;
 // NOLINTEND(modernize-use-using)
 
 // A test hook, for a soak that counts what's kept: how many there are, not freed, of the worlds
@@ -1009,6 +1039,52 @@ FBE_API bool fbe_particles_set_seed(uint64_t particles, uint32_t seed);
 // Spawns `count` now, as many as it holds at most, and how many are alive.
 FBE_API bool fbe_particles_burst(uint64_t particles, int32_t count);
 FBE_API int32_t fbe_particles_alive(uint64_t particles);
+
+// More of how each is born and goes, each as it was before unless set. A seed's run of an emitter
+// that sets none of them is what it was.
+// How far to each side of the emitter one may be born, on its own axes, 0 or more: a box of twice
+// that, about it, none at first.
+FBE_API bool fbe_particles_set_start_box(uint64_t particles, float x, float y, float z);
+FBE_API bool fbe_particles_start_box(uint64_t particles, fbe_vec3_t* box);
+// A velocity added to each one's own, on the world's axes, chosen between these on each axis,
+// units a second; none at first.
+FBE_API bool fbe_particles_set_velocity_box(uint64_t particles, const fbe_vec3_t* least,
+                                            const fbe_vec3_t* most);
+FBE_API bool fbe_particles_velocity_box(uint64_t particles, fbe_vec3_t* least, fbe_vec3_t* most);
+// What each one's size is times, chosen at its birth between these, 0 or more; 1 at first.
+FBE_API bool fbe_particles_set_size_range(uint64_t particles, float least, float most);
+// Its half-width and half-height, as so many times its size, 0 or more; 1 and 1 at first, a square.
+FBE_API bool fbe_particles_set_shape(uint64_t particles, float width, float height);
+// A step's length in seconds, 0 for none, as at first, which fbe_particles_set_growth and
+// fbe_particles_set_fade go by: a game's tick, for what it steps a tick at a time. `held` has them
+// change only at each whole step of a particle's age, as stepping by hand does; without, they go
+// smoothly between, the same at each whole step.
+FBE_API bool fbe_particles_set_steps(uint64_t particles, float seconds, bool held);
+// What each step does to its half-width and half-height: `added` to each, then each times
+// `multiplied`, above 0, from what its sizes and shape have it; 0 and 1 at first, for nothing. One
+// shrunk to nothing draws nothing, and one grown is 1e9 at most, so it's finite whatever these are.
+FBE_API bool fbe_particles_set_growth(uint64_t particles, float added, float multiplied);
+// What each step takes off its alpha, 0 or more, 0 at first, from what its colors have it. One
+// that reaches none is gone then, before its life's end, and no longer counted alive; held, that's
+// at a whole step, its first at the soonest, so one that starts with none shows through that.
+FBE_API bool fbe_particles_set_fade(uint64_t particles, float a_step);
+// Whether each is rolled the way it's moving in the view, its right along it, with its own roll
+// and spin added to that; not at first, when its roll and spin are all of it.
+FBE_API bool fbe_particles_set_roll_along(uint64_t particles, bool along);
+// Bursts of `count`, as many as it holds at most, every `every` seconds from when this is called,
+// the first in the next step, for `lasts` seconds, 0 for as long as it's on, and set off again
+// `again` seconds after they were, 0 for never. 0 of them stops them. `every` is 0.001 or more, as
+// `again` is unless it's 0. Each is born where the emitter was then, in its step. A step longer
+// than its longest life has only the bursts that could be alive at its end.
+FBE_API bool fbe_particles_set_bursts(uint64_t particles, int32_t count, float every, float lasts,
+                                      float again);
+// What those set, but the two boxes, and whether its bursts are set off and have more to come.
+FBE_API bool fbe_particles_settings(uint64_t particles, fbe_particles_settings_t* settings);
+// Reads an emitter's live particles, in no order that's kept, with no GPU, as a server has none:
+// writes up to `capacity` and gives how many there are, -1 for a freed one. It keeps a copy of
+// each one's birth from the first call on, which costs it 48 bytes for each it holds, so the first
+// call gives 0 and those born after are read.
+FBE_API int32_t fbe_particles_read(uint64_t particles, fbe_particle_t* read, int32_t capacity);
 
 // A World's sky, behind what's opaque and in front of each camera's clear color: the atmosphere,
 // one scattering marched per pixel, the sun along a directional light's way, or straight up with 0;

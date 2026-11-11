@@ -51,14 +51,39 @@ End Function
 
 Function Said(editor: Editor): String => editor.Run.Log.Lines().Join("\n")
 
+// What a game's file says its count is, read whole: Null for none, and for one caught as it's
+// written, empty or held.
+Function Beat(folder: Path): String?
+    Local file = folder / "beat"
+    If !File.Exists(file) Then Return Null
+    Local read = Try? File.ReadText(file)
+    Return read != "" ? read : Null
+End Function
+
 // Whether a game's stopped adding to its file.
 Function Dead(folder: Path): Bool Throws IOError
-    Local file = folder / "beat"
-    If !File.Exists(file) Then Return True
+    If !File.Exists(folder / "beat") Then Return True
     Sleep(50.Milliseconds)
-    Local was = Try? File.ReadText(file)
+    Local was = Beat(folder)
     Sleep(150.Milliseconds)
-    Return (Try? File.ReadText(file)) == was
+    Return Beat(folder) == was
+End Function
+
+// Whether a game's adding to its file: its count's gone up from what it was. That's a count, not
+// a clock, as a busy machine lets a game go a long time between two, which is no sign it's
+// stopped; it's given a minute before it's said not to be.
+Function Alive(folder: Path): Bool Throws IOError
+    Local was: String? = Null
+    Local since = Instant.Now()
+    While (Instant.Now() - since) < 60.Seconds
+        Local now = Beat(folder)
+        If now != Null
+            If was != Null && now != was Then Return True
+            was = now
+        End If
+        Sleep(10.Milliseconds)
+    End While
+    Return False
 End Function
 
 // A scene saved, so there's something to run.
@@ -246,7 +271,7 @@ Function AStoppedGameIsNeverLeftBehind() Throws IOError, GraphicsError
     editor.Play()
     StepUntil(editor, Function() => File.Exists(beat) || !editor.Run.Going())
     Expect(editor.Run.State() == PlayState.RUNNING, Said(editor))
-    Expect(!(Try Dead(folder)), "it's going")
+    Expect(Try Alive(folder), "it's going")
     Expect(editor.Run.ProcessId() != Null)
     // By the command.
     Expect(editor.Actions.Run("play.stop"))
@@ -691,7 +716,7 @@ Function StoppingABuildEndsWhatsBuilding() Throws IOError, GraphicsError
     If open == Null Then Panic("its project")
     editor.Run.Start(open, "res://level.scene")
     StepUntil(editor, Function() => File.Exists(beat) || !editor.Run.Going())
-    Expect(editor.Run.State() == PlayState.BUILDING && !(Try Dead(folder)), Said(editor))
+    Expect(editor.Run.State() == PlayState.BUILDING && (Try Alive(folder)), Said(editor))
     editor.Run.Stop()
     StepUntil(editor, Function() => !editor.Run.Going())
     Expect(editor.Run.State() == PlayState.STOPPED, Said(editor))
@@ -721,7 +746,7 @@ Function WhatCantBeStoppedStaysKnownOf() Throws IOError, GraphicsError
     editor.Play()
     Expect(editor.Run.State() == PlayState.RUNNING && editor.Run.ProcessId() == first, Said(editor))
     Expect(Said(editor).Contains("it says --scene"), "it was cleared: {Said(editor)}")
-    Expect(!(Try Dead(folder)))
+    Expect(Try Alive(folder))
     editor.Run.FailStoppingWith(Null)
     editor.Run.StopNow()
     Expect(!editor.Run.Going() && (Try Dead(folder)))
@@ -823,10 +848,14 @@ Function AGameSayingALotIsntKeptWaiting() Throws IOError, GraphicsError
     Defer Frame.SetLimit(0)
     editor.Play()
     StepUntil(editor, Function() => editor.Run.State() != PlayState.BUILDING)
-    // Its frames, from its running to its end, and its pipes' reads: one a frame would be a frame a
-    // read. How long that takes is the machine's, as a busy one's slower either way, so it's frames
-    // to reads that tell, at least three reads for each two frames.
+    // Its pipes' reads, from its running to its end, and how many of them a frame went back for,
+    // having read already: one read a frame, the rest left to the next, would be none. How many
+    // frames that takes is the machine's: a busy one gives a game less to say in the little longer a
+    // frame gives it, 5 of 124 reads here under forty other programs against 100 on its own, and
+    // so more frames, 199 against 22. So it's the count of those reads that tells, not frames to
+    // reads, which a busy machine brings to one.
     Local readsBefore = editor.Run.Reads()
+    Local againBefore = editor.Run.ReadsAgain()
     Local frames = 0
     Local since = Instant.Now()
     While editor.Run.Going() && (Instant.Now() - since) < 180.Seconds
@@ -834,13 +863,15 @@ Function AGameSayingALotIsntKeptWaiting() Throws IOError, GraphicsError
         frames += 1
     End While
     Expect(editor.Run.State() == PlayState.ENDED, Said(editor))
-    // Here, about 35 frames for 124 reads of 64 KB, more than three a frame, the pane making only the
-    // rows in view. One a frame would be as many frames as reads.
+    // Here, about 25 frames for 124 reads of 64 KB, the pane making only the rows in view.
     Local reads = editor.Run.Reads() - readsBefore
+    Local again = editor.Run.ReadsAgain() - againBefore
     Local fits = (Window.Height() / 22) + 3
     Expect(editor.Output.RowsMade() <= fits,
            "it made {editor.Output.RowsMade()} of what fit in {fits}")
-    Expect(frames * 3 < reads * 2, "{frames} frames for {reads} reads, in {Instant.Now() - since}")
+    Expect(reads > 100, "{reads} reads")
+    Expect(again > 0,
+           "{again} of {reads} reads were a frame's going back for more, in {frames} frames")
 End Function
 
 // Its folder and its scene can be called anything.

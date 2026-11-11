@@ -337,13 +337,21 @@ TEST_CASE("a shader binds only what the scene's pipelines have") {
         bool sized = true;
         /// How many of its 9 words there are, as the last instruction.
         std::size_t there = 9;
+        /// How many of them the array's of, and the binding it's at.
+        std::uint32_t count = 64;
+        std::uint32_t binding = 1;
+        /// How many words the constant of that count has: 4, or 5 as one of 64 bits has.
+        std::uint32_t count_words = 4;
     };
     const auto at_samples = [](const image_t& image) {
         std::vector<std::uint32_t> words = good_spirv();
         // A float, an int, and 64 of it.
         words.insert(words.end(), { (3U << 16U) | 22U, 20, 32 });
         words.insert(words.end(), { (4U << 16U) | 21U, 25, 32, 0 });
-        words.insert(words.end(), { (4U << 16U) | 43U, 25, 26, 64 });
+        words.insert(words.end(), { (image.count_words << 16U) | 43U, 25, 26, image.count });
+        if (image.count_words == 5) {
+            words.push_back(0);
+        }
         if (image.sized) {
             words.insert(words.end(), { (4U << 16U) | 28U, 22, 21, 26 });
         } else {
@@ -352,7 +360,7 @@ TEST_CASE("a shader binds only what the scene's pipelines have") {
         // A pointer to them, a variable of it, at binding 1, and the images last.
         words.insert(words.end(), { (4U << 16U) | 32U, 23, 0, 22 });
         words.insert(words.end(), { (4U << 16U) | 59U, 23, 24, 0 });
-        words.insert(words.end(), { (4U << 16U) | 71U, 24, 33, 1 });
+        words.insert(words.end(), { (4U << 16U) | 71U, 24, 33, image.binding });
         std::vector<std::uint32_t> type{ (9U << 16U) | 25U, 21, image.of, 1, 0, 0 };
         type.insert(type.end(), { image.multisampled, image.sampled, 0 });
         words.insert(words.end(), type.begin(),
@@ -367,6 +375,26 @@ TEST_CASE("a shader binds only what the scene's pipelines have") {
     fbe_shader_release(unsized);
     CHECK(shader_of(at_samples({ .multisampled = 0 })) == 0);
     CHECK(error_says("don't bind"));
+    // No more of a binding than the set holds there: 64 multisampled images, 32 samplers, and the
+    // 1024 textures every device's set has, as a pipeline's layout has no more for it to read.
+    CHECK(shader_of(at_samples({ .count = 65 })) == 0);
+    CHECK(error_says("than it holds"));
+    CHECK(shader_of(at_samples({ .count = 65568, .binding = 0 })) == 0);
+    CHECK(error_says("than it holds"));
+    CHECK(shader_of(at_samples({ .count = 33, .binding = 0 })) == 0);
+    CHECK(shader_of(at_samples({ .count = 1025, .binding = 2 })) == 0);
+    for (const image_t& held : {
+             image_t{ .count = 32, .binding = 0 },
+             image_t{ .count = 1024, .binding = 2 },
+             image_t{ .count = 1 },
+         }) {
+        const std::uint64_t taken = shader_of(at_samples(held));
+        CHECK(taken != 0);
+        fbe_shader_release(taken);
+    }
+    // A count that isn't one word, as no compiler of the engine's writes it, is too many.
+    CHECK(shader_of(at_samples({ .count = 8, .count_words = 5 })) == 0);
+    CHECK(error_says("than it holds"));
     // The review's: a storage image, one of ints, and one whose last words aren't there, as far
     // as what it's checked by is there.
     CHECK(shader_of(at_samples({ .sampled = 2 })) == 0);

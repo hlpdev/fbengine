@@ -97,10 +97,14 @@ struct Particle
     float life;
     float roll;
     float spin;
+    float scale;
+    float ends;
 };
 
 // An emitter: its particles, gravity, drag, their colors and half-sizes from birth to death, its clock
-// now, and when that starts again.
+// now, and when that starts again; then their half-width and half-height as multiples of their size,
+// a step's length, what each step adds to those and multiplies them by, what it takes off their alpha,
+// whether those wait for whole steps, and whether each is rolled the way it moves in the view.
 struct Emitter
 {
     Particle* records;
@@ -112,7 +116,39 @@ struct Emitter
     float sizeEnd;
     float now;
     float wrap;
+    float shape[2];
+    float step;
+    float growAdded;
+    float growMultiplied;
+    float fade;
+    uint held;
+    uint rollAlong;
 };
+
+// A particle's half-size after so many steps, each adding to it and then multiplying it, never below 0
+// and never past 1e9, so it's finite: as particles.cpp's grown has it, which reads them without a GPU.
+// What's added is times the sum of the multiple's powers below `steps`, worked out from the power's
+// logarithm, so a multiple near 1 loses nothing to rounding.
+float grownSize(Emitter emitter, float size, float steps)
+{
+    if (steps <= 0.0)
+    {
+        return size;
+    }
+    const float times = emitter.growMultiplied;
+    float power = 1.0;
+    float sum = steps;
+    if (times != 1.0)
+    {
+        const float grows = clamp(steps * log(times), -100.0, 41.0);
+        power = exp(grows);
+        const float less = abs(grows) < 0.01 ? grows * (1.0 + grows * (0.5 + grows / 6.0)) : power - 1.0;
+        sum = less / (times - 1.0);
+    }
+    const float all = min(times * sum, 1e30);
+    const float added = clamp(emitter.growAdded * all, -1e30, 1e30);
+    return clamp(min(size * power, 1e30) + added, 0.0, 1e9);
+}
 
 // An instance: its matrix's three rows, and its color.
 struct Instance
@@ -709,7 +745,7 @@ Corner particleVertex(uint index : SV_VulkanVertexID, uint instance : SV_VulkanI
     {
         age += emitter.wrap;
     }
-    if (age >= particle.life)
+    if (age >= particle.ends)
     {
         return corner;
     }
@@ -729,14 +765,39 @@ Corner particleVertex(uint index : SV_VulkanVertexID, uint instance : SV_VulkanI
     }
     const float3 place = born + going * left + gravity * fell;
     const float part = age / particle.life;
-    const float size = lerp(emitter.sizeStart, emitter.sizeEnd, part);
-    const float turned = particle.roll + particle.spin * age;
+    float steps = 0.0;
+    if (emitter.step > 0.0)
+    {
+        steps = emitter.held != 0 ? floor(age / emitter.step) : age / emitter.step;
+        steps = min(steps, 1e9);
+    }
+    const float size = lerp(emitter.sizeStart, emitter.sizeEnd, part) * particle.scale;
+    const float2 halves = float2(grownSize(emitter, size * emitter.shape[0], steps),
+                                 grownSize(emitter, size * emitter.shape[1], steps));
+    float turned = particle.roll + particle.spin * age;
+    if (emitter.rollAlong != 0)
+    {
+        // How it's going now, which its place's formula has the slope of, as the view sees it: its
+        // right along that. One going nowhere, or straight at the eye, keeps its own roll.
+        float3 moving = going + gravity * age;
+        if (dragged >= 0.01)
+        {
+            const float kept = exp(-dragged);
+            moving = going * kept + gravity * ((1.0 - kept) / emitter.drag);
+        }
+        const float2 seenMoving = mul(draw.toView, float4(moving, 0.0)).xy;
+        if (dot(seenMoving, seenMoving) > 1e-12)
+        {
+            turned += atan2(seenMoving.y, seenMoving.x);
+        }
+    }
     const float along = cos(turned);
     const float across = sin(turned);
     const uint bits = quadCorners[index % 6];
     const float2 unit = float2(float(bits & 1) * 2.0 - 1.0, float(bits >> 1) * 2.0 - 1.0);
-    const float3 offset = float3(unit.x * along - unit.y * across, unit.x * across + unit.y * along, 0.0);
-    const float3 seen = mul(draw.toView, float4(place, 1.0)).xyz + offset * size;
+    const float2 reach = unit * halves;
+    const float3 offset = float3(reach.x * along - reach.y * across, reach.x * across + reach.y * along, 0.0);
+    const float3 seen = mul(draw.toView, float4(place, 1.0)).xyz + offset;
     corner.position = mul(camera.projection, float4(seen, 1.0));
     corner.place = seen;
     corner.uv0 = float2(unit.x * 0.5 + 0.5, 0.5 - unit.y * 0.5);
@@ -746,6 +807,7 @@ Corner particleVertex(uint index : SV_VulkanVertexID, uint instance : SV_VulkanI
                         float4(emitter.colorEnd[0], emitter.colorEnd[1], emitter.colorEnd[2],
                                emitter.colorEnd[3]),
                         part);
+    corner.color.a = max(corner.color.a - emitter.fade * steps, 0.0);
     if (fixedLook())
     {
         corner.color.rgb = toEncoded(corner.color.rgb);

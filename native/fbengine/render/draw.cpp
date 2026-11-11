@@ -699,6 +699,13 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
                     .size_end = particles.size_end,
                     .now = scene::particles_clock(particles, tweened.tween()),
                     .wrap = scene::particles_wrap,
+                    .shape = particles.shape,
+                    .step = particles.step,
+                    .grow_added = particles.grow_added,
+                    .grow_multiplied = particles.grow_multiplied,
+                    .fade = particles.fade,
+                    .held = particles.held ? 1U : 0U,
+                    .roll_along = particles.roll_along ? 1U : 0U,
                 },
             };
             bool no_room = false;
