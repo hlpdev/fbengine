@@ -1527,7 +1527,7 @@ TEST_CASE("pixels written on the CPU reach the GPU when the call that sends them
     std::int64_t size = 0;
     std::uint8_t* pixels = fbe_texture_pixels(texture, &size);
     REQUIRE(pixels != nullptr);
-    REQUIRE(size == 16 * 16 * 4);
+    REQUIRE(size == 1024);
     (void)settled();
     // The first four of the first four rows.
     for (std::size_t y = 0; y < 4; ++y) {
