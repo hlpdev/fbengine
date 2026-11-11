@@ -9,6 +9,7 @@
 #include <array>
 #include <assets/loads.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <cstdint>
 #include <fbengine.h>
@@ -1238,8 +1239,10 @@ std::uint64_t written(std::uint8_t value) {
     return texture;
 }
 
-/// How many allocations there are once what starting the GPU left to free is freed.
+/// How many allocations there are once what's recorded is run and what waited to be freed is,
+/// what starting the GPU left too.
 std::uint32_t settled() {
+    REQUIRE(fbe::gpu::finish_frame());
     (void)fbe::gpu::release_waiting();
     REQUIRE(fbe::gpu::waiting_frees() == 0);
     return fbe::gpu::allocations().count;
@@ -1319,6 +1322,7 @@ TEST_CASE("a texture freed with a pass waiting in the graph waits for the pass",
     const VkExtent2D size{ .width = 8, .height = 8 };
     fbe::gpu::image_t image = fbe::gpu::make_color_image(srgb, size);
     REQUIRE(image.image != VK_NULL_HANDLE);
+    (void)settled();
     const fbe::gpu::resource_t into = fbe::gpu::external_resource({
         .image = image.image,
         .view = image.view,
@@ -1327,7 +1331,6 @@ TEST_CASE("a texture freed with a pass waiting in the graph waits for the pass",
         .stages = flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_COPY_BIT),
         .access = flag<VkAccessFlags2>(VK_ACCESS_2_TRANSFER_READ_BIT),
     });
-    (void)settled();
     require(fbe::gpu::add_pass({
         .name = "a clear",
         .colors = { { .target = into, .clear = true, .rgba = { 0.0F, 0.0F, 0.0F, 1.0F } } },
@@ -1340,6 +1343,106 @@ TEST_CASE("a texture freed with a pass waiting in the graph waits for the pass",
     REQUIRE(fbe::gpu::finish_frame());
     fbe::gpu::destroy_image(image);
     CHECK(settled() < none);
+    stop_gpu();
+}
+
+// The GPU isn't done with a frame in flight, so what's freed goes with the last one submitted,
+// and is freed with it by whatever next asks, with no Flip.
+TEST_CASE("a texture freed with a frame in flight goes with the last frame submitted",
+          "[gpu][frees]") {
+    start();
+    const std::uint64_t first = written(1);
+    const std::uint64_t second = written(2);
+    CHECK(reads_as(first, 1));
+    const std::uint32_t both = settled();
+    fbe::gpu::inject(fbe::gpu::fault_t::NOT_DONE);
+    CHECK(fbe_texture_release(first));
+    CHECK(fbe::gpu::waiting_frees() == 1);
+    CHECK(fbe::gpu::allocations().count == both);
+    CHECK(fbe_texture_release(second));
+    CHECK(fbe::gpu::waiting_frees() == 0);
+    CHECK(fbe::gpu::allocations().count == both - 2);
+    stop_gpu();
+}
+
+// A submit that failed left its uploads to go with the next, which may use anything.
+TEST_CASE("a texture freed with a failed submit's uploads carried waits for them", "[gpu][frees]") {
+    start();
+    const std::uint64_t kept = written(1);
+    CHECK(reads_as(kept, 1));
+    const std::uint32_t one = settled();
+    const std::uint64_t carried = written(2);
+    fbe::gpu::inject(fbe::gpu::fault_t::SUBMIT);
+    fbe_frame_flip(false);
+    const std::size_t waiting = fbe::gpu::waiting_frees();
+    const std::uint32_t with = fbe::gpu::allocations().count;
+    CHECK(with > one);
+    CHECK(fbe_texture_release(kept));
+    CHECK(fbe::gpu::waiting_frees() == waiting + 1);
+    CHECK(fbe::gpu::allocations().count == with);
+    // What was carried is run with the next, and read.
+    CHECK(reads_as(carried, 2));
+    CHECK(fbe_texture_release(carried));
+    CHECK(settled() < one);
+    stop_gpu();
+}
+
+// A lost device runs nothing more, so what's freed on it goes as its frame's given up.
+TEST_CASE("a texture freed as the device is found lost is freed when the frame's given up",
+          "[gpu][frees]") {
+    start();
+    const std::uint64_t texture = written(1);
+    CHECK(reads_as(texture, 1));
+    const std::uint32_t one = settled();
+    fbe::gpu::inject(fbe::gpu::fault_t::LOST_FREEING);
+    CHECK(fbe_texture_release(texture));
+    CHECK(fbe::gpu::waiting_frees() == 1);
+    // What the fence said is what the GPU's known by from then on.
+    CHECK(fbe::gpu::lost());
+    fbe_frame_flip(false);
+    CHECK(fbe::gpu::waiting_frees() == 0);
+    CHECK(fbe::gpu::allocations().count < one);
+    stop_gpu();
+}
+
+// A copy onto itself waits in the graph, which makes an image for it as the frame's submitted, and
+// so can move the textures: a texture made with no room frees what waits from the call's edge,
+// holding none of them, and is made from the top.
+TEST_CASE("a texture made with no room and a copy queued that makes its own image is made",
+          "[gpu][frees]") {
+    start();
+    const bool flipped = GENERATE(false, true);
+    CAPTURE(flipped);
+    const std::uint64_t kept = written(1);
+    const std::uint64_t freed = written(2);
+    if (flipped) {
+        // Two frames of work, and what's freed left with the last of them.
+        fbe_frame_flip(false);
+        const std::uint64_t more = written(3);
+        fbe_frame_flip(false);
+        CHECK(fbe_texture_release(more));
+    }
+    CHECK(reads_as(kept, 1));
+    (void)settled();
+    CHECK(fbe_texture_copy(kept, 4, 4, kept, 0, 0, 8, 8));
+    if (flipped) {
+        fbe::gpu::inject(fbe::gpu::fault_t::NOT_DONE);
+    }
+    CHECK(fbe_texture_release(freed));
+    CHECK(fbe::gpu::waiting_frees() == 1);
+    fbe::gpu::limit_allocations(static_cast<std::int64_t>(fbe::gpu::allocations().count));
+    const std::uint64_t made = fbe_texture_create(16, 16, FBE_TEXTURE_RGBA8, false);
+    INFO(fbe_error());
+    REQUIRE(made != 0);
+    CHECK(fbe::gpu::waiting_frees() == 0);
+    fbe::gpu::limit_allocations(-1);
+    const std::vector<std::uint8_t> pixels(std::size_t{ 16 } * 16 * 4, 9);
+    require(fbe_texture_write(made, 0, 0, 16, 16, pixels.data(), 64));
+    CHECK(reads_as(made, 9));
+    CHECK(reads_as(kept, 1));
+    CHECK(fbe_gpu_validation_errors() == 0);
+    CHECK(fbe_texture_release(made));
+    CHECK(fbe_texture_release(kept));
     stop_gpu();
 }
 
@@ -1393,22 +1496,66 @@ TEST_CASE("textures made and freed past the device's allocations with no Flip ar
     stop_gpu();
 }
 
-TEST_CASE("buffers made and freed past the device's allocations with no Flip are all made",
+// An allocation with no room frees nothing itself, in the middle of whatever wanted it, which may
+// hold what freeing would move or end: it fails, and the public call it's in, with nothing held,
+// frees what waits and runs again.
+TEST_CASE("an allocation with no room frees nothing, and the call it's in tries again",
           "[gpu][frees]") {
     start();
     constexpr auto storage = flag<VkBufferUsageFlags>(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     const std::uint32_t base = settled();
     fbe::gpu::limit_allocations(static_cast<std::int64_t>(base) + 6);
     const std::vector<std::byte> data(4096, std::byte{ 3 });
-    for (int round = 0; round < 40; ++round) {
-        CAPTURE(round);
+    const auto made_and_freed = [&] {
         fbe::gpu::buffer_t buffer = fbe::gpu::make_buffer(4096, storage);
-        INFO(fbe_error());
-        REQUIRE(buffer.buffer != VK_NULL_HANDLE);
+        if (buffer.buffer == VK_NULL_HANDLE) {
+            return false;
+        }
         require(fbe::gpu::write_buffer(buffer, 0, data));
         fbe::gpu::free_buffer(buffer);
+        return true;
+    };
+    // Bare, as in a frame's own draws: with six allocations waiting, a buffer and what it was
+    // written through each, the next fails, and they wait still.
+    int made = 0;
+    while (made < 40 && made_and_freed()) {
+        ++made;
+    }
+    CHECK(made == 3);
+    CHECK(std::string_view(fbe_error()).contains("VkResult -2"));
+    CHECK(fbe::gpu::waiting_frees() == 6);
+    CHECK(fbe::gpu::allocations().count == base + 6);
+    // That failure isn't a later call's, which fails for something else.
+    int later = 0;
+    CHECK_FALSE(fbe::gpu::with_room([&] {
+        ++later;
+        return false;
+    }));
+    CHECK(later == 1);
+    CHECK(fbe::gpu::waiting_frees() == 6);
+    // In a call that tries again, every one's made, and an inner call leaves the trying to it.
+    for (int round = 0; round < 40; ++round) {
+        CAPTURE(round);
+        CHECK(fbe::gpu::with_room([&] { return fbe::gpu::with_room(made_and_freed); }));
     }
     CHECK(fbe::gpu::allocations().count <= base + 6);
+    // One that fails for something else isn't run again, whatever waits.
+    CHECK(fbe::gpu::waiting_frees() > 0);
+    int runs = 0;
+    CHECK_FALSE(fbe::gpu::with_room([&] {
+        ++runs;
+        return false;
+    }));
+    CHECK(runs == 1);
+    // Nor one that failed for room with nothing waiting to free.
+    CHECK(fbe::gpu::release_waiting());
+    fbe::gpu::limit_allocations(static_cast<std::int64_t>(fbe::gpu::allocations().count));
+    runs = 0;
+    CHECK_FALSE(fbe::gpu::with_room([&] {
+        ++runs;
+        return made_and_freed();
+    }));
+    CHECK(runs == 1);
     fbe::gpu::limit_allocations(-1);
     stop_gpu();
 }

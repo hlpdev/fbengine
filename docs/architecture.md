@@ -180,10 +180,15 @@ good modern engine on its own. Every structural choice is checked against both.
   What's freed, a texture's image or a buffer, goes once nothing on the GPU can use it, and that
   needs no Flip: with the frame being recorded if anything recorded could use it, or a pass waits
   in the graph (gpu::after_use); at once if nothing is and the GPU's done with every frame; or
-  with the last frame submitted. And an allocation the device has no room for, as past NVIDIA's
-  4,096, submits what's recorded, waits for it, frees all that waited, and is tried once more
-  (gpu::allocated), so a game that builds a level and leaves it over and over with no Flip
-  between, a loader, a test, a server, runs out only of what's alive. Never in a frame's own
+  with the last frame submitted. An allocation the device has no room for, as past NVIDIA's
+  4,096, frees nothing itself, in the middle of whatever wanted it, which may hold what freeing
+  would move or end: it fails, saying it was for room (gpu::allocated). The public call it's in,
+  if it's one of a texture's (create, a target, a load's, a write, a read, a reload), has undone
+  what it began and holds nothing, so it submits what's recorded, waits for each frame's fence,
+  frees what each left, and runs once more from the top (gpu::with_room), and a game that builds
+  a level and leaves it over and over with no Flip between, a loader, a test, a server, runs out
+  only of what's alive. A frame's own draws don't: a camera's draw or a batch of 2D quads with no
+  room fails that frame as it did, and the buffers a draw makes are among those. Never in a frame's
   submit, where the graph makes its transient targets. A shader's code and its pipelines, which
   hold none of the device's memory, wait for the next frame submitted without beginning it
   (gpu::after_next_frame), so a shader freed and made again before then has its pipelines still,

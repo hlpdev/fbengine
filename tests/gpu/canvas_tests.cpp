@@ -812,6 +812,41 @@ TEST_CASE("a line going back across its longer axis has the CPU's pixels, ties t
     stop_gpu();
 }
 
+// Quads held in a batch go to the graph before a texture's written, which takes memory of the
+// frame's: with no room for it they aren't drawn, and fbe_error has why, as a frame's own draws
+// fail and nothing's freed for them in the middle of one. The write's made all the same, through
+// what it had, and nothing's freed under either.
+TEST_CASE("a texture written with a batch held and no room for the batch is written", "[gpu]") {
+    start();
+    const std::uint64_t made = target(16, 12);
+    const std::uint64_t other = fbe_texture_create(16, 16, FBE_TEXTURE_RGBA8, false);
+    REQUIRE(other != 0);
+    // The first quads of a GPU just started, so the frame has no memory for them yet, and makes
+    // it as they go to the graph.
+    const fbe_2d_pen_t solid = pen(red);
+    require(fbe_2d_rect(made, &solid, 2, 3, 5, 4, true));
+    // Room for what the write goes through, and none for the batch's quads.
+    fbe::gpu::limit_allocations(static_cast<std::int64_t>(fbe::gpu::allocations().count) + 1);
+    const std::vector<std::uint8_t> pixels(std::size_t{ 16 } * 16 * 4, 9);
+    const bool written = fbe_texture_write(other, 0, 0, 16, 16, pixels.data(), 64);
+    const std::string said = fbe_error();
+    fbe::gpu::limit_allocations(-1);
+    CAPTURE(written, said);
+    CHECK(written);
+    std::vector<std::uint8_t> back(pixels.size());
+    require(fbe_texture_read(other, 0, back.data(), static_cast<std::int64_t>(back.size())));
+    CHECK(back == pixels);
+    CHECK(said.contains("couldn't make a buffer the CPU reaches (VkResult -2)"));
+    CHECK(pixels_of(read(made), red).empty());
+    // And with room they're drawn.
+    require(fbe_2d_rect(made, &solid, 2, 3, 5, 4, true));
+    CHECK(pixels_of(read(made), red).size() == 20);
+    CHECK(fbe_gpu_validation_errors() == 0);
+    CHECK(fbe_texture_release(other));
+    CHECK(fbe_texture_release(made));
+    stop_gpu();
+}
+
 TEST_CASE("a rectangle covers exactly its pixels, and its outline each once", "[gpu]") {
     start();
     const std::uint64_t made = target(16, 12);

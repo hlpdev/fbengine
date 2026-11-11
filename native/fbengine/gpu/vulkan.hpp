@@ -179,29 +179,49 @@ void after_use(std::function<void()> free);
 void after_next_frame(std::function<void()> free);
 /// How many of those wait now.
 std::size_t waiting_frees();
-/// Frees what waits, when an allocation's failed for want of room on the device: submits what's
-/// recorded, if anything is, waits for the GPU to be done with it, and frees what every frame
-/// left. Whether it could, and so whether the allocation's worth trying again; never in a frame's
-/// submit, or with nothing waiting.
+/// Frees what waits, for a call that's failed for want of room on the device, and only where
+/// nothing of the engine's is held across it, as with_room has it: submits what's recorded, if
+/// anything is, waits for the GPU to be done with each frame, and frees what each left. Whether
+/// it could, and so whether the call's worth trying again; never in a frame's submit, or with
+/// nothing waiting.
 bool release_waiting();
+/// Says an allocation's failed for want of room, which with_room asks after.
+void say_no_room();
+/// Begins a public call that can allocate; whether no other's begun, so it's the one to try
+/// again. And ends it.
+bool enter_edge();
+void leave_edge();
+/// Whether the call that's failed did for want of room, and what waited was freed for it.
+bool made_room();
 /// Lets the device have `most` allocations, as its maxMemoryAllocationCount would, for the tests:
 /// one past that fails as the device's would. Below 0 is all it has.
 void limit_allocations(std::int64_t most);
 /// Whether the tests' limit has no room for one more.
 bool at_allocation_limit();
 
-/// Makes something with VMA by `make`, which gives its VkResult; if the device has no room, frees
-/// what waited to be freed and tries once more.
+/// Makes something with VMA by `make`, which gives its VkResult, and says so if the device had no
+/// room for it. Nothing's freed for it here, where a caller holds what freeing would move or end.
 template <typename Make>
 VkResult allocated(const Make& make) {
-    const auto once = [&make] {
-        return at_allocation_limit() ? VK_ERROR_OUT_OF_DEVICE_MEMORY : make();
-    };
-    VkResult result = once();
-    if ((result == VK_ERROR_OUT_OF_DEVICE_MEMORY || result == VK_ERROR_TOO_MANY_OBJECTS) &&
-        release_waiting()) {
-        result = once();
+    const VkResult result = at_allocation_limit() ? VK_ERROR_OUT_OF_DEVICE_MEMORY : make();
+    if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY || result == VK_ERROR_TOO_MANY_OBJECTS) {
+        say_no_room();
     }
+    return result;
+}
+
+/// A public call that can allocate, `call`, which gives 0 or false having undone what it began:
+/// if it failed for want of room with frees waiting, they're freed, and it's run once more from
+/// the top. Only the outermost of them tries again, as nothing's held across that one, and a
+/// frame's own draws never do.
+template <typename Call>
+auto with_room(const Call& call) {
+    const bool outermost = enter_edge();
+    auto result = call();
+    if (!result && outermost && made_room()) {
+        result = call();
+    }
+    leave_edge();
     return result;
 }
 
@@ -334,6 +354,10 @@ enum class fault_t : std::uint8_t {
     NO_READ_SAMPLES,
     /// Running work now, as a read or a buffer's upload does, as the device is lost.
     LOST_NOW,
+    /// Asking whether a frame's done, for what's freed: it isn't yet.
+    NOT_DONE,
+    /// Asking whether a frame's done, for what's freed, as the device is lost.
+    LOST_FREEING,
 };
 
 /// Makes the next `fault` happen.

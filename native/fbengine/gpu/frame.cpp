@@ -39,6 +39,10 @@ std::vector<std::function<void()>> with_next;
 /// How deep in a frame's submit the engine is: what's freed or made in there, as the graph's
 /// transient targets are, leaves the frame alone.
 int submitting = 0;
+/// Whether an allocation's failed for want of room since the outermost public call began, and how
+/// many of those calls are begun.
+bool no_room = false;
+int edges = 0;
 
 /// In a frame's submit for as long as it lives.
 struct submitting_t {
@@ -246,7 +250,18 @@ bool give_up(const fbe::gpu::device_t& gpu, fbe::gpu::frame_t& frame) {
         frame.begun = false;
     }
     vkDeviceWaitIdle(gpu.device);
+    // Every frame's, as nothing's in flight on a lost device, and what waited for the next.
     collect(frame);
+    for (fbe::gpu::frame_t& other : fbe::gpu::device()->frames) {
+        if (!other.begun) {
+            collect(other);
+        }
+    }
+    const std::vector<std::function<void()>> next = std::move(with_next);
+    with_next.clear();
+    for (const std::function<void()>& free : next) {
+        free();
+    }
     for (const carried_t& carry : carried) {
         drop(gpu, carry);
     }
@@ -301,7 +316,14 @@ void after_use(std::function<void()> free) {
     // freed now, with what they left.
     bool all_done = true;
     for (frame_t& frame : gpu.frames) {
-        if (vkGetFenceStatus(gpu.device, frame.done) == VK_SUCCESS) {
+        VkResult status = VK_NOT_READY;
+        if (faulted(fault_t::LOST_FREEING)) {
+            status = VK_ERROR_DEVICE_LOST;
+        } else if (!faulted(fault_t::NOT_DONE)) {
+            status = vkGetFenceStatus(gpu.device, frame.done);
+        }
+        // Lost, it waits for the frame's giving up, which frees every frame's.
+        if (!lose(status) && status == VK_SUCCESS) {
             collect(frame);
         } else {
             all_done = false;
@@ -330,27 +352,21 @@ bool release_waiting() {
     if (gpu == nullptr || submitting > 0 || lost() || waiting_frees() == 0) {
         return false;
     }
-    if (gpu->frames[gpu->frame].begun || !carried.empty() || graph_waits()) {
-        // What's recorded may use what waits: it's submitted, and waited for, which every frame
-        // before it is done by too.
-        if (!finish_frame()) {
+    // What's recorded may use what waits: it's submitted.
+    if ((gpu->frames[gpu->frame].begun || !carried.empty() || graph_waits()) && !finish_frame()) {
+        return false;
+    }
+    // Each frame's is freed once its own fence says the GPU's done with it, whatever finishing the
+    // frame said, which submits nothing if the graph recorded nothing.
+    for (frame_t& frame : gpu->frames) {
+        if (frame.begun) {
             return false;
         }
-    } else {
-        std::array<VkFence, frames_in_flight> fences{};
-        for (std::uint32_t at = 0; at < frames_in_flight; ++at) {
-            fences[at] = gpu->frames[at].done;
-        }
-        const VkResult waited =
-            vkWaitForFences(gpu->device, frames_in_flight, fences.data(), VK_TRUE, UINT64_MAX);
+        const VkResult waited = vkWaitForFences(gpu->device, 1, &frame.done, VK_TRUE, UINT64_MAX);
         if (lose(waited) || waited != VK_SUCCESS) {
             return false;
         }
-    }
-    for (frame_t& frame : gpu->frames) {
-        if (!frame.begun) {
-            collect(frame);
-        }
+        collect(frame);
     }
     // Every frame's done and none's begun, so what waited for the next has nothing to wait for.
     const std::vector<std::function<void()>> next = std::move(with_next);
@@ -359,6 +375,28 @@ bool release_waiting() {
         free();
     }
     return true;
+}
+
+void say_no_room() {
+    no_room = true;
+}
+
+bool enter_edge() {
+    if (edges++ != 0) {
+        return false;
+    }
+    no_room = false;
+    return true;
+}
+
+void leave_edge() {
+    --edges;
+}
+
+bool made_room() {
+    const bool wanted = no_room;
+    no_room = false;
+    return wanted && release_waiting();
 }
 
 void limit_allocations(std::int64_t most) {

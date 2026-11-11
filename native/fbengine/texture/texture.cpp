@@ -1458,33 +1458,37 @@ void stop_textures() {
 extern "C" {
 
 FBE_API uint64_t fbe_texture_create(int32_t width, int32_t height, int32_t format, bool mipmaps) {
-    if (!checked(width, height, format)) {
-        return 0;
-    }
-    return create({
-        .width = static_cast<std::uint32_t>(width),
-        .height = static_cast<std::uint32_t>(height),
-        .format = format,
-        .mipmaps = mipmaps,
+    return fbe::gpu::with_room([&] -> std::uint64_t {
+        if (!checked(width, height, format)) {
+            return 0;
+        }
+        return create({
+            .width = static_cast<std::uint32_t>(width),
+            .height = static_cast<std::uint32_t>(height),
+            .format = format,
+            .mipmaps = mipmaps,
+        });
     });
 }
 
 FBE_API uint64_t fbe_texture_create_target(int32_t width, int32_t height, int32_t format,
                                            int32_t samples, bool depth) {
-    if (samples != 1 && samples != 2 && samples != 4 && samples != 8) {
-        fbe::fail(std::format("a target draws 1, 2, 4, or 8 samples a pixel, not {}", samples));
-        return 0;
-    }
-    if (!checked(width, height, format)) {
-        return 0;
-    }
-    return create({
-        .width = static_cast<std::uint32_t>(width),
-        .height = static_cast<std::uint32_t>(height),
-        .format = format,
-        .target = true,
-        .samples = static_cast<VkSampleCountFlagBits>(samples),
-        .depth = depth,
+    return fbe::gpu::with_room([&] -> std::uint64_t {
+        if (samples != 1 && samples != 2 && samples != 4 && samples != 8) {
+            fbe::fail(std::format("a target draws 1, 2, 4, or 8 samples a pixel, not {}", samples));
+            return 0;
+        }
+        if (!checked(width, height, format)) {
+            return 0;
+        }
+        return create({
+            .width = static_cast<std::uint32_t>(width),
+            .height = static_cast<std::uint32_t>(height),
+            .format = format,
+            .target = true,
+            .samples = static_cast<VkSampleCountFlagBits>(samples),
+            .depth = depth,
+        });
     });
 }
 
@@ -1672,23 +1676,26 @@ FBE_API bool fbe_texture_pixels_written(uint64_t texture, int32_t x, int32_t y, 
 }
 
 FBE_API bool fbe_texture_read(uint64_t texture, int32_t level, uint8_t* pixels, int64_t size) {
-    const texture_t* found = fbe::texture::find(texture);
-    if (found == nullptr) {
-        return false;
-    }
-    if (level < 0) {
-        return fbe::fail(std::format("the texture has {} levels, not {}", found->levels, level));
-    }
-    const std::vector<std::uint8_t> read =
-        fbe::texture::read(texture, static_cast<std::uint32_t>(level));
-    if (read.empty()) {
-        return false;
-    }
-    if (pixels == nullptr || std::cmp_not_equal(size, read.size())) {
-        return fbe::fail(std::format("the level's {} bytes, not {}", read.size(), size));
-    }
-    std::memcpy(pixels, read.data(), read.size());
-    return true;
+    return fbe::gpu::with_room([&] -> bool {
+        const texture_t* found = fbe::texture::find(texture);
+        if (found == nullptr) {
+            return false;
+        }
+        if (level < 0) {
+            return fbe::fail(
+                std::format("the texture has {} levels, not {}", found->levels, level));
+        }
+        const std::vector<std::uint8_t> read =
+            fbe::texture::read(texture, static_cast<std::uint32_t>(level));
+        if (read.empty()) {
+            return false;
+        }
+        if (pixels == nullptr || std::cmp_not_equal(size, read.size())) {
+            return fbe::fail(std::format("the level's {} bytes, not {}", read.size(), size));
+        }
+        std::memcpy(pixels, read.data(), read.size());
+        return true;
+    });
 }
 
 FBE_API bool fbe_texture_retain(uint64_t texture) {
@@ -1796,70 +1803,75 @@ FBE_API bool fbe_texture_srgb(uint64_t texture) {
 
 FBE_API bool fbe_texture_write(uint64_t texture, int32_t x, int32_t y, int32_t width,
                                int32_t height, const uint8_t* pixels, int32_t pitch) {
-    texture_t* found = fbe::texture::find(texture);
-    if (found == nullptr || !has_pixels(*found)) {
-        return false;
-    }
-    if (found->msaa != VK_NULL_HANDLE) {
-        return fbe::fail("a multisampled target is drawn into, not written");
-    }
-    if (!inside(*found, x, y, width, height)) {
-        return false;
-    }
-    const std::int64_t row = std::int64_t{ width } * fbe::texture::pixel_size(found->format);
-    if (pixels == nullptr || pitch < row) {
-        return fbe::fail(std::format("a row of {} pixels is {} bytes, more than the pitch {}",
-                                     width, row, pitch));
-    }
-    // What the CPU wrote into its copy goes first, so this, written after, goes over it.
-    fbe::texture::send_pixels(texture);
-    found = fbe::texture::find(texture);
-    if (found == nullptr) {
-        return false;
-    }
-    return upload(texture, *found, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y),
-                  static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height), pixels,
-                  static_cast<std::uint32_t>(pitch));
+    return fbe::gpu::with_room([&] -> bool {
+        texture_t* found = fbe::texture::find(texture);
+        if (found == nullptr || !has_pixels(*found)) {
+            return false;
+        }
+        if (found->msaa != VK_NULL_HANDLE) {
+            return fbe::fail("a multisampled target is drawn into, not written");
+        }
+        if (!inside(*found, x, y, width, height)) {
+            return false;
+        }
+        const std::int64_t row = std::int64_t{ width } * fbe::texture::pixel_size(found->format);
+        if (pixels == nullptr || pitch < row) {
+            return fbe::fail(std::format("a row of {} pixels is {} bytes, more than the pitch {}",
+                                         width, row, pitch));
+        }
+        // What the CPU wrote into its copy goes first, so this, written after, goes over it.
+        fbe::texture::send_pixels(texture);
+        found = fbe::texture::find(texture);
+        if (found == nullptr) {
+            return false;
+        }
+        return upload(texture, *found, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y),
+                      static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height), pixels,
+                      static_cast<std::uint32_t>(pitch));
+    });
 }
 
 FBE_API bool fbe_texture_write_level(uint64_t texture, int32_t level, int32_t width, int32_t height,
                                      const uint8_t* pixels, int32_t pitch) {
-    texture_t* found = fbe::texture::find(texture);
-    if (found == nullptr || !has_pixels(*found)) {
-        return false;
-    }
-    if (found->msaa != VK_NULL_HANDLE) {
-        return fbe::fail("a multisampled target is drawn into, not written");
-    }
-    if (level < 0 || std::cmp_greater_equal(level, found->levels)) {
-        return fbe::fail(
-            std::format("the texture has {} levels, and no level {}", found->levels, level));
-    }
-    const std::uint32_t level_width =
-        std::max(found->width >> static_cast<std::uint32_t>(level), 1U);
-    const std::uint32_t level_height =
-        std::max(found->height >> static_cast<std::uint32_t>(level), 1U);
-    if (std::int64_t{ width } != level_width || std::int64_t{ height } != level_height) {
-        return fbe::fail(std::format("level {} of a {}x{} texture is {}x{}, not {}x{}", level,
-                                     found->width, found->height, level_width, level_height, width,
-                                     height));
-    }
-    if (pixels == nullptr) {
-        return fbe::fail(std::format("there are no pixels to write into level {}", level));
-    }
-    const std::int64_t row = std::int64_t{ width } * fbe::texture::pixel_size(found->format);
-    if (pitch < row) {
-        return fbe::fail(std::format("a row of {} pixels is {} bytes, more than the pitch {}",
-                                     width, row, pitch));
-    }
-    // What the CPU wrote into its copy goes first, making the levels from it, so this goes over.
-    fbe::texture::send_pixels(texture);
-    found = fbe::texture::find(texture);
-    if (found == nullptr) {
-        return false;
-    }
-    return upload_level(texture, *found, static_cast<std::uint32_t>(level), level_width,
-                        level_height, pixels, static_cast<std::uint32_t>(pitch));
+    return fbe::gpu::with_room([&] -> bool {
+        texture_t* found = fbe::texture::find(texture);
+        if (found == nullptr || !has_pixels(*found)) {
+            return false;
+        }
+        if (found->msaa != VK_NULL_HANDLE) {
+            return fbe::fail("a multisampled target is drawn into, not written");
+        }
+        if (level < 0 || std::cmp_greater_equal(level, found->levels)) {
+            return fbe::fail(
+                std::format("the texture has {} levels, and no level {}", found->levels, level));
+        }
+        const std::uint32_t level_width =
+            std::max(found->width >> static_cast<std::uint32_t>(level), 1U);
+        const std::uint32_t level_height =
+            std::max(found->height >> static_cast<std::uint32_t>(level), 1U);
+        if (std::int64_t{ width } != level_width || std::int64_t{ height } != level_height) {
+            return fbe::fail(std::format("level {} of a {}x{} texture is {}x{}, not {}x{}", level,
+                                         found->width, found->height, level_width, level_height,
+                                         width, height));
+        }
+        if (pixels == nullptr) {
+            return fbe::fail(std::format("there are no pixels to write into level {}", level));
+        }
+        const std::int64_t row = std::int64_t{ width } * fbe::texture::pixel_size(found->format);
+        if (pitch < row) {
+            return fbe::fail(std::format("a row of {} pixels is {} bytes, more than the pitch {}",
+                                         width, row, pitch));
+        }
+        // What the CPU wrote into its copy goes first, making the levels from it, so this goes
+        // over.
+        fbe::texture::send_pixels(texture);
+        found = fbe::texture::find(texture);
+        if (found == nullptr) {
+            return false;
+        }
+        return upload_level(texture, *found, static_cast<std::uint32_t>(level), level_width,
+                            level_height, pixels, static_cast<std::uint32_t>(pitch));
+    });
 }
 
 FBE_API bool fbe_texture_set_alpha(uint64_t texture, bool alpha) {
@@ -1939,93 +1951,99 @@ FBE_API bool fbe_texture_start_loads(void) {
 }
 
 FBE_API uint64_t fbe_texture_from_load(uint64_t load, bool srgb, bool mipmaps) {
-    const fbe::assets::image_t* image = image_of(load);
-    if (image == nullptr) {
-        return 0;
-    }
-    const std::optional<spec_t> spec = spec_of(*image, srgb, mipmaps);
-    return spec ? create(*spec) : 0;
+    return fbe::gpu::with_room([&] -> std::uint64_t {
+        const fbe::assets::image_t* image = image_of(load);
+        if (image == nullptr) {
+            return 0;
+        }
+        const std::optional<spec_t> spec = spec_of(*image, srgb, mipmaps);
+        return spec ? create(*spec) : 0;
+    });
 }
 
 FBE_API uint64_t fbe_texture_from_model(uint64_t load, int32_t index, bool srgb, bool mipmaps) {
-    load_invalid = false;
-    const fbe::assets::load_t* found = fbe::assets::loads().get(load);
-    if (found == nullptr || !found->done || found->error ||
-        found->kind != fbe::assets::load_kind_t::MODEL) {
-        fbe::fail("the load isn't a model load done and loaded");
-        return 0;
-    }
-    if (index < 0 || std::cmp_greater_equal(index, found->model.images.size())) {
-        fbe::fail(std::format("the model has {} images; there's no image {}",
-                              found->model.images.size(), index));
-        return 0;
-    }
-    const std::optional<spec_t> spec =
-        spec_of(found->model.images[static_cast<std::size_t>(index)], srgb, mipmaps);
-    return spec ? create(*spec) : 0;
+    return fbe::gpu::with_room([&] -> std::uint64_t {
+        load_invalid = false;
+        const fbe::assets::load_t* found = fbe::assets::loads().get(load);
+        if (found == nullptr || !found->done || found->error ||
+            found->kind != fbe::assets::load_kind_t::MODEL) {
+            fbe::fail("the load isn't a model load done and loaded");
+            return 0;
+        }
+        if (index < 0 || std::cmp_greater_equal(index, found->model.images.size())) {
+            fbe::fail(std::format("the model has {} images; there's no image {}",
+                                  found->model.images.size(), index));
+            return 0;
+        }
+        const std::optional<spec_t> spec =
+            spec_of(found->model.images[static_cast<std::size_t>(index)], srgb, mipmaps);
+        return spec ? create(*spec) : 0;
+    });
 }
 
 FBE_API bool fbe_texture_reload(uint64_t texture, uint64_t load, bool srgb, bool mipmaps) {
-    const texture_t* reloaded = fbe::texture::find(texture);
-    if (reloaded == nullptr) {
-        return false;
-    }
-    if (reloaded->target) {
-        return fbe::fail("a target is drawn into, not reloaded");
-    }
-    const fbe::assets::image_t* image = image_of(load);
-    if (image == nullptr) {
-        return false;
-    }
-    std::optional<spec_t> spec = spec_of(*image, srgb, mipmaps);
-    if (!spec) {
-        return false;
-    }
-    // Frames in flight draw with its slot's view, whose descriptor can't change under them, and a
-    // slot goes on being drawn from, so nothing's waited for but all of them.
-    if (!fbe::gpu::finish_frame()) {
-        return false;
-    }
-    const VkResult idle = vkDeviceWaitIdle(fbe::gpu::device()->device);
-    if (idle != VK_SUCCESS) {
-        return fbe::gpu::fail_vulkan("the GPU couldn't finish", idle);
-    }
-    // Finishing the frame can make transient targets' images.
-    if (fbe::texture::find(texture) == nullptr) {
-        return false;
-    }
-    // It's made in a slot of its own, past the others, which may be the bindless set's last, so
-    // it doesn't go in the set, and it's gone again below.
-    const auto scratch = static_cast<std::uint32_t>(textures.size());
-    textures.emplace_back();
-    generations.push_back(1);
-    live.push_back(false);
-    const auto give_back = [] {
-        textures.pop_back();
-        generations.pop_back();
-        live.pop_back();
-    };
-    spec->engine = true;
-    spec->bound = false;
-    if (!make(scratch, *spec)) {
+    return fbe::gpu::with_room([&] -> bool {
+        const texture_t* reloaded = fbe::texture::find(texture);
+        if (reloaded == nullptr) {
+            return false;
+        }
+        if (reloaded->target) {
+            return fbe::fail("a target is drawn into, not reloaded");
+        }
+        const fbe::assets::image_t* image = image_of(load);
+        if (image == nullptr) {
+            return false;
+        }
+        std::optional<spec_t> spec = spec_of(*image, srgb, mipmaps);
+        if (!spec) {
+            return false;
+        }
+        // Frames in flight draw with its slot's view, whose descriptor can't change under them, and
+        // a slot goes on being drawn from, so nothing's waited for but all of them.
+        if (!fbe::gpu::finish_frame()) {
+            return false;
+        }
+        const VkResult idle = vkDeviceWaitIdle(fbe::gpu::device()->device);
+        if (idle != VK_SUCCESS) {
+            return fbe::gpu::fail_vulkan("the GPU couldn't finish", idle);
+        }
+        // Finishing the frame can make transient targets' images.
+        if (fbe::texture::find(texture) == nullptr) {
+            return false;
+        }
+        // It's made in a slot of its own, past the others, which may be the bindless set's last, so
+        // it doesn't go in the set, and it's gone again below.
+        const auto scratch = static_cast<std::uint32_t>(textures.size());
+        textures.emplace_back();
+        generations.push_back(1);
+        live.push_back(false);
+        const auto give_back = [] {
+            textures.pop_back();
+            generations.pop_back();
+            live.pop_back();
+        };
+        spec->engine = true;
+        spec->bound = false;
+        if (!make(scratch, *spec)) {
+            give_back();
+            return false;
+        }
+        const auto slot = static_cast<std::uint32_t>(texture);
+        texture_t& held = textures[slot];
+        texture_t& made = textures[scratch];
+        made.filter = held.filter;
+        made.wrap_u = held.wrap_u;
+        made.wrap_v = held.wrap_v;
+        made.references = held.references;
+        made.version = held.version + 1;
+        made.engine = held.engine;
+        std::swap(held, made);
+        fbe::gpu::write_texture(slot, held.view);
+        destroy(made);
         give_back();
-        return false;
-    }
-    const auto slot = static_cast<std::uint32_t>(texture);
-    texture_t& held = textures[slot];
-    texture_t& made = textures[scratch];
-    made.filter = held.filter;
-    made.wrap_u = held.wrap_u;
-    made.wrap_v = held.wrap_v;
-    made.references = held.references;
-    made.version = held.version + 1;
-    made.engine = held.engine;
-    std::swap(held, made);
-    fbe::gpu::write_texture(slot, held.view);
-    destroy(made);
-    give_back();
-    drop_copy(slot);
-    return true;
+        drop_copy(slot);
+        return true;
+    });
 }
 
 FBE_API bool fbe_texture_load_invalid(void) {

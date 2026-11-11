@@ -13487,6 +13487,36 @@ std::uint64_t shader_of_generation(std::uint32_t generation) {
 
 } // namespace
 
+// A frame's own draws hold the graph's resources and slices of the frame's memory as they
+// allocate, so nothing's freed for one of them: with no room it fails, saying why, with what
+// waited still waiting, and the next frame, with room, is drawn right.
+TEST_CASE("a camera's draw with no room fails that frame, frees nothing, and is right the next",
+          "[gpu][scene][frees]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    require(fbe_camera_set_hdr(scene.camera, true));
+    const std::uint64_t material = fbe_material_create();
+    require(fbe_material_set_shading(material, FBE_SHADING_UNLIT));
+    cube(scene.world, 0.0F, 0.0F, -6.0F, material);
+    // A texture freed with a pass waiting, which waits for the frame.
+    const std::vector<std::uint8_t> pixels(std::size_t{ 16 } * 16 * 4, 200);
+    const std::uint64_t texture = fbe_texture_create(16, 16, FBE_TEXTURE_RGBA8, true);
+    require(texture != 0);
+    require(fbe_texture_write(texture, 0, 0, 16, 16, pixels.data(), 16 * 4));
+    require(fbe_texture_release(texture));
+    const std::size_t waiting = fbe::gpu::waiting_frees();
+    REQUIRE(waiting > 0);
+    fbe::gpu::limit_allocations(static_cast<std::int64_t>(fbe::gpu::allocations().count));
+    CHECK_FALSE(fbe_render_world(scene.world, 1.0F));
+    CHECK(std::string_view(fbe_error()).contains("(VkResult -2)"));
+    CHECK(fbe::gpu::waiting_frees() >= waiting);
+    fbe::gpu::limit_allocations(-1);
+    fbe_frame_flip(false);
+    CHECK(lit_pixels(scene.drawn()) > 0);
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_material_release(material);
+}
+
 // A shader's code and its pipelines hold none of the device's memory, and a shader made again
 // before the next frame has them still, so they wait for that frame without beginning it: what's
 // freed after them, with nothing recorded, doesn't wait with them.
