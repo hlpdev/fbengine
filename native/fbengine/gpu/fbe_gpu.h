@@ -159,7 +159,8 @@ FBE_API bool fbe_gpu_counters(fbe_gpu_counters_t* counters);
 
 // How many errors Vulkan's validation layers have found since the program started, which are on
 // in a debug build of the DLL when the layers are there, or when FBE_GPU_VALIDATION is 1 (and off
-// when it's 0); each is printed as it's found.
+// when it's 0); each is printed as it's found. With FBE_GPU_VALIDATION_SAID at 1, as a test's
+// wrapper sets it, the GPU says on stderr as it first starts whether they're on.
 FBE_API int32_t fbe_gpu_validation_errors(void);
 FBE_API bool fbe_gpu_validating(void);
 

@@ -67,6 +67,8 @@ fbe::gpu::fault_t injected = fbe::gpu::fault_t::NONE;
 std::uint64_t stops = 0;
 
 bool validating = false;
+/// Whether it's been said, to a test that asked, whether the layers are on.
+bool said_validating = false;
 /// Whether the validation layer checks synchronization too.
 bool synchronizing = false;
 std::int32_t validation_errors = 0;
@@ -209,6 +211,15 @@ bool make_instance() {
     std::vector<const char*> layers;
     validating = wants_validation() && has_validation_layer() &&
                  has_extension(extensions, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    // A test's wrapper asks to be told, once, so a run the layers found nothing in isn't taken
+    // for one they checked when they weren't there.
+    const char* asked = SDL_getenv("FBE_GPU_VALIDATION_SAID");
+    if (!said_validating && asked != nullptr && std::string_view(asked) == "1") {
+        said_validating = true;
+        std::fputs(validating ? "fbengine: Vulkan's validation layers are on\n"
+                              : "fbengine: Vulkan's validation layers are off\n",
+                   stderr);
+    }
     const bool sync = validating && has_sync_validation();
     synchronizing = sync;
     if (validating) {

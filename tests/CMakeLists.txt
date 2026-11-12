@@ -402,7 +402,7 @@ if(FBENGINE_FB_TESTS)
              COMMAND "${CMAKE_COMMAND}" "-DFB=${FBENGINE_FB}" "-DFOLDER=${folder}"
                      "-DARGUMENTS=--;--watch;--frames;40;${driving}" -P "${CMAKE_CURRENT_SOURCE_DIR}/proof_exit.cmake")
     set_tests_properties(${test} PROPERTIES
-                         FAIL_REGULAR_EXPRESSION "exit code [^0]"
+                         FAIL_REGULAR_EXPRESSION "exit code [^0]|Vulkan validation error"
                          ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                          PASS_REGULAR_EXPRESSION "${printed}"
                          SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 120)
@@ -413,7 +413,7 @@ if(FBENGINE_FB_TESTS)
              COMMAND "${CMAKE_COMMAND}" "-DFB=${FBENGINE_FB}" "-DFOLDER=${PROJECT_SOURCE_DIR}/examples/proof/${name}"
                      -P "${CMAKE_CURRENT_SOURCE_DIR}/proof_exit.cmake")
     set_tests_properties(proof.${name} PROPERTIES
-                         FAIL_REGULAR_EXPRESSION "exit code [^0]"
+                         FAIL_REGULAR_EXPRESSION "exit code [^0]|Vulkan validation error"
                          ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;FBENGINE_OWN_TEST_FONTS=${CMAKE_CURRENT_SOURCE_DIR}/fonts;${fbengine_vulkan_environment}"
                          PASS_REGULAR_EXPRESSION "\n${printed}\r?\n$"
                          SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 120)
@@ -425,7 +425,7 @@ if(FBENGINE_FB_TESTS)
              COMMAND "${CMAKE_COMMAND}" "-DFB=${FBENGINE_FB}" "-DFOLDER=${folder}"
                      "-DARGUMENTS=--;--watch;--frames;40" -P "${CMAKE_CURRENT_SOURCE_DIR}/proof_exit.cmake")
     set_tests_properties(proof.${name}_watch PROPERTIES
-                         FAIL_REGULAR_EXPRESSION "exit code [^0]"
+                         FAIL_REGULAR_EXPRESSION "exit code [^0]|Vulkan validation error"
                          ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                          PASS_REGULAR_EXPRESSION "\nwatched 40 frames\r?\n$"
                          SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 120)
