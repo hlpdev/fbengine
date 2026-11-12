@@ -128,11 +128,13 @@ jobs:
               continue
             fi
             fb publish "packages/$package" --registry "$INDEX"
-            for _ in $(seq 60); do indexed "$package" && break; sleep 5; done
+            waited=0
+            for _ in $(seq 180); do indexed "$package" && break; sleep 5; waited=$((waited + 5)); done
             if ! indexed "$package"; then
-              echo "::error::The index doesn't show $package $version five minutes after it was published"
+              echo "::error::The index doesn't show $package $version fifteen minutes after it was published"
               exit 1
             fi
+            echo "the index showed $package $version after ${waited}s"
           done
 
   # The editor, built for each target as a release's programs are, with the DLLs it loads beside it
