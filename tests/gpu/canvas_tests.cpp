@@ -1783,8 +1783,8 @@ TEST_CASE("a pen in stored values blends what's stored, as a camera in them does
     CHECK(near(drawn(stored({ 50, 50, 50, 255 }, FBE_2D_SOLID),
                      stored({ 200, 200, 200, 128 }, FBE_2D_ADD)),
                150, 150, 150));
-    const int added = to_srgb(std::pow((50.0 + 0.055 * 255.0) / (1.055 * 255.0), 2.4) +
-                              std::pow((100.0 + 0.055 * 255.0) / (1.055 * 255.0), 2.4));
+    const int added = to_srgb(std::pow((50.0 + (0.055 * 255.0)) / (1.055 * 255.0), 2.4) +
+                              std::pow((100.0 + (0.055 * 255.0)) / (1.055 * 255.0), 2.4));
     CHECK(near(drawn(pen({ 50, 50, 50, 255 }), pen({ 100, 100, 100, 255 }, FBE_2D_ADD)), added,
                added, added));
     // Multiplied: half of half is a quarter.
@@ -1857,9 +1857,10 @@ TEST_CASE("a sprite's last row and column are drawn wherever it is", "[gpu]") {
         float y;
     };
     for (const place_t place :
-         { place_t{ 0.0F, 0.0F }, place_t{ 1000.0F, 400.0F }, place_t{ 1071.0F, 419.0F },
-           place_t{ 1256.0F, 696.0F }, place_t{ 333.0F, 77.0F }, place_t{ 640.25F, 360.25F },
-           place_t{ 901.75F, 13.75F }, place_t{ 77.4F, 650.6F } }) {
+         { place_t{ .x = 0.0F, .y = 0.0F }, place_t{ .x = 1000.0F, .y = 400.0F },
+           place_t{ .x = 1071.0F, .y = 419.0F }, place_t{ .x = 1256.0F, .y = 696.0F },
+           place_t{ .x = 333.0F, .y = 77.0F }, place_t{ .x = 640.25F, .y = 360.25F },
+           place_t{ .x = 901.75F, .y = 13.75F }, place_t{ .x = 77.4F, .y = 650.6F } }) {
         CAPTURE(place.x, place.y);
         // Smoothed, a part of a pixel along is a mix of two texels.
         if (filter == FBE_TEXTURE_LINEAR && place.x != std::floor(place.x)) {
