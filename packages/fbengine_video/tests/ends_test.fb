@@ -5,6 +5,7 @@ Import std.math
 Import std.test
 Import std.time
 Import fbengine_video
+Import "./budget"
 
 // Videos whose streams end in each way: B-frames last, closed groups, three B-frames, a picture
 // of a B-frame cut short, P-frames only, and a larger one with sound.
@@ -98,7 +99,7 @@ Function AClockMovedOnALongWaySeeksThere() Throws VideoError
     video.Play()
     Local start = Instant.Now()
     video.Update(600.52)
-    Expect(start.Elapsed < 500.Milliseconds, "it took {start.Elapsed}")
+    Expect(start.Elapsed.TotalSeconds < Budget(0.5), "it took {start.Elapsed}, {BudgetHeld()}")
     Expect(video.FrameNumber() == 13, "it shows {video.FrameNumber()}")
     Expect(Abs(video.Time() - 0.52) < 0.001, "its time is {video.Time()}")
     // And plays on from there, into the next loop.
@@ -113,7 +114,7 @@ Function AClockMovedOnALongWaySeeksThere() Throws VideoError
     once.Update(1.0)
     start = Instant.Now()
     once.Update(600)
-    Expect(start.Elapsed < 500.Milliseconds, "it took {start.Elapsed}")
+    Expect(start.Elapsed.TotalSeconds < Budget(0.5), "it took {start.Elapsed}, {BudgetHeld()}")
     Expect(once.Ended() && once.FrameNumber() == 49)
 End Function
 
@@ -154,7 +155,7 @@ Function AClockMovedOnByYearsIsExact() Throws VideoError
     For i = 1 To 100
         video.Update(1e9)
     End For
-    Expect(start.Elapsed < 2000.Milliseconds, "it took {start.Elapsed}")
+    Expect(start.Elapsed.TotalSeconds < Budget(2.0), "it took {start.Elapsed}, {BudgetHeld()}")
     Expect(video.FrameNumber() == 13, "it shows {video.FrameNumber()}")
     Expect(Abs(video.Time() - 0.52) < 0.001, "its time is {video.Time()}")
     For i = 14 To 60
