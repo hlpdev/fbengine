@@ -1,6 +1,6 @@
 [project]
 name = "fbengine"
-version = "1.1.0"
+version = "1.1.1"
 type = "library"
 license = "Apache-2.0"
 description = "A game engine for FutureBlitz: windows, input, 2D, the 3D scene, and its renderer."

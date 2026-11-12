@@ -1,6 +1,6 @@
 [project]
 name = "fbengine_editor"
-version = "1.1.0"
+version = "1.1.1"
 type = "executable"
 license = "Apache-2.0"
 description = "fbengine's editor, a program on its packages, which opens a game's project folder."
