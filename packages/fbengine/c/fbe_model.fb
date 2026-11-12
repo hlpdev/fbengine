@@ -24,6 +24,8 @@ Public Extern "C" Lib "fbengine_native"
                                          other_images: Ptr<Int32>, capacity: Int32,
                                          made: Ptr<Int32>): Bool
     Function fbe_model_material_name(load: UInt64, index: Int32): CString
+    Function fbe_model_material_same(load: UInt64, index: Int32, other: UInt64,
+                                     other_index: Int32): Bool
     Function fbe_model_image_name(load: UInt64, index: Int32): CString
     Function fbe_model_scene(load: UInt64): Int32
     Function fbe_model_scene_count(load: UInt64): Int32

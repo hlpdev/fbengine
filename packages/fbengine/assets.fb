@@ -296,6 +296,8 @@ Public Final Class Assets
     Static Field watch: FolderWatch? = Null
     Static Field fromSource: Bool = False
     Static Field reloads: AssetReload[] = []
+    Static Field reloadHooks: (Int, Func(AssetReload))[] = []
+    Static Field lastReloadHook: Int = 0
     // The assets whose loads read a file besides their own, as a glTF's buffers, by the file's
     // path: each by its type and its path, as Reader has them, with its type's cache and its path.
     // One type's asset of a path is apart from another's of it, which may read other files.
@@ -734,10 +736,10 @@ Public Final Class Assets
     End Method
 
     /// What hot reload, or Reload, has loaded again since this was last asked, in the order each
-    /// was done. An asset taken in place is what its file says again: a Model's Materials have the
-    /// file's shading, layers, maps, and textures, and its Geometries' surfaces the file's
-    /// Materials, so what a game set on them after loading is the game's to set again, for each
-    /// Model here.
+    /// was done. An asset taken in place is what its file says again, but for what a game set on a
+    /// Model's Material that the file says nothing new of, which is kept: a Material the file's
+    /// changed has the file's shading, layers, maps, and textures, and what a game set on it is
+    /// the game's to set again, here or in a hook OnReload has.
     @MainThread
     Public Static Method Reloaded(): AssetReload[]
         Local done = reloads
@@ -966,10 +968,38 @@ Public Final Class Assets
         Return caches.Count - 1
     End Method
 
-    // Keeps what a reload did, for Reloaded.
+    /// Runs `hook` as each asset's loaded again, by hot reload or Reload, with what Reloaded then
+    /// has of it, once it's done: where a game gives an asset its look again, as what it sets on a
+    /// Model's Materials that the file's changed. Hooks run in the order they were added. Gives
+    /// the number RemoveOnReload takes.
+    @MainThread
+    Public Static Method OnReload(hook: Func(AssetReload)): Int
+        lastReloadHook += 1
+        reloadHooks.Add((lastReloadHook, hook))
+        Return lastReloadHook
+    End Method
+
+    /// Stops running the hook OnReload gave `id` for; one that's gone already is left as it is.
+    @MainThread
+    Public Static Method RemoveOnReload(id: Int)
+        For at = 0 Until reloadHooks.Count
+            If reloadHooks[at].0 == id
+                reloadHooks.RemoveAt(at)
+                Return
+            End If
+        End For
+    End Method
+
+    // Keeps what a reload did, for Reloaded, and tells the hooks, as they were when it was done,
+    // so one that adds or removes hooks changes the next reload's.
     @MainThread
     Static Method Reported(reload: AssetReload)
         reloads.Add(reload)
+        Local running: (Int, Func(AssetReload))[] = []
+        running.AddAll(reloadHooks)
+        For hook In running
+            hook.1 (reload)
+        End For
     End Method
 
     // Keeps a mount at `at`, of the folder `folder` or not, and gives its place, normalized.

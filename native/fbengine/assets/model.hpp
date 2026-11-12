@@ -82,6 +82,8 @@ struct texture_ref_t {
     vec2_t offset = { 0, 0 };
     vec2_t scale = { 1, 1 };
     float rotation = 0;
+
+    bool operator==(const texture_ref_t&) const = default;
 };
 
 enum class alpha_t : std::uint8_t { OPAQUE, MASK, BLEND };
@@ -105,6 +107,8 @@ struct material_t {
     float alpha_cutoff = 0.5F;
     bool double_sided = false;
     bool unlit = false;
+
+    bool operator==(const material_t&) const = default;
 };
 
 struct node_t {

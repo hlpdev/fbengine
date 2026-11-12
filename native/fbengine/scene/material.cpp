@@ -258,6 +258,44 @@ FBE_API uint64_t fbe_material_clone(uint64_t material) {
     return scene().material_slots.handle(copy);
 }
 
+FBE_API bool fbe_material_take(uint64_t material, uint64_t from) {
+    const std::uint32_t slot = fbe::scene::material_slot(material);
+    const std::uint32_t source = fbe::scene::material_slot(from);
+    if (slot == none || source == none) {
+        return false;
+    }
+    if (slot == source) {
+        return true;
+    }
+    // What the other has is held before what this had is let go of, as they can be the same.
+    const material_t original = scene().materials[source];
+    for (const fbe::scene::layer_t& layer : original.layers) {
+        if (layer.texture != 0) {
+            fbe_texture_retain(layer.texture);
+        }
+    }
+    fbe::shaders_own::retain(original.shader);
+    for (const fbe::scene::layer_t& map : original.maps) {
+        if (map.texture != 0) {
+            fbe_texture_retain(map.texture);
+        }
+    }
+    material_t& taking = scene().materials[slot];
+    for (const fbe::scene::layer_t& layer : taking.layers) {
+        fbe::scene::release_texture(layer.texture);
+    }
+    fbe::shaders_own::release(taking.shader);
+    for (const fbe::scene::layer_t& map : taking.maps) {
+        fbe::scene::release_texture(map.texture);
+    }
+    const std::uint32_t references = taking.references;
+    std::string scene_id = std::move(taking.scene_id);
+    taking = original;
+    taking.references = references;
+    taking.scene_id = std::move(scene_id);
+    return true;
+}
+
 FBE_API bool fbe_material_set_color(uint64_t material, float r, float g, float b, float a) {
     material_t* found = material_of(material);
     if (found == nullptr) {

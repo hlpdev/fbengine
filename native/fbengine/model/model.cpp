@@ -801,6 +801,19 @@ FBE_API int32_t fbe_model_material_image(uint64_t load, int32_t material, int32_
     return read != nullptr ? read->image : -1;
 }
 
+FBE_API bool fbe_model_material_same(uint64_t load, int32_t index, uint64_t other,
+                                     int32_t other_index) {
+    const assets::model_t* model = model_of(load);
+    const assets::model_t* others = model_of(other);
+    if (model == nullptr || others == nullptr || index < 0 || other_index < 0 ||
+        std::cmp_greater_equal(index, model->materials.size()) ||
+        std::cmp_greater_equal(other_index, others->materials.size())) {
+        return false;
+    }
+    return model->materials[static_cast<std::size_t>(index)] ==
+           others->materials[static_cast<std::size_t>(other_index)];
+}
+
 FBE_API const char* fbe_model_material_name(uint64_t load, int32_t index) {
     const assets::model_t* model = model_of(load);
     return model != nullptr && index >= 0 && std::cmp_less(index, model->materials.size())

@@ -767,6 +767,9 @@ FBE_API bool fbe_material_release(uint64_t material);
 FBE_API bool fbe_material_alive(uint64_t material);
 // A new material with another's settings, held once.
 FBE_API uint64_t fbe_material_clone(uint64_t material);
+// Gives a material all of another's settings, as a clone has them, in place: what holds it and
+// what draws with it are as they were. False for one that isn't live.
+FBE_API bool fbe_material_take(uint64_t material, uint64_t from);
 // Its color and alpha, linear: any finite color, and alpha 0 to 1.
 FBE_API bool fbe_material_set_color(uint64_t material, float r, float g, float b, float a);
 FBE_API bool fbe_material_color(uint64_t material, fbe_color_t* color);

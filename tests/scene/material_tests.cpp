@@ -452,6 +452,39 @@ TEST_CASE("a material holds its shader, which goes with the last of what holds i
     CHECK(fbe_material_shader(clone) == 0);
 }
 
+// As a model's reload gives a file's material, made again, what the one before it had.
+TEST_CASE("a material takes another's settings in place, holding what that holds") {
+    const std::uint64_t from = fbe_material_create();
+    const std::uint64_t shader = shader_of(cooked(fbe_version(), good_spirv()));
+    CHECK(fbe_material_set_shader(from, shader));
+    CHECK(fbe_material_set_color(from, 0.0F, 0.5F, 0.0F, 1.0F));
+    CHECK(fbe_material_set_shading(from, FBE_SHADING_UNLIT));
+    const std::uint64_t material = fbe_material_create();
+    const std::uint64_t own = shader_of(cooked(fbe_version(), good_spirv()));
+    CHECK(fbe_material_set_shader(material, own));
+    CHECK(fbe_shader_release(own));
+    CHECK(fbe_material_retain(material));
+    CHECK(fbe_material_take(material, from));
+    // It's itself still, held as it was, with what the other has, and what it had is let go of.
+    CHECK(fbe_material_shader(material) == shader);
+    CHECK(fbe_material_shading(material) == FBE_SHADING_UNLIT);
+    fbe_color_t color{};
+    CHECK(fbe_material_color(material, &color));
+    CHECK(color.g == 0.5F);
+    CHECK_FALSE(fbe_shader_alive(own));
+    CHECK(fbe_material_release(material));
+    CHECK(fbe_material_alive(material));
+    // Taking its own is nothing; and it holds the shader with the other, each once.
+    CHECK(fbe_material_take(material, material));
+    CHECK(fbe_shader_release(shader));
+    CHECK(fbe_material_release(from));
+    CHECK(fbe_shader_alive(shader));
+    CHECK_FALSE(fbe_material_take(material, from));
+    CHECK_FALSE(fbe_material_take(from, material));
+    CHECK(fbe_material_release(material));
+    CHECK_FALSE(fbe_shader_alive(shader));
+}
+
 TEST_CASE("a shader replaced stays itself, and refusing leaves it as it was") {
     const std::vector<std::uint8_t> good = cooked(fbe_version(), good_spirv());
     const std::uint64_t shader = shader_of(good);

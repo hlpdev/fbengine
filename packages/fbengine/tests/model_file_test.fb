@@ -177,6 +177,93 @@ Function AFileThatCantSpawnLeavesItAsItWas() Throws IOError
     Expect(root.Find("m") != Null)
 End Function
 
+// A glTF of a triangle with a material, "paint", of `color`, and a node named `node`.
+Function Painted(color: String, node: String): UInt8[]
+    Return Gltf(1, "\"materials\":[{{\"name\":\"paint\",\"pbrMetallicRoughness\":{{\"baseColorFactor\":[{color}]}}}}]," +
+                "\"nodes\":[{{\"name\":\"{node}\",\"mesh\":0}}],\"scenes\":[{{\"nodes\":[0]}}]")
+End Function
+
+// Loads `path` again, and gives once it's done.
+Function Again(path: String) Throws IOError
+    Assets.Reloaded()
+    Try Assets.Reload(path)
+    Local done = False
+    FlipUntil(Function(): Bool
+        done = done || Assets.Reloaded().Count > 0
+        Return done
+    End Function)
+    Expect(done)
+End Function
+
+// What a game set on a model's material is kept by a reload of a file that says nothing new of
+// that material; one the file's changed is the file's again.
+@Test
+Function AReloadKeepsWhatWasSetOnAMaterialTheFileHasntChanged() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "a.gltf", Painted("1,0,0,1", "m"))
+    Assets.MountFolder("res://file-kept", folder.Path)
+    Defer Assets.Unmount("res://file-kept")
+    Local world = World()
+    Defer world.Free()
+    Local model = Try Assets.Load<Model>("res://file-kept/a.gltf")
+    Defer model.Free()
+    Local root = Try model.Spawn()
+    Expect(model.Materials()[0].Color().r == 1)
+    model.Materials()[0].SetColor(Color(0, 0.5, 0))
+    model.Materials()[0].SetShading(Shading.UNLIT)
+    // The file written with another node, and the same material.
+    Try File.WriteBytes(folder.Path / "a.gltf", Painted("1,0,0,1", "n"))
+    Try Again("res://file-kept/a.gltf")
+    Expect(root.Find("n") != Null)
+    Expect(model.Materials()[0].Color().g == 0.5)
+    Expect(model.Materials()[0].Color().r == 0)
+    Expect(model.Materials()[0].Shading() == Shading.UNLIT)
+    // And with the material changed: it's what the file says.
+    Try File.WriteBytes(folder.Path / "a.gltf", Painted("0,0,1,1", "n"))
+    Try Again("res://file-kept/a.gltf")
+    Expect(model.Materials()[0].Color().b == 1)
+    Expect(model.Materials()[0].Color().g == 0)
+    Expect(model.Materials()[0].Shading() != Shading.UNLIT)
+End Function
+
+// A hook's run once as an asset's loaded again, with what Reloaded has of it, and no more once
+// it's removed.
+@Test
+Function AHookIsRunOnceAsAnAssetsReloaded() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "a.gltf", Painted("1,0,0,1", "m"))
+    Assets.MountFolder("res://file-hook", folder.Path)
+    Defer Assets.Unmount("res://file-hook")
+    Local world = World()
+    Defer world.Free()
+    Local model = Try Assets.Load<Model>("res://file-hook/a.gltf")
+    Defer model.Free()
+    Local told: AssetReload[] = []
+    Local hook = Assets.OnReload(Function(reload: AssetReload)
+        told.Add(reload)
+        // Where a game gives the asset its look again.
+        model.Materials()[0].SetColor(Color(0, 0.25, 0))
+    End Function)
+    Try File.WriteBytes(folder.Path / "a.gltf", Painted("0,0,1,1", "m"))
+    Try Again("res://file-hook/a.gltf")
+    Expect(told.Count == 1)
+    Expect(told[0].Path == "res://file-hook/a.gltf")
+    Expect(told[0].InPlace)
+    Expect(told[0].Error == Null)
+    Expect(model.Materials()[0].Color().g == 0.25)
+    Assets.RemoveOnReload(hook)
+    Try File.WriteBytes(folder.Path / "a.gltf", Painted("1,1,1,1", "m"))
+    Try Again("res://file-hook/a.gltf")
+    Expect(told.Count == 1)
+    Expect(model.Materials()[0].Color().g == 1)
+End Function
+
 // A reload to a file of fewer scenes.
 @Test
 Function AReloadWithFewerScenesSaysSo() Throws IOError

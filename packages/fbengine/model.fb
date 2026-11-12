@@ -121,7 +121,10 @@ Public Final Class Model Implements Asset
     /// the file says; what's new is made; what the file's lost is freed, and what a game's put under
     /// that goes up to what it was under, for a game's own entities are never freed. A Player on a
     /// root goes on, each clip it plays the new file's of that name, where it was, or stopped for
-    /// none. A material of anyone's that read one of its Textures reads the new file's of that image,
+    /// none. A Material the file says nothing new of, found by its name, or else its number, is as
+    /// it was, with all a game set on it; one the file's changed is what the file says, and Assets'
+    /// OnReload is where a game gives it its look again.
+    /// A material of anyone's that read one of its Textures reads the new file's of that image,
     /// found by its name, or its URI, or else its number, where it can: a layer the same format, a map
     /// what it can read; a World's sky and a camera's target aren't followed. It gives True. It throws
     /// as FromLoad does, and an IOError of INVALID_DATA for a file without a scene a Spawn was of,
@@ -136,6 +139,7 @@ Public Final Class Model Implements Asset
             made.FreeParts()
             Throw e
         End Try
+        made.Kept(Self)
         Local before = Model(Self.load)
         before.Took(Self)
         Took(made)
@@ -247,6 +251,45 @@ Public Final Class Model Implements Asset
     Public Method Clips(): Clip[]
         Live("Clips")
         Return clips.Clone()
+    End Method
+
+    // Gives each of its Materials that the file says of what `before`'s said of its own, by its
+    // name if that's one material's in each, or else its number, all that one has: what a game
+    // set on it since, and the textures it read, which Followed then follows to this file's.
+    @MainThread
+    Method Kept(before: Model)
+        For at = 0 Until materials.Count
+            Local name = MaterialNamed(at)
+            Local was = at
+            If name != "" && MaterialsNamed(name) == 1 && before.MaterialsNamed(name) == 1
+                For other = 0 Until before.materials.Count
+                    If before.MaterialNamed(other) == name Then was = other
+                End For
+            End If
+            If was >= before.materials.Count Then Continue
+            If !fbe_model_material_same(load.Handle, at, before.load.Handle, was) Then Continue
+            If !fbe_material_take(materials[at].Live("Reload"),
+                                  before.materials[was].Live("Reload"))
+                Panic(LastError())
+            End If
+        End For
+    End Method
+
+    // What its file calls its material at `at`, and how many of its materials it calls `name`.
+    @MainThread
+    Method MaterialNamed(at: Int): String
+        Unsafe
+            Return fbe_model_material_name(load.Handle, at).ToString()
+        End Unsafe
+    End Method
+
+    @MainThread
+    Method MaterialsNamed(name: String): Int
+        Local count = 0
+        For at = 0 Until materials.Count
+            If MaterialNamed(at) == name Then count += 1
+        End For
+        Return count
     End Method
 
     // What's read of `before`'s textures by a material of anyone's, a scene's read of them or a game's,

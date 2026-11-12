@@ -409,6 +409,7 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_material_release(material: UInt64): Bool
     Function fbe_material_alive(material: UInt64): Bool
     Function fbe_material_clone(material: UInt64): UInt64
+    Function fbe_material_take(material: UInt64, from: UInt64): Bool
     Function fbe_material_set_color(material: UInt64, r: Float32, g: Float32, b: Float32,
                                     a: Float32): Bool
     Function fbe_material_color(material: UInt64, color: Ptr<fbe_color_t>): Bool

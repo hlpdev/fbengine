@@ -366,7 +366,11 @@ good modern engine on its own. Every structural choice is checked against both.
   read, so a model naming a buffer that isn't there yet is loaded when that comes. An asset that's
   gone without the cache being told has what it read let go at the next reload of its path. A
   file isn't said to be what its assets read while one of them is loading for the first time,
-  which may have read it before a write. A sidecar's write loads its asset again once. The write
+  which may have read it before a write. A sidecar's write loads its asset again once. A model
+  loaded again keeps what a game set on each Material the file says nothing new of, found by
+  its name or else its number (the new one takes the old one's settings, and its textures are
+  followed to the new file's); one the file's changed is the file's, and `Assets.OnReload` runs
+  a game's hook as each asset's loaded again, to give it its look. The write
   time is the file system's own, 100 ns on Windows and nanoseconds elsewhere, not the C++
   library's, which is whole seconds on Windows. That's how finely it's kept, not how finely it's
   given: Linux gives a write the kernel's clock as of its last tick, 1 to 4 ms before (kernels
