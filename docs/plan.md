@@ -19,19 +19,21 @@ original 1.3.11, and ue5-additions.md what v5 adds; the steps below cover both.
 |---|---|---|---|
 | **E0** | Setup | | done (2026-10-31) |
 | **E1** | App and input | E0 | done (2026-10-31) |
-| **E2** | The GPU core | E1 step 1 | golden images of a triangle, a textured quad, and a readback match on lavapipe |
-| **E3** | 2D | E2 | a small arcade game runs, and its frames match their golden images |
+| **E2** | The GPU core | E1 step 1 | done (2026-11-01): golden images of a triangle, a textured quad, and a readback match on lavapipe; ctest's `gpu.` tests |
+| **E3** | 2D | E2 | done (2026-11-01): a small arcade game runs, and its frames match their golden images |
 | **E4** | The scene | E1 step 2 | done (2026-10-31) |
 | **E5** | Drawing the scene | E2, E4 | done (2026-11-02): a lightmapped, fogged, lit room with cameras rendering to textures matches its golden images |
-| **E6** | The modern renderer | E5 | Khronos's glTF sample models match their references, with shadows and post effects |
-| **E7** | Animation | E4 (E5 to draw it) | skinned and morphing sample models match their reference frames |
-| **E8** | Assets | E2, E4; a FutureBlitz build step for its last steps | a game runs from cooked paks, and reloads changed files in development |
+| **E6** | The modern renderer | E5 | done: Khronos's glTF sample models match their references, with shadows and post effects |
+| **E7** | Animation | E4 (E5 to draw it) | done: skinned and morphing sample models match their reference frames |
+| **E8** | Assets | E2, E4; a FutureBlitz build step for its last steps | done: a game runs from cooked paks, and reloads changed files in development |
 | **E9** | Audio (fbengine_audio) | E1 step 2 | done (2026-10-31): sounds follow entities |
-| **E10** | Physics (fbengine_physics) | E1 step 2 | Jolt's sample scenes stay stable, deterministic runs repeat, and bodies drive entities |
-| **E11** | UI (fbengine_ui) | E3 | a sample game's menus, HUD, and console work by mouse, keyboard, and gamepad |
-| **E12** | Video (fbengine_video) | E3, E9 | a video plays into a texture with its sound in sync |
-| **E13** | The editor | E5, E7, E8, E11 | a scene is made, saved, played, and inspected in the editor |
-| **E14** | The proof | everything | a sample for each of SCP:CB's engine requirements runs, and a modern showcase game, on Windows, Linux, and macOS |
+| **E10** | Physics (fbengine_physics) | E1 step 2 | done: Jolt's sample scenes stay stable, deterministic runs repeat, and bodies drive entities |
+| **E11** | UI (fbengine_ui) | E3 | done: a sample game's menus, HUD, and console work by mouse, keyboard, and gamepad |
+| **E12** | Video (fbengine_video) | E3, E9 | done: a video plays into a texture with its sound in sync |
+| **E13** | The editor | E5, E7, E8, E11 | done: a scene is made, saved, played, and inspected in the editor |
+| **E14** | The proof | everything | done: examples/proof's 40 samples, one or more for each of SCP:CB's engine requirements (124 ctest tests, `proof.`), and Slack Water, walked to each ending in ctest, from the folder and from a pak, on Windows, Linux, and macOS |
+
+All of it is landed, with the stability pass after E14: loaders fuzzed on broken and random files, races checked under ThreadSanitizer, soaks that count what's held, a lost device and surface, and a dedicated server with `Gpu.SetDisabled(True)`; 86 tests carry ctest's `stability` label, and sanitizers.yml runs nightly. Master 91072938 (fbengine 1.1.1, 2026-11-12) is green on every job of CI on the five targets (run 43154037803) and of the sanitizers (run 43205675117).
 
 The order below is one possible: with lanes, E2, E4, E9, and E10 start together once E1's input
 is in, and the rest start as what they need lands.
