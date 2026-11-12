@@ -2751,3 +2751,12 @@ if(FBENGINE_SANITIZE)
   get_property(fbengine_all_tests DIRECTORY PROPERTY TESTS)
   set_tests_properties(${fbengine_all_tests} PROPERTIES TIMEOUT ${fbengine_sanitized_timeout})
 endif()
+
+# Every run of Slack Water fails on what Vulkan's validation layers say, wherever in its output,
+# as what they say after the game's own last line, as it ends, is printed and isn't counted.
+get_property(every_test DIRECTORY PROPERTY TESTS)
+foreach(each IN LISTS every_test)
+  if(each MATCHES "^examples[.]slack_water[.]")
+    set_property(TEST ${each} APPEND PROPERTY FAIL_REGULAR_EXPRESSION "Vulkan validation error")
+  endif()
+endforeach()

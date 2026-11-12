@@ -25,8 +25,9 @@ extern "C" {
 // and 0 for no, as a camera does that fbe_camera_set_stored_values is set on: its color goes
 // into the target's bytes as it's given, what it blends with are those bytes, so half white over
 // black is 128, not 188, and an sRGB texture's texels, decoded as they're sampled and filtered by
-// their light, are encoded again before the pen's color multiplies them. C has no `using`, so it's
-// a typedef. NOLINTNEXTLINE(modernize-use-using)
+// their light, are encoded again before the pen's color multiplies them; a draw with it into an
+// RGBA16F target is refused. C has no `using`, so it's a typedef.
+// NOLINTNEXTLINE(modernize-use-using)
 typedef struct fbe_2d_pen_t {
     int32_t origin_x;
     int32_t origin_y;

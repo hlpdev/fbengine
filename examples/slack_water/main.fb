@@ -4933,6 +4933,8 @@ End If
 // Every run ends by what Vulkan's validation layers found in it, which is nothing, and by whether
 // they were there to look, so a run without them isn't taken for one they passed.
 Local wrong = Gpu.ValidationErrors()
-Print("Vulkan's validation layers were {Gpu.Validating() ? "on" : "off"}, and found {wrong} things wrong")
+Local checked = Gpu.Validating() ? "on" : "off"
+If !Gpu.Started() && Gpu.Stops() == 0 Then checked = "not asked, as no GPU was started"
+Print("Vulkan's validation layers were {checked}, and found {wrong} things wrong")
 If wrong != 0 Then failed = True
 If failed Then Process.Exit(1)

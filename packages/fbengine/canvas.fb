@@ -133,8 +133,14 @@ Public Final Class Canvas
     /// bytes, so half white over black is 128, not 188, and what's added adds the bytes. An sRGB
     /// texture decodes as it's sampled, so what's filtered between its texels is by their light,
     /// and is encoded again before the color multiplies it; one whose pixels are data is what's
-    /// stored. Into a target whose pixels are data it changes nothing but that.
-    @MainThread Public Method SetStoredValues(on: Bool)
+    /// stored. Into a target whose pixels are data it changes nothing but that. Into one of
+    /// RGBA16F it panics, as an HDR camera does: stored values have no light past white.
+    @MainThread @PanicsAtCaller
+    Public Method SetStoredValues(on: Bool)
+        If on && texture?.Format() == TextureFormat.RGBA16F
+            Panic("SetStoredValues on a Canvas: a target that draws in stored values isn't HDR, " +
+                  "as they have no light past white to tonemap")
+        End If
         pen.stored = on ? 1 : 0
     End Method
 

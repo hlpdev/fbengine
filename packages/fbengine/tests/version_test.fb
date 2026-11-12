@@ -5,5 +5,5 @@ Import fbengine
 // The DLL is the package's own build: its version is project.toml's.
 @Test
 Function TheDllIsThePackagesVersion()
-    Expect(Version() == "1.1.1")
+    Expect(Version() == "1.2.0")
 End Function

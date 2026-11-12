@@ -229,6 +229,102 @@ Function AReloadKeepsWhatWasSetOnAMaterialTheFileHasntChanged() Throws IOError
     Expect(model.Materials()[0].Shading() != Shading.UNLIT)
 End Function
 
+// A glTF of a triangle with `materials`, its entries, and a node named `node`.
+Function Materialed(materials: String, node: String): UInt8[]
+    Return Gltf(1, "\"materials\":[{materials}]," +
+                "\"nodes\":[{{\"name\":\"{node}\",\"mesh\":0}}],\"scenes\":[{{\"nodes\":[0]}}]")
+End Function
+
+// A material's entry, of a color, named or not.
+Function Entry(color: String, name: String = ""): String
+    Local named = name != "" ? "\"name\":\"{name}\"," : ""
+    Return "{{{named}\"pbrMetallicRoughness\":{{\"baseColorFactor\":[{color}]}}}}"
+End Function
+
+// A game may free one of a model's Materials: a reload passes it over, and keeps the rest.
+@Test
+Function AReloadPassesOverAMaterialAGameFreed() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Local entries = Entry("1,0,0,1", "one") + "," + Entry("1,0,0,1", "two")
+    Try File.WriteBytes(folder.Path / "a.gltf", Materialed(entries, "m"))
+    Assets.MountFolder("res://file-freed", folder.Path)
+    Defer Assets.Unmount("res://file-freed")
+    Local world = World()
+    Defer world.Free()
+    Local model = Try Assets.Load<Model>("res://file-freed/a.gltf")
+    Defer model.Free()
+    model.Materials()[0].Free()
+    model.Materials()[1].SetColor(Color(0, 0.5, 0))
+    Try File.WriteBytes(folder.Path / "a.gltf", Materialed(entries, "n"))
+    Try Again("res://file-freed/a.gltf")
+    Expect(model.Materials().Count == 2)
+    Expect(!model.Materials()[0].Freed())
+    Expect(model.Materials()[0].Color().r == 1)
+    Expect(model.Materials()[1].Color().g == 0.5)
+End Function
+
+// Materials with no names are found by their numbers only while the file has as many as it had:
+// with one put in before them, each is what the file says, not another's that was at its number.
+@Test
+Function UnnamedMaterialsAreKeptByNumberOnlyAmongAsMany() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Local two = Entry("1,0,0,1") + "," + Entry("1,0,0,1")
+    Try File.WriteBytes(folder.Path / "a.gltf", Materialed(two, "m"))
+    Assets.MountFolder("res://file-numbered", folder.Path)
+    Defer Assets.Unmount("res://file-numbered")
+    Local world = World()
+    Defer world.Free()
+    Local model = Try Assets.Load<Model>("res://file-numbered/a.gltf")
+    Defer model.Free()
+    model.Materials()[0].SetColor(Color(0, 0.5, 0))
+    model.Materials()[1].SetColor(Color(0, 0, 0.5))
+    // As many: each by its number.
+    Try File.WriteBytes(folder.Path / "a.gltf", Materialed(two, "n"))
+    Try Again("res://file-numbered/a.gltf")
+    Expect(model.Materials()[0].Color().g == 0.5)
+    Expect(model.Materials()[1].Color().b == 0.5)
+    // One more, before them, alike: all three are the file's.
+    Try File.WriteBytes(folder.Path / "a.gltf", Materialed(Entry("1,0,0,1") + "," + two, "n"))
+    Try Again("res://file-numbered/a.gltf")
+    Expect(model.Materials().Count == 3)
+    For material In model.Materials()
+        Expect(material.Color().r == 1 && material.Color().g == 0 && material.Color().b == 0)
+    End For
+End Function
+
+// A hook's run for a reload that failed too, with why.
+@Test
+Function AHookIsRunForAReloadThatFailed() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "a.gltf", Painted("1,0,0,1", "m"))
+    Assets.MountFolder("res://file-hook-failed", folder.Path)
+    Defer Assets.Unmount("res://file-hook-failed")
+    Local world = World()
+    Defer world.Free()
+    Local model = Try Assets.Load<Model>("res://file-hook-failed/a.gltf")
+    Defer model.Free()
+    Local told: AssetReload[] = []
+    Local hook = Assets.OnReload(Function(reload: AssetReload)
+        told.Add(reload)
+    End Function)
+    Defer Assets.RemoveOnReload(hook)
+    Try File.WriteBytes(folder.Path / "a.gltf", "not a glTF".Bytes)
+    Try Again("res://file-hook-failed/a.gltf")
+    Expect(told.Count == 1)
+    Expect(told[0].Error != Null)
+    Expect(!told[0].InPlace)
+    Expect(model.Materials()[0].Color().r == 1)
+End Function
+
 // A hook's run once as an asset's loaded again, with what Reloaded has of it, and no more once
 // it's removed.
 @Test

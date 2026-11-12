@@ -1009,6 +1009,83 @@ Function WhatsReadOfItsTexturesFollowsItsFile() Throws IOError, GraphicsError
     Expect(model.TextureOf(0)?.ReadPixel(0, 0) == Color32(255, 0, 0, 255))
 End Function
 
+// Whether a material draws its meshes' vertex colors is by the file's meshes, not its own entry:
+// a file written with colors on a primitive, its material's entry untouched, has them drawn, and
+// what a game set on the material is kept; and written without them again, they're not.
+@Test
+Function VertexColorsAreTheFilesAfterAReload() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local material =
+        "{{\"name\":\"paint\",\"pbrMetallicRoughness\":{{\"baseColorFactor\":[1,0,0,1]}}}}"
+    Local plain = Dressed(material, "", "", "", True)
+    Local colored = Dressed(material)
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "it.gltf", plain)
+    Assets.MountFolder("res://colored-paint", folder.Path)
+    Defer Assets.Unmount("res://colored-paint")
+    Local world = World()
+    Defer world.Free()
+    Local model = Try Assets.Load<Model>("res://colored-paint/it.gltf")
+    Defer model.Free()
+    Expect(!model.Materials()[0].VertexColors())
+    model.Materials()[0].SetColor(Color(0, 0.5, 0))
+    For file In [colored, plain]
+        Assets.Reloaded()
+        Try File.WriteBytes(folder.Path / "it.gltf", file)
+        Try Assets.Reload("res://colored-paint/it.gltf")
+        Local done = False
+        FlipUntil(Function(): Bool
+            done = done || Assets.Reloaded().Count > 0
+            Return done
+        End Function)
+        Expect(done)
+        Expect(model.Materials()[0].VertexColors() == RefEquals(file, colored))
+        Expect(model.Materials()[0].Color().g == 0.5)
+    End For
+End Function
+
+// Only a material that read a Texture of the model's that a game's freed goes back to what the
+// file says; another keeps what was set on it.
+@Test
+Function OnlyAMaterialThatReadAFreedTextureIsTheFiles() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local materials =
+        "{{\"name\":\"read\",\"pbrMetallicRoughness\":{{\"baseColorTexture\":{{\"index\":0}}}}}}," +
+        "{{\"name\":\"plain\"}}"
+    Local file = Dressed(materials, "{{\"source\":1}}")
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "it.gltf", file)
+    Assets.MountFolder("res://freed-one", folder.Path)
+    Defer Assets.Unmount("res://freed-one")
+    Local world = World()
+    Defer world.Free()
+    Local model = Try Assets.Load<Model>("res://freed-one/it.gltf")
+    Defer model.Free()
+    Expect(model.Materials().Count == 2)
+    model.Materials()[0].SetColor(Color(0, 0.5, 0))
+    model.Materials()[1].SetColor(Color(0, 0, 0.5))
+    model.Textures()[1]?.Free()
+    // Written again with a space after it: nothing of it's changed.
+    Local again = file.Clone()
+    again.Add(32)
+    Assets.Reloaded()
+    Try File.WriteBytes(folder.Path / "it.gltf", again)
+    Try Assets.Reload("res://freed-one/it.gltf")
+    Local done = False
+    FlipUntil(Function(): Bool
+        done = done || Assets.Reloaded().Count > 0
+        Return done
+    End Function)
+    Expect(done)
+    Expect(model.Materials()[0].Color().g == 1, "the one that read it kept what was set")
+    Expect(model.Materials()[1].Color().b == 0.5, "the other didn't")
+    Expect(model.TextureOf(0)?.ReadPixel(0, 0) == Color32(0, 255, 0, 255))
+End Function
+
 // A texture of its that a game's freed is left out of what follows it, and the rest still do.
 @Test
 Function AFreedTextureOfItsIsLeftOut() Throws IOError, GraphicsError

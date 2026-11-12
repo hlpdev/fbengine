@@ -121,9 +121,12 @@ Public Final Class Model Implements Asset
     /// the file says; what's new is made; what the file's lost is freed, and what a game's put under
     /// that goes up to what it was under, for a game's own entities are never freed. A Player on a
     /// root goes on, each clip it plays the new file's of that name, where it was, or stopped for
-    /// none. A Material the file says nothing new of, found by its name, or else its number, is as
-    /// it was, with all a game set on it; one the file's changed is what the file says, and Assets'
-    /// OnReload is where a game gives it its look again.
+    /// none. A Material the file says nothing new of, in its own entry, the images it reads, and
+    /// their samplers, is as it was, with all a game set on it: found by its name, if that's one
+    /// material's in each file, or else by its number if the file has as many as it had. One the
+    /// file's changed is what the file says, and so is one that read a Texture of the model's a
+    /// game's freed, and one a game's freed is left; whether it draws vertex colors is by the
+    /// file's meshes either way. Assets' OnReload is where a game gives one its look again.
     /// A material of anyone's that read one of its Textures reads the new file's of that image,
     /// found by its name, or its URI, or else its number, where it can: a layer the same format, a map
     /// what it can read; a World's sky and a camera's target aren't followed. It gives True. It throws
@@ -254,33 +257,65 @@ Public Final Class Model Implements Asset
     End Method
 
     // Gives each of its Materials that the file says of what `before`'s said of its own, by its
-    // name if that's one material's in each, or else its number, all that one has: what a game
-    // set on it since, and the textures it read, which Followed then follows to this file's.
+    // name if that's one material's in each, or else its number if the file has as many as it
+    // had, all that one has: what a game set on it since, and the textures it read, which
+    // Followed then follows to this file's. What's from the file's meshes, whether it draws their
+    // vertex colors, is this file's still. One a game's freed, of either, is passed over, and so
+    // is one that read a Texture of `before`'s a game's freed, which isn't followed, so it's
+    // what the file says.
     @MainThread
     Method Kept(before: Model)
-        // A texture of the one before that a game's freed isn't followed to this file's, so a
-        // material that kept reading it would read what's gone: then they're all the file's.
+        Local live: UInt64[] = []
         For texture In before.textures
-            If texture != Null && texture.Freed() Then Return
+            If texture != Null && !texture.Freed() Then live.Add(texture.Live("Reload"))
         End For
         For texture In before.others
-            If texture.Freed() Then Return
+            If !texture.Freed() Then live.Add(texture.Live("Reload"))
         End For
+        Local own = "{before.load.Path()}#"
         For at = 0 Until materials.Count
+            If materials[at].Freed() Then Continue
             Local name = MaterialNamed(at)
-            Local was = at
+            Local was: Int? = Null
             If name != "" && MaterialsNamed(name) == 1 && before.MaterialsNamed(name) == 1
                 For other = 0 Until before.materials.Count
                     If before.MaterialNamed(other) == name Then was = other
                 End For
+            ElseIf materials.Count == before.materials.Count
+                was = at
             End If
-            If was >= before.materials.Count Then Continue
+            If was == Null Then Continue
+            Local old = before.materials[was]
+            If old.Freed() Then Continue
             If !fbe_model_material_same(load.Handle, at, before.load.Handle, was) Then Continue
-            If !fbe_material_take(materials[at].Live("Reload"),
-                                  before.materials[was].Live("Reload"))
-                Panic(LastError())
-            End If
+            If ReadsFreed(old.Live("Reload"), live, own) Then Continue
+            Local taking = materials[at].Live("Reload")
+            Local colored = fbe_material_vertex_colors(taking)
+            If !fbe_material_take(taking, old.Live("Reload")) Then Panic(LastError())
+            If !fbe_material_set_vertex_colors(taking, colored) Then Panic(LastError())
         End For
+    End Method
+
+    // Whether the material `material` reads, in a layer or a map, a texture of the model whose
+    // textures' paths begin with `own` that isn't one of `live`: one of its a game's freed.
+    @MainThread
+    Static Method ReadsFreed(material: UInt64, live: UInt64[], own: String): Bool
+        Local read: UInt64[] = []
+        For layer = 0 Until FBE_MATERIAL_LAYERS
+            read.Add(fbe_material_texture(material, layer))
+        End For
+        For map = 0 Until FBE_MATERIAL_MAPS
+            read.Add(fbe_material_map(material, map))
+        End For
+        For texture In read
+            If texture == 0 || live.Contains(texture) Then Continue
+            Local path = ""
+            Unsafe
+                path = fbe_texture_path(texture).ToString()
+            End Unsafe
+            If path.StartsWith(own) Then Return True
+        End For
+        Return False
     End Method
 
     // What its file calls its material at `at`, and how many of its materials it calls `name`.

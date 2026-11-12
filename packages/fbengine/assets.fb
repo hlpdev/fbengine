@@ -970,8 +970,10 @@ Public Final Class Assets
 
     /// Runs `hook` as each asset's loaded again, by hot reload or Reload, with what Reloaded then
     /// has of it, once it's done: where a game gives an asset its look again, as what it sets on a
-    /// Model's Materials that the file's changed. Hooks run in the order they were added. Gives
-    /// the number RemoveOnReload takes.
+    /// Model's Materials that the file's changed. It's run for one that couldn't be loaded again
+    /// too, with its Error, which is as it was. Hooks run in the order they were added. A hook
+    /// that asks Reloaded takes what's there, this one too, so the game's own next asking doesn't
+    /// have them. Gives the number RemoveOnReload takes.
     @MainThread
     Public Static Method OnReload(hook: Func(AssetReload)): Int
         lastReloadHook += 1

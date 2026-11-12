@@ -1814,6 +1814,13 @@ TEST_CASE("a pen in stored values blends what's stored, as a camera in them does
         CHECK(near(pixel(read(made), 3, 3), 50, 50, 50));
         CHECK(fbe_texture_release(texture));
     }
+    // Into a target of half floats it's refused, as an HDR camera refuses it, and nothing's drawn.
+    const std::uint64_t floats = target(8, 8, FBE_TEXTURE_RGBA16F);
+    const fbe_2d_pen_t bright = stored({ 255, 255, 255, 255 }, FBE_2D_SOLID);
+    CHECK_FALSE(fbe_2d_rect(floats, &bright, 0, 0, 8, 8, true));
+    CHECK(std::string_view(fbe_error()).contains("stored values isn't HDR"));
+    const fbe_2d_pen_t plain = pen({ 255, 255, 255, 255 });
+    CHECK(fbe_2d_rect(floats, &plain, 0, 0, 8, 8, true));
     // And into a target whose pixels are data, it's the bytes, as it was.
     const std::uint64_t data = target(8, 8, FBE_TEXTURE_RGBA8_LINEAR);
     const fbe_2d_pen_t under = stored(black, FBE_2D_SOLID);

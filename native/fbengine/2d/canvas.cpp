@@ -296,6 +296,10 @@ bool begin(std::uint64_t target, const fbe_2d_pen_t* pen, std::int32_t blend = p
     const std::int64_t height = found->height;
     // A batch is one pass, into one target, through its view of its light or of its bytes.
     const bool stored = pen->stored != 0;
+    if (stored && found->format == FBE_TEXTURE_RGBA16F) {
+        return fbe::fail("a target that draws in stored values isn't HDR, as they have no light "
+                         "past white to tonemap");
+    }
     if (handle != batch_target || stored != batch_stored) {
         flush();
         batch_target = handle;

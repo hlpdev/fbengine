@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -71,7 +72,8 @@ bool validating = false;
 bool said_validating = false;
 /// Whether the validation layer checks synchronization too.
 bool synchronizing = false;
-std::int32_t validation_errors = 0;
+/// Counted on whatever thread the layers call back on.
+std::atomic<std::int32_t> validation_errors = 0;
 /// The first of them, as the layer said it, as far as fits, for a test's failure to say.
 std::array<char, 2048> first_error{};
 /// Whether the GPU was lost, until it's stopped.

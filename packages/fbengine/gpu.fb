@@ -101,6 +101,10 @@ Public Class Gpu
     /// Whether the GPU has started.
     @MainThread Public Static Method Started(): Bool => fbe_gpu_started()
 
+    /// How many times the GPU's been stopped since the program started, so with Started, whether
+    /// it ever has.
+    @MainThread Public Static Method Stops(): UInt64 => fbe_gpu_stops()
+
     /// Whether there's to be no GPU at all, as for a dedicated server, set before anything starts
     /// it: then Vulkan's never loaded and no device is made, so it needs no driver, loader, or
     /// display. What would start it, a Texture or a shown Window, throws or panics saying "the GPU
