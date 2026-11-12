@@ -971,6 +971,9 @@ bool record_graph() {
     settle_awaiting(awaiting_missed ? settled_t::MISSED : settled_t::RAN);
     flush_held_back();
     if (added.empty()) {
+        // What the last frame's writes kept to add again is that frame's, which was submitted:
+        // a submit of this one that fails has none of it to carry.
+        carriable.clear();
         empty();
         return true;
     }

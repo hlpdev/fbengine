@@ -1764,6 +1764,38 @@ TEST_CASE("each call that makes or sends a texture's run again once there's room
     fbe_gpu_stop();
 }
 
+// A write into a texture the frame's graph has is a pass, kept to add again if the frame's
+// submit fails. Once its frame's submitted it's run, and what it was sent through goes with that
+// frame: a later frame with nothing in its graph, whose submit fails, has nothing of it to add.
+TEST_CASE("a write that's run isn't added again when a later frame's submit fails", "[gpu]") {
+    start();
+    const std::uint64_t texture = written(1);
+    const std::uint64_t other = written(2);
+    CHECK(reads_as(other, 2));
+    // In the graph, by a clear, so the write after it is a pass.
+    require(fbe_texture_clear(texture, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::vector<std::uint8_t> sevens(std::size_t{ 16 } * 16 * 4, 7);
+    require(fbe_texture_write(texture, 0, 0, 16, 16, sevens.data(), 64));
+    CHECK(reads_as(texture, 7));
+    // Written since, by a pass too, which the old write run again would go over.
+    require(fbe_texture_clear(texture, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::vector<std::uint8_t> nines(sevens.size(), 9);
+    require(fbe_texture_write(texture, 0, 0, 16, 16, nines.data(), 64));
+    fbe_frame_flip(false);
+    fbe_frame_flip(false);
+    (void)fbe::gpu::release_waiting();
+    // A frame of an upload alone, nothing in its graph, whose submit fails.
+    const std::vector<std::uint8_t> threes(sevens.size(), 3);
+    require(fbe_texture_write(other, 0, 0, 16, 16, threes.data(), 64));
+    fbe::gpu::inject(fbe::gpu::fault_t::SUBMIT);
+    fbe_frame_flip(false);
+    fbe_frame_flip(false);
+    CHECK(reads_as(other, 3));
+    CHECK(reads_as(texture, 9));
+    CHECK(fbe_gpu_validation_errors() == 0);
+    stop_gpu();
+}
+
 // As a game that builds a level and leaves it, over and over, with no Flip between.
 TEST_CASE("textures made and freed past the device's allocations with no Flip are all made",
           "[gpu][frees]") {
