@@ -75,8 +75,8 @@ FBE_API bool fbe_model_material_textures(uint64_t load, int32_t index, uint64_t 
 // valid while the load is.
 FBE_API const char* fbe_model_material_name(uint64_t load, int32_t index);
 // Whether the model's file says of its material at `index` all that `other`'s says of its own at
-// `other_index`, its name too, as a file read again does of one it hasn't changed. False for what
-// isn't there.
+// `other_index`, its name too, and reads the images of the same names, or URIs, through the same
+// samplers, as a file read again does of one it hasn't changed. False for what isn't there.
 FBE_API bool fbe_model_material_same(uint64_t load, int32_t index, uint64_t other,
                                      int32_t other_index);
 FBE_API const char* fbe_model_image_name(uint64_t load, int32_t index);

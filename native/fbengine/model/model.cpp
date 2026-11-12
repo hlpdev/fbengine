@@ -810,8 +810,33 @@ FBE_API bool fbe_model_material_same(uint64_t load, int32_t index, uint64_t othe
         std::cmp_greater_equal(other_index, others->materials.size())) {
         return false;
     }
-    return model->materials[static_cast<std::size_t>(index)] ==
-           others->materials[static_cast<std::size_t>(other_index)];
+    const assets::material_t& one = model->materials[static_cast<std::size_t>(index)];
+    const assets::material_t& another = others->materials[static_cast<std::size_t>(other_index)];
+    if (one != another) {
+        return false;
+    }
+    // And what it reads is what the other's does: each image the one of that name, as a file
+    // that's saved its images in another order hasn't, and each sampler the same.
+    const auto reads_the_same = [&](const assets::texture_ref_t& read) {
+        if (read.image >= 0) {
+            const auto image = static_cast<std::size_t>(read.image);
+            if (image >= model->image_names.size() || image >= others->image_names.size() ||
+                model->image_names[image] != others->image_names[image]) {
+                return false;
+            }
+        }
+        if (read.sampler >= 0) {
+            const auto sampler = static_cast<std::size_t>(read.sampler);
+            if (sampler >= model->samplers.size() || sampler >= others->samplers.size() ||
+                model->samplers[sampler] != others->samplers[sampler]) {
+                return false;
+            }
+        }
+        return true;
+    };
+    return reads_the_same(one.base_color_texture) &&
+           reads_the_same(one.metallic_roughness_texture) && reads_the_same(one.normal_texture) &&
+           reads_the_same(one.occlusion_texture) && reads_the_same(one.emissive_texture);
 }
 
 FBE_API const char* fbe_model_material_name(uint64_t load, int32_t index) {

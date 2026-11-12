@@ -258,6 +258,14 @@ Public Final Class Model Implements Asset
     // set on it since, and the textures it read, which Followed then follows to this file's.
     @MainThread
     Method Kept(before: Model)
+        // A texture of the one before that a game's freed isn't followed to this file's, so a
+        // material that kept reading it would read what's gone: then they're all the file's.
+        For texture In before.textures
+            If texture != Null && texture.Freed() Then Return
+        End For
+        For texture In before.others
+            If texture.Freed() Then Return
+        End For
         For at = 0 Until materials.Count
             Local name = MaterialNamed(at)
             Local was = at

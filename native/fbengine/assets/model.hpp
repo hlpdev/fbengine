@@ -72,6 +72,8 @@ struct sampler_t {
     /// 10497 REPEAT, 33071 CLAMP_TO_EDGE, 33648 MIRRORED_REPEAT.
     std::int32_t wrap_u = 10497;
     std::int32_t wrap_v = 10497;
+
+    bool operator==(const sampler_t&) const = default;
 };
 
 /// A texture a material reads: its image, sampler, UV set, and how its UVs are moved first.
