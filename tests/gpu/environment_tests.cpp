@@ -531,6 +531,29 @@ TEST_CASE("what has no direction shades finitely", "[gpu]") {
     stop_gpu();
 }
 
+// A bake makes its textures at an exported call's edge: with no room but for what the frame being
+// recorded would free, that's submitted, waited for, and freed, and the bake's run again, making
+// what it freed as it failed.
+TEST_CASE("an environment's baked once there's room", "[gpu][frees]") {
+    start();
+    const std::uint64_t source = even_source({ 1.0F, 1.0F, 1.0F });
+    const std::vector<std::uint8_t> pixels(std::size_t{ 16 } * 16 * 4, 9);
+    for (int at = 0; at < 4; ++at) {
+        const std::uint64_t texture = fbe_texture_create(16, 16, FBE_TEXTURE_RGBA8, false);
+        REQUIRE(texture != 0);
+        require(fbe_texture_write(texture, 0, 0, 16, 16, pixels.data(), 64));
+        REQUIRE(fbe_texture_release(texture));
+    }
+    REQUIRE(fbe::gpu::waiting_frees() >= 8);
+    fbe::gpu::limit_allocations(static_cast<std::int64_t>(fbe::gpu::allocations().count));
+    const std::uint64_t environment = fbe_environment_bake(source, 16, 4);
+    INFO(fbe_error());
+    CHECK(environment != 0);
+    fbe::gpu::limit_allocations(-1);
+    CHECK(fbe_gpu_validation_errors() == 0);
+    stop_gpu();
+}
+
 // A table that isn't baked is all zeros, as it was for a bake a frame that failed lost: white metal
 // divides by what multiple scattering gives back, which has to stay finite.
 TEST_CASE("shading through an empty table is finite", "[gpu]") {

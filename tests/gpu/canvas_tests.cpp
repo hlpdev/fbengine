@@ -839,6 +839,58 @@ TEST_CASE("a batch with no room for its quads is dropped, not drawn after what c
     stop_gpu();
 }
 
+// A call with no room frees what the frames submitted left before the graph's asked whether it
+// waits, which sends the batch: so the batch has that room, and isn't dropped just before it.
+TEST_CASE("a batch held when a call makes room is sent with the room, and drawn", "[gpu][frees]") {
+    start();
+    const std::uint64_t made = target(16, 12);
+    require(fbe_texture_clear(made, 0.0F, 0.0F, 0.0F, 1.0F));
+    // Two textures' images, and what they were written through, left with a frame submitted,
+    // which has no 2D in it: the next has no memory for quads yet.
+    const std::vector<std::uint8_t> pixels(std::size_t{ 16 } * 16 * 4, 9);
+    for (int at = 0; at < 2; ++at) {
+        const std::uint64_t texture = fbe_texture_create(16, 16, FBE_TEXTURE_RGBA8, false);
+        REQUIRE(texture != 0);
+        require(fbe_texture_write(texture, 0, 0, 16, 16, pixels.data(), 64));
+        CHECK(fbe_texture_release(texture));
+    }
+    fbe_frame_flip(false);
+    REQUIRE(fbe::gpu::waiting_frees() >= 4);
+    const fbe_2d_pen_t solid = pen(red);
+    require(fbe_2d_rect(made, &solid, 2, 3, 5, 4, true));
+    fbe::gpu::limit_allocations(static_cast<std::int64_t>(fbe::gpu::allocations().count));
+    SECTION("a texture made") {
+        const std::uint64_t more = fbe_texture_create(16, 16, FBE_TEXTURE_RGBA8, false);
+        INFO(fbe_error());
+        CHECK(more != 0);
+    }
+    SECTION("room asked for, submitting what's recorded") {
+        CHECK(fbe::gpu::release_waiting());
+    }
+    fbe::gpu::limit_allocations(-1);
+    CHECK(pixels_of(read(made), red).size() == 20);
+    CHECK(fbe_gpu_validation_errors() == 0);
+    stop_gpu();
+}
+
+// A call that fails for room, with nothing to free for it, says why it failed, whatever was said
+// as room was looked for: a batch dropped then says its own.
+TEST_CASE("a call with no room and nothing to free says its own error, not the batch's",
+          "[gpu][frees]") {
+    start();
+    const std::uint64_t made = target(16, 12);
+    (void)fbe::gpu::release_waiting();
+    const fbe_2d_pen_t solid = pen(red);
+    require(fbe_2d_rect(made, &solid, 2, 3, 5, 4, true));
+    REQUIRE(fbe::gpu::waiting_frees() == 0);
+    fbe::gpu::limit_allocations(static_cast<std::int64_t>(fbe::gpu::allocations().count));
+    CHECK(fbe_texture_create(16, 16, FBE_TEXTURE_RGBA8, false) == 0);
+    CHECK(std::string_view(fbe_error()).contains("couldn't make a texture (VkResult -2)"));
+    fbe::gpu::limit_allocations(-1);
+    CHECK(fbe_gpu_validation_errors() == 0);
+    stop_gpu();
+}
+
 // The quads say which texture by its slot. A texture a dropped batch drew with is freed, and
 // another made takes its slot: nothing of the new one is drawn where the old was to be.
 TEST_CASE("a dropped batch's texture is freed and its slot taken, and nothing's drawn of either",

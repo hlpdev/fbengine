@@ -845,91 +845,96 @@ FBE_API bool fbe_model_drop_images(uint64_t load) {
 FBE_API bool fbe_model_material_textures(uint64_t load, int32_t index, uint64_t material,
                                          const uint64_t* textures, int32_t count, uint64_t* others,
                                          int32_t* other_images, int32_t capacity, int32_t* made) {
-    const assets::model_t* model = model_of(load);
-    if (model == nullptr) {
-        return false;
-    }
-    if (index < 0 || std::cmp_greater_equal(index, model->materials.size())) {
-        return fbe::fail(std::format("the model has {} materials; there's no material {}",
-                                     model->materials.size(), index));
-    }
-    const assets::material_t& from = model->materials[static_cast<std::size_t>(index)];
-    const std::span<const std::uint64_t> given(
-        textures, textures != nullptr ? static_cast<std::size_t>(std::max(count, 0)) : 0);
-    const others_t kept{
-        .held = others,
-        .images = other_images,
-        .capacity = capacity,
-        .made = made,
-    };
-    const assets::texture_ref_t& base = from.base_color_texture;
-    if (base.image >= 0 && !beyond_uv_sets(load, index, base, "base color")) {
-        const std::uint64_t texture =
-            texture_to_read(load, *model, index, base, "base color", true, given, kept);
-        if (texture == 0) {
+    // Run again for room, it finds the others it made already in the caller's list, and sets
+    // the material what it set before.
+    return fbe::gpu::with_room([&] -> bool {
+        const assets::model_t* model = model_of(load);
+        if (model == nullptr) {
             return false;
         }
-        if (!fbe_material_set_texture(material, 0, texture) ||
-            !fbe_material_set_layer(material, 0, FBE_LAYER_MULTIPLY,
-                                    static_cast<std::int32_t>(base.uv_set))) {
-            return refused(std::format("the material {}'s base color can't be as its file says: {}",
-                                       index, fbe_error()));
+        if (index < 0 || std::cmp_greater_equal(index, model->materials.size())) {
+            return fbe::fail(std::format("the model has {} materials; there's no material {}",
+                                         model->materials.size(), index));
         }
-        // A file's rotation turns UVs the other way from a layer's.
-        if (!fbe_material_set_layer_uv(material, 0, 1.0F / base.scale[0], 1.0F / base.scale[1],
-                                       -base.rotation, -base.offset[0], -base.offset[1])) {
-            return refused(
-                std::format("the material {}'s base color can't be moved as its file says: {}",
-                            index, fbe_error()));
+        const assets::material_t& from = model->materials[static_cast<std::size_t>(index)];
+        const std::span<const std::uint64_t> given(
+            textures, textures != nullptr ? static_cast<std::size_t>(std::max(count, 0)) : 0);
+        const others_t kept{
+            .held = others,
+            .images = other_images,
+            .capacity = capacity,
+            .made = made,
+        };
+        const assets::texture_ref_t& base = from.base_color_texture;
+        if (base.image >= 0 && !beyond_uv_sets(load, index, base, "base color")) {
+            const std::uint64_t texture =
+                texture_to_read(load, *model, index, base, "base color", true, given, kept);
+            if (texture == 0) {
+                return false;
+            }
+            if (!fbe_material_set_texture(material, 0, texture) ||
+                !fbe_material_set_layer(material, 0, FBE_LAYER_MULTIPLY,
+                                        static_cast<std::int32_t>(base.uv_set))) {
+                return refused(
+                    std::format("the material {}'s base color can't be as its file says: {}", index,
+                                fbe_error()));
+            }
+            // A file's rotation turns UVs the other way from a layer's.
+            if (!fbe_material_set_layer_uv(material, 0, 1.0F / base.scale[0], 1.0F / base.scale[1],
+                                           -base.rotation, -base.offset[0], -base.offset[1])) {
+                return refused(
+                    std::format("the material {}'s base color can't be moved as its file says: {}",
+                                index, fbe_error()));
+            }
         }
-    }
-    struct map_t {
-        std::int32_t in_file;
-        std::int32_t on_material;
-        std::string_view name;
-    };
-    for (const map_t& map : {
-             map_t{
-                 .in_file = FBE_MODEL_METALLIC_ROUGHNESS,
-                 .on_material = FBE_MAP_METAL_ROUGH,
-                 .name = "metal-rough",
-             },
-             map_t{
-                 .in_file = FBE_MODEL_NORMAL,
-                 .on_material = FBE_MAP_NORMAL,
-                 .name = "normal",
-             },
-             map_t{
-                 .in_file = FBE_MODEL_OCCLUSION,
-                 .on_material = FBE_MAP_OCCLUSION,
-                 .name = "occlusion",
-             },
-             map_t{
-                 .in_file = FBE_MODEL_EMISSIVE,
-                 .on_material = FBE_MAP_EMISSIVE,
-                 .name = "emissive",
-             },
-         }) {
-        const assets::texture_ref_t& read = *map_of(from, map.in_file);
-        if (read.image < 0 || beyond_uv_sets(load, index, read, map.name)) {
-            continue;
+        struct map_t {
+            std::int32_t in_file;
+            std::int32_t on_material;
+            std::string_view name;
+        };
+        for (const map_t& map : {
+                 map_t{
+                     .in_file = FBE_MODEL_METALLIC_ROUGHNESS,
+                     .on_material = FBE_MAP_METAL_ROUGH,
+                     .name = "metal-rough",
+                 },
+                 map_t{
+                     .in_file = FBE_MODEL_NORMAL,
+                     .on_material = FBE_MAP_NORMAL,
+                     .name = "normal",
+                 },
+                 map_t{
+                     .in_file = FBE_MODEL_OCCLUSION,
+                     .on_material = FBE_MAP_OCCLUSION,
+                     .name = "occlusion",
+                 },
+                 map_t{
+                     .in_file = FBE_MODEL_EMISSIVE,
+                     .on_material = FBE_MAP_EMISSIVE,
+                     .name = "emissive",
+                 },
+             }) {
+            const assets::texture_ref_t& read = *map_of(from, map.in_file);
+            if (read.image < 0 || beyond_uv_sets(load, index, read, map.name)) {
+                continue;
+            }
+            const bool color = map.on_material == FBE_MAP_EMISSIVE;
+            const std::uint64_t texture =
+                texture_to_read(load, *model, index, read, map.name, color, given, kept);
+            if (texture == 0) {
+                return false;
+            }
+            if (!fbe_material_set_map(material, map.on_material, texture,
+                                      static_cast<std::int32_t>(read.uv_set)) ||
+                !fbe_material_set_map_uv(material, map.on_material, 1.0F / read.scale[0],
+                                         1.0F / read.scale[1], -read.rotation, -read.offset[0],
+                                         -read.offset[1])) {
+                return refused(std::format("the material {}'s {} map can't be as its file says: {}",
+                                           index, map.name, fbe_error()));
+            }
         }
-        const bool color = map.on_material == FBE_MAP_EMISSIVE;
-        const std::uint64_t texture =
-            texture_to_read(load, *model, index, read, map.name, color, given, kept);
-        if (texture == 0) {
-            return false;
-        }
-        if (!fbe_material_set_map(material, map.on_material, texture,
-                                  static_cast<std::int32_t>(read.uv_set)) ||
-            !fbe_material_set_map_uv(material, map.on_material, 1.0F / read.scale[0],
-                                     1.0F / read.scale[1], -read.rotation, -read.offset[0],
-                                     -read.offset[1])) {
-            return refused(std::format("the material {}'s {} map can't be as its file says: {}",
-                                       index, map.name, fbe_error()));
-        }
-    }
-    return true;
+        return true;
+    });
 }
 
 FBE_API int32_t fbe_model_scene(uint64_t load) {

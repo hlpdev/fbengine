@@ -1539,7 +1539,8 @@ TEST_CASE("a texture made with no room frees what's done first, and submits only
         // The copy has no room for its own image as the read's submit records it, and is dropped,
         // with its error; that submit run, what it left is freed for what the read goes through.
         CHECK(shades_of(kept) == as_it_was);
-        CHECK(std::string_view(fbe_error()).contains("(VkResult -2)"));
+        // Its two passes, into its own image and back, of which neither was recorded.
+        CHECK(fbe::gpu::last_recorded().dropped == 2);
         fbe::gpu::limit_allocations(-1);
     }
     SECTION("a submit that passes over what it can't record isn't what a call's run again for") {
@@ -1575,7 +1576,11 @@ TEST_CASE("pixels written on the CPU that a clear couldn't send first aren't sen
     }
     require(fbe_texture_pixels_written(texture, 0, 0, 4, 4));
     fbe::gpu::limit_allocations(static_cast<std::int64_t>(fbe::gpu::allocations().count));
+    const std::uint32_t held = fbe::gpu::allocations().count;
     require(fbe_texture_clear(texture, 1.0F, 1.0F, 1.0F, 1.0F));
+    // The send before the clear had no room, and made nothing to go through.
+    CHECK(std::string_view(fbe_error()).contains("couldn't make a buffer"));
+    CHECK(fbe::gpu::allocations().count == held);
     fbe::gpu::limit_allocations(-1);
     CHECK(reads_as(texture, 255));
     // And the CPU's copy is read again from what the GPU has.
@@ -1621,6 +1626,83 @@ TEST_CASE("a write that fails for room leaves the CPU's pixels to send, and the 
     CHECK(fbe_gpu_validation_errors() == 0);
     CHECK(fbe_texture_release(texture));
     stop_gpu();
+}
+
+// A level written with no room, and nothing to free for it, fails with the texture as it was,
+// its first level too: the GPU hasn't changed it, so the CPU's copy is still its pixels.
+TEST_CASE("a level's write that fails for room leaves the texture unchanged", "[gpu][frees]") {
+    start();
+    const std::uint64_t texture = make(16, 16, FBE_TEXTURE_RGBA8, true);
+    const std::vector<std::uint8_t> ones(std::size_t{ 16 } * 16 * 4, 1);
+    require(fbe_texture_write(texture, 0, 0, 16, 16, ones.data(), 64));
+    std::int64_t size = 0;
+    std::uint8_t* pixels = fbe_texture_pixels(texture, &size);
+    REQUIRE(pixels != nullptr);
+    (void)settled();
+    REQUIRE(fbe::gpu::waiting_frees() == 0);
+    fbe::gpu::limit_allocations(static_cast<std::int64_t>(fbe::gpu::allocations().count));
+    const std::vector<std::uint8_t> nines(ones.size(), 9);
+    CHECK_FALSE(fbe_texture_write_level(texture, 0, 16, 16, nines.data(), 64));
+    // Written into still, as what the CPU has is what the GPU has.
+    std::fill_n(pixels, 16, std::uint8_t{ 60 });
+    INFO(fbe_error());
+    CHECK(fbe_texture_pixels_written(texture, 0, 0, 4, 1));
+    fbe::gpu::limit_allocations(-1);
+    std::vector<std::uint8_t> expected(std::size_t{ 16 } * 16, 1);
+    std::fill_n(expected.begin(), 4, std::uint8_t{ 60 });
+    CHECK(shades_of(texture) == expected);
+    // And with room for a level's write once what waits is freed, what the CPU wrote goes first.
+    std::fill_n(pixels + 64, 16, std::uint8_t{ 70 });
+    require(fbe_texture_pixels_written(texture, 0, 1, 4, 1));
+    const std::uint64_t freed = written(2);
+    CHECK(reads_as(freed, 2));
+    (void)settled();
+    free_with_a_frame(freed);
+    fbe::gpu::limit_allocations(static_cast<std::int64_t>(fbe::gpu::allocations().count));
+    const std::vector<std::uint8_t> small(std::size_t{ 8 } * 8 * 4, 9);
+    CHECK(fbe_texture_write_level(texture, 1, 8, 8, small.data(), 32));
+    fbe::gpu::limit_allocations(-1);
+    std::fill_n(expected.begin() + 16, 4, std::uint8_t{ 70 });
+    CHECK(shades_of(texture) == expected);
+    CHECK(fbe_gpu_validation_errors() == 0);
+    CHECK(fbe_texture_release(texture));
+    stop_gpu();
+}
+
+// A model's material makes the textures its maps read, in the caller's list of them: run again
+// for room, it finds there the ones it made before it failed.
+TEST_CASE("a model's material's textures are made once there's room", "[gpu][frees]") {
+    start();
+    const std::vector<std::uint8_t> blue(64, 200);
+    assets::image_t image = block_image(assets::formats::rgba8_srgb, 64);
+    image.texels = assets::texels_t(nullptr, std::span(blue));
+    // A color and a map of one sRGB image: the map reads a twin of it, made here.
+    assets::material_t from;
+    from.base_color_texture.image = 0;
+    from.metallic_roughness_texture.image = 0;
+    auto model = std::make_shared<assets::load_t>();
+    model->kind = assets::load_kind_t::MODEL;
+    model->model.images.push_back(std::move(image));
+    model->model.materials.push_back(from);
+    model->done = true;
+    const std::uint64_t load = assets::loads().add(std::move(model));
+    const std::uint64_t material = fbe_model_material(load, 0);
+    REQUIRE(material != 0);
+    std::array<std::uint64_t, FBE_MODEL_MAPS> others{};
+    std::array<std::int32_t, FBE_MODEL_MAPS> images{};
+    std::int32_t made = 0;
+    const std::uint64_t texture = fbe_model_texture(load, 0, false);
+    REQUIRE(texture != 0);
+    full_but_for_the_frame();
+    const bool read = fbe_model_material_textures(load, 0, material, &texture, 1, others.data(),
+                                                  images.data(), FBE_MODEL_MAPS, &made);
+    INFO(fbe_error());
+    CHECK(read);
+    CHECK(made == 1);
+    CHECK(others[0] != 0);
+    fbe::gpu::limit_allocations(-1);
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_gpu_stop();
 }
 
 // What's written into a texture's CPU copy is sent before the texture's written or read. With no

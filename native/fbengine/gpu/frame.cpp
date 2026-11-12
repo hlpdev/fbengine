@@ -19,6 +19,7 @@
 
 #include <array>
 #include <functional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -274,6 +275,22 @@ bool give_up(const fbe::gpu::device_t& gpu, fbe::gpu::frame_t& frame) {
     return fbe::gpu::fail_lost();
 }
 
+/// Frees what each frame that isn't being recorded left, waiting for the GPU to be done with it;
+/// false if the GPU's lost or couldn't be waited for.
+bool collect_done(fbe::gpu::device_t& gpu) {
+    for (fbe::gpu::frame_t& frame : gpu.frames) {
+        if (frame.begun) {
+            continue;
+        }
+        const VkResult waited = vkWaitForFences(gpu.device, 1, &frame.done, VK_TRUE, UINT64_MAX);
+        if (fbe::gpu::lose(waited) || waited != VK_SUCCESS) {
+            return false;
+        }
+        collect(frame);
+    }
+    return true;
+}
+
 } // namespace
 
 namespace fbe::gpu {
@@ -360,20 +377,15 @@ bool release_done() {
         return false;
     }
     const std::size_t waited_for = waiting_frees();
-    // Asked first, as what's held back for the graph can begin the frame as it's sent.
+    // What the frames submitted left goes before the graph's asked, which sends what's held back
+    // for it, and that wants the room.
+    if (!collect_done(*gpu)) {
+        return false;
+    }
+    // Asked before the frame's looked at, as what's held back can begin it as it's sent.
     const bool waits = graph_waits();
     const frame_t& recording = gpu->frames[gpu->frame];
     const bool recorded = waits || recording.begun || !carried.empty();
-    for (frame_t& frame : gpu->frames) {
-        if (frame.begun) {
-            continue;
-        }
-        const VkResult waited = vkWaitForFences(gpu->device, 1, &frame.done, VK_TRUE, UINT64_MAX);
-        if (lose(waited) || waited != VK_SUCCESS) {
-            return false;
-        }
-        collect(frame);
-    }
     // What waited for the next frame has nothing to wait for if nothing's recorded for one.
     if (!recorded) {
         const std::vector<std::function<void()>> next = std::move(with_next);
@@ -391,30 +403,27 @@ bool release_waiting() {
         return false;
     }
     const std::size_t waited_for = waiting_frees();
-    // What's recorded may use what waits: it's submitted. The graph's asked first, as what's held
-    // back for it can begin the frame as it's sent.
+    // What the frames submitted left goes before the graph's asked, which sends what's held back
+    // for it, and that wants the room.
+    if (!collect_done(*gpu)) {
+        return false;
+    }
+    // What's recorded may use what waits: it's submitted. The graph's asked before the frame's
+    // looked at, as what's held back for it can begin the frame as it's sent.
     const bool waits = graph_waits();
     if (waits || gpu->frames[gpu->frame].begun || !carried.empty()) {
-        // Whatever it says: a frame it couldn't submit stays begun, and isn't freed below, and
-        // what it couldn't record for want of room is in fbe_error.
+        // Whatever it says: what a frame it couldn't submit left is carried, with its uploads,
+        // to the next submit, so it isn't among what's freed below; and what it couldn't record
+        // for want of room is in fbe_error.
         (void)finish_frame();
     }
     // Each frame's is freed once its own fence says the GPU's done with it, whatever finishing the
     // frame said, which submits nothing if the graph recorded nothing.
-    bool all = true;
-    for (frame_t& frame : gpu->frames) {
-        if (frame.begun) {
-            all = false;
-            continue;
-        }
-        const VkResult waited = vkWaitForFences(gpu->device, 1, &frame.done, VK_TRUE, UINT64_MAX);
-        if (lose(waited) || waited != VK_SUCCESS) {
-            return false;
-        }
-        collect(frame);
+    if (!collect_done(*gpu)) {
+        return false;
     }
     // Every frame's done and none's begun, so what waited for the next has nothing to wait for.
-    if (all && carried.empty()) {
+    if (!gpu->frames[gpu->frame].begun && carried.empty()) {
         const std::vector<std::function<void()>> next = std::move(with_next);
         with_next.clear();
         for (const std::function<void()>& free : next) {
@@ -444,10 +453,16 @@ bool made_room(bool submits) {
     if (!no_room) {
         return false;
     }
+    // The call's own error, which it's left with if it isn't run again: what's freed here, or
+    // submitted, may say something of its own.
+    const std::string own = fbe_error();
     const bool made = submits ? release_waiting() : release_done();
     // Asked for once more by the call's next try, if that has no room either.
     if (made || submits) {
         no_room = false;
+    }
+    if (!made) {
+        fbe::fail(own);
     }
     return made;
 }
@@ -593,6 +608,8 @@ bool finish_frame() {
     }
     begin();
     if (!submit(gpu, frame, VK_NULL_HANDLE, VK_NULL_HANDLE)) {
+        // And what its passes, added again for the next submit, had no room for.
+        no_room = said;
         return false;
     }
     const VkResult waited = vkWaitForFences(gpu.device, 1, &frame.done, VK_TRUE, UINT64_MAX);

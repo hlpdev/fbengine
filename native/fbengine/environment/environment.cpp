@@ -317,94 +317,101 @@ std::uint64_t largest_draw() {
 extern "C" {
 
 FBE_API uint64_t fbe_environment_bake(uint64_t source, int32_t size, int32_t samples) {
-    if (size < smallest || size > largest ||
-        !std::has_single_bit(static_cast<std::uint32_t>(size))) {
-        fbe::fail(std::format("an environment's size is a power of 2 from {} to {}, not {}",
-                              smallest, largest, size));
-        return 0;
-    }
-    if (samples < 1 || samples > most_samples) {
-        fbe::fail(
-            std::format("an environment takes 1 to {} samples, not {}", most_samples, samples));
-        return 0;
-    }
-    if (!fbe_gpu_start()) {
-        return 0;
-    }
-    if (fbe::gpu::lost()) {
-        fbe::gpu::fail_lost();
-        return 0;
-    }
-    if (fbe::texture::find(source) == nullptr) {
-        return 0;
-    }
-    // Pixels written on the CPU reach the GPU first.
-    fbe::texture::send_pixels(source);
-    if (!ready_table()) {
-        return 0;
-    }
-    const auto width = static_cast<std::uint32_t>(size);
-    const auto taken = static_cast<std::uint32_t>(samples);
-    const std::uint64_t irradiance =
-        fbe::texture::create_engine_texture(irradiance_size, irradiance_size, FBE_TEXTURE_RGBA16F);
-    const std::uint64_t specular =
-        irradiance != 0
-            ? fbe::texture::create_engine_texture(width, width, FBE_TEXTURE_RGBA16F, true)
-            : 0;
-    if (!fbe_texture_retain(source)) {
-        return 0;
-    }
-    const auto hold = std::make_shared<hold_t>(hold_t{ .source = source });
-    const auto failed = [&] {
-        release(irradiance);
-        release(specular);
-        let_go(hold);
-        return std::uint64_t{ 0 };
-    };
-    if (specular == 0) {
-        return failed();
-    }
-    if (!bake_level({
-            .entry = "irradianceMain",
-            .source = source,
-            .into = irradiance,
-            .size = irradiance_size,
-            .samples = taken,
-            .hold = hold,
-        })) {
-        return failed();
-    }
-    // Level by level as roughness goes up to the smallest that's read, those past it the same.
-    const auto chain = static_cast<std::uint32_t>(std::bit_width(width));
-    const std::uint32_t levels =
-        chain - 1 - static_cast<std::uint32_t>(std::bit_width(smallest_level) - 1);
-    for (std::uint32_t level = 0; level < chain; ++level) {
-        const float roughness =
-            std::min(static_cast<float>(level) / static_cast<float>(levels), 1.0F);
+    // Run again for room, it makes what it freed as it failed, and nothing's kept of the try.
+    return fbe::gpu::with_room([&] -> std::uint64_t {
+        if (size < smallest || size > largest ||
+            !std::has_single_bit(static_cast<std::uint32_t>(size))) {
+            fbe::fail(std::format("an environment's size is a power of 2 from {} to {}, not {}",
+                                  smallest, largest, size));
+            return 0;
+        }
+        if (samples < 1 || samples > most_samples) {
+            fbe::fail(
+                std::format("an environment takes 1 to {} samples, not {}", most_samples, samples));
+            return 0;
+        }
+        if (!fbe_gpu_start()) {
+            return 0;
+        }
+        if (fbe::gpu::lost()) {
+            fbe::gpu::fail_lost();
+            return 0;
+        }
+        if (fbe::texture::find(source) == nullptr) {
+            return 0;
+        }
+        // Pixels written on the CPU reach the GPU first.
+        fbe::texture::send_pixels(source);
+        if (!ready_table()) {
+            return 0;
+        }
+        const auto width = static_cast<std::uint32_t>(size);
+        const auto taken = static_cast<std::uint32_t>(samples);
+        const std::uint64_t irradiance = fbe::texture::create_engine_texture(
+            irradiance_size, irradiance_size, FBE_TEXTURE_RGBA16F);
+        const std::uint64_t specular =
+            irradiance != 0
+                ? fbe::texture::create_engine_texture(width, width, FBE_TEXTURE_RGBA16F, true)
+                : 0;
+        if (!fbe_texture_retain(source)) {
+            return 0;
+        }
+        const auto hold = std::make_shared<hold_t>(hold_t{ .source = source });
+        const auto failed = [&] {
+            release(irradiance);
+            release(specular);
+            let_go(hold);
+            return std::uint64_t{ 0 };
+        };
+        if (specular == 0) {
+            return failed();
+        }
         if (!bake_level({
-                .entry = "specularMain",
+                .entry = "irradianceMain",
                 .source = source,
-                .into = specular,
-                .level = level,
-                .size = width >> level,
-                .roughness = roughness,
+                .into = irradiance,
+                .size = irradiance_size,
                 .samples = taken,
                 .hold = hold,
             })) {
             return failed();
         }
-    }
-    fbe::texture::changed_on_gpu(irradiance);
-    fbe::texture::changed_on_gpu(specular);
-    let_go(hold);
-    baked_t& state = baked();
-    const std::uint32_t slot = state.slots.make();
-    if (slot >= state.environments.size()) {
-        state.environments.resize(slot + 1);
-    }
-    state.environments[slot] = { .irradiance = irradiance, .specular = specular, .levels = levels };
-    ++state.count;
-    return state.slots.handle(slot);
+        // Level by level as roughness goes up to the smallest that's read, those past it the same.
+        const auto chain = static_cast<std::uint32_t>(std::bit_width(width));
+        const std::uint32_t levels =
+            chain - 1 - static_cast<std::uint32_t>(std::bit_width(smallest_level) - 1);
+        for (std::uint32_t level = 0; level < chain; ++level) {
+            const float roughness =
+                std::min(static_cast<float>(level) / static_cast<float>(levels), 1.0F);
+            if (!bake_level({
+                    .entry = "specularMain",
+                    .source = source,
+                    .into = specular,
+                    .level = level,
+                    .size = width >> level,
+                    .roughness = roughness,
+                    .samples = taken,
+                    .hold = hold,
+                })) {
+                return failed();
+            }
+        }
+        fbe::texture::changed_on_gpu(irradiance);
+        fbe::texture::changed_on_gpu(specular);
+        let_go(hold);
+        baked_t& state = baked();
+        const std::uint32_t slot = state.slots.make();
+        if (slot >= state.environments.size()) {
+            state.environments.resize(slot + 1);
+        }
+        state.environments[slot] = {
+            .irradiance = irradiance,
+            .specular = specular,
+            .levels = levels,
+        };
+        ++state.count;
+        return state.slots.handle(slot);
+    });
 }
 
 FBE_API bool fbe_environment_free(uint64_t environment) {

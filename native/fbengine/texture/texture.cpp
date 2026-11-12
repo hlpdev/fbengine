@@ -1821,10 +1821,7 @@ FBE_API uint8_t* fbe_texture_pixels(uint64_t texture, int64_t* size) {
             // the kept's writes first. Read back into where it is, so it stays there.
             std::vector<std::uint8_t> read = fbe::texture::read(texture, 0);
             if (read.empty()) {
-                // What's written into it and still to send stays, for this call run again.
-                if (kept.right <= kept.left) {
-                    drop_copy(slot);
-                }
+                drop_copy(slot);
                 return nullptr;
             }
             if (kept.pixels.size() == read.size()) {
