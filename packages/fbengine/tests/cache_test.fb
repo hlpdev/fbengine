@@ -13,6 +13,7 @@ Import fbengine
 Import fbengine.c.fbe_assets
 Import "./named/first" As First
 Import "./named/second" As Second
+Import "./budget"
 
 Global made = 0
 
@@ -376,7 +377,7 @@ Function ReleasingManyTakesTimeAsTheyDo() Throws IOError
     For j = 0 Until count
         held[count - 1 - j].Free()
     End For
-    Expect(watch.Elapsed < 1.Seconds)
+    Expect(watch.Elapsed.TotalSeconds < Budget(1.0), "it took {watch.Elapsed}, {BudgetHeld()}")
     Expect(held[0].Freed)
 End Function
 

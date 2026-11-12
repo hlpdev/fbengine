@@ -7,6 +7,7 @@ Import std.text
 Import std.time
 Import fbengine
 Import fbengine_ui
+Import "./budget"
 
 Function Near(a: Float32, b: Float32): Bool => Abs(a - b) < 0.001
 
@@ -359,7 +360,7 @@ Function APasteAtTheMostIsCutQuickly() Throws GraphicsError
     Local timer = Stopwatch.StartNew()
     Try Typed(ui, long.ToString())
     Expect(field.Text() == "abxxxxxxxx" && field.Length() == 10)
-    Expect(timer.Elapsed.TotalSeconds < 0.2)
+    Expect(timer.Elapsed.TotalSeconds < Budget(0.2), "it took {timer.Elapsed}, {BudgetHeld()}")
 End Function
 
 @Test

@@ -14,6 +14,7 @@ Import std.os As os
 Import fbengine
 Import fbengine_editor
 Import fbengine_ui
+Import "./budget"
 
 Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
 
@@ -770,11 +771,13 @@ Function StoppingNeverHoldsUpAFrame() Throws IOError, GraphicsError
     Expect(editor.Run.State() == PlayState.RUNNING, Said(editor))
     Local since = Instant.Now()
     editor.Run.Stop()
-    Expect((Instant.Now() - since) < 750.Milliseconds, "it took {Instant.Now() - since}")
+    Expect((Instant.Now() - since).TotalSeconds < Budget(0.75),
+           "it took {Instant.Now() - since}, {BudgetHeld()}")
     Expect(editor.Run.State() == PlayState.STOPPING && editor.Run.Going(), Said(editor))
     since = Instant.Now()
     editor.Step()
-    Expect((Instant.Now() - since) < 750.Milliseconds, "a frame took {Instant.Now() - since}")
+    Expect((Instant.Now() - since).TotalSeconds < Budget(0.75),
+           "a frame took {Instant.Now() - since}, {BudgetHeld()}")
     Expect(editor.Output.Heading() == "Stopping")
     Local open = editor.Current()
     If open == Null Then Panic("its project")

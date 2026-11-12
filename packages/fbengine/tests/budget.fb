@@ -1,0 +1,18 @@
+// What a check by the wall clock is held to. A budget of time is what a developer's machine keeps;
+// GitHub's runners are shared, and run two to three times slow for minutes at a time, so there a
+// budget is four times as written, which what's become several times dearer still fails. Each
+// package's tests have this file as it is, as they share no code.
+
+Import std.os
+
+/// How many times a budget of time as written it's held to here: 4 on GitHub's runners, which set
+/// GITHUB_ACTIONS, and 1 anywhere else.
+Public Function BudgetScale(): Float64 => Env.Get("GITHUB_ACTIONS") == "true" ? 4.0 : 1.0
+
+/// What `budget`, of seconds or of any share of time, is held to here.
+Public Function Budget(budget: Float64): Float64 => budget * BudgetScale()
+
+/// Which it was held to, for what a check prints.
+Public Function BudgetHeld(): String
+    Return BudgetScale() == 1.0 ? "as written" : "at 4 times, as on GitHub's runners"
+End Function
