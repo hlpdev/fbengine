@@ -55,13 +55,13 @@ Public Final Class Canvas
         If !texture.IsTarget() Then Panic("a Canvas draws into a target, which the texture isn't")
         Self.texture = texture
         Into("Canvas")
-        pen = fbe_2d_pen_t(0, 0, 0, 0, 0, 0, 255, 255, 255, 255, FBE_2D_SOLID)
+        pen = fbe_2d_pen_t(0, 0, 0, 0, 0, 0, 255, 255, 255, 255, FBE_2D_SOLID, 0)
         scale = Vec2(1, 1)
     End New
 
     // The screen's.
     Package New()
-        pen = fbe_2d_pen_t(0, 0, 0, 0, 0, 0, 255, 255, 255, 255, FBE_2D_SOLID)
+        pen = fbe_2d_pen_t(0, 0, 0, 0, 0, 0, 255, 255, 255, 255, FBE_2D_SOLID, 0)
         scale = Vec2(1, 1)
     End New
 
@@ -126,6 +126,20 @@ Public Final Class Canvas
 
     /// How it blends.
     @MainThread Public Method Blend(): Blend2D => pen.blend As Blend2D
+
+    /// Sets whether it draws in stored values, as DirectX 7 blended them, rather than in linear
+    /// light, False at first, as Camera's SetStoredValues has a camera draw: its color goes into
+    /// the target's bytes as it's given, the screen's too, and what blends blends with those
+    /// bytes, so half white over black is 128, not 188, and what's added adds the bytes. An sRGB
+    /// texture decodes as it's sampled, so what's filtered between its texels is by their light,
+    /// and is encoded again before the color multiplies it; one whose pixels are data is what's
+    /// stored. Into a target whose pixels are data it changes nothing but that.
+    @MainThread Public Method SetStoredValues(on: Bool)
+        pen.stored = on ? 1 : 0
+    End Method
+
+    /// Whether it draws in stored values.
+    @MainThread Public Method StoredValues(): Bool => pen.stored != 0
 
     /// Sets how far the sprites it draws are rotated about their handles, in radians, clockwise
     /// on the screen: `SetRotation(Deg(30))` for 30 degrees.

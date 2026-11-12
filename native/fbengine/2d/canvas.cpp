@@ -61,13 +61,15 @@ static_assert(sizeof(quad_t) == 80, "the canvas shader reads quads 80 bytes apar
 /// in its part, half a texel in from its edges, so filtering doesn't reach a neighbor's; it's
 /// tiles, its uv where the tiles start and how big they are, from which the shader works out each
 /// pixel's, wrapped into its part if it has one; its texture's coverage, its red the alpha of its
-/// color; and a texel of no alpha leaves what's there, whatever the blend.
+/// color; a texel of no alpha leaves what's there, whatever the blend; and its texture's sRGB,
+/// drawn in stored values, so its texels are encoded again once they're sampled.
 constexpr std::uint32_t line_flag = 1;
 constexpr std::uint32_t steep_flag = 2;
 constexpr std::uint32_t part_flag = 4;
 constexpr std::uint32_t tile_flag = 8;
 constexpr std::uint32_t coverage_flag = 16;
 constexpr std::uint32_t key_flag = 32;
+constexpr std::uint32_t encoded_flag = 64;
 /// No blend but the pen's, for begin.
 constexpr std::int32_t pens_blend = -1;
 /// The longest line the shader's 32-bit arithmetic draws, and the furthest from 0 its ends can be.
@@ -101,8 +103,9 @@ struct draw_t {
     VkRect2D scissor{};
 };
 
-/// The batch: its target, its quads, and its draws.
+/// The batch: its target, whether it's drawn in stored values, its quads, and its draws.
 std::uint64_t batch_target = 0;
+bool batch_stored = false;
 std::vector<quad_t> quads;
 /// The textures the batch's quads sample, and each slot's mark, the batch's number when its
 /// texture was added, so each is added once.
@@ -178,6 +181,7 @@ void flush() {
     const std::vector<quad_t> sent = std::move(quads);
     const auto drawn = std::make_shared<const std::vector<draw_t>>(std::move(draws));
     const std::vector<std::uint64_t> textures = std::move(sampled);
+    const bool stored = batch_stored;
     quads.clear();
     draws.clear();
     sampled.clear();
@@ -187,9 +191,14 @@ void flush() {
         return;
     }
     const VkExtent2D extent{ .width = found->width, .height = found->height };
-    const VkFormat format = found->vk_format;
+    // Stored values go into a target's bytes as they are, through its view of them if it has one,
+    // and a pen's color as it's given, as into a target whose pixels are data.
+    const VkFormat format = stored && found->stored_view != VK_NULL_HANDLE
+                                ? VK_FORMAT_R8G8B8A8_UNORM
+                                : found->vk_format;
     const VkSampleCountFlagBits samples = found->samples;
-    const bool data = found->format == FBE_TEXTURE_RGBA8_LINEAR || found->format == FBE_TEXTURE_R8;
+    const bool data =
+        stored || found->format == FBE_TEXTURE_RGBA8_LINEAR || found->format == FBE_TEXTURE_R8;
     const fbe::gpu::resource_t target = fbe::gpu::texture_resource(batch_target);
     const VkDeviceSize bytes = sent.size() * sizeof(quad_t);
     const fbe::gpu::slice_t slice =
@@ -214,7 +223,7 @@ void flush() {
         }
         fbe::gpu::add_pass({
             .name = "2d",
-            .colors = { { .target = target } },
+            .colors = { { .target = target, .stored = stored } },
             .uses = std::move(uses),
             .record =
                 [push, drawn, format, samples](VkCommandBuffer commands) {
@@ -236,6 +245,7 @@ void drop() {
     quads.clear();
     draws.clear();
     batch_target = 0;
+    batch_stored = false;
 }
 
 /// Readies the batch for what `pen` draws into `target`, the screen for 0: sends what it has to
@@ -284,9 +294,12 @@ bool begin(std::uint64_t target, const fbe_2d_pen_t* pen, std::int32_t blend = p
     found = fbe::texture::find(handle);
     const std::int64_t width = found->width;
     const std::int64_t height = found->height;
-    if (handle != batch_target) {
+    // A batch is one pass, into one target, through its view of its light or of its bytes.
+    const bool stored = pen->stored != 0;
+    if (handle != batch_target || stored != batch_stored) {
         flush();
         batch_target = handle;
+        batch_stored = stored;
     }
     const bool whole = pen->viewport_width == 0 && pen->viewport_height == 0;
     clip = {
@@ -493,7 +506,8 @@ void add_texels(const std::array<float, 8>& corners, const std::array<float, 4>&
         },
         .color = color,
         .texture = source.slot | (sampler << 24U),
-        .flags = flags,
+        .flags = flags |
+                 (batch_stored && fbe_texture_srgb(source.handle) ? encoded_flag : 0U),
     });
     ++draws.back().count;
 }

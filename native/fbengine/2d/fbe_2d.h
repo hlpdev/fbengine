@@ -21,8 +21,12 @@ extern "C" {
 // A pen: its origin, added to every position it draws at; its viewport, which clips what it draws,
 // in the target's pixels from its top left with the origin not added, 0 by 0 for the whole target;
 // its color, sRGB bytes, or, into a target whose pixels are data, RGBA8_LINEAR's or R8's, the
-// bytes stored; and how it blends, an FBE_2D_ blend. C has no `using`, so it's a typedef.
-// NOLINTNEXTLINE(modernize-use-using)
+// bytes stored; how it blends, an FBE_2D_ blend; and whether it draws in stored values, 1 for yes
+// and 0 for no, as a camera does that fbe_camera_set_stored_values is set on: its color goes
+// into the target's bytes as it's given, what it blends with are those bytes, so half white over
+// black is 128, not 188, and an sRGB texture's texels, decoded as they're sampled and filtered by
+// their light, are encoded again before the pen's color multiplies them. C has no `using`, so it's
+// a typedef. NOLINTNEXTLINE(modernize-use-using)
 typedef struct fbe_2d_pen_t {
     int32_t origin_x;
     int32_t origin_y;
@@ -35,6 +39,7 @@ typedef struct fbe_2d_pen_t {
     uint8_t blue;
     uint8_t alpha;
     int32_t blend;
+    int32_t stored;
 } fbe_2d_pen_t;
 
 // How a texture's drawn: the part of it, in its pixels from its top left, 0 by 0 for all of it;

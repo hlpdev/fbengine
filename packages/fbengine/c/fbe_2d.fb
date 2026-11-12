@@ -18,6 +18,7 @@ Public Const FBE_2D_MULTIPLY: Int32 = 3
     Public Field blue: UInt8
     Public Field alpha: UInt8
     Public Field blend: Int32
+    Public Field stored: Int32
 End Struct
 
 @CLayout Public Struct fbe_2d_sprite_t

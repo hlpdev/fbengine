@@ -1743,6 +1743,88 @@ constexpr fbe_2d_sprite_t all{ .scale_x = 1.0F, .scale_y = 1.0F };
 
 } // namespace
 
+// A pen that draws in stored values blends the target's bytes, as a camera in stored values does
+// and DirectX 7 did: half white over black is 128, where in linear light it's 188, the numbers
+// the camera's own test has. A pen that doesn't, into the same target after, is in light again.
+TEST_CASE("a pen in stored values blends what's stored, as a camera in them does", "[gpu]") {
+    start();
+    const std::uint64_t made = target(8, 8);
+    const fbe_2d_pen_t clear = pen(black);
+    const auto drawn = [&](const fbe_2d_pen_t& under, const fbe_2d_pen_t& over) {
+        require(fbe_2d_clear(made, &clear));
+        require(fbe_2d_rect(made, &under, 0, 0, 8, 8, true));
+        require(fbe_2d_rect(made, &over, 2, 2, 4, 4, true));
+        return pixel(read(made), 3, 3);
+    };
+    const auto stored = [](rgba_t color, std::int32_t blend) {
+        fbe_2d_pen_t made_pen = pen(color, blend);
+        made_pen.stored = 1;
+        return made_pen;
+    };
+    const auto near = [](const rgba_t& got, int red, int green, int blue) {
+        return std::abs(got[0] - red) <= 1 && std::abs(got[1] - green) <= 1 &&
+               std::abs(got[2] - blue) <= 1;
+    };
+    // Over, by alpha.
+    CHECK(near(drawn(stored(black, FBE_2D_SOLID), stored({ 255, 255, 255, 128 }, FBE_2D_ALPHA)),
+               128, 128, 128));
+    CHECK(near(drawn(pen(black), pen({ 255, 255, 255, 128 }, FBE_2D_ALPHA)), 188, 188, 188));
+    // Half green over half red over black, as the camera's test has it: 64, 128, 0.
+    require(fbe_2d_clear(made, &clear));
+    const fbe_2d_pen_t reds = stored({ 255, 0, 0, 128 }, FBE_2D_ALPHA);
+    const fbe_2d_pen_t greens = stored({ 0, 255, 0, 128 }, FBE_2D_ALPHA);
+    require(fbe_2d_rect(made, &reds, 0, 0, 8, 8, true));
+    require(fbe_2d_rect(made, &greens, 0, 0, 8, 8, true));
+    CHECK(near(pixel(read(made), 3, 3), 64, 128, 0));
+    // Added: the bytes add, and by the pen's alpha.
+    CHECK(near(drawn(stored({ 50, 50, 50, 255 }, FBE_2D_SOLID),
+                     stored({ 100, 100, 100, 255 }, FBE_2D_ADD)),
+               150, 150, 150));
+    CHECK(near(drawn(stored({ 50, 50, 50, 255 }, FBE_2D_SOLID),
+                     stored({ 200, 200, 200, 128 }, FBE_2D_ADD)),
+               150, 150, 150));
+    const int added = to_srgb(std::pow((50.0 + 0.055 * 255.0) / (1.055 * 255.0), 2.4) +
+                              std::pow((100.0 + 0.055 * 255.0) / (1.055 * 255.0), 2.4));
+    CHECK(near(drawn(pen({ 50, 50, 50, 255 }), pen({ 100, 100, 100, 255 }, FBE_2D_ADD)), added,
+               added, added));
+    // Multiplied: half of half is a quarter.
+    CHECK(near(drawn(stored({ 128, 128, 128, 255 }, FBE_2D_SOLID),
+                     stored({ 128, 128, 128, 255 }, FBE_2D_MULTIPLY)),
+               64, 64, 64));
+    // A color with no blend is its bytes either way.
+    CHECK(near(drawn(stored(black, FBE_2D_SOLID), stored({ 10, 100, 200, 255 }, FBE_2D_SOLID)), 10,
+               100, 200));
+    CHECK(near(drawn(pen(black), pen({ 10, 100, 200, 255 })), 10, 100, 200));
+    // An sRGB texture's texels are what's stored in it, and faded by what's stored: 100 at half
+    // is 50, where in light it's 71; one whose pixels are data is its bytes.
+    const std::vector<std::uint8_t> hundreds{ 100, 100, 100, 255 };
+    const fbe_2d_sprite_t stretched{ .scale_x = 4.0F, .scale_y = 4.0F };
+    for (const std::int32_t format : { FBE_TEXTURE_RGBA8, FBE_TEXTURE_RGBA8_LINEAR }) {
+        CAPTURE(format);
+        const std::uint64_t texture = fbe_texture_create(1, 1, format, false);
+        REQUIRE(texture != 0);
+        require(fbe_texture_write(texture, 0, 0, 1, 1, hundreds.data(), 4));
+        require(fbe_2d_clear(made, &clear));
+        const fbe_2d_pen_t solid = stored({ 255, 255, 255, 255 }, FBE_2D_SOLID);
+        require(fbe_2d_texture(made, &solid, texture, &stretched, 2.0F, 2.0F));
+        CHECK(near(pixel(read(made), 3, 3), 100, 100, 100));
+        require(fbe_2d_clear(made, &clear));
+        const fbe_2d_pen_t faded = stored({ 255, 255, 255, 128 }, FBE_2D_ALPHA);
+        require(fbe_2d_texture(made, &faded, texture, &stretched, 2.0F, 2.0F));
+        CHECK(near(pixel(read(made), 3, 3), 50, 50, 50));
+        CHECK(fbe_texture_release(texture));
+    }
+    // And into a target whose pixels are data, it's the bytes, as it was.
+    const std::uint64_t data = target(8, 8, FBE_TEXTURE_RGBA8_LINEAR);
+    const fbe_2d_pen_t under = stored(black, FBE_2D_SOLID);
+    const fbe_2d_pen_t over = stored({ 255, 255, 255, 128 }, FBE_2D_ALPHA);
+    require(fbe_2d_rect(data, &under, 0, 0, 8, 8, true));
+    require(fbe_2d_rect(data, &over, 2, 2, 4, 4, true));
+    CHECK(near(pixel(read(data), 3, 3), 128, 128, 128));
+    CHECK(fbe_gpu_validation_errors() == 0);
+    stop_gpu();
+}
+
 // A sprite at its size has each of its texels on one pixel, its last row and column as its first,
 // wherever on the target it is: a pixel's step across the texture that floats have a hair past
 // one texel is still one texel, and isn't sampled as the level above, half a texel further in.

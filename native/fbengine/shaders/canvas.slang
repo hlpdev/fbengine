@@ -1,6 +1,7 @@
 // 2D's quads: each drawn from its corners, in pixels, read through the address the push constants
 // give, six vertices a quad; its color, sRGB bytes, made linear unless the target's pixels are
-// data, times its texture's color. A line's quad covers the pixels around it, and keeps, along its
+// data, or it's drawn in stored values, times its texture's color, which in stored values is
+// encoded again first if the texture's sRGB. A line's quad covers the pixels around it, and keeps, along its
 // longer axis, the one nearest it, as shapes.hpp's line picks it, a tie rounding up. A part of a
 // texture keeps its uv half a texel of the level it's sampled at inside the part, so filtering
 // never reaches a neighbor's texels; tiles have their uv worked out from where the pixel is, in
@@ -43,13 +44,15 @@ struct Corner
 
 // A quad's flags: it's a line; steeper than long; a part of its texture, left, top, right, and
 // bottom in uv; tiles, its uv where they start and how big they are; its texture's coverage, its
-// red its color's alpha; and a texel of no alpha leaves what's there, whatever the blend.
+// red its color's alpha; a texel of no alpha leaves what's there, whatever the blend; and its
+// texture's sRGB, drawn in stored values, so its texels are encoded again.
 static const uint lineFlag = 1;
 static const uint steepFlag = 2;
 static const uint partFlag = 4;
 static const uint tileFlag = 8;
 static const uint coverageFlag = 16;
 static const uint keyFlag = 32;
+static const uint encodedFlag = 64;
 
 // A quad's two triangles, from its corners clockwise from the top left.
 static const uint cornerOf[6] = { 0, 1, 2, 0, 2, 3 };
@@ -57,6 +60,11 @@ static const uint cornerOf[6] = { 0, 1, 2, 0, 2, 3 };
 float toLinear(float value)
 {
     return value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4);
+}
+
+float toEncoded(float value)
+{
+    return value <= 0.0031308 ? value * 12.92 : 1.055 * pow(value, 1.0 / 2.4) - 0.055;
 }
 
 [shader("vertex")]
@@ -164,6 +172,10 @@ float4 fragmentMain(Corner corner) : SV_Target
     if ((corner.flags & coverageFlag) != 0)
     {
         texel = float4(1.0, 1.0, 1.0, texel.r);
+    }
+    else if ((corner.flags & encodedFlag) != 0)
+    {
+        texel.rgb = float3(toEncoded(texel.r), toEncoded(texel.g), toEncoded(texel.b));
     }
     return corner.color * texel;
 }

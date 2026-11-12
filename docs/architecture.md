@@ -204,7 +204,10 @@ good modern engine on its own. Every structural choice is checked against both.
   The window's images and the screen are sRGB, so drawing is in linear light. A camera can draw in
   stored values instead, off by default: textures read as stored, lit and blended as stored, into
   a UNORM target, with no tonemap, and an HDR camera refuses it. DirectX 7 blended stored values,
-  so a game keeping that look (forced alpha 128 giving 128, not 188) needs it.
+  so a game keeping that look (forced alpha 128 giving 128, not 188) needs it. A Canvas can too,
+  by its pen: its batch is drawn through the target's view of its bytes, its color as it's
+  given, and an sRGB texture's texels encoded again once they're sampled, so a HUD's fades and
+  adds are the old game's.
   A portability driver holds what it promises: on MoltenVK the bindless set is 1180 textures
   against 16384 elsewhere, and samplers take no LOD bias, which SetLodBias keeps and doesn't draw.
 - **What it runs on** (the user, 2026-10-31): Vulkan 1.2 GPUs (2016 onward), Windows 10, Linux

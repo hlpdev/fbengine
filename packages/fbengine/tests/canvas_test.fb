@@ -255,6 +255,30 @@ Function TextEndsAtANul() Throws GraphicsError, IOError
     font.Free()
 End Function
 
+// As a HUD that fades over what's drawn, as the game it's of did: half white over black is 128
+// of what's stored, where in light it's 188.
+@Test
+Function ACanvasInStoredValuesBlendsWhatsStored() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local target = Try Texture.Target(4, 4)
+    Local canvas = Canvas(target)
+    Expect(!canvas.StoredValues())
+    canvas.SetColor(Color32(0, 0, 0, 255))
+    canvas.Clear()
+    canvas.SetBlend(Blend2D.ALPHA)
+    canvas.SetColor(Color32(255, 255, 255, 128))
+    canvas.DrawRect(0, 0, 2, 4)
+    canvas.SetStoredValues(True)
+    Expect(canvas.StoredValues())
+    canvas.DrawRect(2, 0, 2, 4)
+    Local read = target.ToImage()
+    Expect(read[0, 0].r >= 187 && read[0, 0].r <= 189)
+    Expect(read[3, 0].r >= 127 && read[3, 0].r <= 129)
+    canvas.SetStoredValues(False)
+    Expect(!canvas.StoredValues())
+End Function
+
 @Test
 Function ASpritesKeyColorIsTransparent() Throws GraphicsError
     If NoGpu() Then Skip("no GPU here")
