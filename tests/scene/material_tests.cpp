@@ -459,29 +459,29 @@ TEST_CASE("a material takes another's settings in place, holding what that holds
     CHECK(fbe_material_set_shader(other, shader));
     CHECK(fbe_material_set_color(other, 0.0F, 0.5F, 0.0F, 1.0F));
     CHECK(fbe_material_set_shading(other, FBE_SHADING_UNLIT));
-    const std::uint64_t material = fbe_material_create();
+    const std::uint64_t taking = fbe_material_create();
     const std::uint64_t own = shader_of(cooked(fbe_version(), good_spirv()));
-    CHECK(fbe_material_set_shader(material, own));
+    CHECK(fbe_material_set_shader(taking, own));
     CHECK(fbe_shader_release(own));
-    CHECK(fbe_material_retain(material));
-    CHECK(fbe_material_take(material, other));
+    CHECK(fbe_material_retain(taking));
+    CHECK(fbe_material_take(taking, other));
     // It's itself still, held as it was, with what the other has, and what it had is let go of.
-    CHECK(fbe_material_shader(material) == shader);
-    CHECK(fbe_material_shading(material) == FBE_SHADING_UNLIT);
+    CHECK(fbe_material_shader(taking) == shader);
+    CHECK(fbe_material_shading(taking) == FBE_SHADING_UNLIT);
     fbe_color_t color{};
-    CHECK(fbe_material_color(material, &color));
+    CHECK(fbe_material_color(taking, &color));
     CHECK(color.g == 0.5F);
     CHECK_FALSE(fbe_shader_alive(own));
-    CHECK(fbe_material_release(material));
-    CHECK(fbe_material_alive(material));
+    CHECK(fbe_material_release(taking));
+    CHECK(fbe_material_alive(taking));
     // Taking its own is nothing; and it holds the shader with the other, each once.
-    CHECK(fbe_material_take(material, material));
+    CHECK(fbe_material_take(taking, taking));
     CHECK(fbe_shader_release(shader));
     CHECK(fbe_material_release(other));
     CHECK(fbe_shader_alive(shader));
-    CHECK_FALSE(fbe_material_take(material, other));
-    CHECK_FALSE(fbe_material_take(other, material));
-    CHECK(fbe_material_release(material));
+    CHECK_FALSE(fbe_material_take(taking, other));
+    CHECK_FALSE(fbe_material_take(other, taking));
+    CHECK(fbe_material_release(taking));
     CHECK_FALSE(fbe_shader_alive(shader));
 }
 

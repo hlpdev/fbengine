@@ -1856,11 +1856,16 @@ TEST_CASE("a sprite's last row and column are drawn wherever it is", "[gpu]") {
         float x;
         float y;
     };
-    for (const place_t place :
-         { place_t{ .x = 0.0F, .y = 0.0F }, place_t{ .x = 1000.0F, .y = 400.0F },
-           place_t{ .x = 1071.0F, .y = 419.0F }, place_t{ .x = 1256.0F, .y = 696.0F },
-           place_t{ .x = 333.0F, .y = 77.0F }, place_t{ .x = 640.25F, .y = 360.25F },
-           place_t{ .x = 901.75F, .y = 13.75F }, place_t{ .x = 77.4F, .y = 650.6F } }) {
+    for (const place_t place : {
+             place_t{ .x = 0.0F, .y = 0.0F },
+             place_t{ .x = 1000.0F, .y = 400.0F },
+             place_t{ .x = 1071.0F, .y = 419.0F },
+             place_t{ .x = 1256.0F, .y = 696.0F },
+             place_t{ .x = 333.0F, .y = 77.0F },
+             place_t{ .x = 640.25F, .y = 360.25F },
+             place_t{ .x = 901.75F, .y = 13.75F },
+             place_t{ .x = 77.4F, .y = 650.6F },
+         }) {
         CAPTURE(place.x, place.y);
         // Smoothed, a part of a pixel along is a mix of two texels.
         if (filter == FBE_TEXTURE_LINEAR && place.x != std::floor(place.x)) {
