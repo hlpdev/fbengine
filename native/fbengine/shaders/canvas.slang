@@ -147,7 +147,10 @@ float4 fragmentMain(Corner corner) : SV_Target
             across *= most / steps;
             down *= most / steps;
         }
-        const float level = clamp(ceil(log2(max(min(steps, most), 1.0))), 0.0,
+        // A step that floats have a hair past a level's own, as a sprite's at its size is by where
+        // on the target it is, is that level still: a sampler takes none of the next till it's a
+        // 256th of the way there.
+        const float level = clamp(ceil(log2(max(min(steps, most), 1.0)) - 1.0 / 256.0), 0.0,
                                   float(textureLevels(texture) - 1));
         const float2 inset = 0.5 * exp2(level) / size;
         const float2 middle = (low + high) * 0.5;

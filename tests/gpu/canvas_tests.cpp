@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -1741,6 +1742,67 @@ rgba_t card_pixel(std::int64_t x, std::int64_t y) {
 constexpr fbe_2d_sprite_t all{ .scale_x = 1.0F, .scale_y = 1.0F };
 
 } // namespace
+
+// A sprite at its size has each of its texels on one pixel, its last row and column as its first,
+// wherever on the target it is: a pixel's step across the texture that floats have a hair past
+// one texel is still one texel, and isn't sampled as the level above, half a texel further in.
+TEST_CASE("a sprite's last row and column are drawn wherever it is", "[gpu]") {
+    start();
+    const std::uint64_t made = target(1280, 720);
+    const bool mipmaps = GENERATE(false, true);
+    const std::int32_t filter = GENERATE(FBE_TEXTURE_NEAREST, FBE_TEXTURE_LINEAR);
+    CAPTURE(mipmaps, filter);
+    // Clear but for a line along each side, each its own color.
+    const std::uint64_t texture = fbe_texture_create(24, 24, FBE_TEXTURE_RGBA8, mipmaps);
+    REQUIRE(texture != 0);
+    std::vector<std::uint8_t> texels(std::size_t{ 24 } * 24 * 4, 0);
+    const auto put = [&](std::size_t x, std::size_t y, rgba_t color) {
+        std::ranges::copy(color, texels.begin() + static_cast<std::ptrdiff_t>(((y * 24) + x) * 4));
+    };
+    for (std::size_t at = 1; at < 23; ++at) {
+        put(at, 0, red);
+        put(23, at, green);
+        put(at, 23, blue);
+        put(0, at, white);
+    }
+    require(fbe_texture_write(texture, 0, 0, 24, 24, texels.data(), 96));
+    require(fbe_texture_set_filter(texture, filter));
+    const fbe_2d_pen_t clear = pen(black);
+    const fbe_2d_pen_t ink = pen(white, FBE_2D_ALPHA);
+    const fbe_2d_sprite_t whole{ .scale_x = 1.0F, .scale_y = 1.0F };
+    struct place_t {
+        float x;
+        float y;
+    };
+    for (const place_t place :
+         { place_t{ 0.0F, 0.0F }, place_t{ 1000.0F, 400.0F }, place_t{ 1071.0F, 419.0F },
+           place_t{ 1256.0F, 696.0F }, place_t{ 333.0F, 77.0F }, place_t{ 640.25F, 360.25F },
+           place_t{ 901.75F, 13.75F }, place_t{ 77.4F, 650.6F } }) {
+        CAPTURE(place.x, place.y);
+        // Smoothed, a part of a pixel along is a mix of two texels.
+        if (filter == FBE_TEXTURE_LINEAR && place.x != std::floor(place.x)) {
+            continue;
+        }
+        require(fbe_2d_clear(made, &clear));
+        require(fbe_2d_texture(made, &ink, texture, &whole, place.x, place.y));
+        const fbe::golden::frame_t frame = read(made);
+        // Each line's 22 pixels, in a row or a column of its own, whatever part of a pixel the
+        // sprite's moved by.
+        for (const rgba_t line : { red, green, blue, white }) {
+            const auto drawn = pixels_of(frame, line);
+            CHECK(drawn.size() == 22);
+            if (drawn.size() == 22) {
+                const bool level = line == red || line == blue;
+                CHECK(std::ranges::all_of(drawn, [&](const auto& pixel) {
+                    return (level ? pixel.second : pixel.first) ==
+                           (level ? drawn.begin()->second : drawn.begin()->first);
+                }));
+            }
+        }
+    }
+    CHECK(fbe_gpu_validation_errors() == 0);
+    stop_gpu();
+}
 
 TEST_CASE("a texture drawn at its size at whole pixels is its texels exactly", "[gpu]") {
     start();
