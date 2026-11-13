@@ -351,7 +351,7 @@ Public Final Class Editor
             If problems.Count > 0 Then Said("Some of what that scene's made of is lost",
                                             problems.Join("\n"))
         Catch error As IOError
-            Said("Couldn't open that scene", error.Message)
+            Said("Couldn't open that scene", "{path}: {error.Message}")
             Return
         End Try
         Tree.MarkChanged()

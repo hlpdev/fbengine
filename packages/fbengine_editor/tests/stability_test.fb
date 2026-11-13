@@ -1,0 +1,457 @@
+// The editor's stability, headless, on lavapipe: thousands of scripted frames of a session, a
+// project opened, a scene edited, undone and redone past both ends, saved, read again, played and
+// stopped, and its docks moved, with the tree, the history, and what's held back where they were
+// each time round; a project's, a scene's, and what's kept between runs' files changed at random,
+// from a seed, each opened or refused with the file named; random runs of its commands, leaving a
+// scene every entity of which is where the tree says; and a GPU lost while it runs, after which
+// its view draws again.
+
+Import std.collections
+Import std.core
+Import std.io
+Import std.math
+Import std.os
+Import std.test
+Import std.text
+Import fbengine
+Import fbengine_editor
+Import fbengine_ui
+
+Global editorState: Int64 = 1
+
+// Park and Miller's, from a seed of 1 or more.
+Function EditorNext(n: Int): Int
+    editorState = editorState * 48271 % 2147483647
+    Return (editorState % n) As Int
+End Function
+
+Function StableNoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
+
+// A game's folder in `at`, called `name`.
+Function StableGame(at: Path, name: String): Path Throws IOError
+    Local folder = at / name
+    Try Dir.CreateAll(folder / "assets")
+    Try File.WriteText(folder / "project.toml",
+                       "[project]\nname = \"{name}\"\nversion = \"0.1.0\"\n")
+    Try File.WriteText(folder / "assets" / "said.txt", name)
+    Return folder
+End Function
+
+Function StableStarted(settings: Path, folder: Path? = Null): Editor Throws IOError, GraphicsError
+    Window.SetHeadless(True)
+    Local editor = Try Editor(settings)
+    Try editor.Start(folder)
+    editor.Step()
+    Return editor
+End Function
+
+// Every node under `node`, and it.
+Function StableNodes(node: Node): Int
+    Local count = 1
+    For child In node.Children()
+        count += StableNodes(child)
+    End For
+    Return count
+End Function
+
+// Closes whatever dialog's showing, as Escape does.
+Function Dismissed(editor: Editor) Throws GraphicsError
+    For tries = 1 To 4
+        If editor.ShowingDialog() == Null Then Return
+        Try Simulate.PressKey(Key.ESCAPE)
+        editor.Step()
+        editor.ShowingDialog()?.Close()
+        editor.Step()
+    End For
+End Function
+
+// What can grow, as a session goes on.
+Class Held Implements Printable
+    Field Entities: Int
+    Field Nodes: Int
+    Field Textures: Int32
+    Field Fonts: Int32
+    Field Panes: Int
+    Field Undoable: Bool
+    Field Lines: Int
+
+    Method ToString(): String
+        Return "entities {Entities}, nodes {Nodes}, textures {Textures}, fonts {Fonts}, " +
+               "panes {Panes}, undoable {Undoable}, lines {Lines}"
+    End Method
+End Class
+
+Function Measured(editor: Editor): Held
+    Local held = Held()
+    held.Entities = editor.Edited.Entities().Count
+    held.Nodes = StableNodes(editor.Shown.Root())
+    held.Textures = Texture.Count()
+    held.Fonts = Font.Count()
+    held.Panes = editor.Docked.ShownPanes().Count
+    held.Undoable = editor.Edits.CanUndo()
+    held.Lines = editor.Run.Log.Lines().Count
+    Return held
+End Function
+
+// One round of a session: a scene edited every way the tree edits one, undone and redone past
+// both ends, its docks moved and put back, saved, read again, and played with no fb to play it.
+Function Round(editor: Editor, round: Int) Throws GraphicsError
+    Local scene = editor.Edited
+    Local made: Entity[] = []
+    For each = 1 To 4
+        Local edit = MadeEdit("Add", scene, Function(): Entity => Pivot())
+        editor.Edits.Commit(edit)
+        Local entity = edit.Made()
+        If entity != Null Then made.Add(entity)
+        editor.Step()
+    End For
+    If made.Count == 4
+        editor.Edits.Commit(RenameEdit(made[0], "named {round}"))
+        editor.Edits.Commit(HideEdit([made[1]], True))
+        editor.Edits.Commit(CopyEdit(scene, [made[0]]))
+        editor.Edits.Commit(ReparentEdit(scene, [made[2]], made[3]))
+        scene.SelectOnly(made[3])
+        editor.Step()
+        editor.Edits.Commit(RemoveEdit(scene, [made[1]]))
+        editor.Step()
+    End If
+    // Undone past the first of them, redone past the last, and undone again.
+    For each = 1 To 14
+        editor.Edits.Undo()
+        If each % 3 == 0 Then editor.Step()
+    End For
+    For each = 1 To 14
+        editor.Edits.Redo()
+        If each % 3 == 0 Then editor.Step()
+    End For
+    For each = 1 To 14
+        editor.Actions.Run("edit.undo")
+    End For
+    editor.Step()
+    // Its docks: each pane beside another, hidden, shown, and all as they were at first.
+    Local panes = editor.Docked.ShownPanes()
+    If panes.Count >= 2
+        Local moved = panes[round % panes.Count]
+        Local target = panes[(round + 1) % panes.Count]
+        editor.Docked.Move(moved, target, [DockSide.LEFT, DockSide.RIGHT, DockSide.TOP,
+                                           DockSide.BOTTOM][round % 4], 0.3)
+        editor.Step()
+        editor.Docked.Hide(target)
+        editor.Step()
+        editor.Docked.Show(target)
+        editor.Docked.Activate(moved)
+        editor.Step()
+    End If
+    editor.DefaultLayout()
+    editor.Step()
+    // Saved, read again, and played with nothing to play it: it says so, and is stopped.
+    editor.SaveScene("res://soak.scene")
+    editor.Step()
+    editor.OpenScene("res://soak.scene")
+    editor.Step()
+    editor.Play()
+    editor.Step()
+    editor.Run.Stop()
+    editor.Step()
+    editor.Run.Log.Clear()
+    Try Dismissed(editor)
+    For each = 1 To 4
+        editor.Step()
+    End For
+End Function
+
+@Test
+Function ASessionOfThousandsOfFramesIsBackWhereItWasEachRound() Throws IOError, GraphicsError
+    If StableNoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try StableStarted(settings.Path, Try StableGame(games.Path, "soak"))
+    Defer editor.Finish()
+    editor.Run.Fb = (games.Path / "no such fb").Text
+    Local frames = Frame.Count()
+    Local warm: Held? = Null
+    For round = 1 To 80
+        Try Round(editor, round)
+        If round < 3 Then Continue
+        Local now = Measured(editor)
+        Local was = warm ?? now
+        If warm == Null Then warm = now
+        Expect(now.Entities == was.Entities, "round {round}: the scene grew: {was} then {now}")
+        Expect(now.Nodes == was.Nodes, "round {round}: the UI's tree grew: {was} then {now}")
+        Expect(now.Textures == was.Textures, "round {round}: textures: {was} then {now}")
+        Expect(now.Fonts == was.Fonts, "round {round}: fonts: {was} then {now}")
+        Expect(now.Panes == was.Panes, "round {round}: panes: {was} then {now}")
+        Expect(now.Undoable == was.Undoable, "round {round}: the history: {was} then {now}")
+        Expect(now.Lines == was.Lines, "round {round}: what the run said: {was} then {now}")
+        Expect(editor.ShowingDialog() == Null, "round {round}: a dialog's left showing")
+    End For
+    Expect(warm != Null)
+    Expect(Frame.Count() - frames >= 2000, "{Frame.Count() - frames} frames")
+    Expect(editor.Current() != Null && editor.SceneFile() == "res://soak.scene")
+End Function
+
+// `bytes` cut short, or changed, at random.
+Function Damaged(bytes: UInt8[]): UInt8[]
+    Local made = bytes.Clone()
+    Select EditorNext(5)
+        Case 0
+            Local kept: UInt8[] = []
+            Local count = EditorNext(made.Count + 1)
+            For at = 0 Until count
+                kept.Add(made[at])
+            End For
+            Return kept
+        Case 1, 2
+            If made.Count == 0 Then Return made
+            For each = 1 To 1 + EditorNext(6)
+                made[EditorNext(made.Count)] = EditorNext(256) As UInt8
+            End For
+            Return made
+        Case 3
+            If made.Count == 0 Then Return made
+            Local from = EditorNext(made.Count)
+            For at = from Until Min(from + 1 + EditorNext(40), made.Count)
+                made[at] = EditorNext(256) As UInt8
+            End For
+            Return made
+        Default
+            Return []
+    End Select
+End Function
+
+// A project's file, a scene's, and what's kept between runs, each damaged 40 ways from a seed:
+// the project opens or is refused in a dialog that names its folder or its file, the scene opens
+// or is refused in one that names it, with the scene that was open left open, and what's kept is
+// read or is as if it weren't there, the editor starting either way.
+@Test
+Function FilesDamagedAtRandomOpenOrAreRefusedByName() Throws IOError, GraphicsError
+    If StableNoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local good = Try StableGame(games.Path, "good")
+    Local editor = Try StableStarted(settings.Path, good)
+    editor.Actions.Run("add.cube")
+    editor.Actions.Run("add.light")
+    editor.SaveScene("res://level.scene")
+    editor.Step()
+    Expect(editor.ShowingDialog() == Null && editor.SceneFile() == "res://level.scene")
+    Local scene = Try File.ReadBytes(good / "assets" / "level.scene")
+    Local entities = editor.Edited.Entities().Count
+    editorState = 5150
+
+    // A scene's file.
+    For round = 1 To 40
+        Try File.WriteBytes(good / "assets" / "damaged.scene", Damaged(scene))
+        editor.OpenScene("res://damaged.scene")
+        editor.Step()
+        Local dialog = editor.ShowingDialog()
+        If dialog != Null && editor.SceneFile() != "res://damaged.scene"
+            Expect(dialog.Said().Contains("damaged.scene"),
+                   "seed 5150, round {round}: a scene refused without its name: {dialog.Said()}")
+            Expect(editor.Edited.Entities().Count == entities,
+                   "round {round}: a scene refused changed the one that was open")
+        End If
+        Try Dismissed(editor)
+        // Whatever it opened as is a scene: every entity of it is in it.
+        For entity In editor.Edited.Entities()
+            Expect(editor.Edited.Has(entity) && !editor.Edited.IsRemoved(entity))
+        End For
+        editor.OpenScene("res://level.scene")
+        editor.Step()
+        Try Dismissed(editor)
+        Expect(editor.Edited.Entities().Count == entities, "round {round}: the good scene")
+    End For
+
+    // A project's file.
+    Local bad = Try StableGame(games.Path, "bad")
+    Local project = Try File.ReadBytes(bad / "project.toml")
+    For round = 1 To 40
+        Try File.WriteBytes(bad / "project.toml", Damaged(project))
+        editor.OpenFolder(bad)
+        editor.Step()
+        Local dialog = editor.ShowingDialog()
+        Local opened = editor.Current()
+        If opened != Null && opened.Folder.Text == bad.Text
+            // Taken as a project: the good one's opened again.
+            Try Dismissed(editor)
+            editor.OpenFolder(good)
+            editor.Step()
+        Else
+            Expect(dialog != Null, "seed 5150, round {round}: neither opened nor refused")
+            Local said = dialog?.Said() ?? ""
+            Expect(said.Contains("project.toml") || said.Contains("bad"),
+                   "seed 5150, round {round}: a project refused without its name: {said}")
+            Expect(opened != Null && opened.Folder.Text == good.Text,
+                   "round {round}: a project refused closed the one that was open")
+        End If
+        Try Dismissed(editor)
+    End For
+    editor.Finish()
+
+    // What's kept between runs: every file of it, damaged, one at a time.
+    Local kept: Path[] = []
+    For entry In Try Dir.Entries(settings.Path)
+        If Dir.Exists(entry.Path)
+            For inner In Try Dir.Entries(entry.Path)
+                If !Dir.Exists(inner.Path) Then kept.Add(inner.Path)
+            End For
+        Else
+            kept.Add(entry.Path)
+        End If
+    End For
+    Expect(kept.Count > 0, "nothing was kept between runs")
+    For file In kept
+        Local whole = Try File.ReadBytes(file)
+        For round = 1 To 12
+            Try File.WriteBytes(file, Damaged(whole))
+            Local again = Try StableStarted(settings.Path, good)
+            again.Step()
+            Try Dismissed(again)
+            Expect(again.Current() != Null, "{file.FileName()}, round {round}: it didn't open")
+            again.Finish()
+            Try File.WriteBytes(file, whole)
+        End For
+    End For
+End Function
+
+// What's wrong with the scene being edited, or "": an entity that isn't in it, or was removed, or
+// isn't among its parent's children as the tree has them, or a selection of what isn't there.
+Function Unsound(editor: Editor): String
+    Local scene = editor.Edited
+    Local all = scene.Entities()
+    For entity In all
+        If !scene.Has(entity) Then Return "{entity.Name()} is listed, and the scene hasn't it"
+        If scene.IsRemoved(entity) Then Return "{entity.Name()} is listed, and was removed"
+        Local beside = scene.SiblingsOf(entity.Parent())
+        Local among = False
+        For other In beside
+            among = among || RefEquals(other, entity)
+        End For
+        If !among && (entity.Parent() == Null || scene.Has(entity.Parent() ?? entity))
+            Return "{entity.Name()} isn't among its parent's children"
+        End If
+    End For
+    For entity In scene.Selected()
+        If !scene.Has(entity) Then Return "{entity.Name()} is selected, and isn't in the scene"
+    End For
+    Local focused = editor.Shown.Focused()
+    If focused != Null
+        Local at: Node? = focused
+        Local held = False
+        While at != Null
+            held = held || RefEquals(at, editor.Shown.Root())
+            For popup In editor.Shown.Popups()
+                held = held || RefEquals(at, popup)
+            End For
+            at = at.Parent()
+        End While
+        If !held Then Return "the focus is on what isn't in the editor's UI"
+    End If
+    Return ""
+End Function
+
+// Its commands run at random, from a seed, two thousand of them, with what's selected changed at
+// random between: after each, the scene's every entity is where the tree says, what's selected is
+// in it, and the focus is on something that's there.
+@Test
+Function CommandsRunAtRandomLeaveASoundScene() Throws IOError, GraphicsError
+    If StableNoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try StableStarted(settings.Path, Try StableGame(games.Path, "random"))
+    Defer editor.Finish()
+    editor.Run.Fb = (games.Path / "no such fb").Text
+    editor.SaveScene("res://level.scene")
+    editor.Step()
+    // All of them but leaving, which ends the session.
+    Local commands = editor.Actions.All().Filter(
+        Function(each: EditorCommand) => each.Id != "file.quit" && each.Id != "file.close")
+    Expect(commands.Count > 20, "{commands.Count} commands")
+    editorState = 8086
+    Local ran = 0
+    For step = 1 To 2000
+        Select EditorNext(8)
+            Case 0
+                Local all = editor.Edited.Entities()
+                If all.Count > 0 Then editor.Edited.SelectOnly(all[EditorNext(all.Count)])
+            Case 1
+                Local all = editor.Edited.Entities()
+                If all.Count > 0 Then editor.Edited.ToggleSelected(all[EditorNext(all.Count)])
+            Case 2
+                Try Dismissed(editor)
+            Case 3
+                Try Simulate.Text(["a", "b 2", "", "\u{301}", "res://level.scene"][EditorNext(5)])
+                Try Simulate.PressKey([Key.RETURN, Key.ESCAPE, Key.TAB, Key.DELETE][EditorNext(4)])
+            Default
+                Local command = commands[EditorNext(commands.Count)]
+                If command.Run() Then ran += 1
+        End Select
+        editor.Step()
+        Local wrong = Unsound(editor)
+        If wrong != ""
+            Fail("seed 8086, step {step}: {wrong}")
+            Return
+        End If
+        // A scene that's grown past 300 is emptied, as a new one is.
+        If editor.Edited.Entities().Count > 300
+            Try Dismissed(editor)
+            editor.Actions.Run("file.new_scene")
+            editor.Step()
+            Try Dismissed(editor)
+        End If
+    End For
+    Expect(ran > 500, "{ran} commands ran")
+    Expect(!editor.Quitting())
+End Function
+
+// A GPU lost while the editor runs, as a driver's crash or reset loses it: its frames go on, and
+// once it's made again the editor draws what it drew, its view of the scene with it.
+@Test
+Function TheEditorDrawsAgainOnceALostGpuIsMadeAgain() Throws IOError, GraphicsError
+    If StableNoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try StableStarted(settings.Path, Try StableGame(games.Path, "lost"))
+    Defer editor.Finish()
+    editor.Actions.Run("add.cube")
+    editor.Actions.Run("add.light")
+    For frame = 1 To 6
+        editor.Step()
+    End For
+    Local before = Try Screen.ToImage()
+    Local view = editor.View.Box()
+    Local seen = 0
+    For y = (view.Y As Int) Until ((view.Y + view.Height) As Int)
+        For x = (view.X As Int) Until ((view.X + view.Width) As Int)
+            If x < 0 || y < 0 || x >= before.Width || y >= before.Height Then Continue
+            Local pixel = before[x, y]
+            If pixel.r > 40 || pixel.g > 40 || pixel.b > 40 Then seen += 1
+        End For
+    End For
+    Expect(seen > 100, "the view showed {seen} pixels of its scene")
+
+    Try Gpu.SimulateLoss()
+    For frame = 1 To 6
+        editor.Step()
+    End For
+    Expect(Gpu.Lost())
+
+    Gpu.Stop()
+    Try Gpu.Start()
+    For frame = 1 To 6
+        editor.Step()
+    End For
+    Expect(!Gpu.Lost())
+    Local target = editor.View.Target()
+    Expect(target != Null && !target.Freed(), "the view has no texture to draw into")
+    Local after = Try Screen.ToImage()
+    Expect(after.Width == before.Width && after.Height == before.Height)
+    Local differing = 0
+    For y = 0 Until Min(before.Height, after.Height)
+        For x = 0 Until Min(before.Width, after.Width)
+            If before[x, y] != after[x, y] Then differing += 1
+        End For
+    End For
+    Expect(differing == 0, "{differing} pixels differ once the GPU's made again")
+    Expect(editor.View.TextureFailures() == 0)
+End Function

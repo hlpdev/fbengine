@@ -129,6 +129,9 @@ Public Final Class Dialog Extends Widget
         Add(buttons)
     End New
 
+    /// What it says, under its title.
+    Public Method Said(): String => said.text
+
     /// Adds `node` above the buttons.
     Public Method AddContent(node: Node)
         body.Add(node)

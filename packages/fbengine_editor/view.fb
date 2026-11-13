@@ -449,9 +449,20 @@ Public Final Class SceneView Extends Widget
     End Method
 
     /// Makes the texture `wide` by `high`, unless it is already, or that's what it couldn't be: one
-    /// that can't be made leaves the one it has showing, and isn't tried again every frame.
+    /// that can't be made leaves the one it has showing, and isn't tried again every frame. One
+    /// that went with a GPU that was lost, or stopped, is made again once there's a GPU to make
+    /// it on, and nothing's made while it's lost.
     Public Method FitTexture(wide: Int32, high: Int32)
+        If Gpu.Lost() Then Return
         Local own = target
+        If own != Null && own.Freed()
+            // Gone with its GPU: there's none to fit, and what couldn't be made then may be now.
+            target = Null
+            sprite = Null
+            own = Null
+            failedWide = 0
+            failedHigh = 0
+        End If
         If wide == 0 || high == 0 || (own != Null && own.Width() == wide && own.Height() == high) Then Return
         If wide == failedWide && high == failedHigh Then Return
         Try
