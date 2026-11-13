@@ -1,0 +1,73 @@
+// A GPU lost under the UI, as a driver's crash or reset loses it, headless, on lavapipe: frames go
+// on with nothing drawn and nothing panicking, and once the game's made the GPU again, what the UI
+// draws is what it drew before, pixel for pixel.
+
+Import std.core
+Import std.image.image
+Import std.os
+Import std.test
+Import fbengine
+Import fbengine_ui
+
+Function LostNoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
+
+// A frame of the game: its events read, the UI told and drawn.
+Function LostFramed(ui: Ui)
+    Flip()
+    ui.Update()
+    Screen.Canvas().Clear()
+    ui.Draw()
+End Function
+
+@Test
+Function TheUiDrawsTheSamePixelsOnceALostGpuIsMadeAgain() Throws GraphicsError
+    If LostNoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Graphics(240, 160)
+    Defer EndGraphics()
+    Local root = Node("root")
+    root.SetArrangement(Arrangement.COLUMN)
+    root.SetPadding(Insets.All(8))
+    root.SetGap(6)
+    root.Add(Label("Slack water, 12:40"))
+    root.Add(Button("Play"))
+    root.Add(Slider(0.0, 1.0, 0.25))
+    root.Add(Toggle("Subtitles", True))
+    root.Add(Progress(0.5))
+    root.Add(TextField("Pip", "your name"))
+    Local ui = Ui(root)
+    For frame = 1 To 3
+        LostFramed(ui)
+    End For
+    Local before = Try Screen.ToImage()
+    Local lit = 0
+    For y = 0 Until before.Height
+        For x = 0 Until before.Width
+            If before[x, y].r > 0 || before[x, y].g > 0 || before[x, y].b > 0 Then lit += 1
+        End For
+    End For
+    Expect(lit > 500, "the UI drew {lit} pixels")
+
+    Try Gpu.SimulateLoss()
+    For frame = 1 To 5
+        LostFramed(ui)
+    End For
+    Expect(Gpu.Lost())
+
+    // As a game does: the GPU stopped and started, and the UI as it was.
+    Gpu.Stop()
+    Try Gpu.Start()
+    Expect(!Gpu.Lost())
+    For frame = 1 To 3
+        LostFramed(ui)
+    End For
+    Local after = Try Screen.ToImage()
+    Expect(after.Width == before.Width && after.Height == before.Height)
+    Local differing = 0
+    For y = 0 Until Min(before.Height, after.Height)
+        For x = 0 Until Min(before.Width, after.Width)
+            If before[x, y] != after[x, y] Then differing += 1
+        End For
+    End For
+    Expect(differing == 0, "{differing} pixels differ after the GPU's made again")
+End Function

@@ -475,8 +475,11 @@ Public Final Class Ui
     /// Draws its tree on the screen's canvas, or on `canvas`, which a texture's draws at a pixel to
     /// each of its units over its scale, as it was last laid out, each widget by its Draw, in the
     /// tree's order; what's hidden isn't. The canvas's pen is as it was after it; its origin moves
-    /// the UI, and its viewport clips it. On the screen, with no window or no GPU, it does nothing.
+    /// the UI, and its viewport clips it. On the screen, with no window or no GPU, it does nothing,
+    /// and nothing anywhere while the GPU's lost, as nothing draws then: once the game's made the
+    /// GPU again it draws as it did.
     @MainThread Public Method Draw(canvas: Canvas? = Null)
+        If Gpu.Lost() Then Return
         Local screen = Screen.Canvas()
         Local onto = canvas ?? screen
         Local across = scale
