@@ -427,6 +427,8 @@ private:
     // Every buffer's bytes, a binary glTF's and data URIs' already, the rest read from res://.
     result_t<void> read_buffers() {
         for (gltf::Buffer& buffer : m_asset.buffers) {
+            // The file it's read from, for one that is, which what's wrong with it names.
+            std::string from;
             if (const auto* custom = std::get_if<gltf::sources::CustomBuffer>(&buffer.data)) {
                 gltf::sources::Vector taken;
                 if (custom->id < m_mapped.size()) {
@@ -434,6 +436,7 @@ private:
                 }
                 buffer.data = std::move(taken);
             } else if (const auto* uri = std::get_if<gltf::sources::URI>(&buffer.data)) {
+                from = std::string(uri->uri.string());
                 result_t<bytes_t> bytes = read_uri(uri->uri);
                 if (!bytes) {
                     return std::unexpected(std::move(bytes.error()));
@@ -457,8 +460,10 @@ private:
                 },
                 buffer.data);
             if (size < buffer.byteLength) {
-                return fail(
-                    std::format("a buffer has {} bytes of its {}", size, buffer.byteLength));
+                return fail(from.empty() ? std::format("a buffer has {} bytes of its {}", size,
+                                                       buffer.byteLength)
+                                         : std::format("its buffer {} has {} bytes of its {}", from,
+                                                       size, buffer.byteLength));
             }
             step();
         }

@@ -1,0 +1,360 @@
+// The tools' stability: a folder cooked, and a game built, hundreds of times, each run's output
+// the same bytes with nothing more left on the disk than the first left; and each kind of file
+// the cook and the build read cut short and changed at random, from a seed, so a failure repeats:
+// an error that names the file, never a crash or a hang, and never a pak half written.
+
+Import std.collections
+Import std.core
+Import std.image.image
+Import std.image.jpeg
+Import std.image.png
+Import std.io
+Import std.math
+Import std.os
+Import std.test
+Import std.text
+Import fbengine
+Import fbengine_tools
+
+Global toolsState: Int64 = 1
+
+// Park and Miller's, from a seed of 1 or more.
+Function ToolsNext(n: Int): Int
+    toolsState = toolsState * 48271 % 2147483647
+    Return (toolsState % n) As Int
+End Function
+
+// A picture of `side` by `side`, each pixel its own, so it has something to compress.
+Function Pictured(side: Int): Image
+    Local image = Image(side, side)
+    For y = 0 Until side
+        For x = 0 Until side
+            image[x, y] = Color32((x * 37 % 256) As UInt8, (y * 59 % 256) As UInt8,
+                                  ((x + y) * 11 % 256) As UInt8, 255)
+        End For
+    End For
+    Return image
+End Function
+
+// A triangle's glTF, its buffer beside it in `name`.bin and its texture `name`.png.
+Function TriangleJson(name: String): String
+    Return "{{\"asset\":{{\"version\":\"2.0\"}},\"buffers\":[{{\"byteLength\":102," +
+           "\"uri\":\"{name}.bin\"}}],\"bufferViews\":[{{\"buffer\":0,\"byteLength\":36}}," +
+           "{{\"buffer\":0,\"byteOffset\":36,\"byteLength\":36}}," +
+           "{{\"buffer\":0,\"byteOffset\":72,\"byteLength\":24}}," +
+           "{{\"buffer\":0,\"byteOffset\":96,\"byteLength\":6}}],\"accessors\":[" +
+           "{{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"," +
+           "\"min\":[0,0,0],\"max\":[1,1,0]}},{{\"bufferView\":1,\"componentType\":5126," +
+           "\"count\":3,\"type\":\"VEC3\"}},{{\"bufferView\":2,\"componentType\":5126," +
+           "\"count\":3,\"type\":\"VEC2\"}},{{\"bufferView\":3,\"componentType\":5123," +
+           "\"count\":3,\"type\":\"SCALAR\"}}],\"meshes\":[{{\"primitives\":[{{" +
+           "\"attributes\":{{\"POSITION\":0,\"NORMAL\":1,\"TEXCOORD_0\":2}},\"indices\":3," +
+           "\"material\":0}}]}}],\"materials\":[{{\"pbrMetallicRoughness\":{{" +
+           "\"baseColorTexture\":{{\"index\":0}}}}}}],\"textures\":[{{\"source\":0}}]," +
+           "\"images\":[{{\"uri\":\"{name}.png\"}}],\"nodes\":[{{\"mesh\":0}}]}}"
+End Function
+
+// The triangle's buffer: three positions, their normals, UVs, and three indices.
+Function TriangleBuffer(): UInt8[]
+    Local one = [0, 0, 0x80, 0x3F] As UInt8[]
+    Local zero = [0, 0, 0, 0] As UInt8[]
+    Local buffer: UInt8[] = []
+    For part In [zero, zero, zero, one, zero, zero, zero, one, zero,
+                 zero, zero, one, zero, zero, one, zero, zero, one,
+                 zero, zero, one, zero, zero, one]
+        buffer.AddAll(part)
+    End For
+    buffer.AddAll([0, 0, 1, 0, 2, 0] As UInt8[])
+    Return buffer
+End Function
+
+// A game's assets in `folder`: pictures with their sidecars, a model with its buffer and texture,
+// and what's copied as it is.
+Function WriteAssets(folder: Path) Throws IOError
+    Try Dir.CreateAll(folder / "textures")
+    Try Dir.CreateAll(folder / "models")
+    Try File.WriteBytes(folder / "textures" / "wall.png", Png.Encode(Pictured(16)))
+    Try File.WriteText(folder / "textures" / "wall.png.toml", "compression = \"bc7\"\n")
+    Try File.WriteBytes(folder / "textures" / "hud.jpg", Jpeg.Encode(Pictured(8)))
+    Try File.WriteBytes(folder / "models" / "door.bin", TriangleBuffer())
+    Try File.WriteBytes(folder / "models" / "door.png", Png.Encode(Pictured(4)))
+    Try File.WriteText(folder / "models" / "door.gltf", TriangleJson("door"))
+    Try File.WriteText(folder / "readme.txt", "hello")
+    Try File.WriteText(folder / "level.scene", "a scene, as it is")
+End Function
+
+// Every file under `folder`, by its path from it, sorted, so two listings are compared.
+Function Listed(folder: Path, under: String = ""): String[] Throws IOError
+    Local found: String[] = []
+    For entry In Try Dir.Entries(folder)
+        Local name = entry.Path.FileName()
+        If Dir.Exists(entry.Path)
+            found.AddAll(Try Listed(entry.Path, under + name + "/"))
+        Else
+            found.Add(under + name)
+        End If
+    End For
+    found.Sort()
+    Return found
+End Function
+
+// The same folder cooked 200 times, with a cache and without, into a pak that's there already:
+// each pak is the first one's bytes, and there's no more on the disk beside it, or in its cache,
+// than the first cook left.
+@Test
+Function AFolderCookedHundredsOfTimesIsTheSameBytesAndLeavesNoMore() Throws IOError
+    Local source = Try TempDir()
+    Defer Try? source.Close()
+    Try WriteAssets(source.Path)
+    Local built = Try TempDir()
+    Defer Try? built.Close()
+    Local pak = built.Path / "game.pak"
+    Local cache = built.Path / "cache"
+    Try Cooker.CookFolder(source.Path, pak, cache)
+    Local first = Try File.ReadBytes(pak)
+    Local left = Try Listed(built.Path)
+    Expect(first.Count > 0)
+    For run = 1 To 200
+        If run % 4 == 0
+            // With no cache, each file cooked again from nothing, into a folder of its own.
+            Local alone = Try TempDir()
+            Try Cooker.CookFolder(source.Path, alone.Path / "game.pak")
+            Local bytes = Try File.ReadBytes(alone.Path / "game.pak")
+            Expect(bytes == first, "run {run}, with no cache: {bytes.Count} bytes, not the first's")
+            Expect((Try Listed(alone.Path)) == ["game.pak"], "run {run}: more was left than a pak")
+            Try alone.Close()
+        Else
+            Try Cooker.CookFolder(source.Path, pak, cache)
+            Local bytes = Try File.ReadBytes(pak)
+            Expect(bytes == first, "run {run}: {bytes.Count} bytes, not the first's {first.Count}")
+        End If
+        If run % 50 == 0
+            Local now = Try Listed(built.Path)
+            Expect(now == left, "run {run}: {now.Count} files beside the pak, not {left.Count}")
+        End If
+    End For
+    // And it's a pak the engine reads.
+    Try Assets.MountPak("res://soak-pak", pak)
+    Defer Assets.Unmount("res://soak-pak")
+    Expect((Try Assets.ReadText("res://soak-pak/readme.txt")) == "hello")
+End Function
+
+// Where fb has a step of the game in `game` write.
+Function StepOut(game: Path, mode: String): Path
+    Return game / "build" / "steps" / "windows-x64" / mode / "game" / "out"
+End Function
+
+// A game built 150 times, as a debug build and as a release: its module and its pak are the first
+// build's bytes, and its build folder holds no more than the first left there.
+@Test
+Function AGameBuiltHundredsOfTimesIsTheSameBytesAndLeavesNoMore() Throws IOError
+    Local game = Try TempDir()
+    Defer Try? game.Close()
+    Try WriteAssets(game.Path / "assets")
+    Try File.WriteText(game.Path / "project.toml",
+                       "[project]\nname = \"game\"\nversion = \"1.2.3\"\n")
+    Local release = StepOut(game.Path, "release")
+    Local debug = StepOut(game.Path, "debug")
+    Try GameBuild.Run("game", game.Path, release, "release")
+    Try GameBuild.Run("game", game.Path, debug, "debug")
+    Local pak = Try File.ReadBytes(game.Path / "build" / "game.pak")
+    Local module = Try File.ReadText(release / "res.fb")
+    Local debugModule = Try File.ReadText(debug / "res.fb")
+    // Its times are each run's own, and nothing else is.
+    Local left = (Try Listed(game.Path / "build"))
+    For run = 1 To 150
+        If run % 3 == 0
+            Try GameBuild.Run("game", game.Path, debug, "debug")
+            Expect((Try File.ReadText(debug / "res.fb")) == debugModule, "run {run}: its module")
+        Else
+            Try GameBuild.Run("game", game.Path, release, "release")
+            Expect((Try File.ReadText(release / "res.fb")) == module, "run {run}: its module")
+            Expect((Try File.ReadBytes(game.Path / "build" / "game.pak")) == pak,
+                   "run {run}: its pak")
+        End If
+        If run % 50 == 0
+            Local now = Try Listed(game.Path / "build")
+            Expect(now == left, "run {run}: {now.Count} files in build, not {left.Count}")
+        End If
+    End For
+End Function
+
+// The bytes of `bytes` from `from` up to `until`.
+Function Part(bytes: UInt8[], from: Int, until: Int): UInt8[]
+    Local part: UInt8[] = []
+    For at = from Until until
+        part.Add(bytes[at])
+    End For
+    Return part
+End Function
+
+// `bytes` cut short, or changed, at random: a run of them made random, a few flipped, a piece
+// taken out, a piece said twice, or none at all.
+Function Broken(bytes: UInt8[]): UInt8[]
+    Local made = bytes.Clone()
+    Select ToolsNext(6)
+        Case 0
+            Return Part(made, 0, ToolsNext(made.Count + 1))
+        Case 1
+            If made.Count == 0 Then Return made
+            For each = 1 To 1 + ToolsNext(8)
+                made[ToolsNext(made.Count)] = ToolsNext(256) As UInt8
+            End For
+            Return made
+        Case 2
+            If made.Count == 0 Then Return made
+            Local from = ToolsNext(made.Count)
+            Local count = Min(1 + ToolsNext(64), made.Count - from)
+            For at = from Until from + count
+                made[at] = ToolsNext(256) As UInt8
+            End For
+            Return made
+        Case 3
+            If made.Count < 2 Then Return []
+            Local from = ToolsNext(made.Count - 1)
+            Local until = from + 1 + ToolsNext(made.Count - from - 1)
+            Local kept = Part(made, 0, from)
+            kept.AddAll(Part(made, until, made.Count))
+            Return kept
+        Case 4
+            Local twice = made.Clone()
+            twice.AddAll(Part(made, ToolsNext(made.Count + 1), made.Count))
+            Return twice
+        Default
+            Return []
+    End Select
+End Function
+
+// Cooks `source` into `pak`, over what's there, with `named` broken in it. A cook that's refused
+// names the file, leaves the pak that was there as it was, and nothing beside it; one that's
+// taken leaves a pak the engine mounts, and nothing beside it. What was wrong, or "".
+Function CookedOrRefused(source: Path, built: Path, named: String,
+                         round: Int): String Throws IOError
+    Local pak = built / "game.pak"
+    Try File.WriteText(pak, "what was there")
+    Local refused: IOError? = Null
+    Try
+        Try Cooker.CookFolder(source, pak)
+    Catch e As IOError
+        refused = e
+    End Try
+    Local beside = Try Listed(built)
+    If beside != ["game.pak"] Then Return "{named}, round {round}: left {beside} beside the pak"
+    If refused != Null
+        If (Try File.ReadText(pak)) != "what was there"
+            Return "{named}, round {round}: refused, and the pak that was there was changed"
+        End If
+        Local file = named.Split("/").Last() ?? named
+        Local said = refused.Message.ToLower()
+        // What's wrong inside a model's buffer, as an index past its vertices, is said of the
+        // model that reads it; a buffer that's short is named itself.
+        Local byItsModel = file.EndsWith(".bin") && said.Contains(file.Replace(".bin", ".gltf"))
+        If !said.Contains(file.ToLower()) && !byItsModel
+            Return "{named}, round {round}: refused without naming it: {refused.Message}"
+        End If
+        Return ""
+    End If
+    Local place = "res://fuzz-pak-{round}"
+    Try
+        Try Assets.MountPak(place, pak)
+    Catch e As IOError
+        Return "{named}, round {round}: cooked into a pak that doesn't mount: {e.Message}"
+    End Try
+    Assets.Unmount(place)
+    Return ""
+End Function
+
+// Each kind of file a cook reads, broken 40 ways from a seed: a picture of each kind, a model's
+// JSON, its buffer, and its texture, a binary glTF, and each sidecar.
+@Test
+Function EachFileACookReadsBrokenAtRandomIsRefusedByNameOrCooked() Throws IOError
+    Local source = Try TempDir()
+    Defer Try? source.Close()
+    Try WriteAssets(source.Path)
+    Try File.WriteText(source.Path / "models" / "door.gltf.toml",
+                       "optimize = false\n[images]\ncompression = \"bc7\"\n")
+    // A binary glTF, as the cooker itself makes one of the triangle.
+    Local scratch = Try TempDir()
+    Defer Try? scratch.Close()
+    Try Cooker.CookModel(source.Path / "models" / "door.gltf", scratch.Path / "door.glb",
+                         ModelSettings())
+    Try File.WriteBytes(source.Path / "models" / "gate.glb",
+                        Try File.ReadBytes(scratch.Path / "door.glb"))
+    Local built = Try TempDir()
+    Defer Try? built.Close()
+    Expect((Try CookedOrRefused(source.Path, built.Path, "nothing", 0)) == "")
+    toolsState = 424242
+    Local round = 0
+    For named In ["textures/wall.png", "textures/hud.jpg", "textures/wall.png.toml",
+                  "models/door.gltf", "models/door.bin", "models/door.png", "models/gate.glb",
+                  "models/door.gltf.toml"]
+        Local file = source.Path / named
+        Local whole = Try File.ReadBytes(file)
+        For each = 1 To 40
+            round += 1
+            Try File.WriteBytes(file, Broken(whole))
+            Local wrong = Try CookedOrRefused(source.Path, built.Path, named, round)
+            Expect(wrong == "", "seed 424242: {wrong}")
+        End For
+        Try File.WriteBytes(file, whole)
+    End For
+    // Whole again, it cooks.
+    Expect((Try CookedOrRefused(source.Path, built.Path, "nothing", round + 1)) == "")
+    Try Cooker.CookFolder(source.Path, built.Path / "game.pak")
+End Function
+
+// A game's project.toml, which a release reads its version from, broken the same ways: the build
+// is refused naming it, or goes on, and no pak's left half written where the executable goes.
+@Test
+Function AProjectsTomlBrokenAtRandomIsRefusedByNameOrBuilt() Throws IOError
+    Local game = Try TempDir()
+    Defer Try? game.Close()
+    Try Dir.CreateAll(game.Path / "assets")
+    Try File.WriteBytes(game.Path / "assets" / "wall.png", Png.Encode(Pictured(4)))
+    Local whole = "[project]\nname = \"game\"\nversion = \"1.2.3\"\n\n[dependencies]\n".Bytes
+    Local out = StepOut(game.Path, "release")
+    toolsState = 777
+    For round = 1 To 60
+        Try File.WriteBytes(game.Path / "project.toml", Broken(whole))
+        Local refused: IOError? = Null
+        Try
+            Try GameBuild.Run("game", game.Path, out, "release")
+        Catch e As IOError
+            refused = e
+        End Try
+        If refused != Null
+            Expect(refused.Message.Contains("project.toml"),
+                   "seed 777, round {round}: refused without naming it: {refused.Message}")
+        End If
+        // What's where the executable goes is a whole pak, or none.
+        Local pak = game.Path / "build" / "game.pak"
+        If File.Exists(pak)
+            Local place = "res://fuzz-game-{round}"
+            Try Assets.MountPak(place, pak)
+            Assets.Unmount(place)
+        End If
+        For entry In Try Dir.Entries(game.Path / "build")
+            Local name = entry.Path.FileName()
+            Expect(name == "game.pak" || name == "steps", "round {round}: {name} was left in build")
+        End For
+    End For
+End Function
+
+// A shader's source broken the same ways, where there's a slangc to compile it: refused naming
+// it, with the compiler's own words, or compiled, and never a pak left half written.
+@Test
+Function AShaderBrokenAtRandomIsRefusedByNameOrCooked() Throws IOError
+    If Env.Get("FBENGINE_SLANGC") == Null Then Skip("no slangc here")
+    Local source = Try TempDir()
+    Defer Try? source.Close()
+    Local whole =
+        "float4 shade(Surface surface)\n{{\n    return float4(0.5, 0.25, 1.0, 1.0);\n}}\n".Bytes
+    Local built = Try TempDir()
+    Defer Try? built.Close()
+    toolsState = 9001
+    For round = 1 To 12
+        Try File.WriteBytes(source.Path / "flat.slang", round == 1 ? whole : Broken(whole))
+        Local wrong = Try CookedOrRefused(source.Path, built.Path, "flat.slang", round)
+        Expect(wrong == "", "seed 9001: {wrong}")
+    End For
+End Function
