@@ -1,0 +1,445 @@
+// The UI fuzzed, headless, on lavapipe, each run from a seed, so one that fails fails again: random
+// input for thousands of frames into a menu, a console, a HUD, a popup, and a scroll; trees built
+// and taken apart at random, a widget removed while it has the focus, the hover, or the mouse, or
+// from inside its own handler; and a theme's and a layout's numbers at the ends of a float. Nothing
+// panics, every box is of finite numbers and no size under 0, and what has the focus, the hover,
+// and the press is each a widget still in the tree, or none.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.os
+Import std.test
+Import std.text
+Import fbengine
+Import fbengine_ui
+
+Global fuzzState: Int64 = 1
+
+// Park and Miller's, from a seed of 1 or more.
+Function FuzzNext(n: Int): Int
+    fuzzState = fuzzState * 48271 % 2147483647
+    Return (fuzzState % n) As Int
+End Function
+
+Function FuzzNoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
+
+// Text a player, a paste, or a broken file gives: huge, all combining marks, control characters,
+// both directions, and what no font has.
+Function Typed(which: Int): String
+    Local texts = ["a", "", "\n", "\t\u{7}\u{1B}[2J\u{0}x", "\u{301}".Repeated(100),
+                   "x".Repeated(3000), "\u{202E}\u{202D}\u{2066}\u{2069}",
+                   "\u{05E9}\u{05DC}\u{05D5}\u{05DD} abc \u{0627}\u{0644}",
+                   "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}".Repeated(10),
+                   "\u{FEFF}\u{200B}\u{FFFD}\u{FFFF}\u{10FFFF}", "echo \"\\", "help", "  ",
+                   "\r\n\r\n", "\u{E000}\u{F8FF}"]
+    Return texts[which % texts.Count]
+End Function
+
+// Whether `node` is `root` or under it.
+Function Under(node: Node, root: Node): Bool
+    Local at: Node? = node
+    While at != Null
+        If RefEquals(at, root) Then Return True
+        at = at.Parent()
+    End While
+    Return False
+End Function
+
+// Whether `widget` is none, or in the tree, or in a popup that's open.
+Function Held(ui: Ui, widget: Widget?): Bool
+    If widget == Null Then Return True
+    If Under(widget, ui.Root()) Then Return True
+    For popup In ui.Popups()
+        If Under(widget, popup) Then Return True
+    End For
+    Return False
+End Function
+
+// What's wrong with the boxes of `node` and all under it, or "": a number that isn't finite, or a
+// size under 0.
+Function Unsound(node: Node): String
+    Local box = node.Box()
+    If !IsFinite(box.X) || !IsFinite(box.Y) || !IsFinite(box.Width) || !IsFinite(box.Height) ||
+       box.Width < 0.0 || box.Height < 0.0
+        Return "{node}: {box}"
+    End If
+    For child In node.Children()
+        Local wrong = Unsound(child)
+        If wrong != "" Then Return wrong
+    End For
+    Return ""
+End Function
+
+// A widget, or none, as a failure says it.
+Function Said(widget: Widget?): String
+    If widget == Null Then Return "none"
+    Return "{widget}"
+End Function
+
+// What's wrong with a Ui after a frame, or "".
+Function Wrong(ui: Ui): String
+    If !Held(ui, ui.Focused()) Then Return "the focus is on {Said(ui.Focused())}, which isn't in the tree"
+    If !Held(ui, ui.Hovered()) Then Return "the hover is on {Said(ui.Hovered())}, which isn't in the tree"
+    If !Held(ui, ui.Pressed()) Then Return "the press is on {Said(ui.Pressed())}, which isn't in the tree"
+    Local wrong = Unsound(ui.Root())
+    If wrong != "" Then Return wrong
+    For popup In ui.Popups()
+        wrong = Unsound(popup)
+        If wrong != "" Then Return wrong
+    End For
+    Return ""
+End Function
+
+// A frame of the game: its events read, the UI told and drawn.
+Function Framed(ui: Ui)
+    Flip()
+    ui.Update()
+    Screen.Canvas().Clear()
+    ui.Draw()
+End Function
+
+@Test
+Function RandomInputLeavesAMenuAConsoleAHudAPopupAndAScrollWhole() Throws GraphicsError, InputError
+    If FuzzNoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Graphics(640, 360)
+    Defer EndGraphics()
+    Local pad = Try Simulate.ConnectGamepad()
+    Defer pad.Unplug()
+    Local root = Node("root")
+    root.SetArrangement(Arrangement.STACK)
+    Local menu = Node("menu")
+    menu.SetArrangement(Arrangement.COLUMN)
+    menu.SetAnchors(Anchors.Point(0.5, 0.5))
+    menu.SetGap(4)
+    Local play = Button("Play")
+    Local loud = Slider(0.0, 1.0, 0.5)
+    Local named = TextField("", "your name")
+    menu.Add(play)
+    menu.Add(loud)
+    menu.Add(Toggle("Subtitles"))
+    menu.Add(named)
+    root.Add(menu)
+    Local hud = Node("hud")
+    hud.SetArrangement(Arrangement.COLUMN)
+    hud.SetAnchors(Anchors.Point(0.0, 0.0))
+    Local said = Label("")
+    hud.Add(said)
+    hud.Add(Progress(0.5))
+    root.Add(hud)
+    Local scroll = ScrollView("scroll")
+    scroll.SetAnchors(Anchors.Point(1.0, 1.0))
+    scroll.SetSize(120, 80)
+    Local rows = Node("rows")
+    rows.SetArrangement(Arrangement.COLUMN)
+    For each = 1 To 40
+        rows.Add(each % 5 == 0 ? Button("row {each}") : Label(Typed(each)))
+    End For
+    scroll.Add(rows)
+    root.Add(scroll)
+    Local list = List(["one", "two", Typed(4), Typed(5), "five"], "list")
+    list.SetAnchors(Anchors.Point(0.0, 1.0))
+    root.Add(list)
+    Local console = Console()
+    console.SetHeight(Sizing.Fixed(120.0))
+    console.SetMaxLines(100)
+    console.Register("echo", "says what it's given",
+                     Function(each: Console, words: String[]) => " ".Join(words))
+    root.Add(console)
+    Local popup = Node("popup")
+    popup.SetArrangement(Arrangement.COLUMN)
+    popup.Add(Button("Yes"))
+    popup.Add(Button("No"))
+    popup.Add(TextField("", "why"))
+    Local ui = Ui(root)
+    Local keys = [Key.TAB, Key.UP, Key.DOWN, Key.LEFT, Key.RIGHT, Key.RETURN, Key.BACKSPACE,
+                  Key.ESCAPE, Key.HOME, Key.END, Key.DELETE, Key.PAGE_UP, Key.PAGE_DOWN, Key.A,
+                  Key.SPACE, Key.GRAVE]
+    Local buttons = [GamepadButton.SOUTH, GamepadButton.EAST, GamepadButton.DPAD_UP,
+                     GamepadButton.DPAD_DOWN, GamepadButton.DPAD_LEFT, GamepadButton.DPAD_RIGHT,
+                     GamepadButton.START]
+    Local sizes = [(640, 360), (1, 1), (4000, 3000), (3, 900), (640, 360), (900, 2)]
+    fuzzState = 20261113
+    Local width = 640
+    Local height = 360
+    For frame = 1 To 2400
+        Select FuzzNext(16)
+            Case 0, 1
+                // In the window, at its edges, and far outside it.
+                Try Simulate.MoveMouse(((FuzzNext(width * 3) - width) As Float32),
+                                       ((FuzzNext(height * 3) - height) As Float32))
+            Case 2
+                Try Simulate.MouseDown([MouseButton.LEFT, MouseButton.RIGHT,
+                                        MouseButton.MIDDLE][FuzzNext(3)])
+            Case 3
+                Try Simulate.MouseUp([MouseButton.LEFT, MouseButton.RIGHT,
+                                      MouseButton.MIDDLE][FuzzNext(3)])
+            Case 4
+                Try Simulate.Wheel(((FuzzNext(2001) - 1000) As Float32) / 10.0,
+                                   ((FuzzNext(21) - 10) As Float32))
+            Case 5, 6
+                Try Simulate.PressKey(keys[FuzzNext(keys.Count)])
+            Case 7
+                Try Simulate.KeyDown(keys[FuzzNext(keys.Count)], FuzzNext(2) == 0)
+            Case 8
+                Try Simulate.KeyUp(keys[FuzzNext(keys.Count)])
+            Case 9
+                Try Simulate.Text(Typed(FuzzNext(100)))
+            Case 10
+                pad.SetButton(buttons[FuzzNext(buttons.Count)], FuzzNext(2) == 0)
+            Case 11
+                Local wanted: Widget[] = [console.Line(), named, play, loud, list]
+                ui.Focus(FuzzNext(6) == 0 ? Null : wanted[FuzzNext(wanted.Count)])
+            Case 12
+                If popup.Parent() == Null && !ui.Popups().Contains(popup)
+                    If FuzzNext(2) == 0
+                        ui.OpenPopup(popup, [PopupKind.MENU, PopupKind.MODAL][FuzzNext(2)])
+                    Else
+                        ui.OpenPopupAt(popup, Vec2((FuzzNext(900) - 100) As Float32,
+                                                   (FuzzNext(600) - 100) As Float32))
+                    End If
+                Else
+                    ui.ClosePopup(popup)
+                End If
+            Case 13
+                said.SetText(Typed(FuzzNext(100)))
+                console.Print(Typed(FuzzNext(100)))
+                If FuzzNext(3) == 0 Then console.Run(Typed(FuzzNext(100)))
+            Case 14
+                scroll.SetOffset(((FuzzNext(4000) - 1000) As Float32))
+                list.SetSelected(FuzzNext(7) - 1)
+            Default
+        End Select
+        // The screen gone to nothing, and to huge, and back: huge for a few frames, as lavapipe
+        // draws each of its pixels on the CPU.
+        If frame % 400 == 0
+            Local size = sizes[(frame / 400) % sizes.Count]
+            width = size.0
+            height = size.1
+            Try Graphics(width As Int32, height As Int32)
+        ElseIf frame % 400 == 20 && width * height > 1000000
+            width = 640
+            height = 360
+            Try Graphics(640, 360)
+        End If
+        Framed(ui)
+        Local wrong = Wrong(ui)
+        If wrong != ""
+            Fail("frame {frame}, seed 20261113: {wrong}")
+            Return
+        End If
+    End For
+    Expect(play.Text() == "Play")
+End Function
+
+// A tree built and taken apart at random, deep and wide, as a game's screens come and go: what's
+// removed with the focus, the hover, or the mouse's press on it, or under it, lets go of it, and
+// a widget that removes itself, or its parent, in its own handler does it safely.
+@Test
+Function TreesBuiltAndTakenApartAtRandomLeaveNothingHeld() Throws GraphicsError, InputError
+    If FuzzNoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Graphics(640, 360)
+    Defer EndGraphics()
+    Local root = Node("root")
+    root.SetArrangement(Arrangement.COLUMN)
+    Local ui = Ui(root)
+    Local nodes: Node[] = [root]
+    Local widgets: Widget[] = []
+    fuzzState = 31337
+    For frame = 1 To 3000
+        Select FuzzNext(12)
+            Case 0, 1, 2, 3
+                // Added under any node there is, to any depth.
+                Local parent = nodes[FuzzNext(nodes.Count)]
+                Local leaf = (parent As? Widget) != Null
+                If leaf Then Continue
+                Local made: Node = Node("n{frame}")
+                Select FuzzNext(7)
+                    Case 0
+                        Local button = Button("b{frame}")
+                        // Its own click takes it, or what holds it, out of the tree.
+                        button.OnClick(Function(clicked: Button)
+                            Local holder = clicked.Parent()
+                            If holder == Null Then Return
+                            If frame % 2 == 0
+                                holder.Remove(clicked)
+                            ElseIf holder.Parent() != Null
+                                holder.Parent()?.Remove(holder)
+                            End If
+                        End Function)
+                        made = button
+                    Case 1
+                        made = TextField("", "t{frame}")
+                    Case 2
+                        made = Slider(0.0, 1.0, 0.5)
+                    Case 3
+                        made = Toggle("g{frame}")
+                    Case 4
+                        made = Label(Typed(frame))
+                    Default
+                        made.SetArrangement([Arrangement.ROW, Arrangement.COLUMN,
+                                             Arrangement.STACK][FuzzNext(3)])
+                End Select
+                If FuzzNext(2) == 0 Then parent.Add(made) Else parent.Insert(0, made)
+                nodes.Add(made)
+                Local widget = made As? Widget
+                If widget != Null Then widgets.Add(widget)
+            Case 4
+                // What has the focus, the hover, or the press, taken out.
+                Local taken = [ui.Focused(), ui.Hovered(), ui.Pressed()][FuzzNext(3)]
+                If taken != Null Then taken.Parent()?.Remove(taken)
+            Case 5
+                // And what holds it.
+                Local taken = [ui.Focused(), ui.Hovered(), ui.Pressed()][FuzzNext(3)]
+                Local holder = taken?.Parent()
+                If holder != Null && !RefEquals(holder, root) Then holder.Parent()?.Remove(holder)
+            Case 6
+                Local at = nodes[FuzzNext(nodes.Count)]
+                If !RefEquals(at, root) && FuzzNext(4) == 0 Then at.RemoveAll()
+            Case 7
+                If widgets.Count > 0 Then ui.Focus(widgets[FuzzNext(widgets.Count)])
+            Case 8
+                Try Simulate.MoveMouse((FuzzNext(640) As Float32), (FuzzNext(360) As Float32))
+                Try Simulate.MouseDown(MouseButton.LEFT)
+            Case 9
+                Try Simulate.MouseUp(MouseButton.LEFT)
+            Case 10
+                Try Simulate.PressKey([Key.TAB, Key.RETURN, Key.SPACE, Key.DOWN][FuzzNext(4)])
+            Default
+                Try Simulate.Text(Typed(FuzzNext(100)))
+        End Select
+        // A tree that's grown past a thousand is emptied, as a game leaves a screen.
+        If nodes.Count > 1000
+            root.RemoveAll()
+            nodes = [root]
+            widgets = []
+        End If
+        Framed(ui)
+        // What's no longer in the tree is forgotten, so nothing's added under it.
+        nodes = nodes.Filter(Function(each: Node) => Under(each, root))
+        widgets = widgets.Filter(Function(each: Widget) => Under(each, root))
+        Local wrong = Wrong(ui)
+        If wrong != ""
+            Fail("frame {frame}, seed 31337: {wrong}")
+            Return
+        End If
+    End For
+    // As deep as a tree goes, and as wide as two thousand: laid out and drawn.
+    root.RemoveAll()
+    Local deep: Node = root
+    For depth = 1 To 254
+        Local next = Node("d{depth}")
+        deep.Add(next)
+        deep = next
+    End For
+    deep.Add(Button("at the bottom"))
+    Local wide = Node("wide")
+    wide.SetArrangement(Arrangement.ROW)
+    For each = 1 To 2000
+        wide.Add(Label("w"))
+    End For
+    root.Add(wide)
+    Framed(ui)
+    Expect(Wrong(ui) == "", Wrong(ui))
+End Function
+
+// The ends of a float, where the docs have them taken: sizes, gaps, paddings, and margins as big
+// as a float holds, mins over maxes, a scale as small and as big as one goes, a scroll moved past
+// both ends and to what isn't a number, and a theme's text saying numbers that aren't. Each is laid
+// out with finite numbers, or the theme's refused whole, saying why.
+@Test
+Function NumbersAtTheEndsOfAFloatAreLaidOutFiniteOrRefused() Throws GraphicsError
+    If FuzzNoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Graphics(640, 360)
+    Defer EndGraphics()
+    Local most: Float32 = 3.4028235e38
+    Local least: Float32 = 1.0e-45
+    Local root = Node("root")
+    root.SetArrangement(Arrangement.COLUMN)
+    Local ui = Ui(root)
+    For big In [most, most / 2.0, 1.0e30, 16777216.0, least, 0.0]
+        root.RemoveAll()
+        Local row = Node("row")
+        row.SetArrangement(Arrangement.ROW)
+        row.SetGap(big)
+        row.SetPadding(Insets.All(big))
+        row.SetMargin(Insets.All(big))
+        For each = 1 To 4
+            Local label = Label("x")
+            label.SetWidth(Sizing.Fixed(big))
+            label.SetHeight(Sizing.Fill(Max(big, least)))
+            label.SetMinSize(big, big)
+            label.SetMaxSize(0.0, 0.0)
+            row.Add(label)
+        End For
+        Local sized = Button("sized")
+        sized.SetSize(big, big)
+        sized.SetContentSize(big, big)
+        row.Add(sized)
+        root.Add(row)
+        Local scroll = ScrollView("scroll")
+        scroll.SetSize(100, 50)
+        Local tall = Node("tall")
+        tall.SetSize(10, big)
+        scroll.Add(tall)
+        root.Add(scroll)
+        // As wide a range as has a width a float can hold.
+        Local slider = Slider(-most / 4.0, most / 4.0, 0.0)
+        slider.SetValue(big)
+        slider.SetStep(big)
+        root.Add(slider)
+        Local progress = Progress(big)
+        root.Add(progress)
+        For scale In [1.0, least * 1.0e10, most, 1.0e-20, 1.0]
+            ui.SetScale(scale)
+            Framed(ui)
+            For offset In [big, -big, (NaN As Float32), most * 2.0, -most * 2.0]
+                scroll.SetOffset(offset)
+                Framed(ui)
+                Expect(IsFinite(scroll.Offset()) && scroll.Offset() >= 0.0,
+                       "a scroll's at {scroll.Offset()}, given {offset}")
+            End For
+            slider.SetValue(NaN As Float32)
+            progress.SetValue(NaN As Float32)
+            Framed(ui)
+            Expect(IsFinite(slider.Value()), "a slider's at {slider.Value()}")
+            Expect(IsFinite(progress.Value()), "a progress is at {progress.Value()}")
+            Local wrong = Wrong(ui)
+            Expect(wrong == "", "sizes of {big}, a scale of {scale}: {wrong}")
+        End For
+        ui.SetScale(1.0)
+    End For
+    // A theme's text: what isn't a number, or is one a style can't have, refuses all of it, and the
+    // theme's as it was.
+    Local theme = Theme.Dark()
+    Local kept = theme.Save()
+    For number In ["NaN", "nan", "inf", "-inf", "-1", "1e999", "-1e999", "3.5e38", "0x10", "",
+                   "1,5", "--1", "9".Repeated(400)]
+        Local text = kept.Replace("16", number)
+        If text == kept Then Continue
+        Local refused = False
+        Try
+            Try theme.Load(text)
+        Catch e As UIError
+            refused = True
+        End Try
+        // Taken, it's a number a style can have: its styles' numbers are finite, and 0 or more.
+        For name In theme.Names()
+            Local style = theme.StyleOf(name)
+            Local sound = IsFinite(style.FontSize) && style.FontSize >= 0.0 &&
+                          IsFinite(style.BorderWidth) && style.BorderWidth >= 0.0 &&
+                          IsFinite(style.CornerRadius) && style.CornerRadius >= 0.0 &&
+                          IsFinite(style.Padding.Left) && style.Padding.Left >= 0.0
+            Expect(sound,
+                   "\"{number}\" for a size, {refused ? "refused" : "taken"}: {name} is {style}")
+        End For
+        If refused Then Expect(theme.Save() == kept, "a theme refused was changed by \"{number}\"")
+        Try? theme.Load(kept)
+    End For
+    ui.SetTheme(theme)
+    Framed(ui)
+    Expect(Wrong(ui) == "", Wrong(ui))
+End Function

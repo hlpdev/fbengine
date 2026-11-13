@@ -124,6 +124,13 @@ Public Class Gpu
     /// again.
     @MainThread Public Static Method Lost(): Bool => fbe_gpu_lost()
 
+    /// Loses the GPU, as a driver's crash or reset does, for a game's tests of what it does then:
+    /// Lost from then on, until Stop and Start make it again. It throws GraphicsError unless the
+    /// GPU's started.
+    @MainThread Public Static Method SimulateLoss() Throws GraphicsError
+        If !fbe_gpu_simulate_loss() Then Throw GraphicsError(LastError())
+    End Method
+
     /// How many bytes of the GPU's own memory the program can use, as the driver says where it
     /// can, or else most of it; -1 before the GPU starts.
     @MainThread Public Static Method MemoryBudget(): Int64 => fbe_gpu_memory_budget()

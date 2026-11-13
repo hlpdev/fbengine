@@ -999,6 +999,14 @@ FBE_API int32_t fbe_gpu_validation_errors(void) {
     return validation_errors;
 }
 
+FBE_API bool fbe_gpu_simulate_loss(void) {
+    if (fbe::gpu::device() == nullptr) {
+        return fbe::fail("the GPU hasn't started");
+    }
+    fbe::gpu::lose(VK_ERROR_DEVICE_LOST);
+    return true;
+}
+
 FBE_API bool fbe_gpu_validating(void) {
     return validating;
 }

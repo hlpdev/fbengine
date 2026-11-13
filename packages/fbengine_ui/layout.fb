@@ -188,7 +188,8 @@ Public Class Node Implements Printable
     @MainThread Public Method Children(): Node[] => children.Clone()
 
     /// Adds `child` after its other children. Panics for one with a parent already, or this one
-    /// or one it's in.
+    /// or one it's in, and for one that would make the tree more than 256 deep, which is past
+    /// any screen's and near what laying one out, a Node inside a Node, has the stack for.
     @MainThread Public Method Add(child: Node)
         Insert(children.Count, child)
     End Method
@@ -204,6 +205,16 @@ Public Class Node Implements Printable
         End While
         If index < 0 || index > children.Count
             Panic("Node.Insert: {index} isn't 0 to {children.Count}")
+        End If
+        Local depth = Deep(child)
+        above = Self
+        While above != Null
+            depth += 1
+            above = above.Parent()
+        End While
+        If depth > DEEPEST
+            Panic(
+                "Node.Add: a tree is {DEEPEST} deep at the most, and {child} would make it {depth}")
         End If
         children.Insert(index, child)
         child.parent = Self
@@ -515,11 +526,32 @@ Function Inset(box: Rect, insets: Insets): Rect
                 Max(box.Height - insets.Vertical(), 0.0))
 End Function
 
+// The deepest a tree is, a root alone being 1 deep.
+Const DEEPEST: Int = 256
+
+// How deep `node`'s tree is, itself 1.
+Function Deep(node: Node): Int
+    Local deepest = 0
+    For child In node.Children()
+        deepest = Max(deepest, Deep(child))
+    End For
+    Return deepest + 1
+End Function
+
+// A box's number as one can be laid out with: finite, as sizes that are each a float add up past
+// one, and 0 for what isn't a number.
+Function Sound(value: Float32): Float32
+    If IsNaN(value) Then Return 0.0
+    Return Max(Min(value, 3.4028235e38), -3.4028235e38)
+End Function
+
 // Puts `node` at `box`, and its children in it.
 Function Arrange(node: Node, box: Rect)
-    node.box = box
+    Local sound = Rect(Sound(box.X), Sound(box.Y), Max(Sound(box.Width), 0.0),
+                       Max(Sound(box.Height), 0.0))
+    node.box = sound
     node.dirty = False
-    node.ArrangeChildren(Inset(box, node.padding))
+    node.ArrangeChildren(Inset(sound, node.padding))
 End Function
 
 // One axis of a box: where it starts, and how long it is.

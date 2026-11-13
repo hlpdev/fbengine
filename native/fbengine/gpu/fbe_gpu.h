@@ -87,6 +87,9 @@ FBE_API void fbe_gpu_stop(void);
 // fbe_frame_flip shows nothing, and what needs the GPU fails, saying so, until fbe_gpu_stop and
 // fbe_gpu_start make it again, and with it everything on it, as nothing made before is left.
 FBE_API bool fbe_gpu_lost(void);
+// Loses the GPU, as a driver's crash or reset does, for a game's tests of what it does then: it's
+// lost from the next thing asked of it. False, with fbe_error's why, unless the GPU's started.
+FBE_API bool fbe_gpu_simulate_loss(void);
 
 // How many bytes of the GPU's own memory (its device-local heaps) the program can use, as the
 // driver says where it can (VK_EXT_memory_budget) or else most of the heaps' size, and how many it

@@ -456,6 +456,15 @@ Public Final Class Ui
         Pads()
         Typing()
 
+        // What this frame's input took out of the tree, or closed, as a popup's own button does,
+        // is no longer hovered, pressed, or focused.
+        Local over = hovered
+        If over != Null && !InTheOpen(over) Then hovered = Null
+        Local held = pressed
+        If held != Null && !InTheOpen(held) Then pressed = Null
+        Local own = focused
+        If own != Null && !InTheOpen(own) Then Focus(Null)
+
         Restyle(root)
         Restyle(popups)
         LaidOut(bounds)
