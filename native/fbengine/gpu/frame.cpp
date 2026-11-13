@@ -46,8 +46,9 @@ int submitting = 0;
 /// many of those calls are begun.
 bool no_room = false;
 int edges = 0;
-/// How many times a frame's been given to the queue.
+/// How many times a frame's been given to the queue, and what's been asked of the driver.
 std::uint64_t submits = 0;
+fbe::gpu::reached_t asked{};
 
 /// In a frame's submit for as long as it lives.
 struct submitting_t {
@@ -116,6 +117,7 @@ fbe::gpu::frame_t& begin() {
     collect(frame);
     read_timer(gpu, frame);
     vkResetCommandPool(gpu.device, frame.pool, 0);
+    ++asked.recordings;
     const VkCommandBufferBeginInfo info{
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         .flags = flag<VkCommandBufferUsageFlags>(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT),
@@ -203,6 +205,7 @@ bool submit(const fbe::gpu::device_t& gpu, fbe::gpu::frame_t& frame, VkSemaphore
     } else if (!fbe::gpu::faulted(fbe::gpu::fault_t::SUBMIT)) {
         result = gpu.queue_submit(gpu.queue, 1, &info, frame.done);
         ++submits;
+        ++asked.submits;
     }
     frame.timed = result == VK_SUCCESS && frame.timer != VK_NULL_HANDLE;
     if (result != VK_SUCCESS) {
@@ -477,6 +480,10 @@ void forget_no_room() {
 
 std::uint64_t frame_submits() {
     return submits;
+}
+
+reached_t& reached() {
+    return asked;
 }
 
 void limit_allocations(std::int64_t most) {

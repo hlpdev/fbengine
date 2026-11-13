@@ -204,6 +204,17 @@ bool said_no_room();
 void forget_no_room();
 /// How many times a frame's been given to the queue, for the tests.
 std::uint64_t frame_submits();
+/// What's been asked of the driver since the program started that a lost GPU never asks, for the
+/// tests: memory made, work submitted or presented, shader modules and pipelines made, and
+/// commands begun.
+struct reached_t {
+    std::uint64_t allocations = 0;
+    std::uint64_t submits = 0;
+    std::uint64_t pipelines = 0;
+    std::uint64_t recordings = 0;
+    bool operator==(const reached_t&) const = default;
+};
+reached_t& reached();
 /// An exported call's length, for one that isn't run again, as a Flip's present isn't: no call
 /// within it frees what waits.
 struct edge_t {
@@ -228,7 +239,11 @@ bool at_allocation_limit();
 /// room for it. Nothing's freed for it here, where a caller holds what freeing would move or end.
 template <typename Make>
 VkResult allocated(const Make& make) {
-    const VkResult result = at_allocation_limit() ? VK_ERROR_OUT_OF_DEVICE_MEMORY : make();
+    VkResult result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    if (!at_allocation_limit()) {
+        ++reached().allocations;
+        result = make();
+    }
     if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY || result == VK_ERROR_TOO_MANY_OBJECTS) {
         say_no_room();
     }

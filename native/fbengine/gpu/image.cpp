@@ -146,6 +146,7 @@ bool run_now(const std::function<void(VkCommandBuffer)>& record) {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         .flags = flag<VkCommandBufferUsageFlags>(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT),
     };
+    ++reached().recordings;
     vkBeginCommandBuffer(commands, &begin);
     record(commands);
     vkEndCommandBuffer(commands);
@@ -158,6 +159,7 @@ bool run_now(const std::function<void(VkCommandBuffer)>& record) {
         .commandBufferInfoCount = 1,
         .pCommandBufferInfos = &submitted,
     };
+    ++reached().submits;
     VkResult result = faulted(fault_t::LOST_NOW) ? VK_ERROR_DEVICE_LOST
                                                  : gpu->queue_submit(gpu->queue, 1, &submit, done);
     if (result == VK_SUCCESS) {

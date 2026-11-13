@@ -276,6 +276,11 @@ slice_t frame_memory(VkDeviceSize size, VkDeviceSize alignment) {
         fail("the GPU hasn't started");
         return {};
     }
+    // A lost GPU's frame begins nothing, and its ring grows no more.
+    if (lost()) {
+        fail_lost();
+        return {};
+    }
     frame_t& frame = recording_frame();
     const VkDeviceSize start = (frame.ring_used + alignment - 1) & ~(alignment - 1);
     if (frame.ring.buffer == VK_NULL_HANDLE || start + size > frame.ring.size) {

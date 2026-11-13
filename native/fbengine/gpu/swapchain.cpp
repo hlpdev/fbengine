@@ -242,6 +242,7 @@ bool make_swapchain(const fbe::gpu::device_t& gpu, bool wait) {
         .clipped = VK_TRUE,
         .oldSwapchain = old,
     };
+    ++fbe::gpu::reached().allocations;
     result = vkCreateSwapchainKHR(gpu.device, &info, nullptr, &swapchain);
     vkDestroySwapchainKHR(gpu.device, old, nullptr);
     if (result != VK_SUCCESS) {
@@ -301,6 +302,7 @@ bool make_headless(const fbe::gpu::device_t& gpu, bool wait) {
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
     };
     const VmaAllocationCreateInfo allocation{ .usage = VMA_MEMORY_USAGE_AUTO };
+    ++fbe::gpu::reached().allocations;
     const VkResult result = vmaCreateImage(gpu.allocator, &image_info, &allocation, &headless,
                                            &headless_memory, nullptr);
     if (result != VK_SUCCESS) {
@@ -575,6 +577,7 @@ void gpu_present(bool wait) {
     const gpu::frame_t& frame = gpu::recording_frame();
     std::uint32_t index = 0;
     if (swapchain != VK_NULL_HANDLE) {
+        ++gpu::reached().submits;
         const VkResult acquired = vkAcquireNextImageKHR(gpu.device, swapchain, UINT64_MAX,
                                                         frame.acquired, VK_NULL_HANDLE, &index);
         if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) {
@@ -608,6 +611,7 @@ void gpu_present(bool wait) {
         .pSwapchains = &swapchain,
         .pImageIndices = &index,
     };
+    ++gpu::reached().submits;
     const VkResult result = vkQueuePresentKHR(gpu.queue, &present);
     gpu::lose(result);
     stale = stale || result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR;

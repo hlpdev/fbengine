@@ -75,8 +75,9 @@ FBE_API bool fbe_texture_write_floats(uint64_t texture, int32_t x, int32_t y, in
 // `pitch` bytes apart, in its format's bytes (4 a pixel for RGBA8, 1 for R8, 8 for
 // RGBA16F), and
 // makes its mipmaps again, in turn with what else the frame does with it: drawing with it or into
-// it, clearing, and copying before the write see it as it was, and after, the write. False if the
-// region isn't in it, or it's a multisampled target, which is only drawn into.
+// it, clearing, and copying before the write see it as it was, and after, the write; nothing,
+// while the GPU's lost (fbe_gpu_lost). False if the region isn't in it, or it's a multisampled
+// target, which is only drawn into.
 FBE_API bool fbe_texture_write(uint64_t texture, int32_t x, int32_t y, int32_t width,
                                int32_t height, const uint8_t* pixels, int32_t pitch);
 

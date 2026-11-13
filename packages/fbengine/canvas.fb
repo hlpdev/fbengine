@@ -65,6 +65,11 @@ Public Final Class Canvas
         scale = Vec2(1, 1)
     End New
 
+    /// Whether it's a texture's canvas whose texture's freed, by Free or by the GPU's stop, which
+    /// frees every texture, so drawing on it panics; False for the screen's, which is always there
+    /// to draw on.
+    @MainThread Public Method Freed(): Bool => texture?.Freed() ?? False
+
     /// Sets the color it draws with, alpha too, which ALPHA and ADD blend by; into a texture whose
     /// pixels are data, RGBA8_LINEAR or R8, it's stored as it's given, not as sRGB.
     @MainThread Public Method SetColor(color: Color32)

@@ -231,6 +231,10 @@ FBE_AUDIO_API void fbe_sound_free(uint64_t sound) {
     sounds().remove(sound);
 }
 
+FBE_AUDIO_API int32_t fbe_sound_count(void) {
+    return static_cast<int32_t>(sounds().count());
+}
+
 FBE_AUDIO_API int32_t fbe_sound_sample_rate(uint64_t sound) {
     const sound_t* found = sounds().find(sound);
     return found != nullptr ? static_cast<int32_t>(found->data->sample_rate) : 0;

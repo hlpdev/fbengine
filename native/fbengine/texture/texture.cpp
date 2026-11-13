@@ -680,6 +680,10 @@ bool make(std::uint32_t slot, const spec_t& spec) {
 bool upload(std::uint64_t handle, const texture_t& texture, std::uint32_t x, std::uint32_t y,
             std::uint32_t width, std::uint32_t height, const std::uint8_t* pixels,
             std::uint32_t pitch, bool ahead = false) {
+    // A lost GPU runs nothing, so nothing's sent: written as a draw is, into nothing.
+    if (fbe::gpu::lost()) {
+        return true;
+    }
     const std::uint32_t row = width * fbe::texture::pixel_size(texture.format);
     const staging_t staging = make_staging(VkDeviceSize{ row } * height);
     if (staging.buffer == VK_NULL_HANDLE) {
@@ -729,6 +733,9 @@ bool upload(std::uint64_t handle, const texture_t& texture, std::uint32_t x, std
 bool upload_level(std::uint64_t handle, const texture_t& texture, std::uint32_t level,
                   std::uint32_t width, std::uint32_t height, const std::uint8_t* pixels,
                   std::uint32_t pitch) {
+    if (fbe::gpu::lost()) {
+        return true;
+    }
     const std::uint32_t row = width * fbe::texture::pixel_size(texture.format);
     const staging_t staging = make_staging(VkDeviceSize{ row } * height);
     if (staging.buffer == VK_NULL_HANDLE) {

@@ -13,12 +13,19 @@ Import std.os
 Import std.test
 Import fbengine
 Import fbengine_audio
+Import fbengine_audio.c.fbe_channel
+Import fbengine_audio.c.fbe_sound
 Import fbengine_video
 Import fbengine_video.c.fbe_video
 
 Function LostNoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
 
 @MainThread Function LostVideoCount(): Int32 => fbe_video_count()
+
+// The sounds there are, and the channels playing.
+@MainThread Function LostSoundCount(): Int32 => fbe_sound_count()
+
+@MainThread Function LostChannelCount(): Int32 => fbe_channel_count()
 
 @Test @MainThread
 Function AVideoPlaysOnIntoTheTextureOfAGpuMadeAgain() Throws VideoError, GraphicsError
@@ -63,15 +70,18 @@ Function AVideoPlaysOnIntoTheTextureOfAGpuMadeAgain() Throws VideoError, Graphic
     Expect(again.ToImage()[32, 24] == video.Frame()[32, 24], "it doesn't play on into it")
     Expect((Try video.Texture()) == again, "it's the same one each time")
 
-    // Lost again, and freed while it is: nothing of it's held.
+    // Lost again, and freed while it is: nothing of it's held, its texture freed with it, before
+    // a stop would free it anyway.
     Try Gpu.SimulateLoss()
     video.Update(0.04)
     Flip(False)
+    Expect(Texture.Count() == textures + 1, "{Texture.Count()} textures, not {textures} and its")
     video.Free()
+    Expect(again.Freed())
     Expect(LostVideoCount() == videos)
+    Expect(Texture.Count() == textures,
+           "{Texture.Count()} textures once it's freed, not {textures}")
     Gpu.Stop()
-    Try Gpu.Start()
-    Expect(Texture.Count() == textures, "{Texture.Count()} textures, not {textures}")
 End Function
 
 @Test @MainThread
@@ -79,21 +89,30 @@ Function AVideosSoundGoesOnOnTheOutputTheMixMovesTo() Throws VideoError, AudioEr
     Try Audio.Start(AudioDevice.SILENT, 44100, 2)
     Defer Audio.Stop()
     Local videos = LostVideoCount()
+    Local sounds = LostSoundCount()
+    Local channels = LostChannelCount()
     Local video = Try Video.Load(Embed("media/colors.mpg"))
     video.SetLoop(True)
     video.Play()
     video.Update(0.04)
     Expect(video.SoundChannel().Playing())
 
-    // Its output's unplugged: lost, with the audio left started, and the mix not moving.
+    Expect(LostSoundCount() == sounds + 1 && LostChannelCount() == channels + 1)
+
+    // Its output's unplugged: lost, with the audio left started, and the mix not moving. The
+    // clock goes on by its frames, the first of them perhaps to where the sound was heard.
     Try Audio.SimulateUnplug()
     Expect(Audio.Lost() && Audio.Started())
-    Local at = video.Time()
+    Local from = video.Time()
+    Local at = from
     For frame = 1 To 10
         video.Update(0.04)
         Expect(video.Time() >= at, "its clock went back, from {at} to {video.Time()}")
         at = video.Time()
     End For
+    Local added = at - from
+    Expect(added >= 0.36 - 1e-9 && added <= 0.4 + 1e-9,
+           "its clock went on {added} seconds over 10 frames of 0.04, from {from}")
     Expect(video.Playing() && !video.Ended())
     Expect(video.SoundChannel().Playing(), "its sound stopped with the output")
 
@@ -115,4 +134,7 @@ Function AVideosSoundGoesOnOnTheOutputTheMixMovesTo() Throws VideoError, AudioEr
     video.Free()
     Expect(!channel.Playing())
     Expect(LostVideoCount() == videos)
+    Expect(LostSoundCount() == sounds, "{LostSoundCount()} sounds once it's freed, not {sounds}")
+    Expect(LostChannelCount() == channels,
+           "{LostChannelCount()} channels once it's freed, not {channels}")
 End Function

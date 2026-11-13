@@ -96,9 +96,18 @@ Function TheUiDrawsNothingOnATexturesCanvasThatWentWithTheGpu() Throws GraphicsE
     Local ui = Ui(root)
     Local target = Try Texture.Target(120, 80)
     Local canvas = Canvas(target)
+    // A canvas the UI's first given once its texture's gone with the GPU, and one once its
+    // texture's freed by the game.
+    Local unseen = Canvas(Try Texture.Target(120, 80))
+    Local freed = Try Texture.Target(120, 80)
+    Local freedCanvas = Canvas(freed)
+    Expect(!canvas.Freed() && !Screen.Canvas().Freed())
     ui.Update()
     ui.Draw(canvas)
     Expect(LostLit(target.ToImage()) > 100, "the UI drew {LostLit(target.ToImage())} pixels")
+    freed.Free()
+    Expect(freedCanvas.Freed())
+    ui.Draw(freedCanvas)
 
     Try Gpu.SimulateLoss()
     ui.Update()
@@ -106,11 +115,14 @@ Function TheUiDrawsNothingOnATexturesCanvasThatWentWithTheGpu() Throws GraphicsE
     Gpu.Stop()
     Try Gpu.Start()
     Expect(target.Freed(), "the texture's still there")
+    Expect(canvas.Freed() && unseen.Freed() && !Screen.Canvas().Freed())
     // Its texture went with the GPU: nothing's drawn, and nothing panics, frame after frame.
     For frame = 1 To 3
         Flip()
         ui.Update()
         ui.Draw(canvas)
+        ui.Draw(unseen)
+        ui.Draw(freedCanvas)
     End For
 
     // A texture of the GPU made again is drawn on as the first was.

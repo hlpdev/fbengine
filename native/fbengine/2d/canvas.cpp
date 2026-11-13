@@ -187,7 +187,8 @@ void flush() {
     sampled.clear();
     ++batches;
     const fbe::texture::texture_t* found = fbe::texture::find(batch_target);
-    if (found == nullptr) {
+    // A lost GPU draws nothing, so nothing's sent.
+    if (found == nullptr || fbe::gpu::lost()) {
         return;
     }
     const VkExtent2D extent{ .width = found->width, .height = found->height };

@@ -1185,7 +1185,11 @@ FBE_API bool fbe_render_camera(uint64_t camera, float tween) try {
     fbe::render::forget_freed_geometries();
     fbe::render::forget_unused_histories();
     fbe::render::forget_unused_atlas();
-    return (fbe_gpu_started() || fbe_gpu_start()) && fbe::render::draw_camera(slot, tween);
+    if (!fbe_gpu_started() && !fbe_gpu_start()) {
+        return false;
+    }
+    // A lost GPU draws nothing, and nothing's made or sent for it.
+    return fbe::gpu::lost() || fbe::render::draw_camera(slot, tween);
 } catch (const std::bad_alloc&) {
     return fbe::fail("out of memory");
 }

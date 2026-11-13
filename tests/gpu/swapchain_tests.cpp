@@ -6,6 +6,7 @@
 #include "gpu_testing.hpp"
 
 #include <algorithm>
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 #include <deque>
@@ -466,6 +467,52 @@ TEST_CASE("a device lost as a swapchain's image is acquired or presented is lost
     CHECK(fake.presented == before);
     CHECK(fbe_texture_create(4, 4, FBE_TEXTURE_RGBA8, false) == 0);
     CHECK(std::string(fbe_error()).starts_with("the GPU was lost"));
+}
+
+// The device lost as the driver says it is, as a frame's presented: nothing's asked of the driver
+// from then on, and the GPU stopped while it's lost waits on the dead device and destroys it,
+// leaving nothing; started again, it draws and presents.
+TEST_CASE("a device the driver lost is stopped, started again, and draws", "[gpu][stability]") {
+    const fbe_2d_pen_t red{ .red = 255, .alpha = 255 };
+    {
+        const shown_t shown;
+        const std::uint64_t target = fbe_texture_create_target(4, 4, FBE_TEXTURE_RGBA8, 1, false);
+        require(target != 0);
+        require(fbe_2d_clear(target, &red));
+        fbe_frame_flip(true);
+        fake.presents.push_back(VK_ERROR_DEVICE_LOST);
+        require(fbe_2d_clear(target, &red));
+        fbe_frame_flip(true);
+        REQUIRE(fbe_gpu_lost());
+        const std::int64_t presented = fake.presented;
+        const fbe::gpu::reached_t before = fbe::gpu::reached();
+        require(fbe_2d_clear(target, &red));
+        require(fbe_2d_rect(0, &red, 0, 0, 8, 8, true));
+        fbe_frame_flip(true);
+        CHECK(fbe::gpu::reached() == before);
+        CHECK(fake.presented == presented);
+        std::array<std::uint8_t, 64> pixels{};
+        CHECK_FALSE(fbe_texture_read(target, 0, pixels.data(), pixels.size()));
+        CHECK(std::string(fbe_error()).starts_with("the GPU was lost"));
+        // Its end closes the window and stops the GPU, still lost, holding the target.
+    }
+    CHECK_FALSE(fbe_gpu_lost());
+    const shown_t again;
+    CHECK_FALSE(fbe_gpu_lost());
+    const std::uint64_t target = fbe_texture_create_target(4, 4, FBE_TEXTURE_RGBA8, 1, false);
+    require(target != 0);
+    require(fbe_2d_clear(target, &red));
+    std::array<std::uint8_t, 64> pixels{};
+    require(fbe_texture_read(target, 0, pixels.data(), pixels.size()));
+    CHECK(pixels[0] == 255);
+    CHECK(pixels[1] == 0);
+    CHECK(pixels[3] == 255);
+    const std::int64_t presented = fake.presented;
+    fbe_frame_flip(true);
+    fbe_frame_flip(true);
+    CHECK(fake.presented == presented + 2);
+    CHECK(fbe_texture_release(target));
+    CHECK(fbe_gpu_validation_errors() == 0);
 }
 
 // A surface 0 by 0, as a minimized window's is on some systems: no swapchain, nothing presented,

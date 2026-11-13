@@ -100,9 +100,6 @@ Public Final Class Ui
     Field cursorSet: Bool = False
     // Where the pointer was at the last Update.
     Field lastPoint: Vec2
-    // The textures' canvases it's drawn on, each with the GPU's stops as it first did, as a stop
-    // since frees its texture.
-    Field canvases: DrawnOn[] = []
 
     /// A Ui of the tree `root`, in `theme`, or Theme.Dark().
     @MainThread Public New(root: Node, theme: Theme? = Null)
@@ -486,9 +483,8 @@ Public Final Class Ui
     /// tree's order; what's hidden isn't. The canvas's pen is as it was after it; its origin moves
     /// the UI, and its viewport clips it. On the screen, with no window or no GPU, it does nothing,
     /// and nothing anywhere while the GPU's lost, as nothing draws then: once the game's made the
-    /// GPU again it draws as it did, but for a texture's canvas it drew on before the GPU stopped,
-    /// whose texture went with it, where it draws nothing. One first given it after its texture
-    /// was freed panics, as drawing on that canvas does.
+    /// GPU again it draws as it did. On a texture's canvas whose texture's freed (Canvas.Freed),
+    /// by the game or with the GPU when it stopped, it draws nothing.
     @MainThread Public Method Draw(canvas: Canvas? = Null)
         If Gpu.Lost() Then Return
         Local screen = Screen.Canvas()
@@ -507,7 +503,7 @@ Public Final Class Ui
             // the narrower way, so text stays in the boxes measured for it.
             fontUnits = Min(across, down) * (Window.Width() As Float32) / (wide As Float32)
         Else
-            If Stale(onto) Then Return
+            If onto.Freed() Then Return
             fontUnits = scale
         End If
         Asked()
@@ -519,19 +515,6 @@ Public Final Class Ui
         paint.Paint(root)
         paint.Paint(popups)
         paint.Finish()
-    End Method
-
-    // Whether `canvas`, a texture's, was drawn on before the GPU last stopped, which freed its
-    // texture; one it hasn't drawn on is kept, with the stops so far, and those gone forgotten.
-    @MainThread Method Stale(canvas: Canvas): Bool
-        Local stops = Gpu.Stops()
-        For each In canvases
-            Local seen = each.canvas
-            If seen != Null && RefEquals(seen, canvas) Then Return each.stops != stops
-        End For
-        canvases = canvases.Filter(Function(each: DrawnOn) => each.canvas != Null)
-        canvases.Add(DrawnOn(canvas, stops))
-        Return False
     End Method
 
     // The engine's font for "", as it draws with none, laid out by it at once, so its first frame's
@@ -995,17 +978,6 @@ Class PopupOpen
         Self.at = at
         Self.closed = closed
         Self.before = before
-    End New
-End Class
-
-// A texture's canvas a Ui's drawn on, and the GPU's stops as it first did.
-Class DrawnOn
-    Field canvas: Weak<Canvas>
-    ReadOnly Field stops: UInt64
-
-    New(canvas: Canvas, stops: UInt64)
-        Self.canvas = canvas
-        Self.stops = stops
     End New
 End Class
 

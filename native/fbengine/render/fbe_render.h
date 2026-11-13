@@ -136,9 +136,9 @@ FBE_API int32_t fbe_render_draw_lights(uint64_t camera, float target_width, floa
 // its viewport, then every showing mirror of its World with an inverse reflects the whole scene
 // into its viewport and depth, no clip plane, then the scene, which covers that
 // unless what's on the mirror's plane lets it through. An order below 0 draws after the
-// reflections, so a sky hides them: a mirror's game leaves its sky out of what's opaque. False,
-// with fbe_error's why, for a freed camera, a tween outside 0 to 1, a GPU that can't start, or with
-// no target and no window.
+// reflections, so a sky hides them: a mirror's game leaves its sky out of what's opaque. Nothing,
+// while the GPU's lost (fbe_gpu_lost). False, with fbe_error's why, for a freed camera, a tween
+// outside 0 to 1, a GPU that can't start, or with no target and no window.
 FBE_API bool fbe_render_camera(uint64_t camera, float tween);
 // The most a side of the atlas shadows share can be, 256 to 8192, 4096 at first, up to what the
 // device goes to. It's as big as they need up to there, and let go of once they're gone.

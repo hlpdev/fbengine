@@ -84,8 +84,10 @@ FBE_API uint64_t fbe_gpu_stops(void);
 // window stays open, and the GPU can start again.
 FBE_API void fbe_gpu_stop(void);
 // Whether the GPU was lost, as a driver's crash or reset loses it: from then on nothing draws,
-// fbe_frame_flip shows nothing, and what needs the GPU fails, saying so, until fbe_gpu_stop and
-// fbe_gpu_start make it again, and with it everything on it, as nothing made before is left.
+// and nothing's asked of the driver: a draw, a clear, a copy, or a write into a texture does
+// nothing and says it worked, fbe_frame_flip shows nothing, and what makes something on the GPU
+// or reads it back fails, saying so, until fbe_gpu_stop and fbe_gpu_start make it again, and with
+// it everything on it, as nothing made before is left.
 FBE_API bool fbe_gpu_lost(void);
 // Loses the GPU, as a driver's crash or reset does, for a game's tests of what it does then: it's
 // lost from the next thing asked of it. False, with fbe_error's why, unless the GPU's started.

@@ -22,6 +22,8 @@ FBE_AUDIO_API uint64_t fbe_sound_stream(const uint8_t* data, int64_t size);
 FBE_AUDIO_API bool fbe_sound_streamed(uint64_t sound);
 // Lets the sound go; the channels playing it play on. A sound that's gone already is nothing.
 FBE_AUDIO_API void fbe_sound_free(uint64_t sound);
+// How many sounds there are, those not freed.
+FBE_AUDIO_API int32_t fbe_sound_count(void);
 // The sound's frames a second, channels, and length in frames, 0 for a sound that's gone.
 FBE_AUDIO_API int32_t fbe_sound_sample_rate(uint64_t sound);
 FBE_AUDIO_API int32_t fbe_sound_channels(uint64_t sound);

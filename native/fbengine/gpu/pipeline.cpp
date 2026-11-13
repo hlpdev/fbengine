@@ -225,6 +225,7 @@ VkShaderModule module_of(const fbe::gpu::device_t& gpu, const fbe::gpu::shader_t
         .pCode = shader.code.data(),
     };
     VkShaderModule module = VK_NULL_HANDLE;
+    ++fbe::gpu::reached().pipelines;
     const VkResult result = vkCreateShaderModule(gpu.device, &info, nullptr, &module);
     if (result != VK_SUCCESS) {
         fbe::gpu::fail_vulkan(std::format("couldn't load the shader {}", shader.name), result);
@@ -389,6 +390,7 @@ VkPipeline make_pipeline(const fbe::gpu::device_t& gpu, const fbe::gpu::pipeline
         .layout = pipeline_layout,
     };
     VkPipeline made = VK_NULL_HANDLE;
+    ++fbe::gpu::reached().pipelines;
     const VkResult result = vkCreateGraphicsPipelines(gpu.device, cache, 1, &info, nullptr, &made);
     if (result != VK_SUCCESS) {
         fbe::gpu::fail_vulkan(std::format("couldn't make a pipeline of {}", desc.shader->name),

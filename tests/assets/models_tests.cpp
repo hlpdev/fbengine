@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <map>
@@ -275,6 +276,28 @@ TEST_CASE("a glTF's buffers and images are read from res://, beside it", "[asset
     assets::result_t<assets::model_t> missing =
         assets::decode_model(path("res://models/tri.gltf"), gltf, files.view(), {});
     REQUIRE(missing.error().failure == assets::failure_t::NOT_FOUND);
+}
+
+// A damaged .bin is named, as its URI says once it's decoded, not only the .gltf that reads it.
+TEST_CASE("a glTF whose buffer file is short is refused naming the file", "[assets][stability]") {
+    const test::temp_folder_t folder;
+    const triangle_t triangle;
+    folder.write("models/tri.gltf", triangle.built.json(triangle_t::rest, "tri%20part.bin"));
+    const bytes_t whole = triangle.built.buffer;
+    REQUIRE(whole.size() > 4);
+    folder.write("models/tri part.bin", bytes_t(whole.begin(), whole.begin() + 4));
+    vfs::vfs_t files;
+    files.mount(path("res://"), vfs::folder(folder.path));
+    const bytes_t gltf = *files.read(path("res://models/tri.gltf"));
+    const assets::result_t<assets::model_t> model =
+        assets::decode_model(path("res://models/tri.gltf"), gltf, files.view(), {});
+    REQUIRE_FALSE(model);
+    INFO(model.error().message);
+    CHECK(model.error().failure == assets::failure_t::INVALID_DATA);
+    CHECK(model.error().message ==
+          std::format("res://models/tri.gltf isn't a glTF the engine loads: its buffer "
+                      "tri part.bin has 4 bytes of its {}",
+                      whole.size()));
 }
 
 TEST_CASE("a primitive without normals gets its triangles' flat normals", "[assets]") {

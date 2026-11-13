@@ -6,6 +6,7 @@ Public Extern "C" Lib "fbengine_audio_native"
     Function fbe_sound_stream(data: Ptr<UInt8>, size: Int64): UInt64
     Function fbe_sound_streamed(sound: UInt64): Bool
     Function fbe_sound_free(sound: UInt64)
+    Function fbe_sound_count(): Int32
     Function fbe_sound_sample_rate(sound: UInt64): Int32
     Function fbe_sound_channels(sound: UInt64): Int32
     Function fbe_sound_frames(sound: UInt64): Int64

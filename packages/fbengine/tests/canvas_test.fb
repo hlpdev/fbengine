@@ -61,6 +61,25 @@ Function ACanvasDrawsIntoItsTarget() Throws GraphicsError
     Expect(image[4, 1] == Color32(0, 0, 0, 255))
 End Function
 
+// Freed once its texture is, by Free or by the GPU's stop; the screen's never is.
+@Test
+Function ACanvasIsFreedWithItsTexture() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Graphics(32, 16)
+    Defer EndGraphics()
+    Local freed = Try Texture.Target(8, 8)
+    Local canvas = Canvas(freed)
+    Local stopped = Canvas(Try Texture.Target(8, 8))
+    Expect(!canvas.Freed() && !stopped.Freed() && !Screen.Canvas().Freed())
+    freed.Free()
+    Expect(canvas.Freed() && !stopped.Freed())
+    Gpu.Stop()
+    Expect(stopped.Freed() && !Screen.Canvas().Freed())
+    Try Gpu.Start()
+    Expect(stopped.Freed() && !Screen.Canvas().Freed())
+End Function
+
 @Test
 Function TheScreensCanvasIsOneAndDrawsIntoTheScreen() Throws GraphicsError
     If NoGpu() Then Skip("no GPU here")
