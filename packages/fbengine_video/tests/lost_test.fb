@@ -1,0 +1,118 @@
+// A device lost under a video that's playing: the GPU, with the video's texture on it, as a
+// driver's crash or reset loses it; and the audio's output, with the video's sound on it, as an
+// output unplugged does. The video plays on, into the texture a GPU made again gives it and with
+// its sound on the output the mix moves to, and nothing of it's held once it's freed. What
+// sync_test.fb has already is the mix that stalls (AMixThatStallsLeavesTheClockGoing) and the audio
+// stopped and started under a video (AVideosSoundStartsAgainWithTheAudio), both on MANUAL's mix;
+// here it's an output that's lost while the audio stays started.
+
+Import std.ffi
+From std.image Import Image
+Import std.math
+Import std.os
+Import std.test
+Import fbengine
+Import fbengine_audio
+Import fbengine_video
+Import fbengine_video.c.fbe_video
+
+Function LostNoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
+
+@MainThread Function LostVideoCount(): Int32 => fbe_video_count()
+
+@Test @MainThread
+Function AVideoPlaysOnIntoTheTextureOfAGpuMadeAgain() Throws VideoError, GraphicsError
+    If LostNoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Graphics(96, 64)
+    Defer EndGraphics()
+    // Started, with its screen, so what's counted after is counted from the same.
+    Try Gpu.Start()
+    Local videos = LostVideoCount()
+    Local textures = Texture.Count()
+    Local video = Try Video.Load(Embed("media/colors.mpg"))
+    Local texture = Try video.Texture()
+    video.Play()
+    video.Update(0.6)
+    Flip(False)
+    Expect(texture.ToImage()[32, 24] == video.Frame()[32, 24])
+    Local at = video.Time()
+
+    // Lost with the video playing: its frames go on, by its clock, with nowhere to be written.
+    Try Gpu.SimulateLoss()
+    For frame = 1 To 10
+        video.Update(0.04)
+        Flip(False)
+    End For
+    Expect(Gpu.Lost())
+    Expect(video.Playing() && !video.Ended())
+    Expect(Abs(video.Time() - (at + 0.4)) < 0.05, "its clock's {video.Time()}, from {at}")
+    Local shown = video.Frame()[32, 24]
+
+    // The GPU made again: the texture it had is gone with the old one, and the one it gives now
+    // has the frame it shows.
+    Gpu.Stop()
+    Try Gpu.Start()
+    Local again = Try video.Texture()
+    Expect(!again.Freed())
+    Expect(again.Width() == 64 && again.Height() == 48)
+    Flip(False)
+    Expect(again.ToImage()[32, 24] == shown, "the texture made again hasn't the frame shown")
+    video.Update(0.6)
+    Flip(False)
+    Expect(again.ToImage()[32, 24] == video.Frame()[32, 24], "it doesn't play on into it")
+    Expect((Try video.Texture()) == again, "it's the same one each time")
+
+    // Lost again, and freed while it is: nothing of it's held.
+    Try Gpu.SimulateLoss()
+    video.Update(0.04)
+    Flip(False)
+    video.Free()
+    Expect(LostVideoCount() == videos)
+    Gpu.Stop()
+    Try Gpu.Start()
+    Expect(Texture.Count() == textures, "{Texture.Count()} textures, not {textures}")
+End Function
+
+@Test @MainThread
+Function AVideosSoundGoesOnOnTheOutputTheMixMovesTo() Throws VideoError, AudioError
+    Try Audio.Start(AudioDevice.SILENT, 44100, 2)
+    Defer Audio.Stop()
+    Local videos = LostVideoCount()
+    Local video = Try Video.Load(Embed("media/colors.mpg"))
+    video.SetLoop(True)
+    video.Play()
+    video.Update(0.04)
+    Expect(video.SoundChannel().Playing())
+
+    // Its output's unplugged: lost, with the audio left started, and the mix not moving.
+    Try Audio.SimulateUnplug()
+    Expect(Audio.Lost() && Audio.Started())
+    Local at = video.Time()
+    For frame = 1 To 10
+        video.Update(0.04)
+        Expect(video.Time() >= at, "its clock went back, from {at} to {video.Time()}")
+        at = video.Time()
+    End For
+    Expect(video.Playing() && !video.Ended())
+    Expect(video.SoundChannel().Playing(), "its sound stopped with the output")
+
+    // The Flip after moves the mix to an output there is, and its sound's on it still.
+    Try Audio.SimulatePlugIn()
+    Flip(False)
+    video.Update(0.04)
+    Flip(False)
+    Expect(!Audio.Lost())
+    Expect(video.SoundChannel().Playing(), "its sound didn't go on")
+    Expect(video.Time() >= at)
+
+    // Every output gone, and freed while they are: nothing of it's held.
+    Try Audio.SimulateUnplugAll()
+    video.Update(0.04)
+    Flip(False)
+    Expect(Audio.Lost())
+    Local channel = video.SoundChannel()
+    video.Free()
+    Expect(!channel.Playing())
+    Expect(LostVideoCount() == videos)
+End Function
