@@ -1,0 +1,82 @@
+// Physics holds no GPU, shown and not only said: a world stepped while the GPU's lost, made
+// again, stopped, and disabled is, at every body, where a world stepped with none of that is, to
+// the bit.
+
+Import std.core
+Import std.math
+Import std.os
+Import std.test
+Import fbengine
+Import fbengine_physics
+
+Function LostNoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
+
+// Crates and balls over a floor, and a hinged door.
+Function LostScene(): PhysicsWorld
+    Local world = PhysicsWorld()
+    Body(world, Shape.Box(Vec3(30, 1, 30)), Motion.STATIC, Vec3(0, -0.5, 0))
+    For i = 0 To 19
+        Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.DYNAMIC,
+             Vec3(((i % 3) As Float) * 1.05, 0.5 + ((i / 9) As Float) * 1.02,
+                  (((i / 3) % 3) As Float) * 1.05))
+        Body(world, Shape.Sphere(0.4), Motion.DYNAMIC,
+             Vec3(((i % 6) As Float) - 2, 6 + ((i / 6) As Float), 1))
+    End For
+    Local door = Body(world, Shape.Box(Vec3(1, 2, 0.1)), Motion.DYNAMIC, Vec3(5.5, 1, 0))
+    Joint.Hinge(door, Null, Vec3(5, 1, 0), Vec3(0, 1, 0))
+    Return world
+End Function
+
+// Frames of 13 to 23 ms, as a real game's are.
+Function LostFrames(world: PhysicsWorld, from: Int, frames: Int)
+    For frame = from To from + frames - 1
+        world.Update(0.013 + ((frame % 5) As Float64) * 0.0025)
+    End For
+End Function
+
+// Where each body a ray down the scene meets is, how it's turned, and how fast it goes.
+Function LostBodies(world: PhysicsWorld): String
+    Local said = "{world.Steps()}"
+    For x = -8 To 8
+        For hit In world.CastRayAll(Vec3(x As Float, 20, 0.5), Vec3(0, -1, 0), 40)
+            said += " {hit.Body.Position()} {hit.Body.Velocity()} {hit.Body.Rotation()}"
+        End For
+    End For
+    Return said
+End Function
+
+@Test
+Function AWorldStepsTheSameWhateverBecomesOfTheGpu() Throws GraphicsError
+    If LostNoGpu() Then Skip("no GPU here")
+    Local plain = LostScene()
+    Defer plain.Free()
+    LostFrames(plain, 0, 400)
+
+    Window.SetHeadless(True)
+    Try Graphics(64, 64)
+    Defer EndGraphics()
+    Try Gpu.Start()
+    Local world = LostScene()
+    Defer world.Free()
+    LostFrames(world, 0, 100)
+    Flip()
+    // Lost, as a driver's crash loses it, with frames going on.
+    Try Gpu.SimulateLoss()
+    Flip()
+    Expect(Gpu.Lost())
+    LostFrames(world, 100, 100)
+    Flip()
+    // Made again.
+    Gpu.Stop()
+    Try Gpu.Start()
+    Flip()
+    LostFrames(world, 200, 100)
+    // And stopped, with none at all from then on.
+    Gpu.Stop()
+    Gpu.SetDisabled(True)
+    Defer Gpu.SetDisabled(False)
+    Expect(!Gpu.Started())
+    LostFrames(world, 300, 100)
+    Expect(LostBodies(world) == LostBodies(plain))
+    Expect(world.Steps() == plain.Steps())
+End Function
