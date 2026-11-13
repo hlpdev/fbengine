@@ -79,6 +79,9 @@ Public Final Class OutputLog
     /// What it's kept, oldest first.
     Public Method Lines(): String[] => lines.Clone()
 
+    /// The most lines it keeps, the oldest let go of once there'd be more.
+    Public Method Most(): Int => most
+
     /// How many lines there have been, those it's let go of among them.
     Public Method Total(): Int => added
 

@@ -39,18 +39,23 @@ Public Struct WindowPlace
 End Struct
 
 /// What's kept between runs. A file that can't be read, or has been changed to nonsense, is as if
-/// it weren't there, and is left as it is; one that can't be written is only not kept.
+/// it weren't there, and is left as it is, and TakeUnread says so, naming it, once; one that can't
+/// be written is only not kept. A line of trusted.txt changed is a project asked about again.
 Public Final Class Session
     // What's been said yes to, whether or not it could be kept.
     Field trusted: Set<String>
     Field folder: Path
     // Null when they can't be read, when nothing's kept in them.
     Field preferences: Preferences?
+    // What couldn't be read, to be said, and every file that's been said of.
+    Field unread: String[] = []
+    Field told: Set<String>
 
     /// What's kept in `folder`, or the OS's folder for settings. It's an IOError if the OS doesn't
     /// say where that is.
     Public New(folder: Path? = Null) Throws IOError
         trusted = Set<String>()
+        told = Set<String>()
         Local where = folder
         If where == Null
             Local config = Folders.Config
@@ -59,8 +64,33 @@ Public Final Class Session
             where = Path(config) / "fbengine_editor"
         End If
         Self.folder = where
-        preferences = Try? Preferences("fbengine_editor", where)
+        Try
+            preferences = Try Preferences("fbengine_editor", where)
+        Catch error As IOError
+            Unread(where / "fbengine_editor" / "preferences.txt", error.Message)
+        End Try
     End New
+
+    /// What's kept that couldn't be read, or was nonsense, since this was last asked, each as its
+    /// file and why, once a file: each is as if it weren't there. What isn't there isn't one.
+    Public Method TakeUnread(): String[]
+        Local taken = unread
+        unread = []
+        Return taken
+    End Method
+
+    /// Says what Kept gave for the project at `path` was nonsense to what read it, as `why`, for
+    /// TakeUnread to say.
+    Public Method Refused(path: String, why: String)
+        Unread(FileFor(path), why)
+    End Method
+
+    // `file` couldn't be read, as `why` says, which names it or doesn't.
+    Method Unread(file: Path, why: String)
+        If told.Contains(file.Text) Then Return
+        told.Add(file.Text)
+        unread.Add(why.Contains(file.Text) ? why : "{file}: {why}")
+    End Method
 
     /// The projects opened lately, the last first, as their folders' paths.
     Public Method Recent(): String[]
@@ -123,8 +153,14 @@ Public Final Class Session
     Public Method Trusted(path: String): Bool
         Local key = TrustKey(path)
         If trusted.Contains(key) Then Return True
-        Local lines = Try? File.ReadLines(folder / "trusted.txt")
-        Return lines != Null && lines.Contains(key)
+        Local file = folder / "trusted.txt"
+        If !File.Exists(file) Then Return False
+        Try
+            Return (Try File.ReadLines(file)).Contains(key)
+        Catch error As IOError
+            Unread(file, error.Message)
+            Return False
+        End Try
     End Method
 
     /// Says the project at `path` may run its code, from now on, kept whole or not at all. What it gives
@@ -143,17 +179,26 @@ Public Final Class Session
         Return Null
     End Method
 
-    /// What's kept for the project at `path`, as Keep had it, or Null.
+    /// What's kept for the project at `path`, as Keep had it, or Null for none, or for what can't
+    /// be read, which TakeUnread says.
     Public Method Kept(path: String): Value?
         Local file = FileFor(path)
         If !File.Exists(file) Then Return Null
-        Local text = Try? File.ReadText(file)
-        If text == Null Then Return Null
-        Local value = Try? Toml.Read(text)
-        If value == Null Then Return Null
+        Local value = Value()
+        Try
+            value = Try Toml.Read(Try File.ReadText(file))
+        Catch error As Error
+            Unread(file, error.Message)
+            Return Null
+        End Try
         Local project = value["project"]?.AsString()
-        If project == Null || Folded(project) != Folded(path) Then Return Null
-        Return value["kept"]
+        Local kept = value["kept"]
+        If project == Null || Folded(project) != Folded(path) || kept == Null ||
+           kept.Kind != ValueKind.OBJECT
+            Unread(file, "it isn't what's kept for {path}")
+            Return Null
+        End If
+        Return kept
     End Method
 
     /// Keeps `value`, an Object, for the project at `path`, whole or not at all.

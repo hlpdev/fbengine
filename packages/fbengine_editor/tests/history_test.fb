@@ -155,6 +155,36 @@ Function ItKeepsTheLastEditsItsToKeep()
     Expect(history.Modified())
 End Function
 
+// Its count is what it keeps to undo and redo, never more than it was made to keep.
+@Test
+Function ItsCountIsWhatItKeeps()
+    Local sum = [0]
+    Local history = History(3)
+    Expect(history.Count() == 0 && history.Most() == 3)
+    For i = 1 To 5
+        history.Commit(Adding(sum, 1))
+        Expect(history.Count() == (i < 3 ? i : 3), "{history.Count()} kept after {i}")
+    End For
+    history.Undo()
+    history.Undo()
+    Expect(history.Count() == 3, "{history.Count()} kept, two of them undone")
+    history.Commit(Adding(sum, 1))
+    Expect(history.Count() == 2, "{history.Count()} kept, what was undone gone")
+    history.Commit(Adding(sum, 1, True))
+    history.Commit(Adding(sum, 1, True))
+    Expect(history.Count() == 3, "{history.Count()} kept, a merge one")
+    // What's offered to merge, and what isn't.
+    Expect(history.Merging())
+    history.EndMerge()
+    Expect(!history.Merging())
+    history.Commit(Adding(sum, 1, True))
+    Expect(history.Merging() && history.Count() == 3)
+    history.Undo()
+    Expect(!history.Merging())
+    history.Clear()
+    Expect(history.Count() == 0 && !history.Merging())
+End Function
+
 @Test
 Function ClearForgetsEverything()
     Local sum = [0]

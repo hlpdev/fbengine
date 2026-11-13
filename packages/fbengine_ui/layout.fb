@@ -60,11 +60,9 @@ Public Struct Sizing Implements Printable
     /// As big as what's in it.
     Public Static Method Fit(): Sizing => Sizing(SizeMode.FIT, 0.0)
 
-    /// `units` long. Panics for a length under 0, or one that isn't finite.
-    Public Static Method Fixed(units: Float32): Sizing
-        If !(units >= 0.0 && IsFinite(units)) Then Panic("Sizing.Fixed: a length is 0 or more, not {units}")
-        Return Sizing(SizeMode.FIXED, units)
-    End Method
+    /// `units` long: 0 for a length under 0 or one that isn't a number, and 16,777,216 for one past
+    /// that, an infinity too, which is as far as a box goes.
+    Public Static Method Fixed(units: Float32): Sizing => Sizing(SizeMode.FIXED, Taken(units))
 
     /// A share of what's left, `weight` to its siblings' weights. Panics for a weight that's not
     /// over 0, or isn't finite.
@@ -146,7 +144,9 @@ Global layouts: Int = 0
 /// laying its children out in its own, less its padding, as its Arrangement says. A widget is a
 /// Node, which measures what it shows; a Node that isn't one is a panel, a row, or a spacer.
 /// Every change marks the tree, and the root's next Layout lays it out again; one with nothing
-/// changed and the same bounds does nothing.
+/// changed and the same bounds does nothing. A box's place and its size are each kept within
+/// 16,777,216 (2^24) either way, where a float still counts every pixel, so its edges are finite:
+/// what isn't a number is 0, and a size under 0 is 0.
 Public Class Node Implements Printable
     Field name: String
     Field parent: Weak<Node>
@@ -213,8 +213,7 @@ Public Class Node Implements Printable
             above = above.Parent()
         End While
         If depth > DEEPEST
-            Panic(
-                "Node.Add: a tree is {DEEPEST} deep at the most, and {child} would make it {depth}")
+            Panic("Node.Insert: a tree is {DEEPEST} deep at the most, and {child} would make it {depth}")
         End If
         children.Insert(index, child)
         child.parent = Self
@@ -281,40 +280,34 @@ Public Class Node Implements Printable
     /// How its height is found.
     @MainThread Public Method Height(): Sizing => height
 
-    /// The least it's laid out as, however it's sized, 0 at first.
+    /// The least it's laid out as, however it's sized, 0 at first; each as a length is taken, 0 for
+    /// one under 0 or not a number, and 16,777,216 for one past it.
     @MainThread Public Method SetMinSize(width: Float32, height: Float32)
-        If !(Length(width) && Length(height))
-            Panic("Node.SetMinSize: a least is 0 or more, and finite, not {width} by {height}")
-        End If
-        minimum = Vec2(width, height)
+        minimum = Vec2(Taken(width), Taken(height))
         Reflow()
     End Method
 
-    /// The most it's laid out as, Inf at first for no most; a least past it wins.
+    /// The most it's laid out as, Inf at first for no most; a least past it wins. One under 0 is 0,
+    /// and one that isn't a number is no most.
     @MainThread Public Method SetMaxSize(width: Float32, height: Float32)
-        If !(width >= 0.0 && height >= 0.0)
-            Panic("Node.SetMaxSize: a most is 0 or more, or Inf, not {width} by {height}")
-        End If
-        maximum = Vec2(width, height)
+        maximum = Vec2(IsNaN(width) ? (Inf As Float32) : Max(width, 0.0),
+                       IsNaN(height) ? (Inf As Float32) : Max(height, 0.0))
         Reflow()
     End Method
 
-    /// Sets the space between its edge and its children. Panics for a side under 0, or not finite.
+    /// Sets the space between its edge and its children; each side as a length is taken, 0 for one
+    /// under 0 or not a number, and 16,777,216 for one past it.
     @MainThread Public Method SetPadding(insets: Insets)
-        For side In [insets.Left, insets.Top, insets.Right, insets.Bottom]
-            If !Length(side) Then Panic("Node.SetPadding: padding is 0 or more, and finite, not {side}")
-        End For
-        padding = insets
+        padding = Insets(Taken(insets.Left), Taken(insets.Top), Taken(insets.Right),
+                         Taken(insets.Bottom))
         Reflow()
     End Method
 
     /// Sets the space around it, between it and its siblings and its parent's padding; a side under
-    /// 0 pulls it in. Panics for a side that isn't finite.
+    /// 0 pulls it in. A side that isn't a number is 0, and one past 16,777,216 either way is that.
     @MainThread Public Method SetMargin(insets: Insets)
-        For side In [insets.Left, insets.Top, insets.Right, insets.Bottom]
-            If !IsFinite(side) Then Panic("Node.SetMargin: a margin is finite, not {side}")
-        End For
-        margin = insets
+        margin = Insets(Sound(insets.Left), Sound(insets.Top), Sound(insets.Right),
+                        Sound(insets.Bottom))
         Reflow()
     End Method
 
@@ -333,10 +326,10 @@ Public Class Node Implements Printable
     /// How it lays its children out.
     @MainThread Public Method ArrangedAs(): Arrangement => arrangement
 
-    /// Sets the space between each two of a row's or a column's children, 0 at first.
+    /// Sets the space between each two of a row's or a column's children, 0 at first; taken as a
+    /// length is, 0 for one under 0 or not a number, and 16,777,216 for one past it.
     @MainThread Public Method SetGap(units: Float32)
-        If !Length(units) Then Panic("Node.SetGap: a gap is 0 or more, and finite, not {units}")
-        gap = units
+        gap = Taken(units)
         Reflow()
     End Method
 
@@ -387,12 +380,10 @@ Public Class Node Implements Printable
     @MainThread Public Method Visible(): Bool => visible
 
     /// Sets the size of what a Node with no children shows, which Measure gives: a widget's text
-    /// or image, (0, 0) at first.
+    /// or image, (0, 0) at first; each as a length is taken, 0 for one under 0 or not a number,
+    /// and 16,777,216 for one past it.
     @MainThread Public Method SetContentSize(width: Float32, height: Float32)
-        If !(Length(width) && Length(height))
-            Panic("Node.SetContentSize: a size is 0 or more, and finite, not {width} by {height}")
-        End If
-        content = Vec2(width, height)
+        content = Vec2(Taken(width), Taken(height))
         Reflow()
     End Method
 
@@ -532,17 +523,27 @@ Const DEEPEST: Int = 256
 // How deep `node`'s tree is, itself 1.
 Function Deep(node: Node): Int
     Local deepest = 0
-    For child In node.Children()
+    For child In node.children
         deepest = Max(deepest, Deep(child))
     End For
     Return deepest + 1
 End Function
 
-// A box's number as one can be laid out with: finite, as sizes that are each a float add up past
-// one, and 0 for what isn't a number.
+// The furthest from 0 a box's place or size is, 2^24, where a float still counts every pixel: its
+// edges, a place and a size added, are finite and whole pixels to there.
+Const FURTHEST: Float32 = 16777216.0
+
+// A box's place, or a margin, as one can be laid out with: within FURTHEST either way, and 0 for
+// what isn't a number.
 Function Sound(value: Float32): Float32
     If IsNaN(value) Then Return 0.0
-    Return Max(Min(value, 3.4028235e38), -3.4028235e38)
+    Return Max(Min(value, FURTHEST), -FURTHEST)
+End Function
+
+// A length as it's taken: 0 for one under 0 or not a number, and FURTHEST for one past it.
+Function Taken(units: Float32): Float32
+    If IsNaN(units) Then Return 0.0
+    Return Max(Min(units, FURTHEST), 0.0)
 End Function
 
 // Puts `node` at `box`, and its children in it.
@@ -667,14 +668,11 @@ Function Share(shown: Node[], lengths: Float32[], filling: Bool[], free: Float32
     End While
 End Function
 
-// Whether `units` is a length a Node takes: 0 or more, and finite.
-Function Length(units: Float32): Bool => units >= 0.0 && IsFinite(units)
-
 // `sizing` as its Mode takes it, as Sizing's Static Methods check it, or `call` panics.
 Function CheckedSizing(call: String, sizing: Sizing): Sizing
     Select sizing.Mode
         Case SizeMode.FIXED
-            If !Length(sizing.Value) Then Panic("{call}: a fixed size is 0 or more, not {sizing.Value}")
+            Return Sizing(SizeMode.FIXED, Taken(sizing.Value))
         Case SizeMode.FILL
             If !(sizing.Value > 0.0 && IsFinite(sizing.Value))
                 Panic("{call}: a fill's weight is over 0, not {sizing.Value}")

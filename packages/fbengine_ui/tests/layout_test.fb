@@ -425,3 +425,98 @@ Function RemoveAllLetsGoOfThemAtOnce()
     parent.RemoveAll()
     Expect(parent.Children().Count == 0)
 End Function
+
+// What's wrong with the edges of `node`'s box, and those under it, or "": as Node's docs keep
+// them, a place and a size each within 2^24 either way, a size not under 0, and so its edges, a
+// place and a size added, finite.
+Function EdgesWrong(node: Node): String
+    Local most: Float32 = 16777216.0
+    Local box = node.Box()
+    Local right = box.X + box.Width
+    Local bottom = box.Y + box.Height
+    If !(IsFinite(right) && IsFinite(bottom) && Abs(box.X) <= most && Abs(box.Y) <= most &&
+         box.Width >= 0.0 && box.Width <= most && box.Height >= 0.0 && box.Height <= most)
+        Return "{node}: {box}, its edges at {right} and {bottom}"
+    End If
+    For child In node.Children()
+        Local wrong = EdgesWrong(child)
+        If wrong != "" Then Return wrong
+    End For
+    Return ""
+End Function
+
+@Test
+Function ABoxsEdgesAreFiniteWhereverItsPutAndHoweverBig()
+    Local inf = Inf As Float32
+    Local most: Float32 = 3.4028235e38
+    For at In [Rect(most, most, most, most), Rect(-most, -most, most, most),
+               Rect(0.0, 0.0, inf, inf), Rect(-inf, -inf, inf, inf),
+               Rect((NaN As Float32), 0.0, (NaN As Float32), 10.0)]
+        Local root = Node("root")
+        root.SetArrangement(Arrangement.ROW)
+        root.SetGap(inf)
+        root.SetPadding(Insets.All(inf))
+        For each = 1 To 100
+            Local column = Node("c{each}")
+            column.SetSize(inf, inf)
+            column.SetMargin(Insets(-inf, inf, inf, -inf))
+            column.Add(Fixed("x{each}", inf, inf))
+            column.Add(Fixed("y{each}", most, -most))
+            root.Add(column)
+        End For
+        root.Layout(at)
+        Local wrong = EdgesWrong(root)
+        Expect(wrong == "", "laid out in {at}: {wrong}")
+    End For
+End Function
+
+// What a length that isn't one is taken as by each setter that takes one, as their docs say:
+// NaN and what's under 0 as 0, and what's past 2^24, an infinity too, as 2^24; a margin, which
+// may be under 0, to 2^24 either way; a most that isn't a number as no most.
+@Test
+Function LengthsThatArentOnesAreTakenAsTheSettersDocsSay()
+    Local most: Float32 = 16777216.0
+    Local nan = NaN As Float32
+    Local inf = Inf As Float32
+    Local cases: (Float32, Float32, Float32)[] = [(nan, 0.0, 0.0), (inf, most, most),
+                                                  (-inf, 0.0, -most), (-1.0, 0.0, -1.0),
+                                                  (3.0e38, most, most), (-3.0e38, 0.0, -most),
+                                                  (5.0, 5.0, 5.0)]
+    For each In cases
+        // The length given, what a length's taken as, and what a margin's taken as.
+        Local given, taken, margin = each
+        Expect(Sizing.Fixed(given).Value == taken, "Fixed({given}) is {Sizing.Fixed(given)}")
+        Local node = Node("node")
+        node.SetWidth(Sizing.Fixed(given))
+        Expect(node.Width().Value == taken, "SetWidth(Fixed({given})) is {node.Width()}")
+        node.SetPadding(Insets(given, given, given, given))
+        Expect(node.Padding() == Insets.All(taken), "SetPadding({given}) is {node.Padding()}")
+        node.SetMargin(Insets(given, given, given, given))
+        Expect(node.Margin() == Insets.All(margin), "SetMargin({given}) is {node.Margin()}")
+        node.SetContentSize(given, given)
+        Expect(node.Measure() == Vec2(taken, taken), "SetContentSize({given}) is {node.Measure()}")
+
+        // A gap, a least, and a most, by where they put what they're on.
+        Local row = Node("row")
+        row.SetArrangement(Arrangement.ROW)
+        row.SetAlign(Align.START)
+        row.SetGap(given)
+        Local a = Fixed("a", 10.0, 10.0)
+        Local least = Fixed("least", 1.0, 1.0)
+        least.SetMinSize(given, given)
+        Local capped = Fixed("most", 50.0, 50.0)
+        capped.SetMaxSize(given, given)
+        row.Add(a)
+        row.Add(least)
+        row.Add(capped)
+        row.Layout(Rect(0.0, 0.0, 100.0, 100.0))
+        Expect(least.Box().X == Min(10.0 + taken, most),
+               "SetGap({given}) put the least at {least.Box()}")
+        Local smallest = Max(taken, 1.0)
+        Expect(least.Box().Width == smallest && least.Box().Height == smallest,
+               "SetMinSize({given}) is {least.Box()}")
+        Local kept = IsNaN(given) ? 50.0 : Min(Max(given, 0.0), 50.0)
+        Expect(capped.Box().Width == kept && capped.Box().Height == kept,
+               "SetMaxSize({given}) is {capped.Box()}")
+    End For
+End Function

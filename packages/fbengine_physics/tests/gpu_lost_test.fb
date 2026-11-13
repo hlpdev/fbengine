@@ -11,20 +11,22 @@ Import fbengine_physics
 
 Function LostNoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
 
-// Crates and balls over a floor, and a hinged door.
-Function LostScene(): PhysicsWorld
+// Crates and balls over a floor, and a hinged door, with each body it makes, in the order made.
+Function LostScene(): (PhysicsWorld, Body[])
     Local world = PhysicsWorld()
-    Body(world, Shape.Box(Vec3(30, 1, 30)), Motion.STATIC, Vec3(0, -0.5, 0))
+    Local bodies: Body[] = []
+    bodies.Add(Body(world, Shape.Box(Vec3(30, 1, 30)), Motion.STATIC, Vec3(0, -0.5, 0)))
     For i = 0 To 19
-        Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.DYNAMIC,
-             Vec3(((i % 3) As Float) * 1.05, 0.5 + ((i / 9) As Float) * 1.02,
-                  (((i / 3) % 3) As Float) * 1.05))
-        Body(world, Shape.Sphere(0.4), Motion.DYNAMIC,
-             Vec3(((i % 6) As Float) - 2, 6 + ((i / 6) As Float), 1))
+        bodies.Add(Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.DYNAMIC,
+                        Vec3(((i % 3) As Float) * 1.05, 0.5 + ((i / 9) As Float) * 1.02,
+                             (((i / 3) % 3) As Float) * 1.05)))
+        bodies.Add(Body(world, Shape.Sphere(0.4), Motion.DYNAMIC,
+                        Vec3(((i % 6) As Float) - 2, 6 + ((i / 6) As Float), 1)))
     End For
     Local door = Body(world, Shape.Box(Vec3(1, 2, 0.1)), Motion.DYNAMIC, Vec3(5.5, 1, 0))
+    bodies.Add(door)
     Joint.Hinge(door, Null, Vec3(5, 1, 0), Vec3(0, 1, 0))
-    Return world
+    Return (world, bodies)
 End Function
 
 // Frames of 13 to 23 ms, as a real game's are.
@@ -34,29 +36,50 @@ Function LostFrames(world: PhysicsWorld, from: Int, frames: Int)
     End For
 End Function
 
-// Where each body a ray down the scene meets is, how it's turned, and how fast it goes.
-Function LostBodies(world: PhysicsWorld): String
-    Local said = "{world.Steps()}"
-    For x = -8 To 8
-        For hit In world.CastRayAll(Vec3(x As Float, 20, 0.5), Vec3(0, -1, 0), 40)
-            said += " {hit.Body.Position()} {hit.Body.Velocity()} {hit.Body.Rotation()}"
-        End For
+// A vector's bits.
+Function LostBits(v: Vec3): String => "{v.x.ToBits()},{v.y.ToBits()},{v.z.ToBits()}"
+
+// Where each body is, how it's turned, and how fast it goes and turns, each float by its bits.
+Function LostBodies(scene: (PhysicsWorld, Body[])): String[]
+    Local said: String[] = ["steps {scene.0.Steps()}"]
+    For at = 0 Until scene.1.Count
+        Local body = scene.1 [at]
+        Local turn = body.Rotation()
+        said.Add("body {at}: at {LostBits(body.Position())}, turned {turn.x.ToBits()}," +
+                 "{turn.y.ToBits()},{turn.z.ToBits()},{turn.w.ToBits()}, going " +
+                 "{LostBits(body.Velocity())}, turning {LostBits(body.AngularVelocity())}")
     End For
     Return said
 End Function
 
+// The first line where `got` isn't `want`, or "".
+Function LostDiffers(got: String[], want: String[]): String
+    If got.Count != want.Count Then Return "{got.Count} lines, not {want.Count}"
+    For at = 0 Until got.Count
+        If got[at] != want[at] Then Return "{got[at]}, not {want[at]}"
+    End For
+    Return ""
+End Function
+
+// The world, stepped 400 frames with the GPU as it is.
+Function LostPlain(): (PhysicsWorld, Body[])
+    Local plain = LostScene()
+    LostFrames(plain.0, 0, 400)
+    Return plain
+End Function
+
 @Test
 Function AWorldStepsTheSameWhateverBecomesOfTheGpu() Throws GraphicsError
-    If LostNoGpu() Then Skip("no GPU here")
-    Local plain = LostScene()
-    Defer plain.Free()
-    LostFrames(plain, 0, 400)
+    If LostNoGpu() Then Skip("no GPU here; the disabled half runs without one")
+    Local plain = LostPlain()
+    Defer plain.0.Free()
 
     Window.SetHeadless(True)
     Try Graphics(64, 64)
     Defer EndGraphics()
     Try Gpu.Start()
-    Local world = LostScene()
+    Local scene = LostScene()
+    Local world = scene.0
     Defer world.Free()
     LostFrames(world, 0, 100)
     Flip()
@@ -77,6 +100,21 @@ Function AWorldStepsTheSameWhateverBecomesOfTheGpu() Throws GraphicsError
     Defer Gpu.SetDisabled(False)
     Expect(!Gpu.Started())
     LostFrames(world, 300, 100)
-    Expect(LostBodies(world) == LostBodies(plain))
-    Expect(world.Steps() == plain.Steps())
+    Local differs = LostDiffers(LostBodies(scene), LostBodies(plain))
+    Expect(differs == "", differs)
+End Function
+
+// With the GPU disabled from the start, as a dedicated server has it, which needs none at all.
+@Test
+Function AWorldStepsTheSameWithTheGpuDisabled()
+    Local plain = LostPlain()
+    Defer plain.0.Free()
+    Gpu.SetDisabled(True)
+    Defer Gpu.SetDisabled(False)
+    Local scene = LostScene()
+    Defer scene.0.Free()
+    LostFrames(scene.0, 0, 400)
+    Expect(Gpu.Disabled() && !Gpu.Started())
+    Local differs = LostDiffers(LostBodies(scene), LostBodies(plain))
+    Expect(differs == "", differs)
 End Function

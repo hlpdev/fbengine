@@ -146,6 +146,11 @@ Public Final Class Editor
         Kinds.Update()
         Local failure = Kinds.TakeFailure()
         If failure != Null Then Said("Couldn't read the game's components", failure)
+        // What's kept between runs that's nonsense is as if it weren't there, and said where it
+        // won't take the place of what a dialog's asking.
+        For unread In Kept.TakeUnread()
+            Run.Log.Say("What was kept couldn't be read, so it's as it is at first: {unread}")
+        End For
         Inspector.Update()
         Run.Update()
         Output.Update()
@@ -209,7 +214,15 @@ Public Final Class Editor
         Files.SetFolder(opened.Folder / "assets")
         Kept.AddRecent(opened.Folder.Text)
         Local saved = Kept.Kept(opened.Folder.Text)
-        If saved == Null || !Docked.Restore(saved["layout"] ?? Value.Object()) Then DefaultLayout()
+        Local layout = Value.Object()
+        If saved != Null Then layout = saved["layout"] ?? layout
+        If saved == Null || !Docked.Restore(layout)
+            DefaultLayout()
+            // With nothing shown it's kept empty, which isn't what's wrong.
+            If saved != Null && layout.Count > 0
+                Kept.Refused(opened.Folder.Text, "its panes' layout isn't one")
+            End If
+        End If
         If saved != Null
             Local scene = saved["scene"]?.AsString()
             If scene != Null && Assets.Exists(scene) Then OpenScene(scene)
@@ -351,7 +364,10 @@ Public Final Class Editor
             If problems.Count > 0 Then Said("Some of what that scene's made of is lost",
                                             problems.Join("\n"))
         Catch error As IOError
-            Said("Couldn't open that scene", "{path}: {error.Message}")
+            // What couldn't be read names it already; what's wrong in what was read doesn't.
+            Local named = error.Message.Contains(path) ||
+                          error.Message.Contains((Try? Assets.Normalize(path)) ?? path)
+            Said("Couldn't open that scene", named ? error.Message : "{path}: {error.Message}")
             Return
         End Try
         Tree.MarkChanged()

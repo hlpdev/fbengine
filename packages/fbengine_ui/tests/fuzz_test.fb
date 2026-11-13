@@ -1,9 +1,14 @@
 // The UI fuzzed, headless, on lavapipe, each run from a seed, so one that fails fails again: random
-// input for thousands of frames into a menu, a console, a HUD, a popup, and a scroll; trees built
-// and taken apart at random, a widget removed while it has the focus, the hover, or the mouse, or
-// from inside its own handler; and a theme's and a layout's numbers at the ends of a float. Nothing
-// panics, every box is of finite numbers and no size under 0, and what has the focus, the hover,
-// and the press is each a widget still in the tree, or none.
+// input for thousands of frames into a menu, a console, a HUD, a popup, and a scroll, a pad's
+// sticks and triggers too, the window minimized and closed to nothing; trees built and taken
+// apart at random, a widget removed while it has the focus, the hover, or the mouse, or from
+// inside its own handler; and a theme's and a layout's numbers at the ends of a float. Nothing
+// panics, every box's edges are finite, its place and size within 2^24 and no size under 0, what
+// has the focus, the hover, and the press is each a widget still in the tree, or none, and a
+// scroll's thumb is dragged only while it's what's pressed.
+//
+// Broken UTF-8 isn't given: Simulate.Text takes a String, which is always whole UTF-8, so text
+// that isn't is left to the text core's own fuzz.
 
 Import std.collections
 Import std.core
@@ -15,6 +20,8 @@ Import fbengine
 Import fbengine_ui
 
 Global fuzzState: Int64 = 1
+// How many times a button's own click has taken it, or what holds it, out of the tree.
+Global fuzzRemovals: Int = 0
 
 // Park and Miller's, from a seed of 1 or more.
 Function FuzzNext(n: Int): Int
@@ -56,13 +63,17 @@ Function Held(ui: Ui, widget: Widget?): Bool
     Return False
 End Function
 
-// What's wrong with the boxes of `node` and all under it, or "": a number that isn't finite, or a
-// size under 0.
+// What's wrong with the boxes of `node` and all under it, or "": as Node's docs keep them, a
+// place and a size each within 2^24 either way, a size not under 0, and so edges, a place and a
+// size added, that are finite.
 Function Unsound(node: Node): String
+    Local most: Float32 = 16777216.0
     Local box = node.Box()
-    If !IsFinite(box.X) || !IsFinite(box.Y) || !IsFinite(box.Width) || !IsFinite(box.Height) ||
-       box.Width < 0.0 || box.Height < 0.0
-        Return "{node}: {box}"
+    Local right = box.X + box.Width
+    Local bottom = box.Y + box.Height
+    If !(IsFinite(right) && IsFinite(bottom) && Abs(box.X) <= most && Abs(box.Y) <= most &&
+         box.Width >= 0.0 && box.Width <= most && box.Height >= 0.0 && box.Height <= most)
+        Return "{node}: {box}, its edges at {right} and {bottom}"
     End If
     For child In node.Children()
         Local wrong = Unsound(child)
@@ -77,11 +88,40 @@ Function Said(widget: Widget?): String
     Return "{widget}"
 End Function
 
-// What's wrong with a Ui after a frame, or "".
-Function Wrong(ui: Ui): String
+// Every ScrollView in `node`'s tree, into `found`.
+Function Views(node: Node, found: ScrollView[])
+    Local view = node As? ScrollView
+    If view != Null Then found.Add(view)
+    For child In node.Children()
+        Views(child, found)
+    End For
+End Function
+
+// What's wrong with a Ui after a frame, or "": with `out`, what's been taken out of it and is
+// still about, so what it held is seen if it's held still.
+Function Wrong(ui: Ui, out: Node[]): String
     If !Held(ui, ui.Focused()) Then Return "the focus is on {Said(ui.Focused())}, which isn't in the tree"
     If !Held(ui, ui.Hovered()) Then Return "the hover is on {Said(ui.Hovered())}, which isn't in the tree"
     If !Held(ui, ui.Pressed()) Then Return "the press is on {Said(ui.Pressed())}, which isn't in the tree"
+    // What holds the pointer: with none, the next press is the left button's, and a scroll's thumb
+    // is dragged only while it's what's pressed.
+    If ui.Pressed() == Null && ui.PressedButton() != MouseButton.LEFT
+        Return "nothing's pressed, but the button's {ui.PressedButton()}"
+    End If
+    Local views: ScrollView[] = []
+    Views(ui.Root(), views)
+    For popup In ui.Popups()
+        Views(popup, views)
+    End For
+    For each In out
+        Views(each, views)
+    End For
+    For view In views
+        Local pressed = ui.Pressed()
+        If view.Dragging() && (pressed == Null || !RefEquals(pressed, view))
+            Return "{view}'s thumb is dragged, but what's pressed is {Said(pressed)}"
+        End If
+    End For
     Local wrong = Unsound(ui.Root())
     If wrong != "" Then Return wrong
     For popup In ui.Popups()
@@ -159,16 +199,27 @@ Function RandomInputLeavesAMenuAConsoleAHudAPopupAndAScrollWhole() Throws Graphi
     Local buttons = [GamepadButton.SOUTH, GamepadButton.EAST, GamepadButton.DPAD_UP,
                      GamepadButton.DPAD_DOWN, GamepadButton.DPAD_LEFT, GamepadButton.DPAD_RIGHT,
                      GamepadButton.START]
+    Local axes = [GamepadAxis.LEFT_X, GamepadAxis.LEFT_Y, GamepadAxis.RIGHT_X, GamepadAxis.RIGHT_Y,
+                  GamepadAxis.LEFT_TRIGGER, GamepadAxis.RIGHT_TRIGGER]
     Local sizes = [(640, 360), (1, 1), (4000, 3000), (3, 900), (640, 360), (900, 2)]
     fuzzState = 20261113
     Local width = 640
     Local height = 360
+    // The frames the scroll's thumb was held, so the check of it isn't of nothing.
+    Local dragged = 0
     For frame = 1 To 2400
         Select FuzzNext(16)
             Case 0, 1
-                // In the window, at its edges, and far outside it.
-                Try Simulate.MoveMouse(((FuzzNext(width * 3) - width) As Float32),
-                                       ((FuzzNext(height * 3) - height) As Float32))
+                If FuzzNext(3) == 0
+                    // Onto the scroll's strip, where its thumb's taken.
+                    Local box = scroll.Box()
+                    Try Simulate.MoveMouse(box.X + box.Width - 3.0,
+                                           box.Y + (FuzzNext(Max(box.Height As Int, 1)) As Float32))
+                Else
+                    // In the window, at its edges, and far outside it.
+                    Try Simulate.MoveMouse(((FuzzNext(width * 3) - width) As Float32),
+                                           ((FuzzNext(height * 3) - height) As Float32))
+                End If
             Case 2
                 Try Simulate.MouseDown([MouseButton.LEFT, MouseButton.RIGHT,
                                         MouseButton.MIDDLE][FuzzNext(3)])
@@ -209,10 +260,20 @@ Function RandomInputLeavesAMenuAConsoleAHudAPopupAndAScrollWhole() Throws Graphi
             Case 14
                 scroll.SetOffset(((FuzzNext(4000) - 1000) As Float32))
                 list.SetSelected(FuzzNext(7) - 1)
+                // The scroll taken out, hidden, and back, its thumb held or not.
+                Select FuzzNext(6)
+                    Case 0
+                        If scroll.Parent() == Null Then root.Add(scroll) Else root.Remove(scroll)
+                    Case 1
+                        scroll.SetVisible(!scroll.Visible())
+                    Default
+                End Select
             Default
+                // A stick or a trigger, anywhere it goes, its middle too.
+                pad.SetAxis(axes[FuzzNext(axes.Count)], ((FuzzNext(5) - 2) As Float32) / 2.0)
         End Select
         // The screen gone to nothing, and to huge, and back: huge for a few frames, as lavapipe
-        // draws each of its pixels on the CPU.
+        // draws each of its pixels on the CPU; and minimized for a while, between.
         If frame % 400 == 0
             Local size = sizes[(frame / 400) % sizes.Count]
             width = size.0
@@ -222,14 +283,39 @@ Function RandomInputLeavesAMenuAConsoleAHudAPopupAndAScrollWhole() Throws Graphi
             width = 640
             height = 360
             Try Graphics(640, 360)
+        ElseIf frame % 400 == 100
+            Try Simulate.MinimizeWindow()
+        ElseIf frame % 400 == 140
+            Try Simulate.RestoreWindow()
         End If
         Framed(ui)
-        Local wrong = Wrong(ui)
+        If scroll.Dragging() Then dragged += 1
+        Local wrong = Wrong(ui, [scroll])
         If wrong != ""
             Fail("frame {frame}, seed 20261113: {wrong}")
             Return
         End If
     End For
+    Expect(dragged > 0, "seed 20261113: the scroll's thumb was never held")
+
+    // No window, so a screen 0 by 0: frames go on, laid out in nothing and drawn nowhere, and
+    // once it's opened again, as before.
+    EndGraphics()
+    For frame = 1 To 20
+        Flip()
+        ui.Update()
+        ui.Draw()
+        Local wrong = Wrong(ui, [scroll])
+        If wrong != ""
+            Fail("with no window, frame {frame}: {wrong}")
+            Return
+        End If
+    End For
+    Try Graphics(640, 360)
+    For frame = 1 To 3
+        Framed(ui)
+    End For
+    Expect(Wrong(ui, [scroll]) == "", Wrong(ui, [scroll]))
     Expect(play.Text() == "Play")
 End Function
 
@@ -248,6 +334,7 @@ Function TreesBuiltAndTakenApartAtRandomLeaveNothingHeld() Throws GraphicsError,
     Local nodes: Node[] = [root]
     Local widgets: Widget[] = []
     fuzzState = 31337
+    fuzzRemovals = 0
     For frame = 1 To 3000
         Select FuzzNext(12)
             Case 0, 1, 2, 3
@@ -256,7 +343,7 @@ Function TreesBuiltAndTakenApartAtRandomLeaveNothingHeld() Throws GraphicsError,
                 Local leaf = (parent As? Widget) != Null
                 If leaf Then Continue
                 Local made: Node = Node("n{frame}")
-                Select FuzzNext(7)
+                Select FuzzNext(8)
                     Case 0
                         Local button = Button("b{frame}")
                         // Its own click takes it, or what holds it, out of the tree.
@@ -265,8 +352,10 @@ Function TreesBuiltAndTakenApartAtRandomLeaveNothingHeld() Throws GraphicsError,
                             If holder == Null Then Return
                             If frame % 2 == 0
                                 holder.Remove(clicked)
+                                fuzzRemovals += 1
                             ElseIf holder.Parent() != Null
                                 holder.Parent()?.Remove(holder)
+                                fuzzRemovals += 1
                             End If
                         End Function)
                         made = button
@@ -278,6 +367,11 @@ Function TreesBuiltAndTakenApartAtRandomLeaveNothingHeld() Throws GraphicsError,
                         made = Toggle("g{frame}")
                     Case 4
                         made = Label(Typed(frame))
+                    Case 5
+                        // What it shows is what's added under it, which may outgrow it.
+                        Local view = ScrollView("s{frame}")
+                        view.SetSize(80, 40)
+                        made = view
                     Default
                         made.SetArrangement([Arrangement.ROW, Arrangement.COLUMN,
                                              Arrangement.STACK][FuzzNext(3)])
@@ -310,22 +404,29 @@ Function TreesBuiltAndTakenApartAtRandomLeaveNothingHeld() Throws GraphicsError,
             Default
                 Try Simulate.Text(Typed(FuzzNext(100)))
         End Select
-        // A tree that's grown past a thousand is emptied, as a game leaves a screen.
+        // A tree that's grown past a thousand is emptied, as a game leaves a screen; what it held
+        // is kept about until it's checked, so a Ui holding on to any of it is seen.
+        Local emptied: Node[] = []
         If nodes.Count > 1000
+            emptied = nodes
             root.RemoveAll()
             nodes = [root]
             widgets = []
         End If
         Framed(ui)
-        // What's no longer in the tree is forgotten, so nothing's added under it.
-        nodes = nodes.Filter(Function(each: Node) => Under(each, root))
-        widgets = widgets.Filter(Function(each: Widget) => Under(each, root))
-        Local wrong = Wrong(ui)
+        Local out = nodes.Filter(Function(each: Node) => !Under(each, root))
+        out.AddAll(emptied)
+        Local wrong = Wrong(ui, out)
         If wrong != ""
             Fail("frame {frame}, seed 31337: {wrong}")
             Return
         End If
+        // What's no longer in the tree is forgotten, now it's been checked, so nothing's added
+        // under it.
+        nodes = nodes.Filter(Function(each: Node) => Under(each, root))
+        widgets = widgets.Filter(Function(each: Widget) => Under(each, root))
     End For
+    Expect(fuzzRemovals > 0, "seed 31337: no click took its own button, or what holds it, out")
     // As deep as a tree goes, and as wide as two thousand: laid out and drawn.
     root.RemoveAll()
     Local deep: Node = root
@@ -342,13 +443,53 @@ Function TreesBuiltAndTakenApartAtRandomLeaveNothingHeld() Throws GraphicsError,
     End For
     root.Add(wide)
     Framed(ui)
-    Expect(Wrong(ui) == "", Wrong(ui))
+    Expect(Wrong(ui, []) == "", Wrong(ui, []))
 End Function
 
+// The style a theme's section names, as "button" or "list.item.hovered": its name, and its state.
+Function Sectioned(section: String): (String, WidgetState)
+    Local parts = section.Split(".")
+    Local states = [("hovered", WidgetState.HOVERED), ("pressed", WidgetState.PRESSED),
+                    ("focused", WidgetState.FOCUSED), ("disabled", WidgetState.DISABLED)]
+    For each In states
+        Local named, state = each
+        If parts.Count > 1 && parts[parts.Count - 1] == named
+            parts.RemoveAt(parts.Count - 1)
+            Return (".".Join(parts), state)
+        End If
+    End For
+    Return (section, WidgetState.NORMAL)
+End Function
+
+// What `theme` has for the field `key` of `section`'s style, its `side`th side for padding.
+Function ThemeField(theme: Theme, section: String, key: String, side: Int): Float32
+    Local name, state = Sectioned(section)
+    Local style = theme.StyleOf(name, state)
+    Select key
+        Case "border_width"
+            Return style.BorderWidth
+        Case "corner_radius"
+            Return style.CornerRadius
+        Case "font_size"
+            Return style.FontSize
+        Default
+            Return [style.Padding.Left, style.Padding.Top, style.Padding.Right,
+                    style.Padding.Bottom][side]
+    End Select
+End Function
+
+// What a theme's number is taken as: as given, refused for the field, or refused as not TOML.
+Enum Taking
+    TAKEN
+    REFUSED
+    NOT_TOML
+End Enum
+
 // The ends of a float, where the docs have them taken: sizes, gaps, paddings, and margins as big
-// as a float holds, mins over maxes, a scale as small and as big as one goes, a scroll moved past
-// both ends and to what isn't a number, and a theme's text saying numbers that aren't. Each is laid
-// out with finite numbers, or the theme's refused whole, saying why.
+// as a float holds, NaN, infinities, and under 0, mins over maxes, a scale as small and as big as
+// one goes, a scroll moved past both ends and to what isn't a number, and each number of a
+// theme's text, one at a time, saying one a style can't have. Each is laid out with finite
+// numbers, or the theme's refused whole, saying where.
 @Test
 Function NumbersAtTheEndsOfAFloatAreLaidOutFiniteOrRefused() Throws GraphicsError
     If FuzzNoGpu() Then Skip("no GPU here")
@@ -360,17 +501,20 @@ Function NumbersAtTheEndsOfAFloatAreLaidOutFiniteOrRefused() Throws GraphicsErro
     Local root = Node("root")
     root.SetArrangement(Arrangement.COLUMN)
     Local ui = Ui(root)
-    For big In [most, most / 2.0, 1.0e30, 16777216.0, least, 0.0]
+    For big In [most, most / 2.0, 1.0e30, 16777216.0, least, 0.0, (NaN As Float32),
+                (Inf As Float32), -(Inf As Float32), -1.0, -most]
         root.RemoveAll()
         Local row = Node("row")
         row.SetArrangement(Arrangement.ROW)
         row.SetGap(big)
         row.SetPadding(Insets.All(big))
         row.SetMargin(Insets.All(big))
+        // A weight's over 0 and finite, or it panics, as its docs say.
+        Local weight = big > 0.0 && IsFinite(big) ? big : 1.0
         For each = 1 To 4
             Local label = Label("x")
             label.SetWidth(Sizing.Fixed(big))
-            label.SetHeight(Sizing.Fill(Max(big, least)))
+            label.SetHeight(Sizing.Fill(weight))
             label.SetMinSize(big, big)
             label.SetMaxSize(0.0, 0.0)
             row.Add(label)
@@ -389,7 +533,8 @@ Function NumbersAtTheEndsOfAFloatAreLaidOutFiniteOrRefused() Throws GraphicsErro
         // As wide a range as has a width a float can hold.
         Local slider = Slider(-most / 4.0, most / 4.0, 0.0)
         slider.SetValue(big)
-        slider.SetStep(big)
+        // A step's 0 or more and finite, or it panics, as its docs say.
+        slider.SetStep(big >= 0.0 && IsFinite(big) ? big : 0.0)
         root.Add(slider)
         Local progress = Progress(big)
         root.Add(progress)
@@ -407,39 +552,87 @@ Function NumbersAtTheEndsOfAFloatAreLaidOutFiniteOrRefused() Throws GraphicsErro
             Framed(ui)
             Expect(IsFinite(slider.Value()), "a slider's at {slider.Value()}")
             Expect(IsFinite(progress.Value()), "a progress is at {progress.Value()}")
-            Local wrong = Wrong(ui)
+            Local wrong = Wrong(ui, [])
             Expect(wrong == "", "sizes of {big}, a scale of {scale}: {wrong}")
         End For
         ui.SetScale(1.0)
     End For
-    // A theme's text: what isn't a number, or is one a style can't have, refuses all of it, and the
-    // theme's as it was.
+
+    // A theme's text, each of its numbers changed alone, a padding's each side: one a length
+    // can't be refuses all of it, naming the style and the field, and text that isn't TOML, the
+    // line; the theme's as it was. One that's 0 or more and finite is taken as it's given.
     Local theme = Theme.Dark()
     Local kept = theme.Save()
-    For number In ["NaN", "nan", "inf", "-inf", "-1", "1e999", "-1e999", "3.5e38", "0x10", "",
-                   "1,5", "--1", "9".Repeated(400)]
-        Local text = kept.Replace("16", number)
-        If text == kept Then Continue
-        Local refused = False
-        Try
-            Try theme.Load(text)
-        Catch e As UIError
-            refused = True
-        End Try
-        // Taken, it's a number a style can have: its styles' numbers are finite, and 0 or more.
-        For name In theme.Names()
-            Local style = theme.StyleOf(name)
-            Local sound = IsFinite(style.FontSize) && style.FontSize >= 0.0 &&
-                          IsFinite(style.BorderWidth) && style.BorderWidth >= 0.0 &&
-                          IsFinite(style.CornerRadius) && style.CornerRadius >= 0.0 &&
-                          IsFinite(style.Padding.Left) && style.Padding.Left >= 0.0
-            Expect(sound,
-                   "\"{number}\" for a size, {refused ? "refused" : "taken"}: {name} is {style}")
+    Local lines = kept.Split("\n")
+    Local numbers: (String, Taking, Float32)[] = [
+        ("nan", Taking.REFUSED, 0.0), ("inf", Taking.REFUSED, 0.0),
+        ("+inf", Taking.REFUSED, 0.0), ("-inf", Taking.REFUSED, 0.0),
+        ("-1", Taking.REFUSED, 0.0), ("-0.5", Taking.REFUSED, 0.0),
+        ("1e999", Taking.REFUSED, 0.0), ("-1e999", Taking.REFUSED, 0.0),
+        ("3.5e38", Taking.REFUSED, 0.0), ("NaN", Taking.NOT_TOML, 0.0),
+        ("Inf", Taking.NOT_TOML, 0.0), ("", Taking.NOT_TOML, 0.0), ("1,5", Taking.NOT_TOML, 0.0),
+        ("--1", Taking.NOT_TOML, 0.0), ("9".Repeated(400), Taking.NOT_TOML, 0.0),
+        ("0x10", Taking.TAKEN, 16.0), ("1e30", Taking.TAKEN, 1.0e30),
+        ("3.4e38", Taking.TAKEN, 3.4e38), ("-0", Taking.TAKEN, 0.0), ("0", Taking.TAKEN, 0.0)]
+    Local section = ""
+    Local fields = 0
+    For index = 0 To lines.Count - 1
+        Local line = lines[index]
+        If line.StartsWith("[")
+            section = line.Replace("[", "").Replace("]", "").Replace("\"", "")
+            Continue
+        End If
+        Local parts = line.Split(" = ")
+        If parts.Count != 2 Then Continue
+        Local key = parts[0]
+        If !["border_width", "corner_radius", "font_size", "padding"].Contains(key) Then Continue
+        // A padding's sides, each its own number.
+        Local sides = [parts[1]]
+        If key == "padding" Then sides = parts[1].Replace("[", "").Replace("]", "").Split(", ")
+        For side = 0 To sides.Count - 1
+            fields += 1
+            For each In numbers
+                Local number, taking, taken = each
+                Local given = sides.Clone()
+                given[side] = number
+                Local changed = lines.Clone()
+                changed[index] = "{key} = {number}"
+                If key == "padding" Then changed[index] = "padding = [{", ".Join(given)}]"
+                Local refusal = ""
+                Try
+                    Try theme.Load("\n".Join(changed))
+                Catch e As UIError
+                    refusal = e.Message
+                End Try
+                Local where = "{section}'s {key} (side {side}) as \"{number}\""
+                Select taking
+                    Case Taking.REFUSED
+                        Expect(refusal.Contains("{section}'s {key} is a number of 0 or more"),
+                               "{where}: {refusal == "" ? "taken" : refusal}")
+                    Case Taking.NOT_TOML
+                        // But in a padding's list, where "1,5" is two sides and "" at the end
+                        // none, so it's the padding's count that's refused.
+                        Local named = key == "padding" &&
+                                      refusal.Contains("{section}'s padding is one number")
+                        Expect(named || refusal.Contains("isn't TOML") &&
+                               refusal.Contains("line {index + 1},"),
+                               "{where}: {refusal == "" ? "taken" : refusal}")
+                    Default
+                        Expect(refusal == "", "{where}: {refusal}")
+                        Local read = ThemeField(theme, section, key, side)
+                        Expect(read == taken, "{where}: taken as {read}")
+                End Select
+                If refusal != ""
+                    Expect(theme.Save() == kept, "{where}: the theme refused was changed")
+                Else
+                    Try? theme.Load(kept)
+                End If
+            End For
         End For
-        If refused Then Expect(theme.Save() == kept, "a theme refused was changed by \"{number}\"")
-        Try? theme.Load(kept)
     End For
+    Expect(fields > 20, "only {fields} of the theme's numbers were found to change")
+    Expect(theme.Save() == kept, "the theme isn't as it was")
     ui.SetTheme(theme)
     Framed(ui)
-    Expect(Wrong(ui) == "", Wrong(ui))
+    Expect(Wrong(ui, []) == "", Wrong(ui, []))
 End Function

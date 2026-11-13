@@ -270,9 +270,17 @@ Public Final Class Dock Extends Node
         If hint.Parent() == Null Then ui.OpenPopup(hint, PopupKind.TIP)
     End Method
 
-    // The tab `id`'s been let go of at `point`.
+    // A tab's drag is over, going nowhere: what showed where it would go is gone.
+    Package Method DragEnded()
+        Local ui = hinted
+        If ui != Null Then ui.ClosePopup(hint)
+        hinted = Null
+    End Method
+
+    // The tab `id`'s been let go of at `point`; a pane that's lost its tab goes nowhere.
     Package Method Drop(ui: Ui, id: String, point: Vec2)
         ui.ClosePopup(hint)
+        If !Showing(id) Then Return
         Local at = Target(point)
         If at == Null Then Return
         Local target = Against(at.0, id)
@@ -614,6 +622,13 @@ Class DockTab Extends Button
         If own == Null || ui == Null Then Return
         dragging = True
         own.Over(ui, id, point)
+    End Method
+
+    // Called off, as when its pane's closed under it: dropped nowhere, and nothing activated.
+    Public Override Method PointerCancelled(point: Vec2)
+        dragging = False
+        Local own = dock
+        If own != Null Then own.DragEnded()
     End Method
 
     Public Override Method PointerUp(point: Vec2, over: Bool)

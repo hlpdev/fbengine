@@ -71,3 +71,50 @@ Function TheUiDrawsTheSamePixelsOnceALostGpuIsMadeAgain() Throws GraphicsError
     End For
     Expect(differing == 0, "{differing} pixels differ after the GPU's made again")
 End Function
+
+// How many of `image`'s pixels aren't black.
+Function LostLit(image: Image): Int
+    Local lit = 0
+    For y = 0 Until image.Height
+        For x = 0 Until image.Width
+            If image[x, y].r > 0 || image[x, y].g > 0 || image[x, y].b > 0 Then lit += 1
+        End For
+    End For
+    Return lit
+End Function
+
+@Test
+Function TheUiDrawsNothingOnATexturesCanvasThatWentWithTheGpu() Throws GraphicsError
+    If LostNoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Graphics(240, 160)
+    Defer EndGraphics()
+    Local root = Node("root")
+    root.SetArrangement(Arrangement.COLUMN)
+    root.Add(Button("Play"))
+    root.Add(Progress(0.5))
+    Local ui = Ui(root)
+    Local target = Try Texture.Target(120, 80)
+    Local canvas = Canvas(target)
+    ui.Update()
+    ui.Draw(canvas)
+    Expect(LostLit(target.ToImage()) > 100, "the UI drew {LostLit(target.ToImage())} pixels")
+
+    Try Gpu.SimulateLoss()
+    ui.Update()
+    ui.Draw(canvas)
+    Gpu.Stop()
+    Try Gpu.Start()
+    Expect(target.Freed(), "the texture's still there")
+    // Its texture went with the GPU: nothing's drawn, and nothing panics, frame after frame.
+    For frame = 1 To 3
+        Flip()
+        ui.Update()
+        ui.Draw(canvas)
+    End For
+
+    // A texture of the GPU made again is drawn on as the first was.
+    Local again = Try Texture.Target(120, 80)
+    ui.Draw(Canvas(again))
+    Expect(LostLit(again.ToImage()) > 100, "the UI drew {LostLit(again.ToImage())} pixels again")
+End Function

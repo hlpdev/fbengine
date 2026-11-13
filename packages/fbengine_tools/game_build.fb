@@ -6,6 +6,7 @@ Import std.core
 Import std.ffi
 Import std.io
 Import std.text
+Import std.text.encoding
 Import std.time
 Import fbengine
 Import "./cook"
@@ -166,10 +167,9 @@ Public Final Class GameBuild
         within.Remove(real)
     End Method
 
-    // `text` as it's written between the quotes of a String.
+    // `text` as it's written between the quotes of a String: its braces doubled, and a backslash,
+    // a quote, and each control character escaped, by spec 01's escapes, as Escape writes them.
     Static Method Literal(text: String): String
-        Return text.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("{{",
-                                                                        "{{{{").Replace("}}",
-                                                                                        "}}}}")
+        Return Escape(text.Replace("{{", "{{{{").Replace("}}", "}}}}"))
     End Method
 End Class

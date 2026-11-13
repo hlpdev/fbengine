@@ -1,7 +1,8 @@
 // The tools' stability: a folder cooked, and a game built, hundreds of times, each run's output
-// the same bytes with nothing more left on the disk than the first left; and each kind of file
-// the cook and the build read cut short and changed at random, from a seed, so a failure repeats:
-// an error that names the file, never a crash or a hang, and never a pak half written.
+// the same bytes, used, with nothing more left on the disk, or held by the engine, than the first
+// left; and each kind of file the cook and the build read cut short and changed at random, from a
+// seed, so a failure repeats: an error that names the file, never a crash or a hang, and never a
+// pak half written.
 
 Import std.collections
 Import std.core
@@ -13,6 +14,7 @@ Import std.math
 Import std.os
 Import std.test
 Import std.text
+Import std.text.encoding
 Import fbengine
 Import fbengine_tools
 
@@ -98,9 +100,48 @@ Function Listed(folder: Path, under: String = ""): String[] Throws IOError
     Return found
 End Function
 
-// The same folder cooked 200 times, with a cache and without, into a pak that's there already:
-// each pak is the first one's bytes, and there's no more on the disk beside it, or in its cache,
-// than the first cook left.
+// What the engine loaded of a model: how much is in it.
+Class SoakModel Implements Asset
+    Field Info: ModelInfo
+
+    New(info: ModelInfo)
+        Info = info
+    End New
+
+    Public Static Method LoadKind(): AssetKind => AssetKind.MODEL
+
+    Public Static Method FromLoad(load: AssetLoad): SoakModel Throws IOError
+        Return SoakModel(load.Model())
+    End Method
+End Class
+
+// The pak at `pak` used as a game uses it, then let go: mounted at `place`, a place of its own
+// each run, so a mount that's kept is seen, its model loaded and released, its readme read, and
+// unmounted.
+Function Used(pak: Path, place: String) Throws IOError
+    Try Assets.MountPak(place, pak)
+    Defer Assets.Unmount(place)
+    Local model = Try Assets.Load<SoakModel>("{place}/models/door.gltf")
+    Expect(model.Info.Meshes == 1 && model.Info.Images == 1, "{place}: its model")
+    Assets.Release(model)
+    Expect((Try Assets.ReadText("{place}/readme.txt")) == "hello", "{place}: its readme")
+End Function
+
+// What the engine holds, as the other soaks count it: the mounts res:// lists, the loads and the
+// holds on assets, and the textures and fonts.
+Function Held(): String
+    Local mounts: String[] = []
+    For entry In (Try? Assets.Entries("res://")) ?? []
+        mounts.Add(entry.Name)
+    End For
+    mounts.Sort()
+    Return "mounts {mounts}, loads {Assets.Loads()}, holds {Assets.Holds()}, " +
+           "textures {Texture.Count()}, fonts {Font.Count()}"
+End Function
+
+// The same folder cooked 200 times, with a cache and without, into a pak that's there already,
+// and each pak used: each is the first one's bytes, there's no more on the disk beside it, or in
+// its cache, than the first cook left, and the engine holds no more than after the first was used.
 @Test
 Function AFolderCookedHundredsOfTimesIsTheSameBytesAndLeavesNoMore() Throws IOError
     Local source = Try TempDir()
@@ -114,6 +155,8 @@ Function AFolderCookedHundredsOfTimesIsTheSameBytesAndLeavesNoMore() Throws IOEr
     Local first = Try File.ReadBytes(pak)
     Local left = Try Listed(built.Path)
     Expect(first.Count > 0)
+    Try Used(pak, "res://soak-pak-0")
+    Local held = Held()
     For run = 1 To 200
         If run % 4 == 0
             // With no cache, each file cooked again from nothing, into a folder of its own.
@@ -122,21 +165,21 @@ Function AFolderCookedHundredsOfTimesIsTheSameBytesAndLeavesNoMore() Throws IOEr
             Local bytes = Try File.ReadBytes(alone.Path / "game.pak")
             Expect(bytes == first, "run {run}, with no cache: {bytes.Count} bytes, not the first's")
             Expect((Try Listed(alone.Path)) == ["game.pak"], "run {run}: more was left than a pak")
+            Try Used(alone.Path / "game.pak", "res://soak-alone-{run}")
             Try alone.Close()
         Else
             Try Cooker.CookFolder(source.Path, pak, cache)
             Local bytes = Try File.ReadBytes(pak)
             Expect(bytes == first, "run {run}: {bytes.Count} bytes, not the first's {first.Count}")
+            Try Used(pak, "res://soak-pak-{run}")
         End If
         If run % 50 == 0
             Local now = Try Listed(built.Path)
             Expect(now == left, "run {run}: {now.Count} files beside the pak, not {left.Count}")
+            Local holds = Held()
+            Expect(holds == held, "run {run}: the engine holds {holds}, not {held}")
         End If
     End For
-    // And it's a pak the engine reads.
-    Try Assets.MountPak("res://soak-pak", pak)
-    Defer Assets.Unmount("res://soak-pak")
-    Expect((Try Assets.ReadText("res://soak-pak/readme.txt")) == "hello")
 End Function
 
 // Where fb has a step of the game in `game` write.
@@ -144,8 +187,9 @@ Function StepOut(game: Path, mode: String): Path
     Return game / "build" / "steps" / "windows-x64" / mode / "game" / "out"
 End Function
 
-// A game built 150 times, as a debug build and as a release: its module and its pak are the first
-// build's bytes, and its build folder holds no more than the first left there.
+// A game built 150 times, as a debug build and as a release, and each release's pak used: its
+// module and its pak are the first build's bytes, its build folder holds no more than the first
+// left there, and the engine holds no more than after the first pak was used.
 @Test
 Function AGameBuiltHundredsOfTimesIsTheSameBytesAndLeavesNoMore() Throws IOError
     Local game = Try TempDir()
@@ -157,9 +201,12 @@ Function AGameBuiltHundredsOfTimesIsTheSameBytesAndLeavesNoMore() Throws IOError
     Local debug = StepOut(game.Path, "debug")
     Try GameBuild.Run("game", game.Path, release, "release")
     Try GameBuild.Run("game", game.Path, debug, "debug")
-    Local pak = Try File.ReadBytes(game.Path / "build" / "game.pak")
+    Local built = game.Path / "build" / "game.pak"
+    Local pak = Try File.ReadBytes(built)
     Local module = Try File.ReadText(release / "res.fb")
     Local debugModule = Try File.ReadText(debug / "res.fb")
+    Try Used(built, "res://soak-game-0")
+    Local held = Held()
     // Its times are each run's own, and nothing else is.
     Local left = (Try Listed(game.Path / "build"))
     For run = 1 To 150
@@ -169,12 +216,14 @@ Function AGameBuiltHundredsOfTimesIsTheSameBytesAndLeavesNoMore() Throws IOError
         Else
             Try GameBuild.Run("game", game.Path, release, "release")
             Expect((Try File.ReadText(release / "res.fb")) == module, "run {run}: its module")
-            Expect((Try File.ReadBytes(game.Path / "build" / "game.pak")) == pak,
-                   "run {run}: its pak")
+            Expect((Try File.ReadBytes(built)) == pak, "run {run}: its pak")
+            Try Used(built, "res://soak-game-{run}")
         End If
         If run % 50 == 0
             Local now = Try Listed(game.Path / "build")
             Expect(now == left, "run {run}: {now.Count} files in build, not {left.Count}")
+            Local holds = Held()
+            Expect(holds == held, "run {run}: the engine holds {holds}, not {held}")
         End If
     End For
 End Function
@@ -225,11 +274,16 @@ Function Broken(bytes: UInt8[]): UInt8[]
     End Select
 End Function
 
-// Cooks `source` into `pak`, over what's there, with `named` broken in it. A cook that's refused
-// names the file, leaves the pak that was there as it was, and nothing beside it; one that's
-// taken leaves a pak the engine mounts, and nothing beside it. What was wrong, or "".
-Function CookedOrRefused(source: Path, built: Path, named: String,
-                         round: Int): String Throws IOError
+// The bytes the triangle's glTF says its buffer has.
+Const BUFFER_BYTES = 102
+
+// Cooks `source` into `pak`, over what's there, with `named` broken in it, as `written`. A cook
+// that's refused names the file, leaves the pak that was there as it was, and nothing beside it;
+// one that's taken leaves a pak the engine mounts, and nothing beside it. A buffer shorter than
+// its glTF says is refused, naming the buffer; a scene, copied as it is, is in the pak as written.
+// What was wrong, or "".
+Function CookedOrRefused(source: Path, built: Path, named: String, round: Int,
+                         written: UInt8[] = []): String Throws IOError
     Local pak = built / "game.pak"
     Try File.WriteText(pak, "what was there")
     Local refused: IOError? = Null
@@ -248,11 +302,15 @@ Function CookedOrRefused(source: Path, built: Path, named: String,
         Local said = refused.Message.ToLower()
         // What's wrong inside a model's buffer, as an index past its vertices, is said of the
         // model that reads it; a buffer that's short is named itself.
-        Local byItsModel = file.EndsWith(".bin") && said.Contains(file.Replace(".bin", ".gltf"))
+        Local byItsModel = file.EndsWith(".bin") && written.Count >= BUFFER_BYTES &&
+                           said.Contains(file.Replace(".bin", ".gltf"))
         If !said.Contains(file.ToLower()) && !byItsModel
             Return "{named}, round {round}: refused without naming it: {refused.Message}"
         End If
         Return ""
+    End If
+    If named.EndsWith(".bin") && written.Count < BUFFER_BYTES
+        Return "{named}, round {round}: cooked with {written.Count} bytes of its {BUFFER_BYTES}"
     End If
     Local place = "res://fuzz-pak-{round}"
     Try
@@ -260,12 +318,19 @@ Function CookedOrRefused(source: Path, built: Path, named: String,
     Catch e As IOError
         Return "{named}, round {round}: cooked into a pak that doesn't mount: {e.Message}"
     End Try
-    Assets.Unmount(place)
+    Defer Assets.Unmount(place)
+    If named.EndsWith(".scene")
+        Local kept = Try Assets.ReadBytes("{place}/{named}")
+        If kept != written
+            Return "{named}, round {round}: the pak's {kept.Count} bytes aren't the {written.Count} written"
+        End If
+    End If
     Return ""
 End Function
 
 // Each kind of file a cook reads, broken 40 ways from a seed: a picture of each kind, a model's
-// JSON, its buffer, and its texture, a binary glTF, and each sidecar.
+// JSON, its buffer, and its texture, a binary glTF, a scene, and each sidecar, a picture's, a
+// model's, and a model's texture's.
 @Test
 Function EachFileACookReadsBrokenAtRandomIsRefusedByNameOrCooked() Throws IOError
     Local source = Try TempDir()
@@ -273,6 +338,9 @@ Function EachFileACookReadsBrokenAtRandomIsRefusedByNameOrCooked() Throws IOErro
     Try WriteAssets(source.Path)
     Try File.WriteText(source.Path / "models" / "door.gltf.toml",
                        "optimize = false\n[images]\ncompression = \"bc7\"\n")
+    Try File.WriteText(source.Path / "textures" / "hud.jpg.toml",
+                       "compression = \"bc7\"\nsrgb = true\n")
+    Try File.WriteText(source.Path / "models" / "door.png.toml", "srgb = true\n")
     // A binary glTF, as the cooker itself makes one of the triangle.
     Local scratch = Try TempDir()
     Defer Try? scratch.Close()
@@ -280,20 +348,23 @@ Function EachFileACookReadsBrokenAtRandomIsRefusedByNameOrCooked() Throws IOErro
                          ModelSettings())
     Try File.WriteBytes(source.Path / "models" / "gate.glb",
                         Try File.ReadBytes(scratch.Path / "door.glb"))
+    Try File.WriteText(source.Path / "models" / "gate.glb.toml", "optimize = false\n")
     Local built = Try TempDir()
     Defer Try? built.Close()
     Expect((Try CookedOrRefused(source.Path, built.Path, "nothing", 0)) == "")
     toolsState = 424242
     Local round = 0
     For named In ["textures/wall.png", "textures/hud.jpg", "textures/wall.png.toml",
-                  "models/door.gltf", "models/door.bin", "models/door.png", "models/gate.glb",
-                  "models/door.gltf.toml"]
+                  "textures/hud.jpg.toml", "models/door.gltf", "models/door.bin",
+                  "models/door.png", "models/gate.glb", "models/door.gltf.toml",
+                  "models/door.png.toml", "models/gate.glb.toml", "level.scene"]
         Local file = source.Path / named
         Local whole = Try File.ReadBytes(file)
         For each = 1 To 40
             round += 1
-            Try File.WriteBytes(file, Broken(whole))
-            Local wrong = Try CookedOrRefused(source.Path, built.Path, named, round)
+            Local written = Broken(whole)
+            Try File.WriteBytes(file, written)
+            Local wrong = Try CookedOrRefused(source.Path, built.Path, named, round, written)
             Expect(wrong == "", "seed 424242: {wrong}")
         End For
         Try File.WriteBytes(file, whole)
@@ -303,41 +374,185 @@ Function EachFileACookReadsBrokenAtRandomIsRefusedByNameOrCooked() Throws IOErro
     Try Cooker.CookFolder(source.Path, built.Path / "game.pak")
 End Function
 
-// A game's project.toml, which a release reads its version from, broken the same ways: the build
-// is refused naming it, or goes on, and no pak's left half written where the executable goes.
+// The version a project.toml's text says, as a release build reads it: what's between the first
+// two quotes of a line of [project] that starts with "version", or "" with none.
+Function SaidVersion(text: String): String
+    Local section = ""
+    For line In text.Split("\n")
+        Local clean = line.Trim()
+        If clean.StartsWith("[") Then section = clean
+        If section == "[project]" && clean.StartsWith("version")
+            Local parts = clean.Split("\"")
+            If parts.Count >= 2 Then Return parts[1]
+        End If
+    End For
+    Return ""
+End Function
+
+// The string literals a call in `code` is given, from its name to its closing parenthesis, each
+// as it's written between its quotes.
+Function LiteralsOf(code: String, call: String): String[]
+    Local found: String[] = []
+    Local start = code.Find(call + "(")
+    If start == Null Then Return found
+    Local chars = code.Chars
+    Local at = (start ?? 0) + call.Length + 1
+    While at < chars.Count && chars[at] != ')'
+        If chars[at] != '"'
+            at += 1
+            Continue
+        End If
+        Local inside = StringBuilder()
+        at += 1
+        While at < chars.Count && chars[at] != '"'
+            If chars[at] == '\\' && at + 1 < chars.Count
+                inside.Append(chars[at])
+                at += 1
+            End If
+            inside.Append(chars[at])
+            at += 1
+        End While
+        found.Add(inside.ToString())
+        at += 1
+    End While
+    Return found
+End Function
+
+// The String a literal written as `literal` is, by spec 01's escapes and its doubled braces, or
+// Null for one fb wouldn't take as it is: a line break or carriage return in it, which ends it, a
+// brace on its own, which starts an interpolation, or an escape that isn't one.
+Function ReadBack(literal: String): String?
+    Local braces = StringBuilder()
+    Local chars = literal.Chars
+    Local at = 0
+    While at < chars.Count
+        Local c = chars[at]
+        If c == '\n' || c == '\r' Then Return Null
+        If c == '\\' && at + 1 < chars.Count
+            // An escape, as it is, and a \u{...}'s braces with it.
+            braces.Append(c).Append(chars[at + 1])
+            If chars[at + 1] == 'u'
+                at += 2
+                While at < chars.Count && chars[at] != '}'
+                    braces.Append(chars[at])
+                    at += 1
+                End While
+                If at < chars.Count Then braces.Append(chars[at])
+                at += 1
+            Else
+                at += 2
+            End If
+        ElseIf c == '{' || c == '}'
+            If at + 1 >= chars.Count || chars[at + 1] != c Then Return Null
+            braces.Append(c)
+            at += 2
+        Else
+            braces.Append(c)
+            at += 1
+        End If
+    End While
+    Return Unescape(braces.ToString())
+End Function
+
+// What fb itself makes of each literal: a program printing each one's bytes in hex, after "v ",
+// run by fb; an IOError where there's no fb to run.
+Function CompiledBy(literals: String[]): ProcessOutput Throws IOError
+    Local probe = Try TempDir()
+    Defer Try? probe.Close()
+    Try File.WriteText(probe.Path / "project.toml",
+                       "[project]\nname = \"probe\"\nversion = \"0.1.0\"\ntype = \"executable\"\n")
+    Local code = "Import std.core\nImport std.text.encoding\n\n"
+    For literal In literals
+        code += "Print(\"v \" + Hex.Encode(\"" + literal + "\".Bytes))\n"
+    End For
+    Try File.WriteText(probe.Path / "main.fb", code)
+    Return Try Command("fb").Args(["--color", "never", "run", probe.Path.Text]).Output()
+End Function
+
+// A game's project.toml, which a release reads its version from, chosen to hold what a String
+// escapes, then broken the same ways at random. Nothing in one refuses a build: one that isn't
+// TOML, or isn't UTF-8, is read for its version all the same, so each builds, its pak's stamped
+// with the version it says, or none when it says none, and its res.fb says that version to
+// MountRelease as a literal fb reads back to it, compiled by fb where there's one, else read back
+// here; and no pak's left half written where the executable goes.
 @Test
-Function AProjectsTomlBrokenAtRandomIsRefusedByNameOrBuilt() Throws IOError
+Function AProjectsTomlBrokenAtRandomBuildsWithTheVersionItSays() Throws IOError
     Local game = Try TempDir()
     Defer Try? game.Close()
     Try Dir.CreateAll(game.Path / "assets")
     Try File.WriteBytes(game.Path / "assets" / "wall.png", Png.Encode(Pictured(4)))
     Local whole = "[project]\nname = \"game\"\nversion = \"1.2.3\"\n\n[dependencies]\n".Bytes
-    Local out = StepOut(game.Path, "release")
+    Local tomls: UInt8[][] = []
+    For version In ["1.2.3", "", "1.2\r3", "tab\there", "bell\x07", "{{braces}}", "back\\slash",
+                    "nel\u{85}", "\u{E9}t\u{E9}", "quote'", "del\x7F"]
+        tomls.Add(("[project]\nname = \"game\"\nversion = \"" + version + "\"\n").Bytes)
+    End For
     toolsState = 777
     For round = 1 To 60
-        Try File.WriteBytes(game.Path / "project.toml", Broken(whole))
-        Local refused: IOError? = Null
+        tomls.Add(Broken(whole))
+    End For
+    Local out = StepOut(game.Path, "release")
+    Local versions: String[] = []
+    Local literals: String[] = []
+    For round = 1 To tomls.Count
+        Local toml = game.Path / "project.toml"
+        Try File.WriteBytes(toml, tomls[round - 1])
+        Local said = SaidVersion(Try File.ReadText(toml))
+        Local where = "seed 777, round {round}, version \"{Escape(said)}\""
         Try
             Try GameBuild.Run("game", game.Path, out, "release")
         Catch e As IOError
-            refused = e
+            Expect(False, "{where}: refused: {e.Message}")
+            Continue
         End Try
-        If refused != Null
-            Expect(refused.Message.Contains("project.toml"),
-                   "seed 777, round {round}: refused without naming it: {refused.Message}")
-        End If
-        // What's where the executable goes is a whole pak, or none.
+        // What's where the executable goes is a whole pak, stamped with the version said.
         Local pak = game.Path / "build" / "game.pak"
-        If File.Exists(pak)
-            Local place = "res://fuzz-game-{round}"
-            Try Assets.MountPak(place, pak)
-            Assets.Unmount(place)
-        End If
+        Local place = "res://fuzz-game-{round}"
+        Try Assets.MountPak(place, pak)
+        Local stamp = "{place}/{GAME_VERSION_FILE}"
+        Local stamped = Assets.Exists(stamp) ? Try Assets.ReadText(stamp) : ""
+        Assets.Unmount(place)
+        Expect(stamped == said, "{where}: its pak's stamped \"{Escape(stamped)}\"")
         For entry In Try Dir.Entries(game.Path / "build")
             Local name = entry.Path.FileName()
-            Expect(name == "game.pak" || name == "steps", "round {round}: {name} was left in build")
+            Expect(name == "game.pak" || name == "steps", "{where}: {name} was left in build")
         End For
+        // And its res.fb says it.
+        Local given = LiteralsOf(Try File.ReadText(out / "res.fb"), "MountRelease")
+        If said == ""
+            Expect(given.Count == 2, "{where}: MountRelease is given {given.Count} strings")
+            Continue
+        End If
+        If given.Count != 3
+            Expect(False, "{where}: MountRelease is given {given.Count} strings")
+            Continue
+        End If
+        Local read = ReadBack(given[2])
+        Expect(read == said, "{where}: res.fb says \"{Escape(given[2])}\", which is " +
+               "{read == Null ? "no literal fb takes" : "\"" + Escape(read ?? "") + "\""}")
+        versions.Add(said)
+        literals.Add(given[2])
     End For
+    // And fb, where there's one, compiles each to the version said.
+    Local ran: ProcessOutput? = Null
+    Try
+        ran = Try CompiledBy(literals)
+    Catch e As IOError
+        Print("no fb to compile res.fb's versions ({e.Message}); each was read back here")
+    End Try
+    If ran != Null
+        Expect(ran.Status.Success, "seed 777: res.fb's versions don't compile: {ran.ErrorText}")
+        Local printed: String[] = []
+        For line In ran.Text.Split("\n")
+            If line.StartsWith("v ") Then printed.Add(line.Slice(2, line.Length).Trim())
+        End For
+        Expect(printed.Count == versions.Count, "fb printed {printed.Count} of {versions.Count}")
+        For at = 0 Until Min(printed.Count, versions.Count)
+            Expect(printed[at] == Hex.Encode(versions[at].Bytes),
+                   "seed 777: fb reads res.fb's \"{Escape(literals[at])}\" as the bytes " +
+                   "{printed[at]}, not \"{Escape(versions[at])}\"")
+        End For
+    End If
 End Function
 
 // A shader's source broken the same ways, where there's a slangc to compile it: refused naming

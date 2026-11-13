@@ -198,12 +198,15 @@ Public Final Class AssetBrowser Extends Widget
     Field settled: String? = Null
     Field choices: Map<String, String>
     // Each by Normalize of its path: its thumbnail, and the time of the file that was of, for what's
-    // been asked for; what's waiting, what's loaded to be made one, and the textures they draw.
+    // been asked for; what's waiting, what's loaded to be made one, with the GPU's stops when its
+    // load began, and the textures they draw.
     Field thumbs: Map<String, Sprite2D>
     Field stamps: Map<String, Timestamp?>
     Field pending: Set<String>
     Field queue: String[] = []
-    Field landed: (String, Texture?, Model?, String)[] = []
+    Field landed: (String, Texture?, Model?, String, UInt64)[] = []
+    // The GPU's stops when its thumbnails were last made, so a GPU made again has them made again.
+    Field gpuStops: UInt64 = 0
     Field loading: Int = 0
     Field flights: Int = 0
     Field made: Int = 0
@@ -241,6 +244,7 @@ Public Final Class AssetBrowser Extends Widget
         pending = Set<String>()
         held = {}
         models = {}
+        gpuStops = Gpu.Stops()
         looked = Stopwatch.StartNew()
         Super.New("assets", "assets")
         // Side by side, so showing a file's settings doesn't move its row.
@@ -398,7 +402,8 @@ Public Final Class AssetBrowser Extends Widget
 
     /// The thumbnail of `path`, asked for the first time it's asked for, and made in a frame to come: an
     /// image's, at most 64 across, or a model's seen from above in a world of its own; Null for what has
-    /// none, or can't be read, or isn't made yet, as ThumbDone says.
+    /// none, or can't be read, or isn't made yet, as ThumbDone says. None is made while the GPU's
+    /// lost; once it's made again, every thumbnail is, as what they were went with the one before.
     Public Method ThumbOf(path: String): Sprite2D?
         Local sort = SortOf(path)
         If sort != AssetSort.IMAGE && sort != AssetSort.MODEL Then Return Null
@@ -493,21 +498,34 @@ Public Final Class AssetBrowser Extends Widget
     Method ThumbGone(key: String)
         stamps.Remove(key)
         thumbs.Remove(key)
-        Local texture = held.Get(key)
-        If texture != Null
-            texture.Free()
-            held.Remove(key)
-        End If
+        LetGo(held.Get(key))
+        held.Remove(key)
     End Method
 
-    // This frame's worth: what's loaded made thumbnails, and more begun.
+    // Frees `texture`, unless the GPU's stopping freed it already.
+    Method LetGo(texture: Texture?)
+        If texture != Null && !texture.Freed() Then texture.Free()
+    End Method
+
+    // This frame's worth: what's loaded made thumbnails, and more begun. Nothing is while the GPU's
+    // lost, and what was loaded on one that's gone is loaded again.
     Method Thumbed()
+        If Gpu.Lost() Then Return
+        If Gpu.Stops() != gpuStops
+            gpuStops = Gpu.Stops()
+            Remade()
+        End If
         Local arrived = landed
         landed = []
         For each In arrived
-            Local key, texture, model, failure = each
+            Local key, texture, model, failure, stops = each
             pending.Remove(key)
-            Landed(key, texture, model, failure)
+            If stops == gpuStops
+                Landed(key, texture, model, failure)
+            Else
+                // What it loaded went with that GPU, and what failed may have failed for that.
+                Asked(key)
+            End If
         End For
         While queue.Count > 0 && loading < THUMBS_A_FRAME
             Local key = queue[0]
@@ -520,6 +538,7 @@ Public Final Class AssetBrowser Extends Widget
     // Loads the file of `key`, as its kind, on the I/O thread, for a frame to make its thumbnail of. A
     // flight that's outlived the folder it was for lets go of what it loaded.
     Async Method Flown(key: String, flight: Int)
+        Local stops = Gpu.Stops()
         Local texture: Texture? = Null
         Local model: Model? = Null
         Local failure = ""
@@ -533,12 +552,15 @@ Public Final Class AssetBrowser Extends Widget
             failure = error.Message
         End Try
         If flight != flights
-            texture?.Free()
-            model?.Free()
+            // What went with a GPU since is gone already.
+            If stops == Gpu.Stops()
+                texture?.Free()
+                model?.Free()
+            End If
             Return
         End If
         loading -= 1
-        landed.Add((key, texture, model, failure))
+        landed.Add((key, texture, model, failure, stops))
     End Method
 
     // What was loaded, made a thumbnail in place of any it had, and its row's. What can't be, keeps
@@ -582,9 +604,22 @@ Public Final Class AssetBrowser Extends Widget
         For row In rows
             If KeyOf(row.Res) == key Then row.ShowThumb(sprite)
         End For
-        Local old = held.Get(key)
-        If old != Null Then old.Free()
+        LetGo(held.Get(key))
         held[key] = texture
+    End Method
+
+    // The GPU's been made again, and what the thumbnails were went with the one before: each one
+    // asked for is let go of and made again.
+    Method Remade()
+        held.Clear()
+        thumbs.Clear()
+        Local keys: String[] = []
+        For key In stamps.Keys()
+            keys.Add(key)
+        End For
+        For key In keys
+            Asked(key)
+        End For
     End Method
 
     // A slider's change is one, once it's let go of.
@@ -652,7 +687,7 @@ Public Final Class AssetBrowser Extends Widget
     // Lets go of all it holds.
     Method Forgotten()
         For each In held.Values()
-            each.Free()
+            LetGo(each)
         End For
         held.Clear()
         thumbs.Clear()
@@ -660,9 +695,11 @@ Public Final Class AssetBrowser Extends Widget
         pending.Clear()
         queue = []
         For each In landed
-            Local key, texture, model, failure = each
-            texture?.Free()
-            model?.Free()
+            Local key, texture, model, failure, stops = each
+            If stops == Gpu.Stops()
+                texture?.Free()
+                model?.Free()
+            End If
         End For
         landed = []
         loading = 0

@@ -1,0 +1,102 @@
+// What holds the pointer taken out of what's shown in the frame it's pressed, by its own press:
+// removed, hidden, or in a popup closed. It's told its press is called off, once, and the next
+// press is the left button's again, whichever button pressed it.
+
+Import std.core
+Import std.math
+Import std.test
+Import fbengine
+Import fbengine_ui
+
+// Calls Going as it's pressed, by any button, and counts how it's let go.
+Class GoesAsPressed Extends Widget
+    Public Field Going: (Func(GoesAsPressed))? = Null
+    Public Field Presses: Int = 0
+    Public Field Ups: Int = 0
+    Public Field Cancels: Int = 0
+
+    New()
+        Super.New("box", "goes")
+        SetSize(100.0, 100.0)
+    End New
+
+    @MainThread Public Override Method PointerDown(point: Vec2): Bool
+        Went()
+        Return True
+    End Method
+
+    @MainThread Public Override Method PointerDownWith(button: MouseButton, point: Vec2): Bool
+        Went()
+        Return True
+    End Method
+
+    @MainThread Public Override Method PointerUp(point: Vec2, over: Bool)
+        Ups += 1
+    End Method
+
+    @MainThread Public Override Method PointerCancelled(point: Vec2)
+        Cancels += 1
+    End Method
+
+    @MainThread Method Went()
+        Presses += 1
+        Local going = Going
+        If going != Null Then going(Self)
+    End Method
+End Class
+
+@Test
+Function APressTakenOutInItsOwnFrameIsCalledOffOnce() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(400, 300)
+    Defer EndGraphics()
+    For how In ["removed", "hidden", "closed"]
+        For button In [MouseButton.LEFT, MouseButton.RIGHT, MouseButton.MIDDLE]
+            Local root = Node("root")
+            Local ui = Ui(root)
+            Local widget = GoesAsPressed()
+            Local popup = Node("popup")
+            If how == "closed"
+                popup.Add(widget)
+                ui.OpenPopup(popup)
+            Else
+                root.Add(widget)
+            End If
+            widget.Going = Function(pressed: GoesAsPressed)
+                Select how
+                    Case "removed"
+                        pressed.Parent()?.Remove(pressed)
+                    Case "hidden"
+                        pressed.SetVisible(False)
+                    Default
+                        ui.ClosePopup(popup)
+                End Select
+            End Function
+            ui.Update()
+            Local center = widget.Box().Center
+            Try Simulate.MoveMouse(center.x, center.y)
+            Flip()
+            ui.Update()
+            Try Simulate.MouseDown(button)
+            Flip()
+            ui.Update()
+            Local said = "{how}, pressed by {button}"
+            Expect(widget.Presses == 1, "{said}: pressed {widget.Presses} times")
+            Expect(ui.Pressed() == Null, "{said}: it's still held")
+            Expect(widget.Cancels == 1, "{said}: called off {widget.Cancels} times")
+            Expect(widget.Ups == 0, "{said}: let go {widget.Ups} times")
+            Expect(ui.PressedButton() == MouseButton.LEFT,
+                   "{said}: the button's {ui.PressedButton()}")
+            // The button let go, and frames on, it's told nothing more.
+            Try Simulate.MouseUp(button)
+            For frame = 1 To 2
+                Flip()
+                ui.Update()
+            End For
+            Expect(widget.Cancels == 1 && widget.Ups == 0,
+                   "{said}: then called off {widget.Cancels} times, let go {widget.Ups}")
+            // What it calls holds what holds it.
+            widget.Going = Null
+        End For
+    End For
+End Function
