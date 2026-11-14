@@ -888,6 +888,8 @@ Function ThumbnailsLoadingAcrossAStopLetGoOfWhatTheyLoaded() Throws IOError, Gra
     editor.Docked.Activate("assets")
     Local unthumbed = Texture.Count()
     Local unheld = Assets.Holds()
+    // What's loading already, of the tests before this one in the program, which isn't this one's.
+    Local unloading = Assets.Loads()
     Local thumbs = ["res://wall.png", "res://ball.gltf", "res://chip.ktx2"]
     Thumbed(editor, thumbs)
     Local textures = Texture.Count()
@@ -922,8 +924,9 @@ Function ThumbnailsLoadingAcrossAStopLetGoOfWhatTheyLoaded() Throws IOError, Gra
     Expect(editor.Files.ThumbsHeld() == 0, "{editor.Files.ThumbsHeld()} thumbnails are held")
     // Each load lands, on the workers however long they take, and is let go of; then two frames
     // for what waited on them to go on.
-    StableUntil(editor, Function(): Bool => Assets.Loads() == 0)
-    Expect(Assets.Loads() == 0, "{Assets.Loads()} loads never landed")
+    StableUntil(editor, Function(): Bool => Assets.Loads() <= unloading)
+    Expect(Assets.Loads() <= unloading,
+           "{Assets.Loads() - unloading} loads never landed, of the {flying} in flight")
     editor.Step()
     editor.Step()
     Expect(Assets.Holds() == unheld,
