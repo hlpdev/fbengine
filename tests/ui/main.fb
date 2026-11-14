@@ -1,5 +1,6 @@
 // fbengine_ui's cases that need a process of their own, which ctest runs by name and checks
-// against what they print: what panics, and what's set before the window opens.
+// against what they print: what panics, what a length that isn't one is laid out as in place of
+// a panic, and what's set before the window opens.
 
 Import std.core
 Import std.math
@@ -122,6 +123,16 @@ Function PoppedTooMany() Throws GraphicsError
     ui.Draw()
 End Function
 
+// `node`'s box, laid out at the start of a row 100 by 100.
+Function LaidOut(node: Node): Rect
+    Local row = Node("laid")
+    row.SetArrangement(Arrangement.ROW)
+    row.SetAlign(Align.START)
+    row.Add(node)
+    row.Layout(Rect(0.0, 0.0, 100.0, 100.0))
+    Return node.Box()
+End Function
+
 Local arguments = Process.Arguments()
 Local name = arguments.Count > 0 ? arguments[0] : ""
 Select name
@@ -139,7 +150,10 @@ Select name
     Case "insert-out-of-range"
         Node("a").Insert(1, Node("b"))
     Case "fixed-negative"
-        Sizing.Fixed(-1.0)
+        Local node = Node("a")
+        node.SetWidth(Sizing.Fixed(-1.0))
+        node.SetHeight(Sizing.Fixed(-1.0))
+        Print("Fixed(-1) is {Sizing.Fixed(-1.0)}, laid out as {LaidOut(node)}")
     Case "fill-zero"
         Sizing.Fill(0.0)
     Case "fraction-past-one"
@@ -149,11 +163,21 @@ Select name
     Case "set-width-unchecked"
         Node("a").SetWidth(Sizing(SizeMode.FILL, 0.0))
     Case "min-size-nan"
-        Node("a").SetMinSize(NaN, 0.0)
+        Local node = Node("a")
+        node.SetMinSize(NaN, 0.0)
+        Print("SetMinSize(NaN, 0) laid out as {LaidOut(node)}")
     Case "padding-negative"
-        Node("a").SetPadding(Insets.All(-1.0))
+        Local node = Node("a")
+        node.SetPadding(Insets.All(-1.0))
+        Local child = Node("child")
+        child.SetSize(5.0, 5.0)
+        node.Add(child)
+        LaidOut(node)
+        Print("SetPadding(-1) is {node.Padding()}, its child at {child.Box()}")
     Case "margin-infinite"
-        Node("a").SetMargin(Insets(0.0, Inf, 0.0, 0.0))
+        Local node = Node("a")
+        node.SetMargin(Insets(0.0, Inf, 0.0, 0.0))
+        Print("SetMargin(0, Inf, 0, 0) is {node.Margin()}")
     Case "anchors-backward"
         Node("a").SetAnchors(Anchors(1.0, 0.0, 0.0, 1.0))
     Case "style-negative-border"
@@ -169,11 +193,26 @@ Select name
         style.Padding = Insets(0.0, -2.0, 0.0, 0.0)
         Theme().SetStyle("x", style)
     Case "max-size-negative"
-        Node("a").SetMaxSize(-1.0, 0.0)
+        Local node = Node("a")
+        node.SetSize(10.0, 10.0)
+        node.SetMaxSize(-1.0, 0.0)
+        Print("SetMaxSize(-1, 0) laid out as {LaidOut(node)}")
     Case "gap-infinite"
-        Node("a").SetGap(Inf)
+        Local row = Node("row")
+        row.SetArrangement(Arrangement.ROW)
+        row.SetGap(Inf)
+        Local first = Node("first")
+        first.SetSize(10.0, 10.0)
+        Local second = Node("second")
+        second.SetSize(10.0, 10.0)
+        row.Add(first)
+        row.Add(second)
+        LaidOut(row)
+        Print("SetGap(Inf) put the second at {second.Box().X}")
     Case "content-size-nan"
-        Node("a").SetContentSize(NaN, 0.0)
+        Local node = Node("a")
+        node.SetContentSize(NaN, 0.0)
+        Print("SetContentSize(NaN, 0) is {node.Measure()}, laid out as {LaidOut(node)}")
     Case "anchor-nan"
         Node("a").SetAnchors(Anchors(NaN, 0.0, 1.0, 1.0))
     Case "slider-range-backward"

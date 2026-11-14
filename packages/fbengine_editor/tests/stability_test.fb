@@ -287,6 +287,29 @@ Function Damaged(bytes: UInt8[]): UInt8[]
     End Select
 End Function
 
+// `bytes` damaged as Damaged does, but only the rest of them where `spared` is in them, which is put
+// back where it was, as far as what's left reaches: so the same seed does the same damage wherever
+// `spared`, a path, is and however long it is on this OS.
+Function DamagedBut(bytes: UInt8[], spared: String): UInt8[]
+    Local text = String.FromUtf8(bytes) ?? ""
+    If spared == "" || !text.Contains(spared) Then Return Damaged(bytes)
+    Local pieces = text.Split(spared)
+    Local rest = pieces.Join("").Bytes
+    Local damaged = Damaged(rest)
+    Local cut = damaged.Count < rest.Count
+    Local made: UInt8[] = []
+    Local at = 0
+    For i = 0 Until pieces.Count
+        Local count = pieces[i].Bytes.Count
+        For j = at Until Min(at + count, damaged.Count)
+            made.Add(damaged[j])
+        End For
+        at += count
+        If i < pieces.Count - 1 && (!cut || at < damaged.Count) Then made.AddAll(spared.Bytes)
+    End For
+    Return made
+End Function
+
 // What the editor's run says, as a notice of what was kept is said.
 Function Logged(editor: Editor): String => editor.Run.Log.Lines().Join("\n")
 
@@ -396,13 +419,16 @@ Function FilesDamagedAtRandomOpenOrAreRefusedByName() Throws IOError, GraphicsEr
         End If
     End For
     Expect(kept.Count >= 2, "{kept.Count} files were kept between runs")
+    // What's kept has the project's path in it, which isn't damaged, as it's another length on each
+    // OS; the rest is the same on each, and so is its damage.
+    Local spared = (Try good.Absolute()).Text
     Local noticed = 0
     For file In kept
         Local whole = Try File.ReadBytes(file)
         Local ofGood = (String.FromUtf8(whole) ?? "").Contains("good\"")
         Local preferences = file.FileName() == "preferences.txt"
         For round = 1 To 12
-            Try File.WriteBytes(file, Damaged(whole))
+            Try File.WriteBytes(file, DamagedBut(whole, spared))
             Local again = Try StableStarted(settings.Path, good)
             again.Step()
             Local said = Logged(again)

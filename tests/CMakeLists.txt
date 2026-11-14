@@ -2190,27 +2190,28 @@ fbengine_set_warnings(fbengine_collide_tests)
 catch_discover_tests(fbengine_collide_tests TEST_PREFIX "collide."
                      DL_PATHS "${fbengine_test_dll_paths}")
 
-# fbengine_ui's panics, each by a run of tests/ui, which says it.
+# fbengine_ui's panics, each by a run of tests/ui, which says it; and the lengths that aren't ones,
+# which are laid out as their setters' docs say in place of a panic.
 if(FBENGINE_FB_TESTS)
   set(fbengine_ui_cases
       "add-twice|panic: Node[.]Add: Node \"child\" is in another Node already"
       "add-into-itself|panic: Node[.]Add: Node \"outer\" can't go in itself"
       "insert-out-of-range|panic: Node[.]Insert: 1 isn't 0 to 0"
-      "fixed-negative|panic: Sizing[.]Fixed: a length is 0 or more, not -1"
+      "fixed-negative|Fixed[(]-1[)] is 0, laid out as Rect[(]0, 0, 0, 0[)]"
       "fill-zero|panic: Sizing[.]Fill: a weight is over 0, not 0"
       "fraction-past-one|panic: Sizing[.]Fraction: a fraction is 0 to 1, not 1[.]5"
       "style-empty-name|panic: Theme[.]SetFields: \"button[.]\" isn't a style's name"
       "set-width-unchecked|panic: Node[.]SetWidth: a fill's weight is over 0, not 0"
-      "min-size-nan|panic: Node[.]SetMinSize: a least is 0 or more, and finite, not NaN"
-      "padding-negative|panic: Node[.]SetPadding: padding is 0 or more, and finite, not -1"
-      "margin-infinite|panic: Node[.]SetMargin: a margin is finite, not Inf"
+      "min-size-nan|SetMinSize[(]NaN, 0[)] laid out as Rect[(]0, 0, 0, 0[)]"
+      "padding-negative|SetPadding[(]-1[)] is [(]0, 0, 0, 0[)], its child at Rect[(]0, 0, 5, 5[)]"
+      "margin-infinite|SetMargin[(]0, Inf, 0, 0[)] is [(]0, 16777216, 0, 0[)]"
       "anchors-backward|panic: Node[.]SetAnchors: a Max is at its Min or after"
       "style-negative-border|panic: Theme[.]SetFields: a style's widths, radii, and sizes are 0 or more, not -1"
       "style-nan-font-size|panic: Theme[.]SetFields: a style's widths, radii, and sizes are 0 or more, not NaN"
       "style-negative-padding|panic: Theme[.]SetFields: a style's padding is 0 or more, not -2"
-      "max-size-negative|panic: Node[.]SetMaxSize: a most is 0 or more, or Inf, not -1 by 0"
-      "gap-infinite|panic: Node[.]SetGap: a gap is 0 or more, and finite, not Inf"
-      "content-size-nan|panic: Node[.]SetContentSize: a size is 0 or more, and finite, not NaN by 0"
+      "max-size-negative|SetMaxSize[(]-1, 0[)] laid out as Rect[(]0, 0, 0, 0[)]"
+      "gap-infinite|SetGap[(]Inf[)] put the second at 16777216"
+      "content-size-nan|SetContentSize[(]NaN, 0[)] is [(]0, 0[)], laid out as Rect[(]0, 0, 0, 0[)]"
       "anchor-nan|panic: Node[.]SetAnchors: an anchor is finite, not NaN"
       "slider-range-backward|panic: Slider[.]SetRange: a range is finite, and ends at its start or after, not 2 to 1"
       "slider-range-too-wide|panic: Slider[.]SetRange: a range is finite, and ends at its start or after, not -3"

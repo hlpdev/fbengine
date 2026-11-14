@@ -39,8 +39,8 @@ Public Struct WindowPlace
 End Struct
 
 /// What's kept between runs. A file that can't be read, or has been changed to nonsense, is as if
-/// it weren't there, and is left as it is, and TakeUnread says so, naming it, once; one that can't
-/// be written is only not kept. A line of trusted.txt changed is a project asked about again.
+/// it weren't there, and is left as it is, and TakeUnread says so, naming it, once; so is one
+/// whose project read it and Refused any of it, whole. One that can't be written is only not kept. A line of trusted.txt changed is a project asked about again.
 Public Final Class Session
     // What's been said yes to, whether or not it could be kept.
     Field trusted: Set<String>
@@ -50,12 +50,15 @@ Public Final Class Session
     // What couldn't be read, to be said, and every file that's been said of.
     Field unread: String[] = []
     Field told: Set<String>
+    // The projects' files Refused, which are as if they weren't there till they're kept again.
+    Field refused: Set<String>
 
     /// What's kept in `folder`, or the OS's folder for settings. It's an IOError if the OS doesn't
     /// say where that is.
     Public New(folder: Path? = Null) Throws IOError
         trusted = Set<String>()
         told = Set<String>()
+        refused = Set<String>()
         Local where = folder
         If where == Null
             Local config = Folders.Config
@@ -80,9 +83,11 @@ Public Final Class Session
     End Method
 
     /// Says what Kept gave for the project at `path` was nonsense to what read it, as `why`, for
-    /// TakeUnread to say.
+    /// TakeUnread to say; from then on Kept has nothing for it, till Keep keeps it again.
     Package Method Refused(path: String, why: String)
-        Unread(FileFor(path), why)
+        Local file = FileFor(path)
+        refused.Add(file.Text)
+        Unread(file, why)
     End Method
 
     // `file` couldn't be read, as `why` says, which names it or doesn't.
@@ -180,10 +185,10 @@ Public Final Class Session
     End Method
 
     /// What's kept for the project at `path`, as Keep had it, or Null for none, or for what can't
-    /// be read, which TakeUnread says.
+    /// be read, which TakeUnread says, or for what was Refused.
     Public Method Kept(path: String): Value?
         Local file = FileFor(path)
-        If !File.Exists(file) Then Return Null
+        If refused.Contains(file.Text) || !File.Exists(file) Then Return Null
         Local value = Value()
         Try
             value = Try Toml.Read(Try File.ReadText(file))
@@ -203,6 +208,7 @@ Public Final Class Session
 
     /// Keeps `value`, an Object, for the project at `path`, whole or not at all.
     Public Method Keep(path: String, value: Value)
+        refused.Remove(FileFor(path).Text)
         Local document = Value.Object()
         document["project"] = Value(path)
         document["kept"] = value

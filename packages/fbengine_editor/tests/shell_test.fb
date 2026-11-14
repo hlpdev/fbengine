@@ -511,6 +511,37 @@ Function ALayoutKeptThatIsntOneIsAtFirstAndSaysSo() Throws IOError, GraphicsErro
     End For
 End Function
 
+// A kept file that reads, of this project, but whose layout's refused, is refused whole: the scene
+// it names isn't opened, and Kept has nothing of it, till what's kept is written again.
+@Test
+Function AKeptFileRefusedForItsLayoutKeepsNothingOfIt() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local game = Try Game(games.Path, "refused")
+    Local folder = (Try game.Absolute()).Text
+    Local first = Try Started(settings.Path, game)
+    first.Actions.Run("add.cube")
+    first.SaveScene("res://level.scene")
+    first.Step()
+    Expect(first.SceneFile() == "res://level.scene")
+    first.Finish()
+    Local session = Try Session(settings.Path)
+    Local saved = Value.Object()
+    saved["layout"] = Value("panes")
+    saved["scene"] = Value("res://level.scene")
+    session.Keep(folder, saved)
+    Local editor = Try Started(settings.Path, game)
+    editor.Step()
+    Local said = editor.Run.Log.Lines().Join("\n")
+    Expect(said.Contains("its panes' layout isn't one"), "no notice: {said}")
+    Expect(editor.SceneFile() != "res://level.scene", "it opened the refused file's scene")
+    Expect(editor.Kept.Kept(folder) == Null, "Kept has what was refused: {said}")
+    editor.Finish()
+    // Finishing kept it anew, which is read.
+    Expect((Try Session(settings.Path)).Kept(folder) != Null, "what's kept anew isn't read")
+End Function
+
 @Test
 Function WhatsKeptOfAnotherProjectWithTheSameHashIsntThisOnes() Throws IOError
     Local settings = Try TempDir()

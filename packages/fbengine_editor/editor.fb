@@ -257,7 +257,9 @@ Public Final Class Editor
             // With nothing shown it's kept an empty Object, which isn't what's wrong; a String, a
             // number, or a list is.
             If saved != Null && (layout.Kind != ValueKind.OBJECT || layout.Count > 0)
+                // Refused, nothing of it's taken: not its scene either.
                 Kept.Refused(opened.Folder.Text, "its panes' layout isn't one")
+                saved = Null
             End If
         End If
         If saved != Null
