@@ -196,8 +196,8 @@ Public Class Gpu
         Return fbe_gpu_device_kind(fbe_gpu_device()) As GpuKind
     End Method
 
-    /// How many frames Flip has presented in the window, which it doesn't while the window's
-    /// minimized.
+    /// How many frames Flip has presented in the window since the GPU started, which it doesn't
+    /// while the window's minimized; Stop sets it to 0.
     @MainThread Public Static Method Presented(): Int64 => fbe_gpu_presented()
 
     /// Keeps the pipelines the GPU makes in the file at `path`, so they're made faster the next time

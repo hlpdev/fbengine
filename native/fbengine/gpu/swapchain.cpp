@@ -540,6 +540,8 @@ void stop_window() {
     destroy_window();
     made_for = {};
     stale = false;
+    // It counts one GPU's presents; the next start counts its own.
+    presented = 0;
 }
 
 void make_surfaces_by(VkSurfaceKHR (*make)()) {

@@ -106,7 +106,8 @@ FBE_API bool fbe_gpu_simulate_loss(int32_t starts_failing);
 FBE_API int64_t fbe_gpu_memory_budget(void);
 FBE_API int64_t fbe_gpu_memory_usage(void);
 
-// How many frames fbe_frame_flip has presented, which skips them while the window is minimized.
+// How many frames fbe_frame_flip has presented since the GPU started, which skips them while the
+// window is minimized; fbe_gpu_stop sets it to 0.
 // A headless window's are drawn into an image of its own, its size in pixels, which nothing shows.
 FBE_API int64_t fbe_gpu_presented(void);
 // The size of the images the window is presented in, which follows its size in pixels; 0 without

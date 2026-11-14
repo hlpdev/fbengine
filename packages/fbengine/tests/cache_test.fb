@@ -324,6 +324,25 @@ Function AWaiterOnALoadLetGoMeanwhileLoadsItAgain() Throws IOError
     Expect(waited.Freed)
 End Function
 
+// A load on the workers let go of before it lands, as a project's closed while its thumbnails
+// load, is freed as its waiter goes on: once it's loaded again, or once it can't be.
+@Test
+Function ALoadLetGoOfBeforeItLandsIsFreed() Throws IOError
+    MountSprites("res://test-forgot")
+    Local before = Assets.Loads()
+    Local later = Assets.LoadAsync<Plain>("res://test-forgot/hero.png")
+    Assets.ForgetLoaded("res://test-forgot")
+    Local again = Try later.Wait()
+    again.Free()
+    Expect(Assets.Loads() == before, "{Assets.Loads() - before} loads outlived their entry")
+    Local gone = Assets.LoadAsync<Plain>("res://test-forgot/hero.png")
+    Assets.Unmount("res://test-forgot")
+    Assets.ForgetLoaded("res://test-forgot")
+    Expect(ExpectThrows<IOError>(gone.Wait()) != Null)
+    Expect(Assets.Loads() == before,
+           "{Assets.Loads() - before} loads outlived their entry and their mount")
+End Function
+
 @Test
 Function TypesOfOneNameInTwoModulesAreApart() Throws IOError
     MountSprites("res://test-names")

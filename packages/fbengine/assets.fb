@@ -1247,6 +1247,11 @@ Public Final Class Assets
         End If
         Local current = TypedCache<T>.Of().Entries.Get(key)
         If cached.Released || current == Null || !RefEquals(current, cached)
+            // Let go of while it loaded, so nothing's made of its load, which goes now.
+            If cached.Load != 0
+                fbe_assets_free(cached.Load)
+                cached.Load = 0
+            End If
             Return Try Load<T>(path)
         End If
         Local made = cached.Made
