@@ -936,3 +936,47 @@ Function AGpuLostEachFrameIsMadeAgainLessAndLessOften() Throws IOError, Graphics
     Local target = editor.View.Target()
     Expect(target != Null && !target.Freed(), "the view has no texture to draw into")
 End Function
+
+// A GPU lost whose next two Starts fail, as a reset that takes a while fails them: nothing starts
+// it while the editor waits, which tries again each second, timed by frames, and says why once;
+// the third Start works, and the editor draws again by itself.
+@Test
+Function ALostGpuThatWontStartIsTriedEachSecondUntilItDoes() Throws IOError, GraphicsError
+    If StableNoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try StableStarted(settings.Path, Try StableGame(games.Path, "retried"))
+    Defer editor.Finish()
+    editor.Actions.Run("add.cube")
+    editor.Actions.Run("add.light")
+    editor.Docked.Activate("scene")
+    Frame.SetFixedDelta(1.0 / 60.0)
+    Defer Frame.SetFixedDelta(0)
+    For frame = 1 To 4
+        editor.Step()
+    End For
+    Local before = Try StableScreen(editor)
+    Local scale = editor.Shown.Scale()
+    Expect(Lit(before, editor.View.Box(), scale) > 100, "the view showed nothing of its scene")
+    Local lines = editor.Run.Log.Own()
+    Try Gpu.SimulateLoss(2)
+    // Stopped and failed in the first frame, failed again a second on, and started a second
+    // after that: 120 frames, give or take one for the sum of sixtieths.
+    Local started = 0
+    For frame = 1 To 240
+        editor.Step()
+        If started == 0 && Gpu.Started() && !Gpu.Lost() Then started = frame
+    End For
+    Expect(started >= 119 && started <= 123, "the GPU started again in frame {started}")
+    Local said = editor.Run.Log.Lines()
+    Local failed = said.Filter(Function(line: String) => line.Contains("couldn't be made again"))
+    Expect(failed.Count == 1, "why it couldn't start was said {failed.Count} times")
+    Expect(said.Any(Function(line: String) => line == "The GPU's made again."),
+           "the Output pane never said the GPU's made again")
+    Expect(editor.Run.Log.Own() - lines <= 4, "{editor.Run.Log.Own() - lines} lines were said")
+    Local target = editor.View.Target()
+    Expect(target != Null && !target.Freed(), "the view has no texture to draw into")
+    Local after = Try StableScreen(editor)
+    Expect(Lit(after, editor.View.Box(), scale) > 100,
+           "the view shows nothing once the GPU's made again")
+End Function
