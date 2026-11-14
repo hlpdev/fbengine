@@ -790,8 +790,10 @@ bool start(VkSurfaceKHR surface) {
     stop_as_the_process_ends();
     start_pipeline_cache();
     if (!start_bindless() || !start_textures()) {
-        why_failed = fbe_error();
+        // Kept across the stop, which forgets a failed start's why.
+        std::string why = fbe_error();
         stop();
+        why_failed = why;
         failed = true;
         return fail(why_failed);
     }
