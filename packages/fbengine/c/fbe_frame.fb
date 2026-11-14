@@ -4,6 +4,8 @@
 Public Extern "C" Lib "fbengine_native"
     Function fbe_frame_flip(vsync: Bool)
     Function fbe_frame_delta(): Float64
+    Function fbe_frame_set_fixed_delta(seconds: Float64): Bool
+    Function fbe_frame_fixed_delta(): Float64
     Function fbe_frame_count(): Int64
     Function fbe_frame_rate(): Float64
     Function fbe_frame_set_limit(frames_per_second: Int32): Bool

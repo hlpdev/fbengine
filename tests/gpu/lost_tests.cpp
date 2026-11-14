@@ -80,7 +80,8 @@ constexpr std::string_view reaching_areas =
 constexpr std::string_view asks_nothing_names =
     "fbe_environment_count fbe_environment_irradiance fbe_environment_levels "
     "fbe_environment_specular fbe_environment_table fbe_frame_count fbe_frame_delta "
-    "fbe_frame_limit fbe_frame_rate fbe_frame_set_limit fbe_frame_vsync fbe_gpu_anisotropy "
+    "fbe_frame_fixed_delta fbe_frame_limit fbe_frame_rate fbe_frame_set_fixed_delta "
+    "fbe_frame_set_limit fbe_frame_vsync fbe_gpu_anisotropy "
     "fbe_gpu_counters fbe_gpu_device fbe_gpu_device_kind fbe_gpu_device_lacks fbe_gpu_device_name "
     "fbe_gpu_disabled fbe_gpu_lod_bias fbe_gpu_lost fbe_gpu_max_anisotropy fbe_gpu_pipeline_cache "
     "fbe_gpu_pipelines fbe_gpu_presented fbe_gpu_render_height fbe_gpu_render_samples "

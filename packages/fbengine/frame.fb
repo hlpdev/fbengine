@@ -65,8 +65,22 @@ Public Final Class Frame
         End For
     End Method
 
-    /// How many seconds the last frame took, from one Flip to the next, 0 before the second.
+    /// How many seconds the last frame took, from one Flip to the next, 0 before the second; while
+    /// SetFixedDelta's set, what it was given, every frame.
     @MainThread Public Static Method Delta(): Float64 => fbe_frame_delta()
+
+    /// Makes Delta `seconds` every frame, from now, whatever the clock says, for tests and tools
+    /// that step a game by hand: what's timed by Delta, as a gamepad's repeat in a Ui, a field's
+    /// cursor, and whatever a game steps by it, goes the same on any machine, however long its
+    /// frames take. 0 takes it away, back to the clock. Rate and the limit stay on the clock.
+    /// Under 0, or not finite, panics.
+    @MainThread @PanicsAtCaller
+    Public Static Method SetFixedDelta(seconds: Float64)
+        If !fbe_frame_set_fixed_delta(seconds) Then Panic(LastError())
+    End Method
+
+    /// What SetFixedDelta last set, 0 for none.
+    @MainThread Public Static Method FixedDelta(): Float64 => fbe_frame_fixed_delta()
 
     /// Whether the last Flip asked to wait for the display, True before the first.
     @MainThread Public Static Method Vsync(): Bool => fbe_frame_vsync()

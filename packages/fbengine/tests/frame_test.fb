@@ -2,6 +2,7 @@
 
 Import std.core
 Import std.test
+Import std.time
 Import fbengine
 
 Global ticks = 0
@@ -69,6 +70,27 @@ Function TheLimitSpacesFramesOutAndCapsTheRate()
     End For
     Expect(Frame.Rate() > 0.0)
     Expect(Frame.Rate() <= 205.0)
+End Function
+
+// A fixed delta is every frame's, however long the frame took, and once it's taken away, the
+// clock's again.
+@Test
+Function AFixedDeltaIsEveryFramesUntilItsTakenAway()
+    Local fixed: Float64 = 1.0 / 32.0
+    Frame.SetFixedDelta(fixed)
+    Defer Frame.SetFixedDelta(0)
+    Expect(Frame.FixedDelta() == fixed)
+    For frame = 1 To 6
+        // Longer than it, then far shorter: neither shows.
+        If frame % 2 == 0 Then Sleep(40.Milliseconds)
+        Flip(False)
+        Expect(Frame.Delta() == fixed, "frame {frame}: {Frame.Delta()}")
+    End For
+    Frame.SetFixedDelta(0)
+    Expect(Frame.FixedDelta() == 0.0)
+    Sleep(5.Milliseconds)
+    Flip(False)
+    Expect(Frame.Delta() >= 0.0 && Frame.Delta() != fixed, "the clock's {Frame.Delta()}")
 End Function
 
 @Test

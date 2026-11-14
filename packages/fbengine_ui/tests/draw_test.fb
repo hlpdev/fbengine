@@ -6,7 +6,6 @@ From std.image Import Image
 Import std.math
 Import std.os
 Import std.test
-Import std.time
 Import fbengine
 Import fbengine_ui
 
@@ -634,20 +633,18 @@ Function AFieldsCursorBlinksFromWhenItLastMoved() Throws GraphicsError
     If NoGpu() Then Skip("no GPU here")
     Local field = TextField("")
     field.SetSize(100.0, 24.0)
+    // Frames of 1/32 of a second, so it's off from the 17th frame after it's first drawn.
+    Frame.SetFixedDelta(1.0 / 32.0)
+    Defer Frame.SetFixedDelta(0)
     Local ui = Try Opened([field])
     ui.Focus(field)
     Drawn(ui)
     Expect((Try Pixels())[0, 12] != clear)
-    // Off in the second half of each second, with no more than a second of frames to get there.
-    Local waited: Float64 = 0.0
-    Local off = False
-    While waited < 1.0 && !off
-        Sleep(20.Milliseconds)
+    // Off in the second half of each second.
+    For frame = 1 To 16
         Drawn(ui)
-        waited += Frame.Delta()
-        off = (Try Pixels())[0, 12] == clear
-    End While
-    Expect(off)
+    End For
+    Expect((Try Pixels())[0, 12] == clear, "the cursor's on half a second after it was drawn")
     // A key moving it shows it again at once, there.
     Try Simulate.Text("a")
     Drawn(ui)
@@ -800,18 +797,18 @@ Function TwoDrawsAFrameDontHalveTheBlink() Throws GraphicsError
     If NoGpu() Then Skip("no GPU here")
     Local field = TextField("")
     field.SetSize(100.0, 24.0)
+    // Frames of 1/32 of a second: on for the 16 frames of the first half second, and off at the
+    // 17th, however many draws each has.
+    Frame.SetFixedDelta(1.0 / 32.0)
+    Defer Frame.SetFixedDelta(0)
     Local ui = Try Opened([field])
-    Local watch = Stopwatch.StartNew()
     ui.Focus(field)
-    Local off = False
-    While !off && watch.Elapsed.TotalSeconds < 3.0
+    For frame = 1 To 17
         Drawn(ui)
         ui.Draw()
-        off = (Try Pixels())[0, 12] == clear
-        // Never before half a second has gone.
-        If off Then Expect(watch.Elapsed.TotalSeconds >= 0.5)
-    End While
-    Expect(off)
+        Local off = (Try Pixels())[0, 12] == clear
+        Expect(off == (frame == 17), "frame {frame}: the cursor's {off ? "off" : "on"}")
+    End For
     EndGraphics()
 End Function
 

@@ -5,7 +5,6 @@ Import std.core
 Import std.math
 Import std.os
 Import std.text
-Import std.time
 Import fbengine
 Import "./layout"
 Import "./painter"
@@ -203,8 +202,9 @@ Public Class TextField Extends Widget
     Field submitted: Bool = False
     // How far its text is scrolled left, in the UI's units, to show its cursor.
     Field scrolled: Float32 = 0.0
-    // How long its cursor's been blinking, and where it was.
-    Field blinking: Stopwatch
+    // Its Ui's Clock when its cursor started blinking, under 0 to start at the next draw, and
+    // where it was.
+    Field blinkFrom: Float64 = -1.0
     Field blinkedAt: Float32 = 0.0
     // Its prefixes' widths and a line's height, as its font and size were.
     Field widths: Map<Int, Float32>
@@ -216,7 +216,6 @@ Public Class TextField Extends Widget
     /// A field holding `text`, which shows `placeholder` while it's empty.
     @MainThread Public New(text: String = "", placeholder: String = "", name: String = "")
         widths = {}
-        blinking = Stopwatch.StartNew()
         Super.New("field", name)
         Self.placeholder = placeholder
         SetFocusable(True)
@@ -304,7 +303,7 @@ Public Class TextField Extends Widget
     End Method
 
     @MainThread Public Override Method FocusChanged(focused: Bool)
-        blinking = Stopwatch.StartNew()
+        blinkFrom = -1.0
     End Method
 
     @MainThread Public Override Method Draw(paint: Painter)
@@ -349,14 +348,16 @@ Public Class TextField Extends Widget
         paint.PopClip()
     End Method
 
-    // Draws its cursor at `x`, while it's on, half of each second, from when it last moved on the
-    // screen, as a composition moves it too, or it got the focus.
+    // Draws its cursor at `x`, while it's on, half of each second of its Ui's Clock, so of
+    // Frame.Delta, from when it last moved on the screen, as a composition moves it too, or it got
+    // the focus; a Clock behind when it started, as another Ui's can be, starts it again.
     @MainThread Method CursorDrawn(paint: Painter, x: Float32, top: Float32, line: Float32)
-        If blinkedAt != x
+        Local now = Owner()?.Clock() ?? 0.0
+        If blinkedAt != x || blinkFrom < 0.0 || now < blinkFrom
             blinkedAt = x
-            blinking = Stopwatch.StartNew()
+            blinkFrom = now
         End If
-        If Mod(blinking.Elapsed.TotalSeconds, 1.0) >= 0.5 Then Return
+        If Mod(now - blinkFrom, 1.0) >= 0.5 Then Return
         paint.Fill(Rect(x, top, 1.0 / paint.Across(), line), CurrentStyle().Foreground)
     End Method
 

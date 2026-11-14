@@ -67,6 +67,9 @@ End Function
 @Test
 Function AMenuConsoleAndHudRunForThousandsOfFramesWithoutGrowing() Throws GraphicsError, InputError
     If SoakNoGpu() Then Skip("no GPU here")
+    // A frame's a 60th of a second, however long it takes, so the pad's repeats are the seed's.
+    Frame.SetFixedDelta(1.0 / 60.0)
+    Defer Frame.SetFixedDelta(0)
     Window.SetHeadless(True)
     Try Graphics(640, 360)
     Defer EndGraphics()

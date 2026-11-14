@@ -3,7 +3,6 @@
 Import std.core
 Import std.math
 Import std.test
-Import std.time
 Import fbengine
 Import fbengine_ui
 
@@ -24,6 +23,12 @@ End Function
 Function Press(ui: Ui, key: Key) Throws GraphicsError
     Try Simulate.PressKey(key)
     Frame(ui)
+End Function
+
+// A widget, or none, as a failure says it.
+Function Named(widget: Widget?): String
+    If widget == Null Then Return "none"
+    Return "{widget}"
 End Function
 
 // A 2 by 2 grid of buttons, a b over c d.
@@ -161,9 +166,13 @@ Function AGamepadMovesTheFocusAndActivates() Throws GraphicsError, InputError
     Frame(ui)
 End Function
 
-// Held, a gamepad's way moves the focus again after a moment, and on while it's held.
+// Held, a gamepad's way moves the focus again after a moment, and on while it's held: frames of
+// 1/32 of a second, so 0.4 seconds is reached in the 13th frame held, and a tenth more by the
+// 17th, on any machine.
 @Test
 Function AHeldWayMovesTheFocusAgain() Throws GraphicsError, InputError
+    fbengine.Frame.SetFixedDelta(1.0 / 32.0)
+    Defer fbengine.Frame.SetFixedDelta(0)
     Local root = Node("root")
     root.SetAlign(Align.START)
     Local buttons: Button[] = []
@@ -181,13 +190,19 @@ Function AHeldWayMovesTheFocusAgain() Throws GraphicsError, InputError
     pad.SetButton(GamepadButton.DPAD_DOWN, True)
     Frame(ui)
     Expect(ui.Focused() == buttons[1])
-    // A slow machine gets two seconds.
-    Local waited = Stopwatch.StartNew()
-    While ui.Focused() == buttons[1] && waited.Elapsed.TotalSeconds < 2.0
+    For held = 1 To 12
         Frame(ui)
-    End While
-    Expect(ui.Focused() == buttons[2])
-    Expect(waited.Elapsed.TotalSeconds >= 0.35)
+        Expect(ui.Focused() == buttons[1], "held {held} frames: {Named(ui.Focused())}")
+    End For
+    Frame(ui)
+    Expect(ui.Focused() == buttons[2], "held 13 frames: {Named(ui.Focused())}")
+    For held = 14 To 15
+        Frame(ui)
+        Expect(ui.Focused() == buttons[2], "held {held} frames: {Named(ui.Focused())}")
+    End For
+    Frame(ui)
+    Frame(ui)
+    Expect(ui.Focused() == buttons[3], "held 17 frames: {Named(ui.Focused())}")
     pad.SetButton(GamepadButton.DPAD_DOWN, False)
     Frame(ui)
 End Function
@@ -344,9 +359,12 @@ Function TheArrowsPreferWhatsAcross() Throws GraphicsError
     Expect(ui.Focused() == wide)
 End Function
 
-// Pressed again in one frame, a held way starts its time again.
+// Pressed again in one frame, a held way starts its time again: frames of 1/32 of a second, so
+// 0.4 seconds is reached in the 13th frame held.
 @Test
 Function AWayPressedAgainWaitsAgain() Throws GraphicsError, InputError
+    fbengine.Frame.SetFixedDelta(1.0 / 32.0)
+    Defer fbengine.Frame.SetFixedDelta(0)
     Local root = Node("root")
     root.SetAlign(Align.START)
     Local buttons: Button[] = []
@@ -363,21 +381,21 @@ Function AWayPressedAgainWaitsAgain() Throws GraphicsError, InputError
     ui.Focus(buttons[0])
     pad.SetButton(GamepadButton.DPAD_DOWN, True)
     Frame(ui)
-    Local waited = Stopwatch.StartNew()
-    While ui.Focused() == buttons[1] && waited.Elapsed.TotalSeconds < 2.0
+    For held = 1 To 13
         Frame(ui)
-    End While
-    Expect(ui.Focused() == buttons[2])
+    End For
+    Expect(ui.Focused() == buttons[2], "held 13 frames: {Named(ui.Focused())}")
     // Let go and pressed again: one move, then none for 0.4 seconds.
     pad.SetButton(GamepadButton.DPAD_DOWN, False)
     pad.SetButton(GamepadButton.DPAD_DOWN, True)
     Frame(ui)
     Expect(ui.Focused() == buttons[3])
-    Local again = Stopwatch.StartNew()
-    While again.Elapsed.TotalSeconds < 0.25
+    For held = 1 To 12
         Frame(ui)
-    End While
-    Expect(ui.Focused() == buttons[3])
+        Expect(ui.Focused() == buttons[3], "held again {held} frames: {Named(ui.Focused())}")
+    End For
+    Frame(ui)
+    Expect(ui.Focused() == buttons[4], "held again 13 frames: {Named(ui.Focused())}")
     pad.SetButton(GamepadButton.DPAD_DOWN, False)
     Frame(ui)
 End Function

@@ -500,6 +500,10 @@ End Function
 @Test
 Function CommandsRunAtRandomLeaveASoundScene() Throws IOError, GraphicsError
     If StableNoGpu() Then Skip("no GPU here")
+    // A frame's a 60th of a second, however long it takes, so what's timed by Frame.Delta, as the
+    // view's camera, goes as the seed has it.
+    Frame.SetFixedDelta(1.0 / 60.0)
+    Defer Frame.SetFixedDelta(0)
     Local settings = Try TempDir()
     Local games = Try TempDir()
     Local editor = Try StableStarted(settings.Path, Try StableGame(games.Path, "random"))

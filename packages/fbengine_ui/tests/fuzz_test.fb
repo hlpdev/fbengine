@@ -16,6 +16,7 @@ Import std.math
 Import std.os
 Import std.test
 Import std.text
+Import std.time
 Import fbengine
 Import fbengine_ui
 
@@ -142,6 +143,10 @@ End Function
 @Test
 Function RandomInputLeavesAMenuAConsoleAHudAPopupAndAScrollWhole() Throws GraphicsError, InputError
     If FuzzNoGpu() Then Skip("no GPU here")
+    // A frame's a 60th of a second, however long it takes, so the pad's repeats, and the path,
+    // are the seed's.
+    Frame.SetFixedDelta(1.0 / 60.0)
+    Defer Frame.SetFixedDelta(0)
     Window.SetHeadless(True)
     Try Graphics(640, 360)
     Defer EndGraphics()
@@ -319,12 +324,133 @@ Function RandomInputLeavesAMenuAConsoleAHudAPopupAndAScrollWhole() Throws Graphi
     Expect(play.Text() == "Play")
 End Function
 
+// Every node of `node`'s tree, it first, into `found`.
+Function Walked(node: Node, found: Node[])
+    found.Add(node)
+    For child In node.Children()
+        Walked(child, found)
+    End For
+End Function
+
+// Where `widget` is in `nodes`, -1 for none, and -2 if it isn't there.
+Function PlaceOf(nodes: Node[], widget: Widget?): Int
+    If widget == Null Then Return -1
+    For i = 0 To nodes.Count - 1
+        If RefEquals(nodes[i], widget) Then Return i
+    End For
+    Return -2
+End Function
+
+// A hash of what a frame left: what has the focus, the hover, and the press, each by where it is
+// in the tree and the popups, and every box.
+Function FrameHash(ui: Ui): UInt64
+    Local nodes: Node[] = []
+    Walked(ui.Root(), nodes)
+    For popup In ui.Popups()
+        Walked(popup, nodes)
+    End For
+    Local held = "{PlaceOf(nodes, ui.Focused())} {PlaceOf(nodes, ui.Hovered())} " +
+                 "{PlaceOf(nodes, ui.Pressed())}"
+    Local hash = held.Hash()
+    For node In nodes
+        hash = HashCombine(hash, "{node.Box()}".Hash())
+    End For
+    Return hash
+End Function
+
+// Each frame's FrameHash on the path `seed` takes through a column of buttons, a field, a list,
+// and a scroll: the mouse, keys, and a pad's ways held for many frames, so held ones repeat; each
+// frame slowed by a sleep of `slowed` milliseconds.
+Function FuzzPath(seed: Int64, frames: Int, slowed: Int): UInt64[] Throws GraphicsError, InputError
+    Window.SetHeadless(True)
+    Try Graphics(320, 240)
+    Defer EndGraphics()
+    Local pad = Try Simulate.ConnectGamepad()
+    Defer pad.Unplug()
+    Local root = Node("root")
+    root.SetArrangement(Arrangement.ROW)
+    Local column = Node("column")
+    column.SetArrangement(Arrangement.COLUMN)
+    For each = 1 To 8
+        column.Add(Button("b{each}"))
+    End For
+    column.Add(TextField("", "name"))
+    column.Add(Slider(0.0, 1.0, 0.5))
+    root.Add(column)
+    root.Add(List(["one", "two", "three", "four"], "list"))
+    Local scroll = ScrollView("scroll")
+    scroll.SetSize(100, 80)
+    Local rows = Node("rows")
+    rows.SetArrangement(Arrangement.COLUMN)
+    For each = 1 To 20
+        rows.Add(Button("r{each}"))
+    End For
+    scroll.Add(rows)
+    root.Add(scroll)
+    Local ui = Ui(root)
+    Local ways = [GamepadButton.DPAD_UP, GamepadButton.DPAD_DOWN, GamepadButton.DPAD_LEFT,
+                  GamepadButton.DPAD_RIGHT]
+    Try Simulate.MoveMouse(0.0, 0.0)
+    Framed(ui)
+    fuzzState = seed
+    Local path: UInt64[] = []
+    For frame = 1 To frames
+        Select FuzzNext(10)
+            Case 0
+                Try Simulate.MoveMouse((FuzzNext(320) As Float32), (FuzzNext(240) As Float32))
+            Case 1
+                Try Simulate.MouseDown(MouseButton.LEFT)
+            Case 2
+                Try Simulate.MouseUp(MouseButton.LEFT)
+            Case 3
+                Try Simulate.PressKey([Key.TAB, Key.UP, Key.DOWN, Key.RETURN][FuzzNext(4)])
+            Case 4, 5
+                // Let go only now and then, so a way's held for a second or more.
+                pad.SetButton(ways[FuzzNext(ways.Count)], FuzzNext(8) != 0)
+            Case 6
+                pad.SetButton(GamepadButton.SOUTH, FuzzNext(2) == 0)
+            Default
+        End Select
+        If slowed > 0 Then Sleep((slowed As Int64).Milliseconds)
+        Framed(ui)
+        path.Add(FrameHash(ui))
+    End For
+    For way In ways
+        pad.SetButton(way, False)
+    End For
+    pad.SetButton(GamepadButton.SOUTH, False)
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    Framed(ui)
+    Return path
+End Function
+
+// A seed takes the same path however long its frames take, with a fixed delta: the same focus,
+// hover, press, and boxes each frame, slowed by a sleep each frame and not.
+@Test
+Function ASeedTakesTheSamePathHoweverLongItsFramesTake() Throws GraphicsError, InputError
+    If FuzzNoGpu() Then Skip("no GPU here")
+    Frame.SetFixedDelta(1.0 / 60.0)
+    Defer Frame.SetFixedDelta(0)
+    Local seed: Int64 = 20261114
+    Local slow = Try FuzzPath(seed, 400, 5)
+    Local fast = Try FuzzPath(seed, 400, 0)
+    Expect(slow.Count == 400 && fast.Count == 400, "seed {seed}: {slow.Count} and {fast.Count}")
+    For frame = 0 To slow.Count - 1
+        If slow[frame] != fast[frame]
+            Fail("seed {seed}: frame {frame + 1} slowed isn't as it was unslowed")
+            Return
+        End If
+    End For
+End Function
+
 // A tree built and taken apart at random, deep and wide, as a game's screens come and go: what's
 // removed with the focus, the hover, or the mouse's press on it, or under it, lets go of it, and
 // a widget that removes itself, or its parent, in its own handler does it safely.
 @Test
 Function TreesBuiltAndTakenApartAtRandomLeaveNothingHeld() Throws GraphicsError, InputError
     If FuzzNoGpu() Then Skip("no GPU here")
+    Frame.SetFixedDelta(1.0 / 60.0)
+    Defer Frame.SetFixedDelta(0)
     Window.SetHeadless(True)
     Try Graphics(640, 360)
     Defer EndGraphics()

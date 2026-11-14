@@ -100,6 +100,10 @@ Public Final Class Ui
     Field cursorSet: Bool = False
     // Where the pointer was at the last Update.
     Field lastPoint: Vec2
+    // Its own time, Frame.Delta's seconds added at the first Update of each frame, so what's
+    // timed by it, as a field's cursor, follows Frame.SetFixedDelta; and the frame it last added.
+    Field clock: Float64 = 0.0
+    Field clockedAt: Int64 = -1
 
     /// A Ui of the tree `root`, in `theme`, or Theme.Dark().
     @MainThread Public New(root: Node, theme: Theme? = Null)
@@ -405,6 +409,9 @@ Public Final Class Ui
     /// The widget with the keyboard's and the gamepad's focus, or Null.
     @MainThread Public Method Focused(): Widget? => focused
 
+    // The seconds of Frame.Delta its Updates have seen, a frame's once.
+    @MainThread Package Method Clock(): Float64 => clock
+
     /// Gives `widget` the focus, or takes it from the one that has it with Null; one that can't
     /// have it, as a label can't, one that's disabled, or one under a MODAL, leaves the focus where
     /// it is.
@@ -432,6 +439,10 @@ Public Final Class Ui
     /// the pointer to the widget under it or holding it, the wheel to the one under it that uses
     /// it, and keys and text to the one with the focus; and styles each by what it's doing.
     @MainThread Public Method Update()
+        If Frame.Count() != clockedAt
+            clockedAt = Frame.Count()
+            clock += Frame.Delta()
+        End If
         Forget(root)
         Forget(popups)
         back = False

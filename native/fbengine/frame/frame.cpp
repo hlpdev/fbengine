@@ -7,6 +7,7 @@
 #include "input/input.hpp"
 #include "jobs/jobs.hpp"
 
+#include <cmath>
 #include <cstdint>
 #include <format>
 #include <SDL3/SDL.h>
@@ -22,6 +23,8 @@ constexpr std::int32_t fastest = 1000;
 std::uint64_t last_flip = 0;
 std::int64_t frames = 0;
 double delta = 0.0;
+// What fbe_frame_delta says instead, while it's over 0.
+double fixed_delta = 0.0;
 double rate = 0.0;
 std::uint64_t rate_since = 0;
 std::int64_t rate_frames = 0;
@@ -77,7 +80,20 @@ FBE_API void fbe_frame_flip(bool wait_for_vsync) {
 }
 
 FBE_API double fbe_frame_delta(void) {
-    return delta;
+    return fixed_delta > 0.0 ? fixed_delta : delta;
+}
+
+FBE_API bool fbe_frame_set_fixed_delta(double seconds) {
+    if (!std::isfinite(seconds) || seconds < 0.0) {
+        return fbe::fail(
+            std::format("a fixed delta is 0, for none, or a finite time over it, not {}", seconds));
+    }
+    fixed_delta = seconds;
+    return true;
+}
+
+FBE_API double fbe_frame_fixed_delta(void) {
+    return fixed_delta;
 }
 
 FBE_API int64_t fbe_frame_count(void) {
