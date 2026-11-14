@@ -69,7 +69,8 @@ FBE_API bool fbe_gpu_set_device(int32_t device);
 FBE_API int32_t fbe_gpu_device(void);
 
 // Starts the GPU, if it hasn't started, with a swapchain for the window if there is one; false if
-// it can't, and then it never starts, saying why each time.
+// it can't, and then it fails again at once, saying why each time, until fbe_gpu_stop, which
+// forgets the failure, so the next start tries again.
 FBE_API bool fbe_gpu_start(void);
 FBE_API bool fbe_gpu_started(void);
 // Whether there's to be no GPU at all, as for a dedicated server, set before anything starts it:
@@ -81,7 +82,7 @@ FBE_API bool fbe_gpu_disabled(void);
 // How many times it's been stopped, so what was made before can tell that it's gone.
 FBE_API uint64_t fbe_gpu_stops(void);
 // Stops the GPU, if it's started, freeing everything it made, the window's swapchain first; the
-// window stays open, and the GPU can start again.
+// window stays open, and the GPU can start again, a failed start forgotten.
 FBE_API void fbe_gpu_stop(void);
 // Whether the GPU was lost, as a driver's crash or reset loses it: from then on nothing draws,
 // and nothing's asked of the driver: a draw, a clear, a copy, or a write into a texture does
@@ -93,8 +94,10 @@ FBE_API void fbe_gpu_stop(void);
 // that isn't one, fails as it would on a GPU that isn't lost.
 FBE_API bool fbe_gpu_lost(void);
 // Loses the GPU, as a driver's crash or reset does, for a game's tests of what it does then: it's
-// lost from the next thing asked of it. False, with fbe_error's why, unless the GPU's started.
-FBE_API bool fbe_gpu_simulate_loss(void);
+// lost from the next thing asked of it, and the next `starts_failing` starts fail as a device
+// that's still lost does (VkResult -4), each failure forgotten by fbe_gpu_stop as any is. False,
+// with fbe_error's why, unless the GPU's started, or for a count under 0.
+FBE_API bool fbe_gpu_simulate_loss(int32_t starts_failing);
 
 // How many bytes of the GPU's own memory (its device-local heaps) the program can use, as the
 // driver says where it can (VK_EXT_memory_budget) or else most of the heaps' size, and how many it
@@ -139,10 +142,10 @@ FBE_API float fbe_gpu_anisotropy(void);
 FBE_API float fbe_gpu_max_anisotropy(void);
 
 // The screen: the target, a texture, each frame's drawn into, RGBA8 with depth, which Flip shows
-// in the window, scaled, starting the GPU if nothing has; 0 without a window, or if the GPU can't
-// start. It's made again, a new texture, when its size or samples change, a new size of the
-// window's once the Flip after it has shown the frame drawn into the old one, and its pixels stay
-// from one Flip to the next.
+// in the window, scaled, starting the GPU if nothing has and no start's failed since the last
+// fbe_gpu_stop; 0 without a window, or if the GPU can't start. It's made again, a new texture,
+// when its size or samples change, a new size of the window's once the Flip after it has shown
+// the frame drawn into the old one, and its pixels stay from one Flip to the next.
 FBE_API uint64_t fbe_gpu_screen(void);
 // The screen's size in pixels, 0 by 0 for the window's in pixels, which it follows as of the last
 // fbe_frame_flip; false if it's not 1 to 16384 a side. A new size, or samples, makes the screen

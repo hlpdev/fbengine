@@ -43,7 +43,7 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_gpu_stops(): UInt64
     Function fbe_gpu_stop()
     Function fbe_gpu_lost(): Bool
-    Function fbe_gpu_simulate_loss(): Bool
+    Function fbe_gpu_simulate_loss(starts_failing: Int32): Bool
     Function fbe_gpu_memory_budget(): Int64
     Function fbe_gpu_memory_usage(): Int64
     Function fbe_gpu_presented(): Int64

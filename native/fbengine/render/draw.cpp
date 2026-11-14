@@ -1196,11 +1196,20 @@ FBE_API bool fbe_render_camera(uint64_t camera, float tween) try {
         return false;
     }
     // What it draws into is the call's own to get right, lost or not; a lost GPU then draws
-    // nothing, and nothing's made or sent for it.
+    // nothing, and nothing's made or sent for it, but what a shown camera draws into is still
+    // changed, as a 2D draw's target is, so its pixels on the CPU from before aren't what it has.
     if (!fbe::render::has_target(slot)) {
         return false;
     }
-    return fbe::gpu::lost() || fbe::render::draw_camera(slot, tween);
+    if (!fbe::gpu::lost()) {
+        return fbe::render::draw_camera(slot, tween);
+    }
+    if (shows) {
+        const fbe::scene::scene_t& s = fbe::scene::scene();
+        const std::uint64_t target = s.cameras[s.entities.component[slot]].target;
+        fbe::texture::changed_on_gpu(target != 0 ? target : fbe_gpu_screen());
+    }
+    return true;
 } catch (const std::bad_alloc&) {
     return fbe::fail("out of memory");
 }

@@ -76,7 +76,7 @@ TEST_CASE("the GPU starts on a device with what fbengine needs, with no window",
 // As a game's test loses the GPU, to see what it does then: lost from then on, nothing drawn and
 // nothing held past its stop, and made again by a stop and a start.
 TEST_CASE("a GPU lost for a test is lost until it's stopped and started", "[gpu][stability]") {
-    CHECK_FALSE(fbe_gpu_simulate_loss());
+    CHECK_FALSE(fbe_gpu_simulate_loss(0));
     CHECK(std::string_view(fbe_error()).contains("hasn't started"));
     REQUIRE(fbe_window_set_headless(true));
     fbe_gpu_set_pipeline_cache("");
@@ -84,14 +84,14 @@ TEST_CASE("a GPU lost for a test is lost until it's stopped and started", "[gpu]
     const std::uint64_t texture = fbe_texture_create(8, 8, FBE_TEXTURE_RGBA8, false);
     REQUIRE(texture != 0);
     CHECK_FALSE(fbe_gpu_lost());
-    CHECK(fbe_gpu_simulate_loss());
+    CHECK(fbe_gpu_simulate_loss(0));
     CHECK(fbe_gpu_lost());
     // What needs it fails, saying so, and a Flip shows nothing.
     CHECK(fbe_texture_create(8, 8, FBE_TEXTURE_RGBA8, false) == 0);
     CHECK(std::string_view(fbe_error()).contains("the GPU was lost"));
     fbe_frame_flip(false);
     CHECK(fbe_gpu_lost());
-    CHECK(fbe_gpu_simulate_loss());
+    CHECK(fbe_gpu_simulate_loss(0));
     stop_gpu();
     require(fbe_gpu_start());
     CHECK_FALSE(fbe_gpu_lost());

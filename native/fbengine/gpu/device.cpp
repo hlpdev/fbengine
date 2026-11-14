@@ -57,9 +57,11 @@ bool started = false;
 /// Whether a program's said there's to be no GPU, as a dedicated server does: then Vulkan's never
 /// loaded, and nothing starts it.
 bool disabled = false;
-/// Whether starting failed, which it then does every time, and why.
+/// Whether starting failed, which it then does every time until the GPU's stopped, and why.
 bool failed = false;
 std::string why_failed;
+/// How many of the next starts a test has fail, as a device that's still lost does.
+std::int32_t failing_starts = 0;
 /// VMA's allocations left when the GPU last stopped.
 std::uint32_t leftovers = 0;
 /// The failure a test made happen next.
@@ -557,7 +559,12 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
         .enabledExtensionCount = static_cast<std::uint32_t>(enabled.size()),
         .ppEnabledExtensionNames = enabled.data(),
     };
-    const VkResult made = vkCreateDevice(candidate.physical, &info, nullptr, &current.device);
+    VkResult made = VK_ERROR_DEVICE_LOST;
+    if (failing_starts > 0) {
+        --failing_starts;
+    } else {
+        made = vkCreateDevice(candidate.physical, &info, nullptr, &current.device);
+    }
     if (made != VK_SUCCESS) {
         current.device = VK_NULL_HANDLE;
         return fbe::gpu::fail_vulkan(
@@ -820,6 +827,8 @@ void stop() {
     }
     gpu_lost = false;
     no_driver = false;
+    failed = false;
+    why_failed.clear();
     candidates.clear();
     if (vulkan != VK_NULL_HANDLE) {
         if (messenger != VK_NULL_HANDLE) {
@@ -880,6 +889,10 @@ bool remake_frame(const device_t& gpu, frame_t& frame) {
 
 bool lost() {
     return gpu_lost;
+}
+
+bool start_failed() {
+    return failed;
 }
 
 bool validating_synchronization() {
@@ -1008,10 +1021,15 @@ FBE_API int32_t fbe_gpu_validation_errors(void) {
     return validation_errors;
 }
 
-FBE_API bool fbe_gpu_simulate_loss(void) {
+FBE_API bool fbe_gpu_simulate_loss(int32_t starts_failing) {
     if (fbe::gpu::device() == nullptr) {
         return fbe::fail("the GPU hasn't started");
     }
+    if (starts_failing < 0) {
+        return fbe::fail(
+            std::format("a count of starts to fail is 0 or more, not {}", starts_failing));
+    }
+    failing_starts = starts_failing;
     fbe::gpu::lose(VK_ERROR_DEVICE_LOST);
     return true;
 }
