@@ -200,3 +200,61 @@ Function WhatAPointerCancelledTakesOutIsntHovered() Throws GraphicsError
     Flip()
     ui.Update()
 End Function
+
+// A click, pressed and let go in one frame, whose own press takes its widget out: the release that
+// comes in the same frame doesn't let go of what's out, which is called off, once.
+@Test
+Function AClickWhosePressTakesItOutIsCalledOffNotLetGo() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(400, 300)
+    Defer EndGraphics()
+    For how In ["removed", "hidden", "disabled", "closed"]
+        For button In [MouseButton.LEFT, MouseButton.RIGHT, MouseButton.MIDDLE]
+            Local root = Node("root")
+            Local ui = Ui(root)
+            Local widget = GoesAsPressed()
+            Local popup = Node("popup")
+            If how == "closed"
+                popup.Add(widget)
+                ui.OpenPopup(popup)
+            Else
+                root.Add(widget)
+            End If
+            widget.Going = Function(pressed: GoesAsPressed)
+                Select how
+                    Case "removed"
+                        pressed.Parent()?.Remove(pressed)
+                    Case "hidden"
+                        pressed.SetVisible(False)
+                    Case "disabled"
+                        pressed.SetEnabled(False)
+                    Default
+                        ui.ClosePopup(popup)
+                End Select
+            End Function
+            ui.Update()
+            Local center = widget.Box().Center
+            Try Simulate.MoveMouse(center.x, center.y)
+            Flip()
+            ui.Update()
+            Try Simulate.MouseDown(button)
+            Try Simulate.MouseUp(button)
+            Flip()
+            ui.Update()
+            Local said = "{how}, clicked by {button}"
+            Expect(widget.Presses == 1, "{said}: pressed {widget.Presses} times")
+            Expect(ui.Pressed() == Null, "{said}: it's still held")
+            Expect(widget.Cancels == 1, "{said}: called off {widget.Cancels} times")
+            Expect(widget.Ups == 0, "{said}: let go {widget.Ups} times")
+            Expect(ui.PressedButton() == MouseButton.LEFT,
+                   "{said}: the button's {ui.PressedButton()}")
+            For frame = 1 To 2
+                Flip()
+                ui.Update()
+            End For
+            Expect(widget.Cancels == 1 && widget.Ups == 0,
+                   "{said}: then called off {widget.Cancels} times, let go {widget.Ups}")
+            widget.Going = Null
+        End For
+    End For
+End Function

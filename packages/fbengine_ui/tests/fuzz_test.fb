@@ -23,6 +23,8 @@ Import fbengine_ui
 Global fuzzState: Int64 = 1
 // How many times a button's own click has taken it, or what holds it, out of the tree.
 Global fuzzRemovals: Int = 0
+// How many times FuzzPath's pad held a way for long enough, by Frame.Delta, for it to repeat.
+Global fuzzRepeats: Int = 0
 
 // Park and Miller's, from a seed of 1 or more.
 Function FuzzNext(n: Int): Int
@@ -393,6 +395,10 @@ Function FuzzPath(seed: Int64, frames: Int, slowed: Int): UInt64[] Throws Graphi
     Try Simulate.MoveMouse(0.0, 0.0)
     Framed(ui)
     fuzzState = seed
+    fuzzRepeats = 0
+    // The seconds each way's been held down, by Frame.Delta, as the UI times its repeat.
+    Local heldFor: Float64[] = [0.0, 0.0, 0.0, 0.0]
+    Local down = [False, False, False, False]
     Local path: UInt64[] = []
     For frame = 1 To frames
         Select FuzzNext(10)
@@ -406,13 +412,23 @@ Function FuzzPath(seed: Int64, frames: Int, slowed: Int): UInt64[] Throws Graphi
                 Try Simulate.PressKey([Key.TAB, Key.UP, Key.DOWN, Key.RETURN][FuzzNext(4)])
             Case 4, 5
                 // Let go only now and then, so a way's held for a second or more.
-                pad.SetButton(ways[FuzzNext(ways.Count)], FuzzNext(8) != 0)
+                Local way = FuzzNext(ways.Count)
+                Local pressing = FuzzNext(8) != 0
+                pad.SetButton(ways[way], pressing)
+                If pressing && !down[way] Then heldFor[way] = 0.0
+                down[way] = pressing
             Case 6
                 pad.SetButton(GamepadButton.SOUTH, FuzzNext(2) == 0)
             Default
         End Select
         If slowed > 0 Then Sleep((slowed As Int64).Milliseconds)
         Framed(ui)
+        For way = 0 Until ways.Count
+            If !down[way] Then Continue
+            Local before = heldFor[way]
+            heldFor[way] += Frame.Delta()
+            If before < 0.4 && heldFor[way] >= 0.4 Then fuzzRepeats += 1
+        End For
         path.Add(FrameHash(ui))
     End For
     For way In ways
@@ -433,8 +449,13 @@ Function ASeedTakesTheSamePathHoweverLongItsFramesTake() Throws GraphicsError, I
     Defer Frame.SetFixedDelta(0)
     Local seed: Int64 = 20261114
     Local slow = Try FuzzPath(seed, 400, 5)
+    Local slowRepeats = fuzzRepeats
     Local fast = Try FuzzPath(seed, 400, 0)
     Expect(slow.Count == 400 && fast.Count == 400, "seed {seed}: {slow.Count} and {fast.Count}")
+    // Its path goes through the pad's repeat, timed by Delta, or it'd show nothing of it.
+    Expect(slowRepeats > 0 && fuzzRepeats > 0,
+           "seed {seed}: a way was held long enough to repeat {slowRepeats} and " +
+           "{fuzzRepeats} times")
     For frame = 0 To slow.Count - 1
         If slow[frame] != fast[frame]
             Fail("seed {seed}: frame {frame + 1} slowed isn't as it was unslowed")

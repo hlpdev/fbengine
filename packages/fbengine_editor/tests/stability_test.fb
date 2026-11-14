@@ -287,13 +287,35 @@ Function Damaged(bytes: UInt8[]): UInt8[]
     End Select
 End Function
 
-// `bytes` damaged as Damaged does, but only the rest of them where `spared` is in them, which is put
-// back where it was, as far as what's left reaches: so the same seed does the same damage wherever
-// `spared`, a path, is and however long it is on this OS.
-Function DamagedBut(bytes: UInt8[], spared: String): UInt8[]
+// `bytes` damaged as Damaged does, but only the rest of them where any of `spared` is in them, each
+// put back where it was, as far as what's left reaches: so the same seed does the same damage
+// wherever `spared`, paths, are and however long they are on this OS. Bytes with none of them fail
+// the test, as their damage would go with where that is.
+Function DamagedBut(bytes: UInt8[], spared: String[]): UInt8[]
     Local text = String.FromUtf8(bytes) ?? ""
-    If spared == "" || !text.Contains(spared) Then Return Damaged(bytes)
-    Local pieces = text.Split(spared)
+    // The text in pieces, and the path that ends each but the last.
+    Local pieces: String[] = []
+    Local between: String[] = []
+    Local left = text
+    While True
+        Local first: Int? = Null
+        Local found = ""
+        For path In spared
+            Local at = path != "" ? left.Find(path) : Null
+            If at != Null && (first == Null || at < (first ?? 0)) Then first = at
+            If at != Null && at == first Then found = path
+        End For
+        Local start = first
+        If start == Null Then Break
+        pieces.Add(left.Slice(0, start))
+        between.Add(found)
+        left = left.Slice(start + found.Length, left.Length)
+    End While
+    pieces.Add(left)
+    If between.Count == 0
+        Fail("none of {spared} is in what's damaged around it, so its damage goes with the OS")
+        Return Damaged(bytes)
+    End If
     Local rest = pieces.Join("").Bytes
     Local damaged = Damaged(rest)
     Local cut = damaged.Count < rest.Count
@@ -305,7 +327,7 @@ Function DamagedBut(bytes: UInt8[], spared: String): UInt8[]
             made.Add(damaged[j])
         End For
         at += count
-        If i < pieces.Count - 1 && (!cut || at < damaged.Count) Then made.AddAll(spared.Bytes)
+        If i < pieces.Count - 1 && (!cut || at < damaged.Count) Then made.AddAll(between[i].Bytes)
     End For
     Return made
 End Function
@@ -419,9 +441,9 @@ Function FilesDamagedAtRandomOpenOrAreRefusedByName() Throws IOError, GraphicsEr
         End If
     End For
     Expect(kept.Count >= 2, "{kept.Count} files were kept between runs")
-    // What's kept has the project's path in it, which isn't damaged, as it's another length on each
-    // OS; the rest is the same on each, and so is its damage.
-    Local spared = (Try good.Absolute()).Text
+    // What's kept has the projects' paths in it, which aren't damaged, as they're another length on
+    // each OS; the rest is the same on each, and so is its damage.
+    Local spared = [(Try good.Absolute()).Text, (Try bad.Absolute()).Text]
     Local noticed = 0
     For file In kept
         Local whole = Try File.ReadBytes(file)
@@ -825,4 +847,92 @@ Function TheEditorDrawsAgainOnceALostGpuIsMadeAgain() Throws IOError, GraphicsEr
     End For
     Expect(differing == 0, "{differing} pixels differ once the GPU's made again")
     Expect(editor.View.TextureFailures() == 0)
+End Function
+
+// Thumbnails loading as the GPU's lost, stopped, and started again let go of what they loaded,
+// whether it landed before the stop or after it, so the textures and the holds on assets, which
+// a Model keeps until it's freed, are as they were once the thumbnails are made again.
+@Test
+Function ThumbnailsLoadingAcrossAStopLetGoOfWhatTheyLoaded() Throws IOError, GraphicsError
+    If StableNoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local game = Try StableGame(games.Path, "across")
+    Local image = Image(16, 16)
+    For y = 0 Until 16
+        For x = 0 Until 16
+            image[x, y] = Color32(200, (x * 16) As UInt8, (y * 16) As UInt8, 255)
+        End For
+    End For
+    Try File.WriteBytes(game / "assets" / "wall.png", Png.Encode(image))
+    Try File.WriteText(game / "assets" / "ball.gltf", STABLE_TRIANGLE)
+    Local editor = Try StableStarted(settings.Path, game)
+    Defer editor.Finish()
+    editor.Docked.Activate("assets")
+    Local thumbs = ["res://wall.png", "res://ball.gltf"]
+    Thumbed(editor, thumbs)
+    Local textures = Texture.Count()
+    Local holds = Assets.Holds()
+    For round = 1 To 3
+        // Made again, so every thumbnail's asked for again, and its load's begun.
+        Gpu.Stop()
+        Try Gpu.Start()
+        editor.Step()
+        Expect(thumbs.Any(Function(path: String) => !editor.Files.ThumbDone(path)),
+               "round {round}: no thumbnail was loading")
+        Try Gpu.SimulateLoss()
+        Gpu.Stop()
+        Try Gpu.Start()
+        Thumbed(editor, thumbs)
+        For path In thumbs
+            Expect(ThumbDrawn(editor, path), "round {round}: {path} isn't drawn")
+        End For
+        Expect(Texture.Count() == textures,
+               "round {round}: {Texture.Count()} textures, not {textures}")
+        Expect(Assets.Holds() == holds, "round {round}: {Assets.Holds()} holds, not {holds}")
+    End For
+End Function
+
+// A GPU lost again each frame, as a driver that's failing loses it: the editor waits longer each
+// time before it makes it again, up to 8 seconds, timed by frames, so its starts and what it says
+// are few; and once the losses stop, it draws again, and a loss after it's stayed up a while is
+// made again at once.
+@Test
+Function AGpuLostEachFrameIsMadeAgainLessAndLessOften() Throws IOError, GraphicsError
+    If StableNoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try StableStarted(settings.Path, Try StableGame(games.Path, "failing"))
+    Defer editor.Finish()
+    Frame.SetFixedDelta(1.0 / 60.0)
+    Defer Frame.SetFixedDelta(0)
+    For frame = 1 To 4
+        editor.Step()
+    End For
+    Local stops = Gpu.Stops()
+    Local lines = editor.Run.Log.Own()
+    // Ten seconds: made again at once, then after 1, 2, and 4 seconds, and then not for 8.
+    For frame = 1 To 600
+        Try? Gpu.SimulateLoss()
+        editor.Step()
+    End For
+    Local starts = Gpu.Stops() - stops
+    Expect(starts >= 3 && starts <= 5, "the GPU was made again {starts} times in 600 frames")
+    Local said = editor.Run.Log.Own() - lines
+    Expect(said <= 8, "the Output pane said {said} lines")
+    For frame = 1 To 600
+        editor.Step()
+        If Gpu.Started() && !Gpu.Lost() Then Break
+    End For
+    Expect(Gpu.Started() && !Gpu.Lost(), "the editor left the GPU lost")
+    For frame = 1 To 120
+        editor.Step()
+    End For
+    Local made = Gpu.Stops()
+    Try Gpu.SimulateLoss()
+    editor.Step()
+    Expect(Gpu.Stops() == made + 1 && Gpu.Started() && !Gpu.Lost(),
+           "a loss after the GPU stayed up two seconds waited")
+    Local target = editor.View.Target()
+    Expect(target != Null && !target.Freed(), "the view has no texture to draw into")
 End Function

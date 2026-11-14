@@ -502,9 +502,9 @@ Public Final Class AssetBrowser Extends Widget
         held.Remove(key)
     End Method
 
-    // Frees `texture`, unless the GPU's stopping freed it already.
+    // Frees `texture`, whose hold on its asset a stop that freed it on the GPU leaves.
     Method LetGo(texture: Texture?)
-        If texture != Null && !texture.Freed() Then texture.Free()
+        texture?.Free()
     End Method
 
     // This frame's worth: what's loaded made thumbnails, and more begun. Nothing is while the GPU's
@@ -523,7 +523,10 @@ Public Final Class AssetBrowser Extends Widget
             If stops == gpuStops
                 Landed(key, texture, model, failure)
             Else
-                // What it loaded went with that GPU, and what failed may have failed for that.
+                // What it loaded went with that GPU, and what failed may have failed for that; a
+                // stop frees only what's on the GPU, so it's let go of all the same.
+                texture?.Free()
+                model?.Free()
                 Asked(key)
             End If
         End For
@@ -552,11 +555,9 @@ Public Final Class AssetBrowser Extends Widget
             failure = error.Message
         End Try
         If flight != flights
-            // What went with a GPU since is gone already.
-            If stops == Gpu.Stops()
-                texture?.Free()
-                model?.Free()
-            End If
+            // Freed even if it went with a GPU since, which freed only what's on the GPU.
+            texture?.Free()
+            model?.Free()
             Return
         End If
         loading -= 1
@@ -611,6 +612,9 @@ Public Final Class AssetBrowser Extends Widget
     // The GPU's been made again, and what the thumbnails were went with the one before: each one
     // asked for is let go of and made again.
     Method Remade()
+        For each In held.Values()
+            LetGo(each)
+        End For
         held.Clear()
         thumbs.Clear()
         Local keys: String[] = []
@@ -695,11 +699,9 @@ Public Final Class AssetBrowser Extends Widget
         pending.Clear()
         queue = []
         For each In landed
-            Local key, texture, model, failure, stops = each
-            If stops == Gpu.Stops()
-                texture?.Free()
-                model?.Free()
-            End If
+            Local _, texture, model, _, _ = each
+            texture?.Free()
+            model?.Free()
         End For
         landed = []
         loading = 0

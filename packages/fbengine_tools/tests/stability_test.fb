@@ -6,6 +6,7 @@
 
 Import std.collections
 Import std.core
+Import std.data
 Import std.image.image
 Import std.image.jpeg
 Import std.image.png
@@ -401,6 +402,18 @@ Function WrittenVersions(): String[][]
             ["[project]\nversion = \"del\\u007F\"\n", "del\x7F"]]
 End Function
 
+// The version a project.toml of `bytes` says of its [project], read here by std's TOML: "" for
+// none, and for bytes that aren't UTF-8 or aren't TOML.
+Function TomlVersion(bytes: UInt8[]): String
+    Local text = String.FromUtf8(bytes)
+    If text == Null Then Return ""
+    Try
+        Return (Try Toml.Read(text)).Path("project.version")?.AsString() ?? ""
+    Catch error As ParseError
+        Return ""
+    End Try
+End Function
+
 // The string literals a call in `code` is given, from its name to its closing parenthesis, each
 // as it's written between its quotes.
 Function LiteralsOf(code: String, call: String): String[]
@@ -486,8 +499,8 @@ End Function
 // one that isn't TOML, or isn't UTF-8, says no version, so each builds, its pak's stamped with the
 // version it says, or none when it says none, and its res.fb says that version to MountRelease as
 // a literal fb reads back to it, compiled by fb where there's one, else read back here; and no
-// pak's left half written where the executable goes. A broken one's version is what its pak's
-// stamped, which its res.fb says too.
+// pak's left half written where the executable goes. A broken one's version is what std's TOML
+// reads in it here.
 @Test
 Function AProjectsTomlBrokenAtRandomBuildsWithTheVersionItSays() Throws IOError
     Local game = Try TempDir()
@@ -507,11 +520,14 @@ Function AProjectsTomlBrokenAtRandomBuildsWithTheVersionItSays() Throws IOError
     Local out = StepOut(game.Path, "release")
     Local versions: String[] = []
     Local literals: String[] = []
+    // How many of the broken ones still say a version, so the stamp's checked against one.
+    Local versioned = 0
     For round = 1 To tomls.Count
         Local toml = game.Path / "project.toml"
         Try File.WriteBytes(toml, tomls[round - 1])
-        Local wanted: String? = round <= written.Count ? written[round - 1][1] : Null
-        Local where = "seed 777, round {round}, version \"{Escape(wanted ?? "as stamped")}\""
+        Local said = round <= written.Count ? written[round - 1][1] : TomlVersion(tomls[round - 1])
+        If round > written.Count && said != "" Then versioned += 1
+        Local where = "seed 777, round {round}, version \"{Escape(said)}\""
         Try
             Try GameBuild.Run("game", game.Path, out, "release")
         Catch e As IOError
@@ -525,7 +541,6 @@ Function AProjectsTomlBrokenAtRandomBuildsWithTheVersionItSays() Throws IOError
         Local stamp = "{place}/{GAME_VERSION_FILE}"
         Local stamped = Assets.Exists(stamp) ? Try Assets.ReadText(stamp) : ""
         Assets.Unmount(place)
-        Local said = wanted ?? stamped
         Expect(stamped == said, "{where}: its pak's stamped \"{Escape(stamped)}\"")
         For entry In Try Dir.Entries(game.Path / "build")
             Local name = entry.Path.FileName()
@@ -547,6 +562,7 @@ Function AProjectsTomlBrokenAtRandomBuildsWithTheVersionItSays() Throws IOError
         versions.Add(said)
         literals.Add(given[2])
     End For
+    Expect(versioned > 0 && versioned < 60, "seed 777: {versioned} of 60 broken ones say a version")
     // And fb, where there's one, compiles each to the version said.
     Local ran: ProcessOutput? = Null
     Try

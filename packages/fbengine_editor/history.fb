@@ -244,16 +244,15 @@ Public Final Class History
 
     /// How many edits it keeps, to undo and to redo: never more than the `most` it was made
     /// with, as the oldest goes once there'd be more, and what's undone goes with the next Commit.
-    /// A group that's open counts once it's ended. Public for the package's tests.
-    Public Method Count(): Int => done.Count + undone.Count
+    /// A group that's open counts once it's ended.
+    Package Method Count(): Int => done.Count + undone.Count
 
-    /// The most edits it keeps, as it was made with. Public for the package's tests.
-    Public Method Most(): Int => most
+    /// The most edits it keeps, as it was made with.
+    Package Method Most(): Int => most
 
     /// Whether the next Commit is offered to the last edit to merge: not with none, nor once an
-    /// undo, a redo, EndMerge, or MarkSaved has come since, nor in a group. Public for the
-    /// package's tests.
-    Public Method Merging(): Bool => depth == 0 && !sealed && done.Count > 0 && saved != done.Count
+    /// undo, a redo, EndMerge, or MarkSaved has come since, nor in a group.
+    Package Method Merging(): Bool => depth == 0 && !sealed && done.Count > 0 && saved != done.Count
 
     /// The name of the edit Undo would take back, or Null as CanUndo says.
     Public Method UndoName(): String? => CanUndo() ? done[done.Count - 1].Name : Null

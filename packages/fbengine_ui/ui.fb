@@ -852,10 +852,15 @@ Public Final Class Ui
             End While
             If pressed == Null Then pressedWith = MouseButton.LEFT
         End For
-        Local holding = pressed
-        If holding != Null && (MouseXSpeed() != 0.0 || MouseYSpeed() != 0.0)
-            holding.PointerDrag(point)
+        // What its own press took out is called off, and what its drag did, before a release:
+        // a widget that's out when its press ends is never let go of.
+        CalledOff()
+        Local dragging = pressed
+        If dragging != Null && (MouseXSpeed() != 0.0 || MouseYSpeed() != 0.0)
+            dragging.PointerDrag(point)
         End If
+        CalledOff()
+        Local holding = pressed
         If holding != Null && !MouseDown(pressedWith)
             pressed = Null
             holding.PointerUp(point, Within(under, holding))

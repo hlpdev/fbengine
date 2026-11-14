@@ -130,11 +130,11 @@ Public Final Class Dialog Extends Widget
         Add(buttons)
     End New
 
-    /// What it says, under its title. Public for the package's tests.
-    Public Method Said(): String => said.text
+    /// What it says, under its title.
+    Package Method Said(): String => said.text
 
     /// Its title.
-    Public Method Title(): String => heading.Text()
+    Package Method Title(): String => heading.Text()
 
     /// Adds `node` above the buttons.
     Public Method AddContent(node: Node)

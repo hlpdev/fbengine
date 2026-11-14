@@ -94,11 +94,13 @@ Public Final Class GameBuild
     End Method
 
     // The version the project.toml in `folder` says of its [project], read as TOML, or "" with
-    // none, or for a file that isn't TOML, whose build isn't refused for it.
+    // none, or for a file that isn't UTF-8 or isn't TOML, whose build isn't refused for it.
     Static Method VersionIn(folder: Path): String Throws IOError
         Local file = folder / "project.toml"
         If !File.Exists(file) Then Return ""
-        Local text = Try File.ReadText(file)
+        // Its bytes, as ReadText takes what isn't UTF-8 in place of what is.
+        Local text = String.FromUtf8(Try File.ReadBytes(file))
+        If text == Null Then Return ""
         Local toml = Value.Object()
         Try
             toml = Try Toml.Read(text)

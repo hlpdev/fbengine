@@ -25,6 +25,9 @@ Import "./session"
 Import "./tree"
 Import "./view"
 
+// The longest a GPU lost as soon as it's made waits before it's made again, in seconds.
+Const BACK_OFF_MOST: Float64 = 8.0
+
 /// fbengine's editor. Start opens its window; then each frame, Step, until Quitting, then Finish.
 /// Everything it does is a command in Actions, so a test runs them as its menus and keys do.
 Public Final Class Editor
@@ -70,10 +73,15 @@ Public Final Class Editor
     Field assetsHaveKeys: Bool = False
     Field retired: EditedScene[] = []
     // Whether a GPU that was lost is still to be made again; the seconds until it's tried again,
-    // once a Start's failed; and whether why it failed has been said.
+    // once a Start's failed or while it's backing off; and whether why it failed has been said.
     Field remaking: Bool = False
     Field remakeIn: Float64 = 0.0
     Field remakeSaid: Bool = False
+    // The seconds since it was last made again; how long it waited after the last loss that came
+    // soon after that, 0 for none; and whether its waiting's been said.
+    Field sinceMade: Float64 = BACK_OFF_MOST
+    Field backOff: Float64 = 0.0
+    Field backOffSaid: Bool = False
 
     /// An editor keeping what it keeps in `settings`, or the OS's folder for settings. It's an
     /// IOError if that can't be read.
@@ -144,7 +152,9 @@ Public Final Class Editor
 
     /// One frame: what the window's read, what it does, and its UI drawn. A GPU that was lost, as
     /// a driver's crash or reset loses it, is made again, which the Output pane says; one that
-    /// can't start is tried again each second, and why it couldn't is said once.
+    /// can't start is tried again each second, and why it couldn't is said once. One lost again
+    /// within a second of being made again waits before it's made again, a second, then twice as
+    /// long each time, up to 8, which is said once. Its seconds are Frame.Delta's.
     Public Method Step()
         Flip()
         Remade()
@@ -183,19 +193,35 @@ Public Final Class Editor
     /// Whether it's been asked to end.
     Public Method Quitting(): Bool => quitting
 
-    // A lost GPU stopped and started again, as a game's loop does, so what it shows is made again.
+    // A lost GPU stopped and started again, as a game's loop does, so what it shows is made again;
+    // after a wait, if it's lost as soon as it's made.
     Method Remade()
-        If Gpu.Lost()
-            Gpu.Stop()
+        sinceMade += Frame.Delta()
+        If Gpu.Lost() && !remaking
             remaking = True
-            remakeIn = 0.0
             remakeSaid = False
-            Run.Log.Note(
-                "The GPU was lost, as a driver's crash or reset loses it; it's made again.")
+            If sinceMade < 1.0
+                backOff = Min(Max(backOff * 2.0, 1.0), BACK_OFF_MOST)
+                remakeIn = backOff
+                If !backOffSaid
+                    backOffSaid = True
+                    Run.Log.Note("The GPU was lost again as soon as it was made again, so it " +
+                                 "waits before it's made again, longer each time, up to " +
+                                 "{BACK_OFF_MOST As Int} seconds.")
+                End If
+            Else
+                backOff = 0.0
+                backOffSaid = False
+                remakeIn = 0.0
+                Run.Log.Note(
+                    "The GPU was lost, as a driver's crash or reset loses it; it's made again.")
+            End If
         End If
         If !remaking Then Return
         remakeIn -= Frame.Delta()
         If remakeIn > 0.0 Then Return
+        // Stopped first, which also forgets a Start that failed, so this one tries again.
+        Gpu.Stop()
         Try
             Try Gpu.Start()
         Catch error As GraphicsError
@@ -208,6 +234,7 @@ Public Final Class Editor
             Return
         End Try
         remaking = False
+        sinceMade = 0.0
         Run.Log.Note("The GPU's made again.")
     End Method
 

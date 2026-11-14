@@ -82,13 +82,12 @@ Public Final Class OutputLog
     /// What it's kept, oldest first.
     Public Method Lines(): String[] => lines.Clone()
 
-    /// The most lines it keeps, the oldest let go of once there'd be more. Public for the
-    /// package's tests.
-    Public Method Most(): Int => most
+    /// The most lines it keeps, the oldest let go of once there'd be more.
+    Package Method Most(): Int => most
 
     /// How many of the lines it's kept are the editor's own, Say's and Note's, not a run's output,
     /// whose count can go with how far a run got.
-    Public Method Own(): Int
+    Package Method Own(): Int
         Local own = 0
         For kind In kinds
             If kind != 0 Then own += 1

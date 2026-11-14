@@ -40,7 +40,8 @@ End Struct
 
 /// What's kept between runs. A file that can't be read, or has been changed to nonsense, is as if
 /// it weren't there, and is left as it is, and TakeUnread says so, naming it, once; so is one
-/// whose project read it and Refused any of it, whole. One that can't be written is only not kept. A line of trusted.txt changed is a project asked about again.
+/// whose project read it and Refused any of it, whole. One that can't be written is only not
+/// kept. A line of trusted.txt changed is a project asked about again.
 Public Final Class Session
     // What's been said yes to, whether or not it could be kept.
     Field trusted: Set<String>

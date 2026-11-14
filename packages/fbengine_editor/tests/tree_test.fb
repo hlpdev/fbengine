@@ -711,8 +711,9 @@ Function ARowDraggedThatAnUndoReplacesIsntDropped() Throws IOError, GraphicsErro
     Try Letting(editor)
     Expect(all["d"].Parent() == all["a"], "the first drag didn't put d under a")
     // d's row, under a, dragged toward e; the undo puts d back, so its row's another.
-    Local held = editor.Tree.RowOf(all["d"])
     Try Dragging(editor, OnName(editor, all["d"]), OnName(editor, all["e"]))
+    Local held = editor.Tree.RowOf(all["d"])
+    Expect(held != Null && RefEquals(editor.Shown.Pressed(), held), "d's row isn't what's dragged")
     Expect(editor.Shown.Popups().Count == 1, "the drag shows no hint")
     Try Primary(Key.Z)
     editor.Step()
