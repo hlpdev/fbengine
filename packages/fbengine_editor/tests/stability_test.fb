@@ -920,13 +920,9 @@ Function ThumbnailsLoadingAcrossAStopLetGoOfWhatTheyLoaded() Throws IOError, Gra
     Expect(flying > 0, "no thumbnail was loading")
     editor.Files.SetFolder(Null)
     Expect(editor.Files.ThumbsHeld() == 0, "{editor.Files.ThumbsHeld()} thumbnails are held")
-    // Each load lands, and is let go of: by frames, as many as they take, and two for what waited
-    // on them to go on.
-    For frame = 1 To 2000
-        If Assets.Loads() == 0 Then Break
-        editor.Step()
-        Sleep(2.Milliseconds)
-    End For
+    // Each load lands, on the workers however long they take, and is let go of; then two frames
+    // for what waited on them to go on.
+    StableUntil(editor, Function(): Bool => Assets.Loads() == 0)
     Expect(Assets.Loads() == 0, "{Assets.Loads()} loads never landed")
     editor.Step()
     editor.Step()
