@@ -258,3 +258,45 @@ Function AClickWhosePressTakesItOutIsCalledOffNotLetGo() Throws GraphicsError
         End For
     End For
 End Function
+
+// A LEFT press that takes its widget out, and a RIGHT or MIDDLE press in the same frame: the left
+// one's widget is called off first, so the other press is taken, by what it's in.
+@Test
+Function APressAfterALeftPressTookItsWidgetOutIsTaken() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(400, 300)
+    Defer EndGraphics()
+    For button In [MouseButton.RIGHT, MouseButton.MIDDLE]
+        Local root = Node("root")
+        Local ui = Ui(root)
+        Local outer = GoesAsPressed()
+        Local inner = GoesAsPressed()
+        root.Add(outer)
+        outer.Add(inner)
+        // Disabled, so the other press goes on to what it's in.
+        inner.Going = Function(pressed: GoesAsPressed) => pressed.SetEnabled(False)
+        ui.Update()
+        Local center = inner.Box().Center
+        Try Simulate.MoveMouse(center.x, center.y)
+        Flip()
+        ui.Update()
+        Expect(ui.Hovered() == inner, "{button}: the pointer isn't over the inner widget")
+        Try Simulate.MouseDown(MouseButton.LEFT)
+        Try Simulate.MouseDown(button)
+        Flip()
+        ui.Update()
+        Local said = "a LEFT press and a {button} press"
+        Expect(inner.Presses == 1 && inner.Cancels == 1,
+               "{said}: the inner pressed {inner.Presses} times, called off {inner.Cancels}")
+        Expect(outer.Presses == 1, "{said}: the outer pressed {outer.Presses} times")
+        Expect(ui.Pressed() == outer, "{said}: the outer isn't held")
+        Expect(ui.PressedButton() == button, "{said}: the button's {ui.PressedButton()}")
+        Try Simulate.MouseUp(button)
+        Try Simulate.MouseUp(MouseButton.LEFT)
+        Flip()
+        ui.Update()
+        Expect(outer.Ups == 1 && outer.Cancels == 0,
+               "{said}: the outer let go {outer.Ups} times, called off {outer.Cancels}")
+        inner.Going = Null
+    End For
+End Function

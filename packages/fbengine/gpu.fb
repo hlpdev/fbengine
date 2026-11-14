@@ -157,10 +157,11 @@ Public Class Gpu
     /// Loses the GPU, as a driver's crash or reset does, for a game's tests of what it does then:
     /// Lost from then on, until Stop and Start make it again; and the next `startsFailing` Starts
     /// throw as a device that's still lost does, each forgotten by Stop as any failed Start is, for
-    /// a test of a game's retry. It throws GraphicsError unless the GPU's started, or for a count
-    /// under 0.
+    /// a test of a game's retry; Starts still to fail last, across Stops, until they've failed or
+    /// the program ends. It throws GraphicsError unless the GPU's started, or for a count under 0,
+    /// naming it.
     @MainThread Public Static Method SimulateLoss(startsFailing: Int = 0) Throws GraphicsError
-        If !fbe_gpu_simulate_loss(startsFailing As Int32) Then Throw GraphicsError(LastError())
+        If !fbe_gpu_simulate_loss(startsFailing) Then Throw GraphicsError(LastError())
     End Method
 
     /// How many bytes of the GPU's own memory the program can use, as the driver says where it

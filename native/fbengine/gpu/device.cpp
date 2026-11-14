@@ -60,7 +60,8 @@ bool disabled = false;
 /// Whether starting failed, which it then does every time until the GPU's stopped, and why.
 bool failed = false;
 std::string why_failed;
-/// How many of the next starts a test has fail, as a device that's still lost does.
+/// How many of the next starts a test has fail, as a device that's still lost does: kept across
+/// stops until they've failed, as a game's retry stops before each start.
 std::int32_t failing_starts = 0;
 /// VMA's allocations left when the GPU last stopped.
 std::uint32_t leftovers = 0;
@@ -833,6 +834,9 @@ void stop() {
     why_failed.clear();
     candidates.clear();
     if (vulkan != VK_NULL_HANDLE) {
+        // The window's surface goes with the instance that made it, a failed start's too; the
+        // next start makes another.
+        stop_window();
         if (messenger != VK_NULL_HANDLE) {
             vkDestroyDebugUtilsMessengerEXT(vulkan, messenger, nullptr);
             messenger = VK_NULL_HANDLE;
@@ -850,6 +854,10 @@ void stop() {
 
 std::uint32_t allocations_left() {
     return leftovers;
+}
+
+void forget_failing_starts() {
+    failing_starts = 0;
 }
 
 allocations_t allocations() {

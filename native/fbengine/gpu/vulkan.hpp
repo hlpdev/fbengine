@@ -126,6 +126,9 @@ void stop();
 /// How many of VMA's allocations were left when the GPU last stopped, which is 0 unless something
 /// wasn't freed.
 std::uint32_t allocations_left();
+/// For a test's end: forgets the starts fbe_gpu_simulate_loss has still to fail, which a stop
+/// keeps, as a game's retry stops before each start, so none fails in the tests after it.
+void forget_failing_starts();
 
 /// VMA's allocations now, and their bytes, as its statistics count them; none before the GPU
 /// starts.

@@ -905,6 +905,25 @@ TEST_CASE("a start that failed is tried again once the GPU's stopped, and the GP
     fbe_window_close();
 }
 
+// Starts a simulated loss has still to fail last across stops, as a game's retry stops before
+// each start, and a test's end forgets them, so none fails in a later test.
+TEST_CASE("a test's end forgets the starts a simulated loss has still to fail",
+          "[gpu][stability]") {
+    REQUIRE(fbe_window_set_headless(true));
+    require(fbe_gpu_start());
+    require(fbe_gpu_simulate_loss(3));
+    fbe_gpu_stop();
+    fbe_gpu_stop();
+    CHECK_FALSE(fbe_gpu_start());
+    CHECK(std::string_view(fbe_error()).ends_with("(VkResult -4)"));
+    // Two still to fail, which the test's end forgets.
+    stop_gpu();
+    INFO(fbe_error());
+    CHECK(fbe_gpu_start());
+    CHECK_FALSE(fbe_gpu_lost());
+    stop_gpu();
+}
+
 TEST_CASE("a camera's render while the GPU's lost leaves its target's pixels on the CPU older",
           "[gpu][stability]") {
     require(fbe_gpu_start());

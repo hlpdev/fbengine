@@ -49,9 +49,11 @@ inline std::filesystem::path scratch(const std::string& name) {
 }
 
 /// Stops the GPU, which has to free everything it made: the validation layers find no error
-/// (destroying a device with something of it left is one), and VMA has nothing left.
+/// (destroying a device with something of it left is one), and VMA has nothing left; and forgets
+/// the starts a simulated loss has still to fail, so none fails in a later test.
 inline void stop_gpu() {
     fbe_gpu_stop();
+    fbe::gpu::forget_failing_starts();
     CHECK(!fbe_gpu_started());
     CHECK(fbe_gpu_validation_errors() == 0);
     CHECK(fbe::gpu::allocations_left() == 0);

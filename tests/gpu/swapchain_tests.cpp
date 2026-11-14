@@ -15,6 +15,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using fbe::gpu::flag;
@@ -43,13 +44,18 @@ struct fake_t {
     std::uint64_t surfaces = 0;
     std::set<std::uint64_t> lost;
     std::uint64_t destroyed_surfaces = 0;
+    /// Which of the GPU's instances the test's on, counted from 0 as each is made: a new one's
+    /// handle can be the last one's.
+    std::uint64_t instance = 0;
+    /// The instance each surface was made on, which only that instance may use or destroy it.
+    std::map<std::uint64_t, std::uint64_t> made_on;
     std::map<std::uint64_t, chain_t> chains;
     std::uint64_t made_chains = 0;
     std::int64_t presented = 0;
     /// How many surfaces to come are lost as they're made.
     int lost_as_made = 0;
     /// What was asked of them that a driver would take as the caller's mistake: a swapchain of no
-    /// size, or one that isn't there.
+    /// size, one that isn't there, or a surface of another instance than the GPU's.
     int misused = 0;
 };
 
@@ -84,6 +90,7 @@ std::uint64_t value_of(Handle handle) {
 
 VkSurfaceKHR make_surface() {
     ++fake.surfaces;
+    fake.made_on[fake.surfaces] = fake.instance;
     if (fake.lost_as_made > 0) {
         --fake.lost_as_made;
         fake.lost.insert(fake.surfaces);
@@ -91,14 +98,31 @@ VkSurfaceKHR make_surface() {
     return handle_of<VkSurfaceKHR>(fake.surfaces);
 }
 
+/// Whether `surface` is one of the GPU's instance's, counting it misused if it isn't.
+bool of_the_instance(VkSurfaceKHR surface) {
+    const auto found = fake.made_on.find(value_of(surface));
+    if (found == fake.made_on.end() || found->second != fake.instance) {
+        ++fake.misused;
+        return false;
+    }
+    return true;
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL support(VkPhysicalDevice /*physical*/, std::uint32_t /*family*/,
-                                       VkSurfaceKHR /*surface*/, VkBool32* supported) {
+                                       VkSurfaceKHR surface, VkBool32* supported) {
+    if (!of_the_instance(surface)) {
+        return VK_ERROR_SURFACE_LOST_KHR;
+    }
     *supported = VK_TRUE;
     return VK_SUCCESS;
 }
 
+void stand_in();
+
 VKAPI_ATTR VkResult VKAPI_CALL capabilities(VkPhysicalDevice /*physical*/, VkSurfaceKHR surface,
                                             VkSurfaceCapabilitiesKHR* said) {
+    // Asked as each swapchain's made, after a start's loaded the driver's swapchain calls.
+    stand_in();
     if (fake.lost.contains(value_of(surface))) {
         return VK_ERROR_SURFACE_LOST_KHR;
     }
@@ -151,7 +175,7 @@ void destroy_chain(chain_t& chain) {
 VKAPI_ATTR VkResult VKAPI_CALL create(VkDevice /*device*/, const VkSwapchainCreateInfoKHR* info,
                                       const VkAllocationCallbacks* /*callbacks*/,
                                       VkSwapchainKHR* made) {
-    if (fake.lost.contains(value_of(info->surface))) {
+    if (fake.lost.contains(value_of(info->surface)) || !of_the_instance(info->surface)) {
         return VK_ERROR_SURFACE_LOST_KHR;
     }
     if (info->imageExtent.width == 0 || info->imageExtent.height == 0) {
@@ -291,9 +315,25 @@ VKAPI_ATTR VkResult VKAPI_CALL present(VkQueue /*queue*/, const VkPresentInfoKHR
 
 VKAPI_ATTR void VKAPI_CALL destroy_surface(VkInstance /*instance*/, VkSurfaceKHR surface,
                                            const VkAllocationCallbacks* /*callbacks*/) {
-    if (surface != VK_NULL_HANDLE) {
+    if (surface != VK_NULL_HANDLE && of_the_instance(surface)) {
         ++fake.destroyed_surfaces;
+        fake.made_on.erase(value_of(surface));
     }
+}
+
+/// The tests' surface and swapchain calls in the driver's place, again whenever an instance or a
+/// device is made, which loads the driver's.
+void stand_in() {
+    vkGetPhysicalDeviceSurfaceSupportKHR = support;
+    vkGetPhysicalDeviceSurfaceCapabilitiesKHR = capabilities;
+    vkGetPhysicalDeviceSurfaceFormatsKHR = formats;
+    vkGetPhysicalDeviceSurfacePresentModesKHR = modes;
+    vkCreateSwapchainKHR = create;
+    vkDestroySwapchainKHR = destroy;
+    vkGetSwapchainImagesKHR = images;
+    vkAcquireNextImageKHR = acquire;
+    vkQueuePresentKHR = present;
+    vkDestroySurfaceKHR = destroy_surface;
 }
 
 /// The GPU started with no window, the driver's surface and swapchain calls the tests', and a shown
@@ -319,16 +359,7 @@ struct shown_t {
             .present = vkQueuePresentKHR,
             .destroy_surface = vkDestroySurfaceKHR,
         };
-        vkGetPhysicalDeviceSurfaceSupportKHR = support;
-        vkGetPhysicalDeviceSurfaceCapabilitiesKHR = capabilities;
-        vkGetPhysicalDeviceSurfaceFormatsKHR = formats;
-        vkGetPhysicalDeviceSurfacePresentModesKHR = modes;
-        vkCreateSwapchainKHR = create;
-        vkDestroySwapchainKHR = destroy;
-        vkGetSwapchainImagesKHR = images;
-        vkAcquireNextImageKHR = acquire;
-        vkQueuePresentKHR = present;
-        vkDestroySurfaceKHR = destroy_surface;
+        stand_in();
         fbe::gpu::make_surfaces_by(make_surface);
         require(fbe_window_open(320, 200, FBE_WINDOW_WINDOWED));
     }
@@ -351,6 +382,7 @@ struct shown_t {
         vkQueuePresentKHR = real.present;
         vkDestroySurfaceKHR = real.destroy_surface;
         CHECK(fake.chains.empty());
+        CHECK(fake.made_on.empty());
         CHECK(fake.misused == 0);
     }
 };
@@ -512,6 +544,39 @@ TEST_CASE("a device the driver lost is stopped, started again, and draws", "[gpu
     fbe_frame_flip(true);
     CHECK(fake.presented == presented + 2);
     CHECK(fbe_texture_release(target));
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+// A game's retry of a lost GPU, with a shown window: a start that fails once its window's surface
+// is made leaves the surface on the instance it was made on, which the stop then destroys, so the
+// surface goes first, and the next start makes another on its own instance, and presents.
+TEST_CASE("a start that failed with a shown window leaves no surface past its instance",
+          "[gpu][stability]") {
+    const shown_t shown;
+    fbe_frame_flip(true);
+    REQUIRE(fake.presented == 1);
+    require(fbe_gpu_simulate_loss(1));
+    const auto stopped = [] {
+        fbe_gpu_stop();
+        // Made now, so the tests' calls stand in for the driver's that it loads.
+        REQUIRE(fbe::gpu::instance() != VK_NULL_HANDLE);
+        ++fake.instance;
+        stand_in();
+    };
+    stopped();
+    CHECK(fake.destroyed_surfaces == 1);
+    CHECK_FALSE(fbe_gpu_start());
+    CHECK(std::string_view(fbe_error()).ends_with("(VkResult -4)"));
+    CHECK(fake.surfaces == 2);
+    stopped();
+    CHECK(fake.destroyed_surfaces == 2);
+    require(fbe_gpu_start());
+    CHECK(fake.surfaces == 3);
+    const std::int64_t presented = fake.presented;
+    fbe_frame_flip(true);
+    fbe_frame_flip(true);
+    CHECK(fake.presented == presented + 2);
+    CHECK(fake.misused == 0);
     CHECK(fbe_gpu_validation_errors() == 0);
 }
 

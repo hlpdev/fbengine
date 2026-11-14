@@ -470,7 +470,7 @@ Public Final Class Ui
         // What this frame's input took out of the tree, disabled, or closed, as a popup's own
         // button does, is no longer pressed, then hovered or focused, so what a PointerCancelled
         // took out with it isn't either.
-        CalledOff()
+        CalledOff(point)
         Local over = hovered
         If over != Null && !InTheOpen(over) Then hovered = Null
         Local own = focused
@@ -811,7 +811,7 @@ Public Final Class Ui
     @MainThread Method Pointer(point: Vec2, under: Widget?)
         // A widget holding the pointer that the game disabled, hid, or took out of the tree since
         // the last Update is called off; PointerUp is only ever for a release.
-        CalledOff()
+        CalledOff(point)
         // One held by the right or the middle button keeps it through the others' presses.
         Local other = pressed != Null && pressedWith != MouseButton.LEFT
         If !other && MouseHit(MouseButton.LEFT) && !Dismissed()
@@ -834,6 +834,9 @@ Public Final Class Ui
                 Focus(focusing)
             End If
         End If
+        // What the left button's press took out is called off first, so the others' presses this
+        // frame are taken.
+        CalledOff(point)
         For button In [MouseButton.RIGHT, MouseButton.MIDDLE]
             If pressed != Null || !MouseHit(button) || Dismissed() Then Continue
             // As the left button's, but for the focus staying where it is unless a widget takes it.
@@ -854,12 +857,12 @@ Public Final Class Ui
         End For
         // What its own press took out is called off, and what its drag did, before a release:
         // a widget that's out when its press ends is never let go of.
-        CalledOff()
+        CalledOff(point)
         Local dragging = pressed
         If dragging != Null && (MouseXSpeed() != 0.0 || MouseYSpeed() != 0.0)
             dragging.PointerDrag(point)
         End If
-        CalledOff()
+        CalledOff(point)
         Local holding = pressed
         If holding != Null && !MouseDown(pressedWith)
             pressed = Null
@@ -870,12 +873,12 @@ Public Final Class Ui
 
     // What holds the pointer, disabled, hidden, or out of the tree, is told it's called off, once,
     // as a MODAL opening over it tells it, so what it began, as a drag, ends; and the next press is
-    // the left button's again.
-    @MainThread Method CalledOff()
+    // the left button's again; `point` is where the pointer is.
+    @MainThread Method CalledOff(point: Vec2)
         Local held = pressed
         If held == Null || held.EffectivelyEnabled() && InTheOpen(held) Then Return
         pressed = Null
-        held.PointerCancelled(lastPoint)
+        held.PointerCancelled(point)
         pressedWith = MouseButton.LEFT
     End Method
 

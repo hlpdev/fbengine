@@ -32,6 +32,18 @@ Function StableNoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
 // A game of std alone, quick to build, that says so and ends.
 Const PLAYED = "Import std.core\n\nPrint(\"it played\")\n"
 
+// A 16 by 16 KTX2 of UASTC, fbengine's tests' uastc.ktx2: compressed, so its thumbnail is the
+// texture loaded, which holds its asset until it's freed.
+Const STABLE_CHIP =
+    "q0tUWCAyMLsNChoKAAAAAAEAAAAQAAAAEAAAAAAAAAAAAAAAAQAAAAEAAAAAAAAAaAAAACwAAACUAAAAMAAAAAAA" +
+    "AAAAAAAAAAAAAAAAAADQAAAAAAAAAAABAAAAAAAAAAEAAAAAAAAsAAAAAAAAAAIAKACmAQIAAwMAABAAAAAAAAAA" +
+    "AAB/AAAAAAAAAAAA/////ysAAABLVFh3cml0ZXIAVW5pZGVudGlmaWVkIGFwcCAvIGxpYmt0eCB2NC40LjIAAAAA" +
+    "AAAAAAAAAAAAAIFT4wHQAR0AMIVTqIXaqP0BEQDiYDwOADzwNvA28DbwgVPLASwBHQAwhVOohdqn/YFCM+IRPA4A" +
+    "8JzwnPCc8JzBKmjB8w4GAGxmMzMAAP//wTQIYXEOBABMozSBE3Ca+MEpaMH3DwYAbGYzMwAA//+BJeBgBAIKAKZ4" +
+    "gWdwRvjOQVtzANC9EQAwdVOnhdqo/IEQKOBgfB8APPA28DbwNvBBW4sALL0RADB1U6eFyqj8gUIzIBJ8HwDwnPCc" +
+    "8JzwnMENsMHzIgEAAAD//8zMmZnBZQMg8DYAABaAm/iJ93jVwVWDwucfAQAAAP//zMyamcFeK6IyFgAAcFb4zte8" +
+    "xZs="
+
 // A glTF of one triangle facing up: (0,0,0), (0,0,1), (1,0,0).
 Const STABLE_TRIANGLE = "{{\"asset\":{{\"version\":\"2.0\"}},\"scene\":0,\"scenes\":[{{\"nodes\":[0]}}],\"nodes\":[{{\"name\":\"blade\",\"mesh\":0}}],\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":0}}}}]}}],\"accessors\":[{{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\",\"min\":[0,0,0],\"max\":[1,0,1]}}],\"bufferViews\":[{{\"buffer\":0,\"byteLength\":36}}],\"buffers\":[{{\"byteLength\":36,\"uri\":\"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAIA/AACAPwAAAAAAAAAA\"}}]}}"
 
@@ -850,8 +862,10 @@ Function TheEditorDrawsAgainOnceALostGpuIsMadeAgain() Throws IOError, GraphicsEr
 End Function
 
 // Thumbnails loading as the GPU's lost, stopped, and started again let go of what they loaded,
-// whether it landed before the stop or after it, so the textures and the holds on assets, which
-// a Model keeps until it's freed, are as they were once the thumbnails are made again.
+// whether it landed before the stop or after it, and what they were, so the textures and the holds
+// on assets, which a Model and a compressed image's thumbnail keep until they're freed, are as
+// they were once the thumbnails are made again; and a folder let go of while they load lets go of
+// what they load, which lands once it's gone, and one let go of with them made, of them.
 @Test
 Function ThumbnailsLoadingAcrossAStopLetGoOfWhatTheyLoaded() Throws IOError, GraphicsError
     If StableNoGpu() Then Skip("no GPU here")
@@ -866,13 +880,20 @@ Function ThumbnailsLoadingAcrossAStopLetGoOfWhatTheyLoaded() Throws IOError, Gra
     End For
     Try File.WriteBytes(game / "assets" / "wall.png", Png.Encode(image))
     Try File.WriteText(game / "assets" / "ball.gltf", STABLE_TRIANGLE)
+    Local chip = Base64.Decode(STABLE_CHIP)
+    Expect(chip != Null, "the KTX2 isn't base64")
+    Try File.WriteBytes(game / "assets" / "chip.ktx2", chip ?? [])
     Local editor = Try StableStarted(settings.Path, game)
     Defer editor.Finish()
     editor.Docked.Activate("assets")
-    Local thumbs = ["res://wall.png", "res://ball.gltf"]
+    Local unthumbed = Texture.Count()
+    Local unheld = Assets.Holds()
+    Local thumbs = ["res://wall.png", "res://ball.gltf", "res://chip.ktx2"]
     Thumbed(editor, thumbs)
     Local textures = Texture.Count()
     Local holds = Assets.Holds()
+    // The compressed one's is the texture loaded, holding its asset.
+    Expect(holds > unheld, "the thumbnails hold {holds} assets, as many as none did")
     For round = 1 To 3
         // Made again, so every thumbnail's asked for again, and its load's begun.
         Gpu.Stop()
@@ -891,6 +912,43 @@ Function ThumbnailsLoadingAcrossAStopLetGoOfWhatTheyLoaded() Throws IOError, Gra
                "round {round}: {Texture.Count()} textures, not {textures}")
         Expect(Assets.Holds() == holds, "round {round}: {Assets.Holds()} holds, not {holds}")
     End For
+    // Made again, so their loads are begun again, and the folder let go of before they land.
+    Gpu.Stop()
+    Try Gpu.Start()
+    editor.Step()
+    Local flying = editor.Files.ThumbsLoading()
+    Expect(flying > 0, "no thumbnail was loading")
+    editor.Files.SetFolder(Null)
+    Expect(editor.Files.ThumbsHeld() == 0, "{editor.Files.ThumbsHeld()} thumbnails are held")
+    // Each load lands, and is let go of: by frames, as many as they take, and two for what waited
+    // on them to go on.
+    For frame = 1 To 2000
+        If Assets.Loads() == 0 Then Break
+        editor.Step()
+        Sleep(2.Milliseconds)
+    End For
+    Expect(Assets.Loads() == 0, "{Assets.Loads()} loads never landed")
+    editor.Step()
+    editor.Step()
+    Expect(Assets.Holds() == unheld,
+           "{flying} loads outlived their folder: {Assets.Holds()} holds, not {unheld}")
+    Expect(Texture.Count() == unthumbed,
+           "{flying} loads outlived their folder: {Texture.Count()} textures, not {unthumbed}")
+    // Its thumbnails made again, and the folder let go of with them held.
+    editor.Files.SetFolder(game / "assets")
+    Thumbed(editor, thumbs)
+    Expect(editor.Files.ThumbsHeld() == thumbs.Count,
+           "{editor.Files.ThumbsHeld()} thumbnails are held, not {thumbs.Count}")
+    Expect(Assets.Holds() == holds, "made again: {Assets.Holds()} holds, not {holds}")
+    editor.Files.SetFolder(Null)
+    Expect(Assets.Holds() == unheld, "let go of: {Assets.Holds()} holds, not {unheld}")
+    Expect(Texture.Count() == unthumbed,
+           "let go of: {Texture.Count()} textures, not {unthumbed}")
+End Function
+
+// How many of the lines the Run pane has said contain `text`.
+Function SaidLines(editor: Editor, text: String): Int
+    Return editor.Run.Log.Lines().Filter(Function(line: String) => line.Contains(text)).Count
 End Function
 
 // A GPU lost again each frame, as a driver that's failing loses it: the editor waits longer each
@@ -916,10 +974,17 @@ Function AGpuLostEachFrameIsMadeAgainLessAndLessOften() Throws IOError, Graphics
         Try? Gpu.SimulateLoss()
         editor.Step()
     End For
-    Local starts = Gpu.Stops() - stops
+    Local starts = (Gpu.Stops() - stops) As Int
     Expect(starts >= 3 && starts <= 5, "the GPU was made again {starts} times in 600 frames")
+    // That it was lost, once; that it waits, once for the back-off; and each time it's made again.
+    Local lost = SaidLines(editor, "The GPU was lost, as a driver's crash")
+    Expect(lost == 1, "the Output pane said the GPU was lost {lost} times")
+    Local waits = SaidLines(editor, "so it waits before it's made again")
+    Expect(waits == 1, "the Output pane said the GPU waits {waits} times")
+    Local made = SaidLines(editor, "The GPU's made again.")
+    Expect(made == starts, "the Output pane said the GPU's made again {made} times, not {starts}")
     Local said = editor.Run.Log.Own() - lines
-    Expect(said <= 8, "the Output pane said {said} lines")
+    Expect(said == starts + 2, "the Output pane said {said} lines, not {starts + 2}")
     For frame = 1 To 600
         editor.Step()
         If Gpu.Started() && !Gpu.Lost() Then Break
@@ -928,10 +993,10 @@ Function AGpuLostEachFrameIsMadeAgainLessAndLessOften() Throws IOError, Graphics
     For frame = 1 To 120
         editor.Step()
     End For
-    Local made = Gpu.Stops()
+    Local remade = Gpu.Stops()
     Try Gpu.SimulateLoss()
     editor.Step()
-    Expect(Gpu.Stops() == made + 1 && Gpu.Started() && !Gpu.Lost(),
+    Expect(Gpu.Stops() == remade + 1 && Gpu.Started() && !Gpu.Lost(),
            "a loss after the GPU stayed up two seconds waited")
     Local target = editor.View.Target()
     Expect(target != Null && !target.Freed(), "the view has no texture to draw into")

@@ -171,6 +171,20 @@ Function AStoppedGpuStartsAgainAndPresents() Throws GraphicsError
 End Function
 
 @Test
+Function AGpuLossRefusesACountOfStartsUnder0ByName() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Gpu.Start()
+    Defer Gpu.Stop()
+    // Under 0, the least Int too; Int is Int32, so a count past it doesn't compile.
+    For count In [-1, -2147483648]
+        Local said = ExpectThrows<GraphicsError>(Gpu.SimulateLoss(count))?.Message ?? "nothing"
+        Expect(said.Contains("not {count}"), "a loss with {count} starts to fail said: {said}")
+        Expect(!Gpu.Lost(), "a loss with {count} starts to fail lost the GPU")
+    End For
+End Function
+
+@Test
 Function ThePipelineCacheIsTheUsersByDefaultAndCanBeNone()
     Local path = Gpu.PipelineCache()
     Defer Gpu.SetPipelineCache(path)

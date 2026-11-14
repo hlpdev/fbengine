@@ -95,8 +95,9 @@ FBE_API void fbe_gpu_stop(void);
 FBE_API bool fbe_gpu_lost(void);
 // Loses the GPU, as a driver's crash or reset does, for a game's tests of what it does then: it's
 // lost from the next thing asked of it, and the next `starts_failing` starts fail as a device
-// that's still lost does (VkResult -4), each failure forgotten by fbe_gpu_stop as any is. False,
-// with fbe_error's why, unless the GPU's started, or for a count under 0.
+// that's still lost does (VkResult -4), each failure forgotten by fbe_gpu_stop as any is; starts
+// still to fail last, across stops, until they've failed or the program ends. False, with
+// fbe_error's why, unless the GPU's started, or for a count under 0.
 FBE_API bool fbe_gpu_simulate_loss(int32_t starts_failing);
 
 // How many bytes of the GPU's own memory (its device-local heaps) the program can use, as the
