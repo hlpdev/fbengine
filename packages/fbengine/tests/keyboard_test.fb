@@ -313,6 +313,9 @@ Function WithoutAWindowTextInputIsOff()
     // Stopping it is nothing.
     StopTextInput()
     Expect(!TextInputActive())
+    // And where it'd be is nothing, set again once there's a window, as a Ui does each frame.
+    SetTextInputArea(10, 20, 200, 16, 4)
+    Expect(!TextInputActive())
 End Function
 
 // Keys and text in one list, as the OS gave them.

@@ -81,7 +81,7 @@ Public Final Class Session
 
     /// Says what Kept gave for the project at `path` was nonsense to what read it, as `why`, for
     /// TakeUnread to say.
-    Public Method Refused(path: String, why: String)
+    Package Method Refused(path: String, why: String)
         Unread(FileFor(path), why)
     End Method
 

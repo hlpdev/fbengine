@@ -480,6 +480,38 @@ Function WhatsRecentHasOneOfEachAndNothingEmpty() Throws IOError
 End Function
 
 @Test
+Function ALayoutKeptThatIsntOneIsAtFirstAndSaysSo() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local game = Try Game(games.Path, "laid")
+    Local folder = (Try game.Absolute()).Text
+    Local first = Try Started(settings.Path, game)
+    first.DefaultLayout()
+    Local layout = "{first.Docked.Saved()}"
+    first.Finish()
+    Local layouts = [("a String", Value("panes")), ("a number", Value(5)),
+                     ("a list", Value.Array()), ("nothing", Value.Object())]
+    For each In layouts
+        Local named, kept = each
+        Local session = Try Session(settings.Path)
+        Local saved = Value.Object()
+        saved["layout"] = kept
+        session.Keep(folder, saved)
+        Local editor = Try Started(settings.Path, game)
+        editor.Step()
+        Local said = editor.Run.Log.Lines().Join("\n")
+        Expect("{editor.Docked.Saved()}" == layout,
+               "{named}: it's {editor.Docked.Saved()}, not {layout}")
+        // An empty one's what's kept with nothing shown, which isn't wrong.
+        Local wrong = named != "nothing"
+        Expect(said.Contains("its panes' layout isn't one") == wrong,
+               "{named}: {wrong ? "no notice" : "a notice"}: {said}")
+        editor.Finish()
+    End For
+End Function
+
+@Test
 Function WhatsKeptOfAnotherProjectWithTheSameHashIsntThisOnes() Throws IOError
     Local settings = Try TempDir()
     Local session = Try Session(settings.Path)

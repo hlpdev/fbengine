@@ -96,6 +96,7 @@ End Class
 /// It keeps in the window, however long what it says is: its text is wrapped, and scrolls if it's
 /// still too tall. Escape closes it, Update, each frame after the Ui's, seeing to that.
 Public Final Class Dialog Extends Widget
+    Field heading: Label
     Field said: WrappedText
     Field scroller: ScrollView
     Field body: Node
@@ -108,6 +109,7 @@ Public Final Class Dialog Extends Widget
     /// A dialog titled `title`, saying `text`. `cancelled`, if it's given, is what Escape does.
     Public New(title: String, text: String, onCancel: (Func())? = Null)
         cancelled = onCancel
+        heading = Label(title)
         said = WrappedText(text)
         scroller = ScrollView("dialog.said")
         body = Node("dialog.body")
@@ -115,7 +117,6 @@ Public Final Class Dialog Extends Widget
         Super.New("dialog", "dialog")
         SetAnchors(Anchors.Point(0.5, 0.5))
         SetGap(10.0)
-        Local heading = Label(title)
         heading.SetStyleName("dialog.title")
         heading.SetTranslates(False)
         Add(heading)
@@ -129,8 +130,11 @@ Public Final Class Dialog Extends Widget
         Add(buttons)
     End New
 
-    /// What it says, under its title.
+    /// What it says, under its title. Public for the package's tests.
     Public Method Said(): String => said.text
+
+    /// Its title.
+    Public Method Title(): String => heading.Text()
 
     /// Adds `node` above the buttons.
     Public Method AddContent(node: Node)

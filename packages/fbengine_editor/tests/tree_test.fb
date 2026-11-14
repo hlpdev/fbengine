@@ -698,6 +698,40 @@ Function ARebuildWhileDraggingEndsItsHint() Throws IOError, GraphicsError
 End Function
 
 @Test
+Function ARowDraggedThatAnUndoReplacesIsntDropped() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    editor.Edited.SelectOnly(all["d"])
+    editor.Step()
+    editor.Step()
+    Try Dragging(editor, OnName(editor, all["d"]), OnName(editor, all["a"]))
+    Try Letting(editor)
+    Expect(all["d"].Parent() == all["a"], "the first drag didn't put d under a")
+    // d's row, under a, dragged toward e; the undo puts d back, so its row's another.
+    Local held = editor.Tree.RowOf(all["d"])
+    Try Dragging(editor, OnName(editor, all["d"]), OnName(editor, all["e"]))
+    Expect(editor.Shown.Popups().Count == 1, "the drag shows no hint")
+    Try Primary(Key.Z)
+    editor.Step()
+    editor.Step()
+    Local now = editor.Tree.RowOf(all["d"])
+    Expect(held != Null && now != Null && !RefEquals(now, held), "d's row is the one dragged")
+    Expect(all["d"].Parent() == Null,
+           "the dragged row, replaced, put d under {all["d"].Parent()?.Name() ?? "nothing"}")
+    Expect(editor.Shown.Popups().Count == 0, "the hint outlived the row")
+    // Let go of, nothing's moved, and the undo's redone as it was.
+    Try Letting(editor)
+    Expect(all["d"].Parent() == Null,
+           "letting go put d under {all["d"].Parent()?.Name() ?? "nothing"}")
+    Expect(editor.Edits.Redo(), "the undo's redo was dropped by a commit")
+    Expect(all["d"].Parent() == all["a"], "the redo didn't put d back under a")
+    editor.Finish()
+End Function
+
+@Test
 Function OnlyWhatsInTheSceneRenames() Throws IOError, GraphicsError
     If NoGpu() Then Skip("no GPU here")
     Local settings = Try TempDir()

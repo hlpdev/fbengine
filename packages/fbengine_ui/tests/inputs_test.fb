@@ -125,6 +125,44 @@ Function AFieldTakesTypingWhileItHasTheFocus() Throws GraphicsError
 End Function
 
 @Test
+Function AFocusedFieldGoesOnWithNoWindowAndTypesAgainInTheNext() Throws GraphicsError
+    Local name = TextField("Ada", "Your name")
+    Local ui = Try Holding(name)
+    Defer EndGraphics()
+    ui.Focus(name)
+    Frame(ui)
+    Expect(TextInputActive())
+    // Minimized, the field's text input goes on, and its area follows it.
+    Try Simulate.MinimizeWindow()
+    For frame = 1 To 3
+        Frame(ui)
+        ui.Draw()
+    End For
+    Try Simulate.RestoreWindow()
+    Frame(ui)
+    Expect(TextInputActive())
+    Expect(TextInputArea().Width > 0, "a restored window's text area is {TextInputArea().Width}")
+    // Closed, frames go on with nothing to type in, and the field keeps the focus.
+    EndGraphics()
+    For frame = 1 To 3
+        Frame(ui)
+        ui.Draw()
+    End For
+    Expect(!TextInputActive())
+    Expect(ui.Focused() == name)
+    // Opened again, it's typed in, at the field.
+    Try Graphics(400, 300)
+    Frame(ui)
+    Expect(TextInputActive(), "a window opened again has no text input for the focused field")
+    Local area = TextInputArea()
+    Local box = name.Box()
+    Expect(area.X == box.X As Int32 && area.Width == box.Width As Int32,
+           "the text's area is at {area.X}, {area.Width} wide, not {box.X}, {box.Width}")
+    Try Typed(ui, "!")
+    Expect(name.Text() == "Ada!", name.Text())
+End Function
+
+@Test
 Function AFieldsKeysEditIt() Throws GraphicsError
     Local field = TextField("hello world")
     Local ui = Try Holding(field)

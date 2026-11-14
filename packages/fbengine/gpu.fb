@@ -126,7 +126,16 @@ Public Class Gpu
     /// draw into the texture, throws or panics, saying the GPU was lost. A setting, as SetLodBias,
     /// is kept, in force once the GPU's made again, and a call's own mistake panics as it would on
     /// a GPU that isn't lost. Nothing made on it before is left, so a game makes its textures
-    /// again.
+    /// again. Nothing makes it again but the game: its loop does, each frame before it draws, as
+    /// the editor's does, trying again later if Start throws:
+    ///
+    /// ```vb
+    /// Flip()
+    /// If Gpu.Lost()
+    ///     Gpu.Stop()
+    ///     Try? Gpu.Start()
+    /// End If
+    /// ```
     @MainThread Public Static Method Lost(): Bool => fbe_gpu_lost()
 
     /// Loses the GPU, as a driver's crash or reset does, for a game's tests of what it does then:

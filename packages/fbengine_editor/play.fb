@@ -61,9 +61,12 @@ End Class
 
 /// What a run says, as lines: bytes as they come, each stream's split at each line's end, a newline, a
 /// return, or both, and what's too long for a line cut, what isn't UTF-8 shown as it can be, and only
-/// the last so many kept.
+/// the last so many kept; and the editor's own lines, about the run, and its notices, which a run's
+/// start doesn't clear.
 Public Final Class OutputLog
     Field lines: String[] = []
+    // Each line's: 0 a run's output, 1 the editor's about the run, 2 its notice.
+    Field kinds: Int[] = []
     Field streams: Unfinished[]
     Field dropped: Int = 0
     Field added: Int = 0
@@ -79,10 +82,22 @@ Public Final Class OutputLog
     /// What it's kept, oldest first.
     Public Method Lines(): String[] => lines.Clone()
 
-    /// The most lines it keeps, the oldest let go of once there'd be more.
+    /// The most lines it keeps, the oldest let go of once there'd be more. Public for the
+    /// package's tests.
     Public Method Most(): Int => most
 
-    /// How many lines there have been, those it's let go of among them.
+    /// How many of the lines it's kept are the editor's own, Say's and Note's, not a run's output,
+    /// whose count can go with how far a run got.
+    Public Method Own(): Int
+        Local own = 0
+        For kind In kinds
+            If kind != 0 Then own += 1
+        End For
+        Return own
+    End Method
+
+    /// How many lines there have been since it was last cleared, those it's let go of and the
+    /// notices Clear kept among them.
     Public Method Total(): Int => added
 
     /// How many times it's been emptied.
@@ -113,10 +128,17 @@ Public Final Class OutputLog
         End For
     End Method
 
-    /// Adds `line`, as a line of its own, after what's unfinished.
+    /// Adds `line`, the editor's about the run, as a line of its own, after what's unfinished.
     Public Method Say(line: String)
         Flush()
-        Added(line)
+        Added(line, 1)
+    End Method
+
+    /// Adds `line`, a notice of the editor's that isn't about a run, as one of its own, after
+    /// what's unfinished, which Clear keeps.
+    Public Method Note(line: String)
+        Flush()
+        Added(line, 2)
     End Method
 
     /// Ends what hasn't ended its line, as a stream that's closed has.
@@ -127,20 +149,28 @@ Public Final Class OutputLog
         End For
     End Method
 
-    /// Empties it.
+    /// Empties it of all but its notices, as a run's start does.
     Public Method Clear()
-        lines.Clear()
+        Local kept: String[] = []
+        Local keptKinds: Int[] = []
+        For i = 0 Until lines.Count
+            If kinds[i] != 2 Then Continue
+            kept.Add(lines[i])
+            keptKinds.Add(2)
+        End For
+        lines = kept
+        kinds = keptKinds
         For of In streams
             of.Bytes.Clear()
             of.AfterReturn = False
         End For
         dropped = 0
-        added = 0
+        added = lines.Count
         cleared += 1
     End Method
 
     Method Finish(of: Unfinished)
-        Added(Shown(of.Bytes))
+        Added(Shown(of.Bytes), 0)
         of.Bytes.Clear()
     End Method
 
@@ -168,11 +198,13 @@ Public Final Class OutputLog
         of.Bytes = rest
     End Method
 
-    Method Added(line: String)
+    Method Added(line: String, kind: Int)
         lines.Add(line)
+        kinds.Add(kind)
         added += 1
         If lines.Count > most
             lines.RemoveAt(0)
+            kinds.RemoveAt(0)
             dropped += 1
         End If
     End Method

@@ -69,6 +69,11 @@ Public Final Class Editor
     Field sceneText: String? = Null
     Field assetsHaveKeys: Bool = False
     Field retired: EditedScene[] = []
+    // Whether a GPU that was lost is still to be made again; the seconds until it's tried again,
+    // once a Start's failed; and whether why it failed has been said.
+    Field remaking: Bool = False
+    Field remakeIn: Float64 = 0.0
+    Field remakeSaid: Bool = False
 
     /// An editor keeping what it keeps in `settings`, or the OS's folder for settings. It's an
     /// IOError if that can't be read.
@@ -137,9 +142,12 @@ Public Final Class Editor
         If folder != Null Then OpenFolder(folder)
     End Method
 
-    /// One frame: what the window's read, what it does, and its UI drawn.
+    /// One frame: what the window's read, what it does, and its UI drawn. A GPU that was lost, as
+    /// a driver's crash or reset loses it, is made again, which the Output pane says; one that
+    /// can't start is tried again each second, and why it couldn't is said once.
     Public Method Step()
         Flip()
+        Remade()
         Tree.Update()
         Retired()
         Files.Update()
@@ -149,7 +157,7 @@ Public Final Class Editor
         // What's kept between runs that's nonsense is as if it weren't there, and said where it
         // won't take the place of what a dialog's asking.
         For unread In Kept.TakeUnread()
-            Run.Log.Say("What was kept couldn't be read, so it's as it is at first: {unread}")
+            Run.Log.Note("What was kept couldn't be read, so it's as it is at first: {unread}")
         End For
         Inspector.Update()
         Run.Update()
@@ -174,6 +182,34 @@ Public Final Class Editor
 
     /// Whether it's been asked to end.
     Public Method Quitting(): Bool => quitting
+
+    // A lost GPU stopped and started again, as a game's loop does, so what it shows is made again.
+    Method Remade()
+        If Gpu.Lost()
+            Gpu.Stop()
+            remaking = True
+            remakeIn = 0.0
+            remakeSaid = False
+            Run.Log.Note(
+                "The GPU was lost, as a driver's crash or reset loses it; it's made again.")
+        End If
+        If !remaking Then Return
+        remakeIn -= Frame.Delta()
+        If remakeIn > 0.0 Then Return
+        Try
+            Try Gpu.Start()
+        Catch error As GraphicsError
+            remakeIn = 1.0
+            If !remakeSaid
+                remakeSaid = True
+                Run.Log.Note("The GPU couldn't be made again, so it's tried each second: " +
+                             error.Message)
+            End If
+            Return
+        End Try
+        remaking = False
+        Run.Log.Note("The GPU's made again.")
+    End Method
 
     /// Keeps what's kept, closes the project, and its window.
     Public Method Finish()
@@ -218,8 +254,9 @@ Public Final Class Editor
         If saved != Null Then layout = saved["layout"] ?? layout
         If saved == Null || !Docked.Restore(layout)
             DefaultLayout()
-            // With nothing shown it's kept empty, which isn't what's wrong.
-            If saved != Null && layout.Count > 0
+            // With nothing shown it's kept an empty Object, which isn't what's wrong; a String, a
+            // number, or a list is.
+            If saved != Null && (layout.Kind != ValueKind.OBJECT || layout.Count > 0)
                 Kept.Refused(opened.Folder.Text, "its panes' layout isn't one")
             End If
         End If
@@ -265,7 +302,7 @@ Public Final Class Editor
         If ShowingDialog() == Null
             Said("Couldn't keep that", says)
         Else
-            Run.Log.Say(says)
+            Run.Log.Note(says)
         End If
     End Method
 

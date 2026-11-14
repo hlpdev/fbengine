@@ -374,19 +374,31 @@ Function EachFileACookReadsBrokenAtRandomIsRefusedByNameOrCooked() Throws IOErro
     Try Cooker.CookFolder(source.Path, built.Path / "game.pak")
 End Function
 
-// The version a project.toml's text says, as a release build reads it: what's between the first
-// two quotes of a line of [project] that starts with "version", or "" with none.
-Function SaidVersion(text: String): String
-    Local section = ""
-    For line In text.Split("\n")
-        Local clean = line.Trim()
-        If clean.StartsWith("[") Then section = clean
-        If section == "[project]" && clean.StartsWith("version")
-            Local parts = clean.Split("\"")
-            If parts.Count >= 2 Then Return parts[1]
-        End If
-    End For
-    Return ""
+// project.toml's written out, each with the version a release reads from it: its [project]'s, as
+// TOML has it, or "" for none, and for what isn't TOML; among them versions holding what a String
+// escapes, written as TOML escapes them.
+Function WrittenVersions(): String[][]
+    Return [["[project]\nname = \"game\"\nversion = \"1.2.3\"\n", "1.2.3"],
+            ["[project]\nname = \"game\"\nversion = \"\"\n", ""],
+            ["[project]\nname = \"game\"\nversion = '1.2.3'\n", "1.2.3"],
+            ["[project]\nname = \"game\"\nversionNote = \"x\"\nversion = \"2.0.0\"\n", "2.0.0"],
+            ["[project] # c\nname = \"game\"\nversion = \"3.1.4\"\n", "3.1.4"],
+            ["[project]\nversion = \"1.2.3\" # c\n", "1.2.3"],
+            ["[project]\nversion = \"\"\"1.0.0\"\"\"\n", "1.0.0"],
+            ["project.version = \"4.5.6\"\n", "4.5.6"],
+            ["[other]\nversion = \"9\"\n[project]\nname = \"game\"\n", ""],
+            ["[project]\nname = \"game\"\n[project.more]\nversion = \"9\"\n", ""],
+            ["[project]\nversion = 1\n", ""],
+            ["[project\nversion = \"1\"\n", ""],
+            ["[project]\nversion = \"1.2\\r3\"\n", "1.2\r3"],
+            ["[project]\nversion = \"tab\\there\"\n", "tab\there"],
+            ["[project]\nversion = \"bell\\u0007\"\n", "bell\x07"],
+            ["[project]\nversion = \"{{braces}}\"\n", "{{braces}}"],
+            ["[project]\nversion = \"back\\\\slash\"\n", "back\\slash"],
+            ["[project]\nversion = \"nel\\u0085\"\n", "nel\u{85}"],
+            ["[project]\nversion = \"\u{E9}t\u{E9}\"\n", "\u{E9}t\u{E9}"],
+            ["[project]\nversion = \"quote'\"\n", "quote'"],
+            ["[project]\nversion = \"del\\u007F\"\n", "del\x7F"]]
 End Function
 
 // The string literals a call in `code` is given, from its name to its closing parenthesis, each
@@ -469,12 +481,13 @@ Function CompiledBy(literals: String[]): ProcessOutput Throws IOError
     Return Try Command("fb").Args(["--color", "never", "run", probe.Path.Text]).Output()
 End Function
 
-// A game's project.toml, which a release reads its version from, chosen to hold what a String
-// escapes, then broken the same ways at random. Nothing in one refuses a build: one that isn't
-// TOML, or isn't UTF-8, is read for its version all the same, so each builds, its pak's stamped
-// with the version it says, or none when it says none, and its res.fb says that version to
-// MountRelease as a literal fb reads back to it, compiled by fb where there's one, else read back
-// here; and no pak's left half written where the executable goes.
+// A game's project.toml, which a release reads its version from as TOML: written out in the ways
+// TOML has, each with the version it says, then broken at random. Nothing in one refuses a build:
+// one that isn't TOML, or isn't UTF-8, says no version, so each builds, its pak's stamped with the
+// version it says, or none when it says none, and its res.fb says that version to MountRelease as
+// a literal fb reads back to it, compiled by fb where there's one, else read back here; and no
+// pak's left half written where the executable goes. A broken one's version is what its pak's
+// stamped, which its res.fb says too.
 @Test
 Function AProjectsTomlBrokenAtRandomBuildsWithTheVersionItSays() Throws IOError
     Local game = Try TempDir()
@@ -483,9 +496,9 @@ Function AProjectsTomlBrokenAtRandomBuildsWithTheVersionItSays() Throws IOError
     Try File.WriteBytes(game.Path / "assets" / "wall.png", Png.Encode(Pictured(4)))
     Local whole = "[project]\nname = \"game\"\nversion = \"1.2.3\"\n\n[dependencies]\n".Bytes
     Local tomls: UInt8[][] = []
-    For version In ["1.2.3", "", "1.2\r3", "tab\there", "bell\x07", "{{braces}}", "back\\slash",
-                    "nel\u{85}", "\u{E9}t\u{E9}", "quote'", "del\x7F"]
-        tomls.Add(("[project]\nname = \"game\"\nversion = \"" + version + "\"\n").Bytes)
+    Local written = WrittenVersions()
+    For form In written
+        tomls.Add(form[0].Bytes)
     End For
     toolsState = 777
     For round = 1 To 60
@@ -497,8 +510,8 @@ Function AProjectsTomlBrokenAtRandomBuildsWithTheVersionItSays() Throws IOError
     For round = 1 To tomls.Count
         Local toml = game.Path / "project.toml"
         Try File.WriteBytes(toml, tomls[round - 1])
-        Local said = SaidVersion(Try File.ReadText(toml))
-        Local where = "seed 777, round {round}, version \"{Escape(said)}\""
+        Local wanted: String? = round <= written.Count ? written[round - 1][1] : Null
+        Local where = "seed 777, round {round}, version \"{Escape(wanted ?? "as stamped")}\""
         Try
             Try GameBuild.Run("game", game.Path, out, "release")
         Catch e As IOError
@@ -512,6 +525,7 @@ Function AProjectsTomlBrokenAtRandomBuildsWithTheVersionItSays() Throws IOError
         Local stamp = "{place}/{GAME_VERSION_FILE}"
         Local stamped = Assets.Exists(stamp) ? Try Assets.ReadText(stamp) : ""
         Assets.Unmount(place)
+        Local said = wanted ?? stamped
         Expect(stamped == said, "{where}: its pak's stamped \"{Escape(stamped)}\"")
         For entry In Try Dir.Entries(game.Path / "build")
             Local name = entry.Path.FileName()

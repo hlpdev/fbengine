@@ -456,18 +456,12 @@ Public Final Class Ui
         Pads()
         Typing()
 
-        // What this frame's input took out of the tree, or closed, as a popup's own button does,
-        // is no longer hovered, pressed, or focused.
+        // What this frame's input took out of the tree, disabled, or closed, as a popup's own
+        // button does, is no longer pressed, then hovered or focused, so what a PointerCancelled
+        // took out with it isn't either.
+        CalledOff()
         Local over = hovered
         If over != Null && !InTheOpen(over) Then hovered = Null
-        // What held the pointer is told it's called off, once, as a MODAL opening over it tells
-        // it, so what it began, as a drag, ends; and the next press is the left button's again.
-        Local held = pressed
-        If held != Null && !InTheOpen(held)
-            pressed = Null
-            held.PointerCancelled(lastPoint)
-            pressedWith = MouseButton.LEFT
-        End If
         Local own = focused
         If own != Null && !InTheOpen(own) Then Focus(Null)
 
@@ -804,14 +798,9 @@ Public Final Class Ui
 
     // The pointer's presses, moves, and releases this frame.
     @MainThread Method Pointer(point: Vec2, under: Widget?)
-        // A widget holding the pointer that's disabled, hidden, or out of the tree lets go, not
-        // over itself.
-        Local gone = pressed
-        If gone != Null && (!gone.EffectivelyEnabled() || !InTheOpen(gone))
-            pressed = Null
-            gone.PointerUp(point, False)
-            pressedWith = MouseButton.LEFT
-        End If
+        // A widget holding the pointer that the game disabled, hid, or took out of the tree since
+        // the last Update is called off; PointerUp is only ever for a release.
+        CalledOff()
         // One held by the right or the middle button keeps it through the others' presses.
         Local other = pressed != Null && pressedWith != MouseButton.LEFT
         If !other && MouseHit(MouseButton.LEFT) && !Dismissed()
@@ -863,6 +852,17 @@ Public Final Class Ui
         End If
     End Method
 
+    // What holds the pointer, disabled, hidden, or out of the tree, is told it's called off, once,
+    // as a MODAL opening over it tells it, so what it began, as a drag, ends; and the next press is
+    // the left button's again.
+    @MainThread Method CalledOff()
+        Local held = pressed
+        If held == Null || held.EffectivelyEnabled() && InTheOpen(held) Then Return
+        pressed = Null
+        held.PointerCancelled(lastPoint)
+        pressedWith = MouseButton.LEFT
+    End Method
+
     // The wheel's notches, to the widget under the pointer that uses them, or the first it's in.
     @MainThread Method Wheel(under: Widget?)
         Local steps = MouseWheelSteps()
@@ -906,6 +906,9 @@ Public Final Class Ui
         Checked()
         Local own = focused
         Local wants = own != Null && own.TakesText()
+        // A window closed, or closed and opened again, took its text input with it: it's
+        // started again, and its area set, once there's a window to type in.
+        If typing && !TextInputActive() Then typing = False
         If wants && own != Null
             // Another field's composition goes with its focus, not into this one.
             Local had = typingFor

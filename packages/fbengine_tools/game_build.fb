@@ -3,6 +3,7 @@
 
 Import std.collections
 Import std.core
+Import std.data
 Import std.ffi
 Import std.io
 Import std.text
@@ -92,20 +93,21 @@ Public Final Class GameBuild
         Try File.WriteText(out / "res.fb", Try References.OfGame(assets, mount))
     End Method
 
-    // The version the project.toml in `folder` says of its [project], or "" with none.
+    // The version the project.toml in `folder` says of its [project], read as TOML, or "" with
+    // none, or for a file that isn't TOML, whose build isn't refused for it.
     Static Method VersionIn(folder: Path): String Throws IOError
         Local file = folder / "project.toml"
         If !File.Exists(file) Then Return ""
-        Local section = ""
-        For line In (Try File.ReadText(file)).Split("\n")
-            Local clean = line.Trim()
-            If clean.StartsWith("[") Then section = clean
-            If section == "[project]" && clean.StartsWith("version")
-                Local parts = clean.Split("\"")
-                If parts.Count >= 2 Then Return parts[1]
-            End If
-        End For
-        Return ""
+        Local text = Try File.ReadText(file)
+        Local toml = Value.Object()
+        Try
+            toml = Try Toml.Read(text)
+        Catch error As ParseError
+            Return ""
+        End Try
+        Local project = toml["project"]
+        If project == Null Then Return ""
+        Return project["version"]?.AsString() ?? ""
     End Method
 
     // Takes out what a cook that was ended left in `folder`, under fb's lock on a step.

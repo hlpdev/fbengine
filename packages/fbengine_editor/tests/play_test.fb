@@ -120,6 +120,13 @@ Function ItsLinesAreWhatsWrittenByTheirEnds()
     Expect(log.Total() == 5)
     log.Clear()
     Expect(log.Lines().Count == 0 && log.Total() == 0 && log.Dropped() == 0)
+    // Its notices are kept through it, and its own lines are counted apart from a run's.
+    log.Feed(bytes, 2)
+    log.Note("noticed")
+    log.Say("said")
+    Expect(log.Own() == 2, "{log.Own()} its own of {log.Lines()}")
+    log.Clear()
+    Expect(log.Lines() == ["noticed"] && log.Total() == 1 && log.Own() == 1, "{log.Lines()}")
 End Function
 
 // `text` given to `log`, as the stream numbered `stream`.
@@ -648,6 +655,30 @@ Function WhatCantBeStartedSaysSo() Throws IOError, GraphicsError
     Expect(Said(editor).Contains("It couldn't be started"), Said(editor))
     editor.Step()
     Expect(editor.Output.Heading() == "Couldn't be started")
+End Function
+
+// A notice from the editor's start, as of what was kept that couldn't be read, stays through a
+// run's start, which clears what the last run said.
+@Test
+Function ARunsStartLeavesTheEditorsNotices() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local folder = Try Game(games.Path, "noticed", PLAIN)
+    // A folder where the preferences' file would be, which can't be read as one.
+    Try Dir.CreateAll(settings.Path / "fbengine_editor" / "preferences.txt")
+    Local editor = Try Started(settings.Path, folder)
+    Defer editor.Finish()
+    editor.Step()
+    Local notice = "What was kept couldn't be read"
+    Expect(Said(editor).Contains(notice), "no notice: {Said(editor)}")
+    Saved(editor)
+    editor.Run.Fb = (games.Path / "no such fb").Text
+    editor.Play()
+    editor.Step()
+    Expect(Said(editor).Contains("It couldn't be started"), Said(editor))
+    Expect(Said(editor).Contains(notice), "the run's start cleared the notice: {Said(editor)}")
+    Expect(editor.Output.ShownLines().Join("\n").Contains(notice), "the pane doesn't show it")
 End Function
 
 // What it says, however much, never holds it up; and something it started that holds its pipes never

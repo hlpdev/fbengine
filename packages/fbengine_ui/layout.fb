@@ -191,20 +191,25 @@ Public Class Node Implements Printable
     /// or one it's in, and for one that would make the tree more than 256 deep, which is past
     /// any screen's and near what laying one out, a Node inside a Node, has the stack for.
     @MainThread Public Method Add(child: Node)
-        Insert(children.Count, child)
+        Placed("Node.Add", children.Count, child)
     End Method
 
     /// Puts `child` at `index` among its children, from 0 to how many it has. Panics as Add does,
     /// and for an index out of range.
     @MainThread Public Method Insert(index: Int, child: Node)
-        If child.Parent() != Null Then Panic("Node.Add: {child} is in another Node already")
+        Placed("Node.Insert", index, child)
+    End Method
+
+    // Puts `child` at `index`, its panics saying `call`, the method the program called.
+    @MainThread Method Placed(call: String, index: Int, child: Node)
+        If child.Parent() != Null Then Panic("{call}: {child} is in another Node already")
         Local above: Node? = Self
         While above != Null
-            If RefEquals(above, child) Then Panic("Node.Add: {child} can't go in itself")
+            If RefEquals(above, child) Then Panic("{call}: {child} can't go in itself")
             above = above.Parent()
         End While
         If index < 0 || index > children.Count
-            Panic("Node.Insert: {index} isn't 0 to {children.Count}")
+            Panic("{call}: {index} isn't 0 to {children.Count}")
         End If
         Local depth = Deep(child)
         above = Self
@@ -213,7 +218,7 @@ Public Class Node Implements Printable
             above = above.Parent()
         End While
         If depth > DEEPEST
-            Panic("Node.Insert: a tree is {DEEPEST} deep at the most, and {child} would make it {depth}")
+            Panic("{call}: a tree is {DEEPEST} deep at the most, and {child} would make it {depth}")
         End If
         children.Insert(index, child)
         child.parent = Self

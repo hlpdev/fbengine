@@ -112,7 +112,8 @@ Function Measured(editor: Editor, edits: Int): Held
     held.Fonts = Font.Count()
     held.Panes = editor.Docked.ShownPanes().Count
     held.Edits = edits
-    held.Lines = editor.Run.Log.Lines().Count
+    // The editor's own lines, not a build's, whose count goes with how far it got when stopped.
+    held.Lines = editor.Run.Log.Own()
     Return held
 End Function
 
@@ -176,8 +177,14 @@ Function Round(editor: Editor, round: Int): Int Throws GraphicsError
     Return edits
 End Function
 
-// Plays the scene, by the fb the tests run with, on the PATH: to its end if `whole`, else stopped
-// as it builds; what's wrong with how it went, or "".
+// The fb the tests run with, as FB says, or Null where it doesn't: the PATH's can be another.
+Function TestsFb(): String?
+    Local said = Env.Get("FB")
+    Return said != Null && said != "" ? said : Null
+End Function
+
+// Plays the scene, by the fb the tests run with: to its end if `whole`, else stopped as it builds;
+// what's wrong with how it went, or "".
 Function Played(editor: Editor, whole: Bool): String
     editor.Play()
     editor.Step()
@@ -195,8 +202,9 @@ Function Played(editor: Editor, whole: Bool): String
     Return ""
 End Function
 
-// Every round plays its scene with a real fb and stops it as it builds; rounds 3 and 40 play it to
-// its end, as a build of each is seconds. The run's log is measured as it's left, never cleared.
+// Every round plays its scene with the fb the tests run with and stops it as it builds; rounds 3
+// and 40 play it to its end, as a build of each is seconds. Where FB doesn't say which fb that is,
+// the rounds don't play. The run's log is measured as it's left, never cleared.
 @Test
 Function ASessionOfThousandsOfFramesIsBackWhereItWasEachRound() Throws IOError, GraphicsError
     If StableNoGpu() Then Skip("no GPU here")
@@ -205,16 +213,24 @@ Function ASessionOfThousandsOfFramesIsBackWhereItWasEachRound() Throws IOError, 
     Local editor = Try StableStarted(settings.Path, Try StableGame(games.Path, "soak", PLAYED),
                                      True)
     Defer editor.Finish()
+    Local fb = TestsFb()
+    If fb != Null
+        editor.Run.Fb = fb
+    Else
+        Print("the rounds don't play: FB doesn't say which fb the tests run with")
+    End If
     Local frames = Frame.Count()
     Local warm: Held? = Null
     For round = 1 To 80
         Local edits = Try Round(editor, round)
-        If round == 3 || round == 40
-            Local wrong = Played(editor, True)
+        If fb != Null
+            If round == 3 || round == 40
+                Local wrong = Played(editor, True)
+                Expect(wrong == "", "round {round}: {wrong}")
+            End If
+            Local wrong = Played(editor, False)
             Expect(wrong == "", "round {round}: {wrong}")
         End If
-        Local wrong = Played(editor, False)
-        Expect(wrong == "", "round {round}: {wrong}")
         Try Dismissed(editor)
         For each = 1 To 4
             editor.Step()
@@ -233,7 +249,7 @@ Function ASessionOfThousandsOfFramesIsBackWhereItWasEachRound() Throws IOError, 
         Expect(now.Fonts == was.Fonts, "round {round}: fonts: {was} then {now}")
         Expect(now.Panes == was.Panes, "round {round}: panes: {was} then {now}")
         Expect(now.Edits == was.Edits, "round {round}: the history: {was} then {now}")
-        Expect(now.Lines == was.Lines, "round {round}: what the run said: {was} then {now}")
+        Expect(now.Lines == was.Lines, "round {round}: the editor's own lines: {was} then {now}")
         Expect(editor.ShowingDialog() == Null, "round {round}: a dialog's left showing")
     End For
     Expect(warm != Null)
@@ -295,9 +311,12 @@ Function FilesDamagedAtRandomOpenOrAreRefusedByName() Throws IOError, GraphicsEr
     editorState = 5150
     Local outcomes = [0, 0, 0]
 
-    // A scene's file.
-    For round = 1 To 40
-        Try File.WriteBytes(good / "assets" / "damaged.scene", Damaged(scene))
+    // A scene's file; first, one whose cube's a mesh of a file that's gone, which opens saying so.
+    Local text = String.FromUtf8(scene) ?? ""
+    Expect(text.Contains("\"builtin:cube\""), "the scene has no cube: {text}")
+    Local gone = text.Replace("\"builtin:cube\"", "\"res://gone.gltf#0\"").Bytes
+    For round = 0 To 40
+        Try File.WriteBytes(good / "assets" / "damaged.scene", round == 0 ? gone : Damaged(scene))
         editor.OpenScene("res://damaged.scene")
         editor.Step()
         Local dialog = editor.ShowingDialog()
@@ -308,11 +327,16 @@ Function FilesDamagedAtRandomOpenOrAreRefusedByName() Throws IOError, GraphicsEr
                 outcomes[0] += 1
             Else
                 outcomes[1] += 1
+                Local title = dialog?.Title() ?? ""
+                Expect(title == "Some of what that scene's made of is lost",
+                       "seed 5150, round {round}: opened, with a dialog of {title}: {said}")
                 Expect(said != "", "seed 5150, round {round}: what's lost isn't said")
             End If
         Else
             outcomes[2] += 1
             Expect(dialog != Null, "seed 5150, round {round}: neither opened nor refused")
+            Expect(dialog?.Title() == "Couldn't open that scene",
+                   "seed 5150, round {round}: refused, with a dialog of {dialog?.Title() ?? ""}")
             Expect(said.Contains("damaged.scene"),
                    "seed 5150, round {round}: a scene refused without its name: {said}")
             Expect(editor.SceneFile() == "res://level.scene" &&
@@ -327,7 +351,8 @@ Function FilesDamagedAtRandomOpenOrAreRefusedByName() Throws IOError, GraphicsEr
         Try Dismissed(editor)
         Expect(editor.Edited.Entities().Count == entities, "round {round}: the good scene")
     End For
-    Expect(outcomes[0] > 0 && outcomes[2] > 0, "seed 5150: opened, lost, refused: {outcomes}")
+    Expect(outcomes[0] > 0 && outcomes[1] > 0 && outcomes[2] > 0,
+           "seed 5150: opened, lost, refused: {outcomes}")
 
     // A project's file.
     Local bad = Try StableGame(games.Path, "bad")
@@ -698,9 +723,9 @@ Function StableScreen(editor: Editor): Image Throws GraphicsError
     Return Try Screen.ToImage()
 End Function
 
-// A GPU lost while the editor runs, as a driver's crash or reset loses it: its frames go on, and
-// once it's made again the editor draws what it drew, its view of the scene and its thumbnails,
-// and a thumbnail asked for while it was lost is made then.
+// A GPU lost while the editor runs, as a driver's crash or reset loses it: its frames make it
+// again, saying so, and then the editor draws what it drew, its view of the scene and its
+// thumbnails, and a thumbnail asked for while it was lost is made then.
 @Test
 Function TheEditorDrawsAgainOnceALostGpuIsMadeAgain() Throws IOError, GraphicsError
     If StableNoGpu() Then Skip("no GPU here")
@@ -742,19 +767,17 @@ Function TheEditorDrawsAgainOnceALostGpuIsMadeAgain() Throws IOError, GraphicsEr
     Local thumbed = row != Null ? Lit(before, row.Box(), scale) : 0
     Expect(thumbed > 20, "the picture's row showed {thumbed} pixels of it")
 
+    Local stops = Gpu.Stops()
     Try Gpu.SimulateLoss()
     editor.Files.ThumbOf("res://sub/late.png")
     For frame = 1 To 6
         editor.Step()
     End For
-    Expect(Gpu.Lost())
-
-    Gpu.Stop()
-    Try Gpu.Start()
-    For frame = 1 To 6
-        editor.Step()
-    End For
-    Expect(!Gpu.Lost())
+    Expect(!Gpu.Lost() && Gpu.Started(), "the editor left the GPU lost")
+    Expect(Gpu.Stops() == stops + 1, "the GPU was stopped {Gpu.Stops() - stops} times")
+    Local said = editor.Output.ShownLines().Join("\n")
+    Expect(said.Contains("The GPU was lost") && said.Contains("The GPU's made again."),
+           "the Output pane says {said}")
     Local all = ["res://wall.png", "res://ball.gltf", "res://sub/late.png"]
     Thumbed(editor, all)
     Local target = editor.View.Target()

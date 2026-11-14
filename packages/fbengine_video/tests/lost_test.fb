@@ -100,19 +100,23 @@ Function AVideosSoundGoesOnOnTheOutputTheMixMovesTo() Throws VideoError, AudioEr
     Expect(LostSoundCount() == sounds + 1 && LostChannelCount() == channels + 1)
 
     // Its output's unplugged: lost, with the audio left started, and the mix not moving. The
-    // clock goes on by its frames, the first of them perhaps to where the sound was heard.
+    // clock goes on by its frames from where it was, or from where its sound was heard if that's
+    // ahead, as the mix got there before it stopped, however fast; the first frame, or the one
+    // after the sound's put where the clock is, perhaps holding it.
     Try Audio.SimulateUnplug()
     Expect(Audio.Lost() && Audio.Started())
     Local from = video.Time()
+    Local heard = video.SoundChannel().Position() - Audio.Period()
+    Local start = heard > from ? heard : from
     Local at = from
     For frame = 1 To 10
         video.Update(0.04)
         Expect(video.Time() >= at, "its clock went back, from {at} to {video.Time()}")
         at = video.Time()
     End For
-    Local added = at - from
+    Local added = at - start
     Expect(added >= 0.36 - 1e-9 && added <= 0.4 + 1e-9,
-           "its clock went on {added} seconds over 10 frames of 0.04, from {from}")
+           "its clock went on {added} seconds over 10 frames of 0.04, from {from}, heard {heard}")
     Expect(video.Playing() && !video.Ended())
     Expect(video.SoundChannel().Playing(), "its sound stopped with the output")
 

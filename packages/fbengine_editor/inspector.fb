@@ -783,7 +783,7 @@ Public Final Class SceneInspector Extends Widget
     /// How many times a row's looked at what it shows, of all that's ever been selected.
     Public Method Refreshes(): Int => refreshes
 
-    /// The entities it's showing the properties of.
+    /// The entities it's showing the properties of. Public for the package's tests.
     Public Method ShownEntities(): Entity[] => entities.Clone()
 
     /// The rows it's showing, in order.

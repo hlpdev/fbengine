@@ -280,9 +280,11 @@ End Function
 @MainThread Public Function TextInputActive(): Bool => fbe_input_text_active()
 
 /// Where the text being typed is in the window's units, with the cursor `cursor` units from its
-/// left, so the IME's windows go beside it. Panics without a window.
+/// left, so the IME's windows go beside it. Without a window it does nothing, as a window that
+/// closes takes its area with it: it's set again once there's one, as a Ui does each frame.
 @MainThread Public Function SetTextInputArea(x: Int32, y: Int32, width: Int32, height: Int32,
                                              cursor: Int32 = 0)
+    If !Window.Open() Then Return
     If !fbe_input_set_text_area(x, y, width, height, cursor) Then Panic(LastError())
 End Function
 

@@ -199,8 +199,9 @@ if(FBENGINE_FB_TESTS)
                        ENVIRONMENT "FBENGINE_SLANGC=${FBENGINE_SLANGC};FBENGINE_PACKAGES=${PROJECT_SOURCE_DIR}/packages"
                        PASS_REGULAR_EXPRESSION "\ncooked 2 shaders\r?\n$")
   set_tests_properties(fbengine_editor.package PROPERTIES FIXTURES_REQUIRED cooked_shaders)
+  # FB, the fb the tests run with, which the soak builds and plays a game with each round.
   set_property(TEST fbengine_editor.package APPEND PROPERTY ENVIRONMENT
-               "FBENGINE_COOKED_SHADERS=${fbengine_cooked_shaders}")
+               "FBENGINE_COOKED_SHADERS=${fbengine_cooked_shaders}" "FB=${FBENGINE_FB}")
 
   # A program that ends with the GPU going, each way it can, and has to end: Windows' ending a process
   # with it going seems to have waited for good on CI. An end of its own stops the GPU first, and says
