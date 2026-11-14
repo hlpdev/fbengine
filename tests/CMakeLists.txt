@@ -112,7 +112,8 @@ target_compile_definitions(fbengine_gpu_tests PRIVATE
                            FBENGINE_GOLDEN_IMAGES="${CMAKE_CURRENT_SOURCE_DIR}/golden"
                            FBENGINE_GOLDEN_FAILURES="${PROJECT_BINARY_DIR}/golden-failures"
                            FBENGINE_GOLDEN_UPDATES="${PROJECT_BINARY_DIR}/golden-updates"
-                           FBENGINE_TEST_SCRATCH="${PROJECT_BINARY_DIR}/test-scratch")
+                           FBENGINE_TEST_SCRATCH="${PROJECT_BINARY_DIR}/test-scratch"
+                           FBENGINE_NATIVE="${PROJECT_SOURCE_DIR}/native/fbengine")
 fbengine_set_warnings(fbengine_gpu_tests)
 fbengine_add_shaders(TARGETS fbengine_gpu_tests NAMESPACE fbe::test_shaders
                      HEADER test_shaders.hpp

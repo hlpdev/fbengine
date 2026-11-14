@@ -632,7 +632,7 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
 /// in it, which it then keeps rather than fail), and the device.
 void destroy_device() {
     if (current.device != VK_NULL_HANDLE) {
-        vkDeviceWaitIdle(current.device);
+        fbe::gpu::wait_idle(current.device);
         for (const fbe::gpu::frame_t& frame : current.frames) {
             vkDestroyQueryPool(current.device, frame.timer, nullptr);
             vkDestroySemaphore(current.device, frame.acquired, nullptr);
@@ -803,7 +803,7 @@ std::vector<void (*)()>& stoppers() {
 void stop() {
     if (started) {
         ++stops;
-        vkDeviceWaitIdle(current.device);
+        fbe::gpu::wait_idle(current.device);
         stop_graph();
         for (void (*free)() : stoppers()) {
             free();
@@ -887,8 +887,17 @@ bool validating_synchronization() {
 }
 
 bool lose(VkResult result) {
-    gpu_lost = gpu_lost || result == VK_ERROR_DEVICE_LOST;
-    return result == VK_ERROR_DEVICE_LOST;
+    if (result != VK_ERROR_DEVICE_LOST) {
+        return false;
+    }
+    // What's in flight is done with first, once, as nothing is on a device the driver lost, whose
+    // wait ends at once: so what a lost GPU frees from then on, without waiting, the GPU's done
+    // with, as on a device lost for a test, or a loss a test makes up.
+    if (!gpu_lost && current.device != VK_NULL_HANDLE) {
+        wait_idle(current.device);
+    }
+    gpu_lost = true;
+    return true;
 }
 
 bool fail_lost() {

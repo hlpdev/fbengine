@@ -205,16 +205,24 @@ void forget_no_room();
 /// How many times a frame's been given to the queue, for the tests.
 std::uint64_t frame_submits();
 /// What's been asked of the driver since the program started that a lost GPU never asks, for the
-/// tests: memory made, work submitted or presented, shader modules and pipelines made, and
-/// commands begun.
+/// tests: memory made, work submitted or presented, shader modules and pipelines made, commands
+/// begun, samplers and image views made, descriptors written, and waits for a fence or the device.
 struct reached_t {
     std::uint64_t allocations = 0;
     std::uint64_t submits = 0;
     std::uint64_t pipelines = 0;
     std::uint64_t recordings = 0;
+    std::uint64_t samplers = 0;
+    std::uint64_t views = 0;
+    std::uint64_t descriptor_writes = 0;
+    std::uint64_t waits = 0;
     bool operator==(const reached_t&) const = default;
 };
 reached_t& reached();
+/// Waits for the device to be done with everything, counted in reached(); what the wait gave.
+VkResult wait_idle(VkDevice device);
+/// Waits for `fence`, counted in reached(); what the wait gave.
+VkResult wait_for(VkDevice device, VkFence fence);
 /// An exported call's length, for one that isn't run again, as a Flip's present isn't: no call
 /// within it frees what waits.
 struct edge_t {
@@ -359,6 +367,10 @@ std::uint32_t sampler_index(std::int32_t filter, std::int32_t wrap_u, std::int32
 float lod_bias_left();
 /// How much of the LOD bias is in every sampler.
 float lod_bias_in_samplers();
+/// The LOD bias and the anisotropy 3D's samplers were last made with, as the device takes them,
+/// for the tests: what's in force, which a setting made while the GPU's lost isn't until it starts.
+float samplers_lod_bias();
+float samplers_anisotropy();
 /// The index of 2D's sampler for a filter, clamped or repeating, which has no LOD bias or
 /// anisotropy.
 std::uint32_t sampler_2d_index(std::int32_t filter, bool repeat);
@@ -427,7 +439,8 @@ const char* first_validation_error();
 /// Whether the validation layer checks the GPU's synchronization too, as it does wherever it
 /// validates and can.
 bool validating_synchronization();
-/// Keeps that the GPU was lost if `result` says it was; whether it was.
+/// Keeps that the GPU was lost if `result` says it was, waiting the first time for what was in
+/// flight, so what a lost GPU frees needs no wait; whether it was.
 bool lose(VkResult result);
 /// Keeps for fbe_error() that the GPU was lost, and returns false.
 bool fail_lost();

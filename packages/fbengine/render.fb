@@ -69,7 +69,8 @@ Public Function ShadowAtlasLimit(): Int => fbe_render_shadow_atlas_limit()
 
 /// Draws every camera of the current World, in their order, `tween` of the way from its last
 /// capture to now, as the frame's passes, which Flip shows. A camera with no target and no window
-/// open, a tween outside 0 to 1, or a GPU that can't start panics.
+/// open, a tween outside 0 to 1, or a GPU that can't start panics, lost or not; while the GPU's
+/// lost (Gpu.Lost) it draws nothing, and doesn't panic for it.
 @MainThread @PanicsAtCaller
 Public Function RenderWorld(tween: Float = 1)
     World.Current().Render(tween)
@@ -87,7 +88,8 @@ Extend Camera
     /// Draws the camera into its target, `tween` of the way from its World's last capture to now,
     /// unless it's hidden: first what it clears of its viewport, then every shown Mirror of its
     /// World's reflection of the scene, then the scene. With no target and no window open, a tween
-    /// outside 0 to 1, or a GPU that can't start, it panics.
+    /// outside 0 to 1, or a GPU that can't start, it panics, lost or not; while the GPU's lost
+    /// (Gpu.Lost) it draws nothing, and doesn't panic for it.
     @MainThread @PanicsAtCaller
     Public Method Render(tween: Float = 1)
         If !fbe_render_camera(Live("Render"), tween) Then Failed("Render")

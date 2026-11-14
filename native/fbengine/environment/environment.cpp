@@ -333,11 +333,12 @@ FBE_API uint64_t fbe_environment_bake(uint64_t source, int32_t size, int32_t sam
         if (!fbe_gpu_start()) {
             return 0;
         }
-        if (fbe::gpu::lost()) {
-            fbe::gpu::fail_lost();
+        // A source that isn't a texture is the call's own to get right, lost or not.
+        if (fbe::texture::find(source) == nullptr) {
             return 0;
         }
-        if (fbe::texture::find(source) == nullptr) {
+        if (fbe::gpu::lost()) {
+            fbe::gpu::fail_lost();
             return 0;
         }
         // Pixels written on the CPU reach the GPU first.

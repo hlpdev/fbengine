@@ -74,10 +74,13 @@ VkExtent2D window_pixels() {
     };
 }
 
-/// Destroys the window's images, waiting for the GPU to be done with them, but not the swapchain,
-/// which its next one is made from.
+/// Destroys the window's images, waiting for the GPU to be done with them unless it's lost, but
+/// not the swapchain, which its next one is made from.
 void destroy_images(const fbe::gpu::device_t& gpu) {
-    vkDeviceWaitIdle(gpu.device);
+    // Nothing's in flight on a lost device to wait for.
+    if (!fbe::gpu::lost()) {
+        fbe::gpu::wait_idle(gpu.device);
+    }
     for (VkImageView view : views) {
         vkDestroyImageView(gpu.device, view, nullptr);
     }
@@ -111,6 +114,7 @@ bool make_views(const fbe::gpu::device_t& gpu, VkFormat view_format) {
             },
         };
         VkImageView view = VK_NULL_HANDLE;
+        ++fbe::gpu::reached().views;
         const VkResult result = fbe::gpu::faulted(fbe::gpu::fault_t::VIEW)
                                     ? VK_ERROR_OUT_OF_HOST_MEMORY
                                     : vkCreateImageView(gpu.device, &info, nullptr, &view);
@@ -362,6 +366,10 @@ bool make_window(const fbe::gpu::device_t& gpu) {
                                          fbe::gpu::name_of(gpu.properties)));
         }
     }
+    // A lost GPU makes it nothing: its screen and images are made as it starts again.
+    if (fbe::gpu::lost()) {
+        return true;
+    }
     fbe::gpu::update_screen(window_pixels());
     return make_images(gpu, vsync);
 }
@@ -513,7 +521,7 @@ std::vector<std::uint8_t> read_window() {
     if (gpu == nullptr || headless == VK_NULL_HANDLE) {
         return {};
     }
-    vkDeviceWaitIdle(gpu->device);
+    fbe::gpu::wait_idle(gpu->device);
     std::vector<std::uint8_t> pixels =
         read_pixels(headless, extent, 4, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     // Blue first, as the image keeps them, to red first.

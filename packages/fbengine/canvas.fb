@@ -225,7 +225,8 @@ Public Final Class Canvas
     /// target's pixels a unit of the font's size (the screen's render size over the window's size;
     /// a texture's 1), in its color times the glyph's coverage, or a color glyph's own colors faded
     /// by its alpha, over what's there unless its blend is ADD; and an underlined font's line under
-    /// each line. It panics for a font that was freed.
+    /// each line. It panics for a font that was freed, lost or not; while the GPU's lost (Gpu.Lost)
+    /// it draws nothing, as the Canvas's other draws, and doesn't panic for it.
     @MainThread @PanicsAtCaller
     Public Method DrawText(font: Font, text: String, x: Int32, y: Int32)
         Local into = Into("DrawText")

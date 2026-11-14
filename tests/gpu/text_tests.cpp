@@ -422,7 +422,8 @@ TEST_CASE("text that can't be drawn is refused", "[gpu]") {
 // Text checks the GPU as the canvas's other draws do: after a stop, its target's freed and it's
 // refused, whatever pages it would make; once the GPU's lost, it's refused; and as a headless
 // window's first draw, it starts the GPU for the screen, as a rectangle does.
-TEST_CASE("text is refused without a GPU to draw it, and starts one for the screen", "[gpu]") {
+TEST_CASE("text is refused without a GPU, starts one for the screen, and draws nothing lost",
+          "[gpu]") {
     start();
     const std::uint64_t made = target(8, 8);
     draw(made, "I", 0, 0);
@@ -447,12 +448,16 @@ TEST_CASE("text is refused without a GPU to draw it, and starts one for the scre
         }
     }
     CHECK(lit > 20);
-    // Lost.
+    // Lost, it draws nothing, as the canvas's other draws, and says it worked; a font that isn't
+    // one is refused still.
     fbe::gpu::inject(fbe::gpu::fault_t::LOST);
     fbe_frame_flip(false);
     REQUIRE(fbe_gpu_lost());
-    CHECK(!fbe_2d_text(0, &ink, font, "ab", 0, 0));
-    CHECK(std::string(fbe_error()).starts_with("the GPU was lost"));
+    const fbe::gpu::reached_t before = fbe::gpu::reached();
+    CHECK(fbe_2d_text(0, &ink, font, "ab", 0, 0));
+    CHECK(fbe::gpu::reached() == before);
+    CHECK(!fbe_2d_text(0, &ink, 0, "ab", 0, 0));
+    CHECK(std::string(fbe_error()) == "no font was given");
     CHECK(fbe_text_free_font(font));
     stop_gpu();
     fbe_window_close();

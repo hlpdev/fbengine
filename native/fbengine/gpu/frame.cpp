@@ -113,7 +113,7 @@ fbe::gpu::frame_t& begin() {
     if (frame.begun) {
         return frame;
     }
-    fbe::gpu::lose(vkWaitForFences(gpu.device, 1, &frame.done, VK_TRUE, UINT64_MAX));
+    fbe::gpu::lose(fbe::gpu::wait_for(gpu.device, frame.done));
     collect(frame);
     read_timer(gpu, frame);
     vkResetCommandPool(gpu.device, frame.pool, 0);
@@ -213,7 +213,7 @@ bool submit(const fbe::gpu::device_t& gpu, fbe::gpu::frame_t& frame, VkSemaphore
         fbe::gpu::miss_passes();
         // Nothing will signal the fence or wait on the acquire, so they're made again, once the
         // GPU's done with everything before.
-        vkDeviceWaitIdle(gpu.device);
+        fbe::gpu::wait_idle(gpu.device);
         // The frame's uploads, and their staging, go to the next submit, in the pool they're in,
         // and the frame gets a new one; on a lost device, or with no memory for a new pool,
         // they're freed with everything carried before.
@@ -258,8 +258,8 @@ bool give_up(const fbe::gpu::device_t& gpu, fbe::gpu::frame_t& frame) {
         vkEndCommandBuffer(frame.commands);
         frame.begun = false;
     }
-    vkDeviceWaitIdle(gpu.device);
-    // Every frame's, as nothing's in flight on a lost device, and what waited for the next.
+    // Not waited for: nothing's in flight once the GPU's lost, which waited for it as it was lost.
+    // So every frame's is freed, and what waited for the next.
     collect(frame);
     for (fbe::gpu::frame_t& other : fbe::gpu::device()->frames) {
         if (!other.begun) {
@@ -285,7 +285,7 @@ bool collect_done(fbe::gpu::device_t& gpu) {
         if (frame.begun) {
             continue;
         }
-        const VkResult waited = vkWaitForFences(gpu.device, 1, &frame.done, VK_TRUE, UINT64_MAX);
+        const VkResult waited = fbe::gpu::wait_for(gpu.device, frame.done);
         if (fbe::gpu::lose(waited) || waited != VK_SUCCESS) {
             return false;
         }
@@ -486,6 +486,16 @@ reached_t& reached() {
     return asked;
 }
 
+VkResult wait_idle(VkDevice device) {
+    ++asked.waits;
+    return vkDeviceWaitIdle(device);
+}
+
+VkResult wait_for(VkDevice device, VkFence fence) {
+    ++asked.waits;
+    return vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
+}
+
 void limit_allocations(std::int64_t most) {
     allocation_limit = most;
 }
@@ -597,7 +607,7 @@ bool finish_frame() {
         if (submitted.begun) {
             continue;
         }
-        const VkResult done = vkWaitForFences(gpu.device, 1, &submitted.done, VK_TRUE, UINT64_MAX);
+        const VkResult done = fbe::gpu::wait_for(gpu.device, submitted.done);
         if (lose(done)) {
             return give_up(gpu, frame);
         }
@@ -619,7 +629,7 @@ bool finish_frame() {
         no_room = said;
         return false;
     }
-    const VkResult waited = vkWaitForFences(gpu.device, 1, &frame.done, VK_TRUE, UINT64_MAX);
+    const VkResult waited = fbe::gpu::wait_for(gpu.device, frame.done);
     if (lose(waited)) {
         return fail_lost();
     }
@@ -628,7 +638,7 @@ bool finish_frame() {
 
 void stop_frames() {
     device_t& gpu = *device();
-    vkDeviceWaitIdle(gpu.device);
+    fbe::gpu::wait_idle(gpu.device);
     const std::vector<std::function<void()>> next = std::move(with_next);
     with_next.clear();
     for (const std::function<void()>& free : next) {

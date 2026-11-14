@@ -132,11 +132,8 @@ float scale_of(std::uint64_t target) {
 }
 
 /// Whether text can be drawn into `target`, the screen for 0, which starts the GPU for a window's
-/// screen, before the pages' textures are made; false, with fbe_error's why, if not.
+/// screen, before the pages' textures are made; false, with fbe_error's why, if not, lost or not.
 bool drawable(std::uint64_t target) {
-    if (fbe::gpu::lost()) {
-        return fbe::gpu::fail_lost();
-    }
     const std::uint64_t handle = target != 0 ? target : fbe_gpu_screen();
     if (handle == 0) {
         return fbe::fail("there's no screen, as there's no window");
@@ -158,7 +155,16 @@ bool draw_text(std::uint64_t target, const fbe_2d_pen_t* pen, const fbe::text::l
     if (pen == nullptr) {
         return fbe::fail("no pen was given");
     }
-    if (!drawable(target) || !upload_pages()) {
+    if (!drawable(target)) {
+        return false;
+    }
+    // A lost GPU draws nothing, as the canvas's other draws, and makes no page's texture; what's
+    // drawn into is still changed, so its pixels on the CPU from before aren't what it has.
+    if (fbe::gpu::lost()) {
+        fbe::texture::changed_on_gpu(target != 0 ? target : fbe_gpu_screen());
+        return true;
+    }
+    if (!upload_pages()) {
         return false;
     }
     // Its top left at x, y, so its first line's baseline below it by its ascent, in whole pixels.

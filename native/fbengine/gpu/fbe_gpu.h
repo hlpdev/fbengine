@@ -87,7 +87,10 @@ FBE_API void fbe_gpu_stop(void);
 // and nothing's asked of the driver: a draw, a clear, a copy, or a write into a texture does
 // nothing and says it worked, fbe_frame_flip shows nothing, and what makes something on the GPU
 // or reads it back fails, saying so, until fbe_gpu_stop and fbe_gpu_start make it again, and with
-// it everything on it, as nothing made before is left.
+// it everything on it, as nothing made before is left. A write or draw into a texture still
+// changes it, so its pixels on the CPU from before are read back, which fails; a setting, as the
+// LOD bias, is kept, in force once the GPU's made again; and a call's own misuse, as a handle
+// that isn't one, fails as it would on a GPU that isn't lost.
 FBE_API bool fbe_gpu_lost(void);
 // Loses the GPU, as a driver's crash or reset does, for a game's tests of what it does then: it's
 // lost from the next thing asked of it. False, with fbe_error's why, unless the GPU's started.
@@ -123,12 +126,14 @@ FBE_API int32_t fbe_gpu_pipelines(void);
 
 // How far every texture's mipmaps are biased, added to the level the GPU picks: negative is
 // sharper, positive blurrier; false if it's not -16 to 16. The GPU's limit clamps it, and a GPU
-// whose samplers have none, as Metal's through MoltenVK, draws with no bias.
+// whose samplers have none, as Metal's through MoltenVK, draws with no bias. Set while the GPU's
+// lost, it's in force once the GPU's made again.
 FBE_API bool fbe_gpu_set_lod_bias(float bias);
 FBE_API float fbe_gpu_lod_bias(void);
 // The most anisotropy textures filtered LINEAR are sampled with, sharper at glancing angles: 1 for
 // none, up to 16; false if it's not 1 to 16. fbe_gpu_max_anisotropy, the GPU's most, clamps it, 0
-// before the GPU starts and 1 on a GPU with none.
+// before the GPU starts and 1 on a GPU with none. Set while the GPU's lost, it's in force once
+// the GPU's made again.
 FBE_API bool fbe_gpu_set_anisotropy(float anisotropy);
 FBE_API float fbe_gpu_anisotropy(void);
 FBE_API float fbe_gpu_max_anisotropy(void);

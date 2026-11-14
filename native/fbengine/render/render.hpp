@@ -106,6 +106,9 @@ bool add_post_passes(const scene::camera_t& camera, gpu::resource_t image, gpu::
                      VkExtent2D size, VkFormat format, VkSampleCountFlagBits samples,
                      VkRect2D scissor, bool into_nothing = false);
 
+/// Whether the camera at `slot` has something to draw into, its target or the window's screen;
+/// false, with fbe_error's why, if not.
+bool has_target(std::uint32_t slot);
 /// Draws a camera that's showing, in the frame's graph, as fbe_render_camera says.
 bool draw_camera(std::uint32_t slot, float tween);
 

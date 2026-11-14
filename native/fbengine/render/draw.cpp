@@ -899,17 +899,24 @@ bool reflected_view(const scene::view_t& view, const mat4_t& mirror, scene::view
 
 } // namespace
 
-bool draw_camera(std::uint32_t slot, float tween) {
+bool has_target(std::uint32_t slot) {
     const scene::scene_t& s = scene::scene();
     const scene::camera_t& camera = s.cameras[s.entities.component[slot]];
     const std::uint64_t target = camera.target != 0 ? camera.target : fbe_gpu_screen();
     if (target == 0) {
         return fail("a camera with no target draws into the screen, and there's no window open");
     }
-    const texture::texture_t* found = texture::find(target);
-    if (found == nullptr) {
+    return texture::find(target) != nullptr;
+}
+
+bool draw_camera(std::uint32_t slot, float tween) {
+    const scene::scene_t& s = scene::scene();
+    const scene::camera_t& camera = s.cameras[s.entities.component[slot]];
+    const std::uint64_t target = camera.target != 0 ? camera.target : fbe_gpu_screen();
+    if (!has_target(slot)) {
         return false;
     }
+    const texture::texture_t* found = texture::find(target);
     const auto width = static_cast<float>(found->width);
     const auto height = static_cast<float>(found->height);
     const VkFormat target_format = found->vk_format;
@@ -1188,7 +1195,11 @@ FBE_API bool fbe_render_camera(uint64_t camera, float tween) try {
     if (!fbe_gpu_started() && !fbe_gpu_start()) {
         return false;
     }
-    // A lost GPU draws nothing, and nothing's made or sent for it.
+    // What it draws into is the call's own to get right, lost or not; a lost GPU then draws
+    // nothing, and nothing's made or sent for it.
+    if (!fbe::render::has_target(slot)) {
+        return false;
+    }
     return fbe::gpu::lost() || fbe::render::draw_camera(slot, tween);
 } catch (const std::bad_alloc&) {
     return fbe::fail("out of memory");

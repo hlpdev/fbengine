@@ -110,7 +110,8 @@ FBE_API bool fbe_texture_copy(uint64_t to, int32_t x, int32_t y, uint64_t from, 
 // frame so far, and stays where it is until the texture's freed or the GPU stops. What's written
 // into it reaches the GPU once fbe_texture_pixels_written says where, before the GPU next uses the
 // texture, so drawing and writing keep their order. nullptr if the texture isn't live or is
-// multisampled, whose pixels are only drawn.
+// multisampled, whose pixels are only drawn, or, saying so, if the GPU's lost and they'd be read
+// back: a write or draw into it while it's lost changes it, so a copy from before is older.
 FBE_API uint8_t* fbe_texture_pixels(uint64_t texture, int64_t* size);
 // Where the stamp of a texture's CPU copy is, a number that changes whenever the copy's freed, as
 // the texture is or the GPU stops: it stays there as long as the program runs, so what holds the

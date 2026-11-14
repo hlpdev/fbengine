@@ -343,7 +343,9 @@ Public Final Class Texture Implements Asset
     /// Writes `image`'s pixels into it with their top left at `x`, `y`, and makes its mipmaps
     /// again, in turn with what else the frame does with it: what's drawn with it, drawn into it,
     /// cleared, or copied before the write has it as it was, and what's after has the write. It
-    /// panics unless the texture is RGBA8 or RGBA8_LINEAR and the image is inside it.
+    /// panics unless the texture is RGBA8 or RGBA8_LINEAR and the image is inside it, lost or not.
+    /// While the GPU's lost (Gpu.Lost) it writes nothing and doesn't panic for it, but the
+    /// texture's changed, so LockPixels after reads it back, which panics, the GPU being lost.
     @MainThread @PanicsAtCaller
     Public Method Write(x: Int32, y: Int32, image: Image)
         Local texture = Live("Write")
@@ -364,7 +366,7 @@ Public Final Class Texture Implements Asset
     /// alpha. It does nothing to the other levels, which are the game's: until Write, WritePixels,
     /// CopyFrom, or a write of its pixels makes them all again from the first, or Clear clears
     /// them. It panics unless the texture is RGBA8 or RGBA8_LINEAR, it has that level, and the
-    /// image is its size.
+    /// image is its size, lost or not; while the GPU's lost it writes nothing, as Write.
     @MainThread @PanicsAtCaller
     Public Method WriteLevel(level: Int32, image: Image)
         Local texture = Live("WriteLevel")
@@ -384,7 +386,8 @@ Public Final Class Texture Implements Asset
     /// Writes `width` by `height` pixels at `x`, `y` from `bytes`, rows packed top first, in its
     /// format's bytes: 4 a pixel for RGBA8, 1 for R8, and 8 for RGBA16F, half floats, little end
     /// first; and makes its mipmaps again, in turn, as Write does. It panics unless there are that
-    /// many bytes and the region is inside it.
+    /// many bytes and the region is inside it, lost or not; while the GPU's lost it writes nothing,
+    /// as Write.
     @MainThread @PanicsAtCaller
     Public Method WritePixels(x: Int32, y: Int32, width: Int32, height: Int32, bytes: UInt8[])
         Local texture = Live("WritePixels")
@@ -476,7 +479,8 @@ Public Final Class Texture Implements Asset
     /// Its pixels at mipmap `level`, read back from the GPU after everything the frame's drawn so
     /// far, which it waits for: rows top first, in its format's bytes, as WritePixels takes them.
     /// It panics for a level whose bytes are more than an array holds, 2147483647, as a 16384 by
-    /// 16384 RGBA16F texture's first level's are, before reading any.
+    /// 16384 RGBA16F texture's first level's are, before reading any, and while the GPU's lost
+    /// (Gpu.Lost), saying so.
     @MainThread @PanicsAtCaller
     Public Method ReadPixels(level: Int32 = 0): UInt8[]
         Local texture = Live("ReadPixels")
@@ -515,7 +519,8 @@ Public Final Class Texture Implements Asset
     /// Its first level's pixels on the CPU, to read and write a pixel at a time: read back from the
     /// GPU only when it's changed them since, which waits for the frame so far, and what's written
     /// sent at Unlock, before the GPU next uses it. It panics unless it's RGBA8 or RGBA8_LINEAR,
-    /// and for a multisampled target, whose pixels are only drawn.
+    /// and for a multisampled target, whose pixels are only drawn; and while the GPU's lost
+    /// (Gpu.Lost), when they'd be read back, as after a write or a draw into it, saying so.
     @MainThread @PanicsAtCaller
     Public Method LockPixels(): Pixels
         Local texture = Live("LockPixels")

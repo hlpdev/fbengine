@@ -36,9 +36,13 @@ std::vector<std::uint32_t> free_samples_slots;
 VkImageView samples_placeholder = VK_NULL_HANDLE;
 std::array<VkImageView, fbe::gpu::samples_slots> samples_views{};
 
-/// Points the set's slot for samples `slot` at `view`, in SHADER_READ_ONLY_OPTIMAL.
+/// Points the set's slot for samples `slot` at `view`, in SHADER_READ_ONLY_OPTIMAL; on a lost GPU
+/// only as it's kept, as nothing draws with the set again.
 void write_samples(std::uint32_t slot, VkImageView view) {
     samples_views.at(slot) = view;
+    if (fbe::gpu::lost()) {
+        return;
+    }
     const VkDescriptorImageInfo image{
         .imageView = view,
         .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -52,11 +56,15 @@ void write_samples(std::uint32_t slot, VkImageView view) {
         .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
         .pImageInfo = &image,
     };
+    ++fbe::gpu::reached().descriptor_writes;
     vkUpdateDescriptorSets(fbe::gpu::device()->device, 1, &write, 0, nullptr);
 }
 
 float lod_bias = 0.0F;
 float anisotropy = 1.0F;
+/// What 3D's samplers were last made with, as the device takes them.
+float made_bias = 0.0F;
+float made_anisotropy = 1.0F;
 
 void destroy_samplers(const fbe::gpu::device_t& gpu,
                       std::array<VkSampler, fbe::gpu::sampler_slots>& made) {
@@ -102,6 +110,7 @@ bool make_samplers(const fbe::gpu::device_t& gpu) {
             .maxAnisotropy = linear && steepest > 1.0F ? steepest : 1.0F,
             .maxLod = VK_LOD_CLAMP_NONE,
         };
+        ++fbe::gpu::reached().samplers;
         const VkResult result = fbe::gpu::faulted(fbe::gpu::fault_t::SAMPLER)
                                     ? VK_ERROR_OUT_OF_HOST_MEMORY
                                     : vkCreateSampler(gpu.device, &info, nullptr, &made.at(index));
@@ -138,19 +147,23 @@ bool make_samplers(const fbe::gpu::device_t& gpu) {
         .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
         .pImageInfo = infos.data(),
     };
+    ++fbe::gpu::reached().descriptor_writes;
     vkUpdateDescriptorSets(gpu.device, 1, &write, 0, nullptr);
     destroy_samplers(gpu, samplers);
     samplers = made;
+    made_bias = bias;
+    made_anisotropy = most;
     return true;
 }
 
-/// The samplers made again for a new LOD bias or anisotropy, once the GPU's done with the old.
+/// The samplers made again for a new LOD bias or anisotropy, once the GPU's done with the old; on
+/// a lost GPU they're made with it as it starts again.
 bool remake_samplers() {
     const fbe::gpu::device_t* gpu = fbe::gpu::device();
-    if (gpu == nullptr) {
+    if (gpu == nullptr || fbe::gpu::lost()) {
         return true;
     }
-    vkDeviceWaitIdle(gpu->device);
+    fbe::gpu::wait_idle(gpu->device);
     return make_samplers(*gpu);
 }
 
@@ -325,6 +338,10 @@ std::uint32_t pool_images() {
 }
 
 void write_texture(std::uint32_t index, VkImageView view) {
+    // Nothing draws with a lost GPU's set again.
+    if (lost()) {
+        return;
+    }
     const VkDescriptorImageInfo image{
         .imageView = view,
         .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -338,6 +355,7 @@ void write_texture(std::uint32_t index, VkImageView view) {
         .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
         .pImageInfo = &image,
     };
+    ++fbe::gpu::reached().descriptor_writes;
     vkUpdateDescriptorSets(device()->device, 1, &write, 0, nullptr);
 }
 
@@ -373,6 +391,7 @@ void write_every_texture(VkImageView view) {
             .descriptorCount = std::min(done, capacity - done),
         };
     }
+    ++fbe::gpu::reached().descriptor_writes;
     vkUpdateDescriptorSets(device()->device, 1, &write, count, copies.data());
 }
 
@@ -422,6 +441,14 @@ std::uint32_t sampler_index(std::int32_t filter, std::int32_t wrap_u, std::int32
 
 float lod_bias_in_samplers() {
     return lod_bias - lod_bias_left();
+}
+
+float samplers_lod_bias() {
+    return made_bias;
+}
+
+float samplers_anisotropy() {
+    return made_anisotropy;
 }
 
 float lod_bias_left() {

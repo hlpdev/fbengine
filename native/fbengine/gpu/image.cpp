@@ -100,6 +100,7 @@ image_t make_color_image(VkFormat format, VkExtent2D extent) {
             .layerCount = 1,
         },
     };
+    ++reached().views;
     result = vkCreateImageView(gpu->device, &view_info, nullptr, &image.view);
     if (result != VK_SUCCESS) {
         fail_vulkan("couldn't make an image's view", result);
@@ -112,7 +113,10 @@ image_t make_color_image(VkFormat format, VkExtent2D extent) {
 void destroy_image(image_t& image) {
     const device_t* gpu = device();
     if (gpu != nullptr && image.image != VK_NULL_HANDLE) {
-        vkDeviceWaitIdle(gpu->device);
+        // Nothing's in flight on a lost device to wait for.
+        if (!lost()) {
+            wait_idle(gpu->device);
+        }
         vkDestroyImageView(gpu->device, image.view, nullptr);
         vmaDestroyImage(gpu->allocator, image.image, image.memory);
     }
@@ -163,7 +167,7 @@ bool run_now(const std::function<void(VkCommandBuffer)>& record) {
     VkResult result = faulted(fault_t::LOST_NOW) ? VK_ERROR_DEVICE_LOST
                                                  : gpu->queue_submit(gpu->queue, 1, &submit, done);
     if (result == VK_SUCCESS) {
-        result = vkWaitForFences(gpu->device, 1, &done, VK_TRUE, UINT64_MAX);
+        result = wait_for(gpu->device, done);
     }
     vkResetFences(gpu->device, 1, &done);
     if (lose(result)) {

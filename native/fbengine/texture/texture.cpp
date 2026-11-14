@@ -262,6 +262,7 @@ bool make_stored_view(VkImage image, VkImageView& view) {
             .layerCount = 1,
         },
     };
+    ++fbe::gpu::reached().views;
     const VkResult result = vkCreateImageView(fbe::gpu::device()->device, &info, nullptr, &view);
     if (result != VK_SUCCESS) {
         view = VK_NULL_HANDLE;
@@ -308,6 +309,7 @@ bool make_attachment(const texture_t& texture, VkFormat format, VkImageUsageFlag
         .format = format,
         .subresourceRange = { .aspectMask = aspect, .levelCount = 1, .layerCount = 1 },
     };
+    ++fbe::gpu::reached().views;
     result = vkCreateImageView(gpu.device, &view_info, nullptr, &view);
     if (result != VK_SUCCESS) {
         view = VK_NULL_HANDLE;
@@ -546,6 +548,7 @@ bool make(std::uint32_t slot, const spec_t& spec) {
             .layerCount = 1,
         },
     };
+    ++fbe::gpu::reached().views;
     result = fbe::gpu::faulted(fbe::gpu::fault_t::VIEW)
                  ? VK_ERROR_OUT_OF_HOST_MEMORY
                  : vkCreateImageView(gpu.device, &view_info, nullptr, &texture.view);
@@ -680,8 +683,10 @@ bool make(std::uint32_t slot, const spec_t& spec) {
 bool upload(std::uint64_t handle, const texture_t& texture, std::uint32_t x, std::uint32_t y,
             std::uint32_t width, std::uint32_t height, const std::uint8_t* pixels,
             std::uint32_t pitch, bool ahead = false) {
-    // A lost GPU runs nothing, so nothing's sent: written as a draw is, into nothing.
+    // A lost GPU runs nothing, so nothing's sent: written as a draw is, into nothing, but changed,
+    // so its pixels on the CPU from before aren't what it has.
     if (fbe::gpu::lost()) {
+        fbe::texture::changed_on_gpu(handle);
         return true;
     }
     const std::uint32_t row = width * fbe::texture::pixel_size(texture.format);
@@ -734,6 +739,9 @@ bool upload_level(std::uint64_t handle, const texture_t& texture, std::uint32_t 
                   std::uint32_t width, std::uint32_t height, const std::uint8_t* pixels,
                   std::uint32_t pitch) {
     if (fbe::gpu::lost()) {
+        if (level == 0) {
+            fbe::texture::changed_on_gpu(handle);
+        }
         return true;
     }
     const std::uint32_t row = width * fbe::texture::pixel_size(texture.format);
@@ -801,14 +809,15 @@ bool checked(std::int32_t width, std::int32_t height, std::int32_t format) {
     if (!fbe::gpu::start_with_window()) {
         return false;
     }
-    if (fbe::gpu::lost()) {
-        return fbe::gpu::fail_lost();
-    }
+    // Its size is the call's own to get right, lost or not.
     const auto largest =
         static_cast<std::int32_t>(fbe::gpu::device()->properties.limits.maxImageDimension2D);
     if (width < 1 || height < 1 || width > largest || height > largest) {
         return fbe::fail(std::format("a texture is 1 to {} pixels on a side, not {}x{}", largest,
                                      width, height));
+    }
+    if (fbe::gpu::lost()) {
+        return fbe::gpu::fail_lost();
     }
     return true;
 }
@@ -1029,16 +1038,17 @@ std::optional<spec_t> spec_of(const fbe::assets::image_t& image, bool srgb, bool
     if (!fbe::gpu::start_with_window()) {
         return std::nullopt;
     }
-    if (fbe::gpu::lost()) {
-        fbe::gpu::fail_lost();
-        return std::nullopt;
-    }
+    // What's wrong with the image is said, lost or not.
     std::optional<file_format_t> format = file_format(image.format);
     if (!format) {
         invalid_image(std::format("a texture isn't of the image's Vulkan format {}", image.format));
         return std::nullopt;
     }
     if (!well_formed(image, *format)) {
+        return std::nullopt;
+    }
+    if (fbe::gpu::lost()) {
+        fbe::gpu::fail_lost();
         return std::nullopt;
     }
     auto vk_format = static_cast<VkFormat>(image.format);
@@ -1516,16 +1526,28 @@ bool read_once(uint64_t texture, int32_t level, uint8_t* pixels, int64_t size) {
     if (found == nullptr) {
         return false;
     }
+    if (!has_pixels(*found)) {
+        return false;
+    }
     if (level < 0) {
         return fbe::fail(std::format("the texture has {} levels, not {}", found->levels, level));
+    }
+    if (std::cmp_greater_equal(level, found->levels)) {
+        return fbe::fail(
+            std::format("the texture has {} levels, not {}", found->levels, level + 1));
+    }
+    // Checked before it's read, so a call that's wrong is said to be, lost or not.
+    const auto shift = static_cast<std::uint32_t>(level);
+    const std::size_t bytes = std::size_t{ std::max(found->width >> shift, 1U) } *
+                              std::max(found->height >> shift, 1U) *
+                              fbe::texture::pixel_size(found->format);
+    if (pixels == nullptr || std::cmp_not_equal(size, bytes)) {
+        return fbe::fail(std::format("the level's {} bytes, not {}", bytes, size));
     }
     const std::vector<std::uint8_t> read =
         fbe::texture::read(texture, static_cast<std::uint32_t>(level));
     if (read.empty()) {
         return false;
-    }
-    if (pixels == nullptr || std::cmp_not_equal(size, read.size())) {
-        return fbe::fail(std::format("the level's {} bytes, not {}", read.size(), size));
     }
     std::memcpy(pixels, read.data(), read.size());
     return true;
@@ -1652,7 +1674,7 @@ bool reload_once(uint64_t texture, uint64_t load, bool srgb, bool mipmaps) {
     if (!fbe::gpu::finish_frame()) {
         return false;
     }
-    const VkResult idle = vkDeviceWaitIdle(fbe::gpu::device()->device);
+    const VkResult idle = fbe::gpu::wait_idle(fbe::gpu::device()->device);
     if (idle != VK_SUCCESS) {
         return fbe::gpu::fail_vulkan("the GPU couldn't finish", idle);
     }
