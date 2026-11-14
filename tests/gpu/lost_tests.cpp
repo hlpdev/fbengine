@@ -641,7 +641,7 @@ TEST_CASE("a GPU lost for a test asks nothing of the driver, and each call refus
             CHECK(rowed.contains(name) != quiet.contains(name));
         }
     }
-    CHECK(exports == 172);
+    CHECK(exports == 174);
     CHECK(calls.size() == 52);
     CHECK(rowed.size() == 48);
     CHECK(rowed.size() + quiet.size() == exports);
