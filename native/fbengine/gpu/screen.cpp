@@ -137,8 +137,10 @@ void stop_screen() {
 extern "C" {
 
 FBE_API uint64_t fbe_gpu_screen(void) {
-    // A headless window's screen is made as the GPU starts, which nothing else may have started.
-    if (screen == 0 && fbe::gpu::window_open() && fbe::gpu::device() == nullptr) {
+    // A headless window's screen is made as the GPU starts, which nothing else may have started;
+    // never once a start's failed, until a stop, as the game's own retry waits then.
+    if (screen == 0 && fbe::gpu::window_open() && fbe::gpu::device() == nullptr &&
+        !fbe::gpu::start_failed()) {
         fbe::gpu::start_with_window();
     }
     return screen;

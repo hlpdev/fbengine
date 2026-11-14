@@ -319,6 +319,9 @@ void stop_bindless() {
     capacity = 0;
     samples_placeholder = VK_NULL_HANDLE;
     samples_views.fill(VK_NULL_HANDLE);
+    // No samplers are in force until the next start makes them.
+    made_bias = 0.0F;
+    made_anisotropy = 1.0F;
 }
 
 VkDescriptorSetLayout bindless_layout() {

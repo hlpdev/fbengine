@@ -112,8 +112,11 @@ VkInstance instance();
 device_t* device();
 
 /// Starts the GPU, making `surface` the swapchain's if there is one, which the device has to be
-/// able to present to; false, with fbe_error's why, if it can't, and then it never starts.
+/// able to present to; false, with fbe_error's why, if it can't, and then it fails again, at
+/// once, until it's stopped.
 bool start(VkSurfaceKHR surface);
+/// Whether the last start failed, which stopping forgets.
+bool start_failed();
 
 /// Stops the GPU, if it's started, tearing everything down in order: the window's images and
 /// surface, the pipelines, the work-now commands, the frames, VMA, the device, the validation

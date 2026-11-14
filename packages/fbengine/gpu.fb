@@ -86,14 +86,15 @@ Public Class Gpu
     @MainThread Public Static Method Device(): Int32 => fbe_gpu_device()
 
     /// Starts the GPU now, if it hasn't started, with a swapchain for the window if it's open. If it
-    /// can't, it never will, and throws why each time.
+    /// can't, it throws why, and again at once each time after, until Stop forgets the failure, so
+    /// the next Start tries again; nothing starts the GPU by itself in the meantime.
     @MainThread Public Static Method Start() Throws GraphicsError
         If !fbe_gpu_start() Then Throw GraphicsError(LastError())
     End Method
 
     /// Stops the GPU, if it's started, freeing everything it made, the window's swapchain first;
     /// the window stays open, Flip presents nothing, and the GPU can start again, on the device
-    /// SetDevice says then.
+    /// SetDevice says then, a failed Start forgotten.
     @MainThread Public Static Method Stop()
         fbe_gpu_stop()
     End Method
@@ -127,22 +128,39 @@ Public Class Gpu
     /// is kept, in force once the GPU's made again, and a call's own mistake panics as it would on
     /// a GPU that isn't lost. Nothing made on it before is left, so a game makes its textures
     /// again. Nothing makes it again but the game: its loop does, each frame before it draws, as
-    /// the editor's does, trying again later if Start throws:
+    /// the editor's does, stopping it and starting it, and if Start throws, as a device that's
+    /// still lost does, stopping and starting it again a second later, counted in Frame.Delta:
     ///
     /// ```vb
     /// Flip()
     /// If Gpu.Lost()
     ///     Gpu.Stop()
-    ///     Try? Gpu.Start()
+    ///     remaking = True
+    ///     remakeIn = 0.0
+    /// End If
+    /// If remaking
+    ///     remakeIn -= Frame.Delta()
+    ///     If remakeIn <= 0.0
+    ///         Gpu.Stop()
+    ///         remaking = False
+    ///         Try
+    ///             Try Gpu.Start()
+    ///         Catch error As GraphicsError
+    ///             remaking = True
+    ///             remakeIn = 1.0
+    ///         End Try
+    ///     End If
     /// End If
     /// ```
     @MainThread Public Static Method Lost(): Bool => fbe_gpu_lost()
 
     /// Loses the GPU, as a driver's crash or reset does, for a game's tests of what it does then:
-    /// Lost from then on, until Stop and Start make it again. It throws GraphicsError unless the
-    /// GPU's started.
-    @MainThread Public Static Method SimulateLoss() Throws GraphicsError
-        If !fbe_gpu_simulate_loss() Then Throw GraphicsError(LastError())
+    /// Lost from then on, until Stop and Start make it again; and the next `startsFailing` Starts
+    /// throw as a device that's still lost does, each forgotten by Stop as any failed Start is, for
+    /// a test of a game's retry. It throws GraphicsError unless the GPU's started, or for a count
+    /// under 0.
+    @MainThread Public Static Method SimulateLoss(startsFailing: Int = 0) Throws GraphicsError
+        If !fbe_gpu_simulate_loss(startsFailing As Int32) Then Throw GraphicsError(LastError())
     End Method
 
     /// How many bytes of the GPU's own memory the program can use, as the driver says where it

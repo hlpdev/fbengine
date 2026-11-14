@@ -199,6 +199,20 @@ bool says_lost() {
     return std::string_view(fbe_error()).starts_with("the GPU was lost");
 }
 
+/// A fixed delta, taken away as its scope ends, however it ends.
+struct fixed_delta_t {
+    explicit fixed_delta_t(double seconds) {
+        require(fbe_frame_set_fixed_delta(seconds));
+    }
+    fixed_delta_t(const fixed_delta_t&) = delete;
+    fixed_delta_t& operator=(const fixed_delta_t&) = delete;
+    fixed_delta_t(fixed_delta_t&&) = delete;
+    fixed_delta_t& operator=(fixed_delta_t&&) = delete;
+    ~fixed_delta_t() {
+        fbe_frame_set_fixed_delta(0.0);
+    }
+};
+
 } // namespace
 
 TEST_CASE("a GPU lost for a test asks nothing of the driver, and each call refuses or does nothing",
@@ -542,7 +556,7 @@ TEST_CASE("a GPU lost for a test asks nothing of the driver, and each call refus
         {
             .name = "fbe_gpu_simulate_loss",
             .does = lost_t::NOTHING,
-            .call = [] { return fbe_gpu_simulate_loss(); },
+            .call = [] { return fbe_gpu_simulate_loss(0); },
         },
         {
             .name = "fbe_gpu_memory_budget",
@@ -661,7 +675,7 @@ TEST_CASE("a GPU lost for a test asks nothing of the driver, and each call refus
         }
     }
 
-    CHECK(fbe_gpu_simulate_loss());
+    CHECK(fbe_gpu_simulate_loss(0));
     for (std::size_t at = 0; at < calls.size(); ++at) {
         const call_t& each = calls[at];
         CAPTURE(each.name);
@@ -749,7 +763,7 @@ TEST_CASE("a write or draw while the GPU's lost leaves its pixels on the CPU fro
     for (const std::uint64_t texture : { written, drawn, texted }) {
         require(fbe_texture_pixels(texture, nullptr) != nullptr);
     }
-    CHECK(fbe_gpu_simulate_loss());
+    CHECK(fbe_gpu_simulate_loss(0));
     // Taken again with nothing since, it's what it was.
     CHECK(fbe_texture_pixels(written, nullptr) != nullptr);
     require(fbe_texture_write(written, 0, 0, 1, 1, pixel.data(), 4));
@@ -772,7 +786,7 @@ TEST_CASE("the LOD bias and anisotropy set while the GPU's lost are in force onc
     require(fbe_gpu_start());
     const float bias = fbe::gpu::samplers_lod_bias();
     const float anisotropy = fbe::gpu::samplers_anisotropy();
-    CHECK(fbe_gpu_simulate_loss());
+    CHECK(fbe_gpu_simulate_loss(0));
     const fbe::gpu::reached_t before = fbe::gpu::reached();
     require(fbe_gpu_set_lod_bias(2.0F));
     require(fbe_gpu_set_anisotropy(4.0F));
@@ -789,9 +803,14 @@ TEST_CASE("the LOD bias and anisotropy set while the GPU's lost are in force onc
     const fbe::gpu::device_t& gpu = *fbe::gpu::device();
     CHECK(fbe::gpu::samplers_lod_bias() == std::min(2.0F, gpu.max_lod_bias));
     CHECK(fbe::gpu::samplers_anisotropy() == std::min(4.0F, gpu.max_anisotropy));
+    // Stopped, no samplers are in force, and the settings are kept for the next start.
+    stop_gpu();
+    CHECK(fbe::gpu::samplers_lod_bias() == 0.0F);
+    CHECK(fbe::gpu::samplers_anisotropy() == 1.0F);
+    CHECK(fbe_gpu_lod_bias() == 2.0F);
+    CHECK(fbe_gpu_anisotropy() == 4.0F);
     require(fbe_gpu_set_lod_bias(0.0F));
     require(fbe_gpu_set_anisotropy(1.0F));
-    stop_gpu();
 }
 
 TEST_CASE("a camera with no target and no window is refused, lost or not", "[gpu][stability]") {
@@ -802,7 +821,7 @@ TEST_CASE("a camera with no target and no window is refused, lost or not", "[gpu
     CHECK_FALSE(fbe_render_camera(camera, 1.0F));
     const std::string whole = fbe_error();
     CHECK(whole == "a camera with no target draws into the screen, and there's no window open");
-    CHECK(fbe_gpu_simulate_loss());
+    CHECK(fbe_gpu_simulate_loss(0));
     CHECK_FALSE(fbe_render_camera(camera, 1.0F));
     CHECK(std::string(fbe_error()) == whole);
     CHECK_FALSE(fbe_render_world(world, 1.0F));
@@ -810,5 +829,113 @@ TEST_CASE("a camera with no target and no window is refused, lost or not", "[gpu
     fbe_world_free(world);
     std::array<std::uint64_t, 64> some{};
     while (fbe_entity_freed(some.data(), some.size()) != 0) {}
+    stop_gpu();
+}
+
+TEST_CASE("a start that failed is tried again once the GPU's stopped, and the GPU's made again",
+          "[gpu][stability]") {
+    REQUIRE(fbe_window_set_headless(true));
+    require(fbe_window_open(32, 16, FBE_WINDOW_WINDOWED));
+    require(fbe_gpu_start());
+    CHECK_FALSE(fbe_gpu_simulate_loss(-1));
+    CHECK_FALSE(fbe_gpu_lost());
+    require(fbe_gpu_simulate_loss(1));
+    // A game's loop, as Gpu.Lost's doc has it: stopped and started, and on a failure stopped and
+    // started again a second later, counted in the delta, which 1/32 counts out exactly.
+    const fixed_delta_t fixed(1.0 / 32.0);
+    int starts = 0;
+    int failures = 0;
+    int made_at = -1;
+    bool remaking = false;
+    double remake_in = 0.0;
+    for (int frame = 0; frame < 100 && made_at < 0; ++frame) {
+        CAPTURE(frame);
+        fbe_frame_flip(false);
+        if (fbe_gpu_lost()) {
+            fbe_gpu_stop();
+            remaking = true;
+            remake_in = 0.0;
+        }
+        if (!remaking) {
+            continue;
+        }
+        remake_in -= fbe_frame_delta();
+        if (remake_in > 0.0) {
+            // Nothing starts it by itself meanwhile, the screen neither: it doesn't try.
+            CHECK_FALSE(fbe_texture_retain(0));
+            const std::string before = fbe_error();
+            CHECK(fbe_gpu_screen() == 0);
+            CHECK(std::string(fbe_error()) == before);
+            CHECK_FALSE(fbe_gpu_started());
+            continue;
+        }
+        fbe_gpu_stop();
+        ++starts;
+        if (fbe_gpu_start()) {
+            made_at = frame;
+            remaking = false;
+        } else {
+            ++failures;
+            INFO(fbe_error());
+            CHECK(std::string_view(fbe_error()).ends_with("(VkResult -4)"));
+            remake_in = 1.0;
+        }
+    }
+    CHECK(starts == 2);
+    CHECK(failures == 1);
+    CHECK(made_at == 32);
+    // Made again, it draws.
+    REQUIRE(fbe_gpu_started());
+    CHECK_FALSE(fbe_gpu_lost());
+    CHECK(fbe_gpu_screen() != 0);
+    const std::uint64_t again = fbe_texture_create_target(8, 8, FBE_TEXTURE_RGBA8, 1, false);
+    require(again != 0);
+    const fbe_2d_pen_t red{ .red = 255, .alpha = 255 };
+    require(fbe_2d_clear(again, &red));
+    // 8 by 8 pixels of 4 bytes.
+    std::array<std::uint8_t, 256> read{};
+    require(fbe_texture_read(again, 0, read.data(), read.size()));
+    CHECK(read[0] == 255);
+    CHECK(read[1] == 0);
+    const std::int64_t shown = fbe_gpu_presented();
+    fbe_frame_flip(false);
+    CHECK(fbe_gpu_presented() == shown + 1);
+    CHECK(fbe_texture_release(again));
+    stop_gpu();
+    fbe_window_close();
+}
+
+TEST_CASE("a camera's render while the GPU's lost leaves its target's pixels on the CPU older",
+          "[gpu][stability]") {
+    require(fbe_gpu_start());
+    const std::uint64_t world = fbe_world_create();
+    const std::uint64_t first = fbe_entity_create(world, 0, FBE_ENTITY_CAMERA);
+    const std::uint64_t second = fbe_entity_create(world, 0, FBE_ENTITY_CAMERA);
+    const std::uint64_t first_target =
+        fbe_texture_create_target(16, 16, FBE_TEXTURE_RGBA8, 1, true);
+    const std::uint64_t second_target =
+        fbe_texture_create_target(16, 16, FBE_TEXTURE_RGBA8, 1, true);
+    require(first_target != 0 && second_target != 0);
+    require(fbe_camera_set_target(first, first_target));
+    require(fbe_camera_set_target(second, second_target));
+    require(fbe_render_world(world, 1.0F));
+    for (const std::uint64_t target : { first_target, second_target }) {
+        require(fbe_texture_pixels(target, nullptr) != nullptr);
+    }
+    require(fbe_gpu_simulate_loss(0));
+    // The one camera's render changes its target alone.
+    require(fbe_render_camera(first, 1.0F));
+    CHECK(fbe_texture_pixels(first_target, nullptr) == nullptr);
+    CHECK(says_lost());
+    CHECK(fbe_texture_pixels(second_target, nullptr) != nullptr);
+    // The world's changes every camera's.
+    require(fbe_render_world(world, 1.0F));
+    CHECK(fbe_texture_pixels(second_target, nullptr) == nullptr);
+    CHECK(says_lost());
+    fbe_world_free(world);
+    std::array<std::uint64_t, 64> some{};
+    while (fbe_entity_freed(some.data(), some.size()) != 0) {}
+    fbe_texture_release(first_target);
+    fbe_texture_release(second_target);
     stop_gpu();
 }
