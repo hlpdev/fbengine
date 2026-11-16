@@ -513,9 +513,9 @@ FBE_API float fbe_light_shadow_distance(uint64_t light);
 // False below 0.
 FBE_API bool fbe_light_set_intensity(uint64_t light, float intensity);
 FBE_API float fbe_light_intensity(uint64_t light);
-// How far a point or spot light reaches, where it ends: per pixel, the inverse square windowed to
-// 0 there; per vertex, FBE_SHADING_VERTEX, 1 - distance / range, 1 at the light and 0 there.
-// False unless above 0.
+// How far a point or spot light reaches, in its shading model's meaning: per pixel, where it ends,
+// the inverse square windowed to 0 there; per vertex, FBE_SHADING_VERTEX, where it starts to fall,
+// as range over distance, with no end. False unless above 0.
 FBE_API bool fbe_light_set_range(uint64_t light, float range);
 FBE_API float fbe_light_range(uint64_t light);
 // A spot light's cone: the angle from its axis where it starts to fade, and where it's out;

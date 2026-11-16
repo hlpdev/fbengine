@@ -13,7 +13,6 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <span>
 #include <utility>
 #include <vector>
 
@@ -191,15 +190,18 @@ struct chosen_t {
     bool operator==(const chosen_t&) const = default;
 };
 
-/// The lights that light `item` most, of `lit`, eight at most, leaving out every point and spot
-/// light whose range ends short of its entity's bounds, which adds nothing to it: of eight or
-/// fewer left, all of them; of more, directional ones first, then those nearest the bounds for how
-/// far they reach, their distance from the box over their range, least first. What lights it
-/// alike is taken in the order it was made, so the eight are the same from frame to frame while
-/// nothing moves, and a light made or freed elsewhere changes none of them.
+/// The lights that light `item` most, of `lit`, eight at most: every one of eight or fewer; of
+/// more, directional ones first, then those nearest its entity's bounds for how far they reach,
+/// their distance from the box over their range, least first. What lights it alike is taken in
+/// the order it was made, so the eight are the same from frame to frame while nothing moves, and
+/// a light made or freed elsewhere changes none of them.
 chosen_t lights_for(const item_t& item, const std::vector<lit_t>& lit) {
     chosen_t picked;
-    if (lit.empty()) {
+    if (lit.size() <= FBE_DRAW_LIGHTS) {
+        picked.count = static_cast<std::uint32_t>(lit.size());
+        for (std::uint32_t at = 0; at < picked.count; ++at) {
+            picked.lights[at] = at;
+        }
         return picked;
     }
     // Its bounds in the world, or where it is, as a box of no size.
@@ -227,24 +229,18 @@ chosen_t lights_for(const item_t& item, const std::vector<lit_t>& lit) {
                                  std::clamp(one.place.y, box.min.y, box.max.y),
                                  std::clamp(one.place.z, box.min.z, box.max.z));
             reach = scene::length(one.place - nearest) / std::fmax(one.draw.range, 1e-6F);
-            if (reach > 1.0F) {
-                continue;
-            }
         }
         ranked.push_back({ .reach = reach, .made = one.made, .at = at });
     }
-    if (ranked.size() > FBE_DRAW_LIGHTS) {
-        const auto most = ranked.begin() + FBE_DRAW_LIGHTS;
-        std::ranges::partial_sort(ranked, most, [](const ranked_t& a, const ranked_t& b) {
-            return a.reach != b.reach ? a.reach < b.reach : a.made < b.made;
-        });
-    }
-    picked.count =
-        static_cast<std::uint32_t>(std::min<std::size_t>(ranked.size(), FBE_DRAW_LIGHTS));
+    const auto most = ranked.begin() + FBE_DRAW_LIGHTS;
+    std::ranges::partial_sort(ranked, most, [](const ranked_t& a, const ranked_t& b) {
+        return a.reach != b.reach ? a.reach < b.reach : a.made < b.made;
+    });
+    picked.count = FBE_DRAW_LIGHTS;
     for (std::uint32_t i = 0; i < picked.count; ++i) {
         picked.lights[i] = ranked[i].at;
     }
-    std::ranges::sort(std::span(picked.lights).first(picked.count));
+    std::ranges::sort(picked.lights);
     return picked;
 }
 
@@ -279,8 +275,8 @@ void read_view(const camera_t& camera, const scene::view_t& view, const scene::t
     lists.draw_lights.clear();
     lists.clusters.assign(FBE_CLUSTERS, fbe_cluster_t{ .first = 0, .count = 0 });
     std::vector<lit_t> lit = lights_lit(s.entities.world[camera.entity], view, tweened);
-    // What's lit per vertex takes eight lights at most, as fixed-function hardware's did, of those
-    // that reach it, which stay in the lights though no cluster has them: all of them when there
+    // What's lit per vertex takes eight lights at most, as fixed-function hardware's did, whatever
+    // they reach, so they stay in the lights though no cluster has them: all of them when there
     // are no more, and of more, each draw the eight that light it most. Draws lit by the same ones
     // share them, each list in the tree's order.
     std::vector<chosen_t> chosen;

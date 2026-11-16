@@ -146,11 +146,11 @@ Public Final Class Light Extends Entity
     @MainThread @PanicsAtCaller
     Public Method Intensity(): Float => fbe_light_intensity(Live("Intensity"))
 
-    /// Sets how far a point or spot light reaches: where it ends, lighting nothing past it. Per
-    /// pixel, a distance d away falls as glTF's KHR_lights_punctual,
+    /// Sets how far a point or spot light reaches, in its shading model's meaning. Per pixel, it's
+    /// where it ends, a distance d away falling as glTF's KHR_lights_punctual,
     /// `clamp(1 - (d / range)^4, 0, 1)^2 / max(d^2, 0.0001)`. Per vertex, Shading.VERTEX, it's
-    /// `clamp(1 - d / range, 0, 1)`, 1 at the light and 0 at its range, as a baked lightmap's lamp
-    /// falls off; a model's lit by the eight that reach it most. One not above 0 panics.
+    /// `range / d`, with no end, as Blitz's LightRange: past 1 within its range, as only what the
+    /// lights come to is clamped, as DirectX 7 did. One not above 0 panics.
     @Limits(0, Above: True)
     @MainThread @PanicsAtCaller
     Public Method SetRange(range: Float)
