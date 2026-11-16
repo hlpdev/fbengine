@@ -356,7 +356,7 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     crate.SetMaterial(vertex)
     crate.SetPosition(Vec3(2, 0, -6))
     Local lamp = Light()
-    lamp.SetRange(2)
+    lamp.SetRange(5)
     Local glass = Plain(Color(0.2, 0.6, 0.9))
     glass.SetBlend(Blend.ALPHA)
     glass.SetAlpha(0.5)
@@ -386,7 +386,8 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
         // in light: 89, 141, 168.
         Check("the pane's half over what's behind", Seen(camera, shown, Vec3(0, 0, -5)),
               Color32(89, 141, 168, 255))
-        // The crate's 0.8, 0.6, 0.4 by a white light, reddest to bluest.
+        // The crate's 0.8, 0.6, 0.4 by a white light, reddest to bluest: at this frame the lamp's
+        // in range of all of it, so it's lit well past the ambient.
         Local crated = Seen(camera, shown, Vec3(2, 0, -6))
         Print("the crate's lit {crated.r > crated.g && crated.g > crated.b}")
     End If
