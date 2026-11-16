@@ -449,9 +449,9 @@ float3 whole(float3 normal)
 }
 
 // A light at a place: the way to it, and the light that reaches it. Per pixel, as glTF's
-// KHR_lights_punctual has it, which ends at its range, as clusters need; per vertex, as DirectX 7's
-// fixed function did with Blitz's attenuation of 1 / range, range over distance, with no end and
-// past 1 within it, in encoded values: only what the lights come to is clamped.
+// KHR_lights_punctual has it, which ends at its range, as clusters need; per vertex, 1 - distance /
+// range, 1 at the light and 0 at its range and past it, as a baked lightmap's lamp falls off, in
+// encoded values: only what the lights come to is clamped.
 void lightAt(Light light, float3 place, bool perVertex, out float3 way, out float3 color)
 {
     float falling = 1.0;
@@ -467,7 +467,7 @@ void lightAt(Light light, float3 place, bool perVertex, out float3 way, out floa
         way = apart > 0.0 ? to / apart : float3(0.0, 0.0, 1.0);
         if (perVertex)
         {
-            falling = light.range / max(apart, 0.0001);
+            falling = saturate(1.0 - apart / light.range);
         }
         else
         {

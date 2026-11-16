@@ -282,13 +282,15 @@ good modern engine on its own. Every structural choice is checked against both.
   constants, so any mix of them draws in the same pass.
   UNLIT and VERTEX are the fixed-function look, so they work in encoded values: layers, ADD, ×2,
   and fog on what's stored, with only the final color converted to linear for the target; PBR is
-  linear throughout. VERTEX's light is `range / distance` with no end, past 1 within its range, as
-  DirectX 7's attenuation of `1 / range` alone is, and only the lights' sum is clamped, per vertex
-  before texturing, from 8 shown lights at most: all of 8 or fewer, in the tree's order, and of
-  more, each draw's own 8 that light it most, directional ones first, then by a light's distance
-  from the draw's bounds over its range, which is what `range / distance` falls off by, and of
-  those alike the first made, so the choice holds from frame to frame (lights_for); PBR keeps
-  KHR_lights_punctual's window, which clusters need. Range means each in its model. A Texture has
+  linear throughout. VERTEX's light is `saturate(1 - distance / range)`, 1 at the light and 0 at
+  its range and past it, as the baked lightmaps' lamps fall off (Blitz's and DirectX 7's
+  `range / distance`, with no end, went in 1.4.0: props glowed beside dark walls), and only the
+  lights' sum is clamped, per vertex before texturing, from 8 shown lights at most, never one whose
+  range ends short of the draw's bounds: all of 8 or fewer left, in the tree's order, and of more,
+  each draw's own 8 that light it most, directional ones first, then by a light's distance from
+  the draw's bounds over its range, and of those alike the first made, so the choice holds from
+  frame to frame (lights_for); PBR keeps KHR_lights_punctual's window, which clusters need. Both
+  end at a light's range. A Texture has
   an alpha flag, which AUTO blending honors. A Texture's mipmaps are made from its first level by
   the GPU, or a game writes a level of its own (`WriteLevel`), which leaves the others as they are,
   as for mipmaps that keep what an alpha cutoff keeps; a write of the first level makes them all

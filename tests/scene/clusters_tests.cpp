@@ -370,27 +370,35 @@ std::uint64_t mesh_in(std::uint64_t world, std::uint64_t material) {
 
 } // namespace
 
-TEST_CASE("a VERTEX draw has the first shown lights, whatever they reach", "[render]") {
+TEST_CASE("a VERTEX draw has the shown lights that reach its bounds, and only those", "[render]") {
     const test_world_t world;
     const std::uint64_t camera = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);
     const std::uint64_t retro = fbe_material_create();
     fbe_material_set_shading(retro, FBE_SHADING_VERTEX);
     const std::uint64_t floor = mesh_in(world.handle, retro);
     fbe_entity_set_position(floor, 0.0F, -1.0F, -10.0F, FBE_SPACE_WORLD);
-    // By its corner off to the side, and far from everything; hidden; with no intensity.
-    const std::uint64_t lamp = light(world.handle, FBE_LIGHT_POINT, 100.0F, -0.5F, -20.0F, 5.0F);
+    // By its corner, reaching it; 2 to its side, ending short of it, and far from everything,
+    // which add nothing; hidden; with no intensity.
+    const std::uint64_t lamp = light(world.handle, FBE_LIGHT_POINT, 1.5F, -0.5F, -8.5F, 1.0F);
+    const std::uint64_t short_of = light(world.handle, FBE_LIGHT_POINT, 3.0F, -1.0F, -10.0F, 1.9F);
     const std::uint64_t far = light(world.handle, FBE_LIGHT_POINT, 900.0F, 900.0F, 900.0F, 1.0F);
     const std::uint64_t hidden = light(world.handle, FBE_LIGHT_POINT, 0.0F, 0.0F, -5.0F, 5.0F);
     fbe_entity_set_hidden(hidden, true);
     const std::uint64_t dark = light(world.handle, FBE_LIGHT_POINT, 0.0F, 0.0F, -5.0F, 5.0F);
     fbe_light_set_intensity(dark, 0.0F);
-    const per_vertex_t got = per_vertex(camera);
+    per_vertex_t got = per_vertex(camera);
     REQUIRE(got.draws.size() == 1);
-    const std::vector<std::uint64_t> expected{ lamp, far };
+    const std::vector<std::uint64_t> expected{ lamp };
     CHECK(got.of(0) == expected);
-    // They're in the lights for that, though no cluster has them.
-    CHECK(got.found.lights.size() == 2);
-    CHECK(got.found.indices.empty());
+    CHECK(got.draws[0].light_count == 1);
+    // The far one's in no cluster either, so it's left out of the lights.
+    CHECK(std::ranges::none_of(got.found.lights,
+                               [&](const fbe_draw_light_t& lit) { return lit.light == far; }));
+    // Reaching it, it's one again.
+    fbe_light_set_range(short_of, 2.1F);
+    got = per_vertex(camera);
+    const std::vector<std::uint64_t> both{ lamp, short_of };
+    CHECK(got.of(0) == both);
     fbe_material_release(retro);
 }
 
@@ -418,7 +426,7 @@ TEST_CASE("only VERTEX draws have lights of their own", "[render]") {
     fbe_material_release(retro);
 }
 
-TEST_CASE("a VERTEX draw's eight lights are in the tree's order, one far off the ninth",
+TEST_CASE("a VERTEX draw's lights are in the tree's order, of more than eight none that ends short",
           "[render]") {
     const test_world_t world;
     const std::uint64_t camera = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);
@@ -428,8 +436,8 @@ TEST_CASE("a VERTEX draw's eight lights are in the tree's order, one far off the
     fbe_entity_set_position(mesh, 0.0F, 0.0F, -6.0F, FBE_SPACE_WORLD);
     // Made first, a pivot, whose child is made last, so the child's first in the tree's order and
     // last as they were made; a directional one among the roots, not ahead of them as it is in the
-    // lights; one far off, which takes its place all the same; and a ninth, further still for
-    // its range, which isn't one.
+    // lights; one far off, ending short of it, which isn't one though fewer than eight are left;
+    // and a ninth, further still for its range, which isn't one either.
     const std::uint64_t pivot = fbe_entity_create(world.handle, 0, FBE_ENTITY_PIVOT);
     std::vector<std::uint64_t> roots;
     roots.reserve(7);
@@ -451,13 +459,16 @@ TEST_CASE("a VERTEX draw's eight lights are in the tree's order, one far off the
     REQUIRE(got.draws.size() == 1);
     std::vector<std::uint64_t> expected{ child };
     expected.insert(expected.end(), roots.begin(), roots.end());
+    expected.erase(std::ranges::find(expected, roots[4]));
     CHECK(got.of(0) == expected);
-    CHECK(got.draws[0].light_count == FBE_DRAW_LIGHTS);
+    CHECK(got.draws[0].light_count == FBE_DRAW_LIGHTS - 1);
     // Each is in the lights as the lights have them: the directional one first.
     CHECK(got.found.lights[0].type == FBE_LIGHT_DIRECTIONAL);
     // What no draw wants and no cluster has is left out.
-    CHECK(std::ranges::none_of(got.found.lights,
-                               [&](const fbe_draw_light_t& lit) { return lit.light == ninth; }));
+    for (const std::uint64_t out : { roots[4], ninth }) {
+        CHECK(std::ranges::none_of(got.found.lights,
+                                   [&](const fbe_draw_light_t& lit) { return lit.light == out; }));
+    }
     fbe_material_release(retro);
 }
 

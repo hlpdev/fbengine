@@ -623,32 +623,87 @@ TEST_CASE("point lights fall off per pixel as glTF's", "[gpu][scene]") {
     fbe_material_release(material);
 }
 
-TEST_CASE("per vertex lighting falls off as range over distance, with no end, and past 1 within",
+namespace {
+
+/// What a VERTEX wall of half 0.05 stores, lit by a white light `apart` in front of its middle
+/// that reaches `range`: every corner as far from it, by 1 - distance / range, and as it faces it.
+std::uint8_t vertex_lit(float apart, float range) {
+    const float distance = std::sqrt((2.0F * 0.05F * 0.05F) + (apart * apart));
+    return stored(std::clamp(1.0F - (distance / range), 0.0F, 1.0F) * apart / distance);
+}
+
+} // namespace
+
+TEST_CASE("per vertex lighting falls off as 1 - distance / range, and ends at its range",
           "[gpu][scene]") {
     const scene_t scene;
     const std::uint64_t material = fbe_material_create();
     require(fbe_material_set_shading(material, FBE_SHADING_VERTEX));
-    // A small wall, all its vertices about as far from the lamp.
+    // A small wall, all its vertices about as far from the lamp, 2 its range.
     wall(scene.world, -1.0F, 0.05F, material);
-    const std::uint64_t lamp = light(scene.world, FBE_LIGHT_POINT, 0.0F, 0.0F, -1.0F, 1.5F);
-    // At 3, half: what's stored.
-    require(fbe_entity_set_position(lamp, 0.0F, 0.0F, 2.0F, FBE_SPACE_WORLD));
-    CHECK(near(middle(scene.drawn()), { 128, 128, 128 }, 1));
-    // At 1.2, inside its range, past all of it: 1.25 of a light 102 stores, as DirectX 7 had it,
-    // with nothing clamped till the lights are summed.
-    require(fbe_entity_set_position(lamp, 0.0F, 0.0F, 0.2F, FBE_SPACE_WORLD));
-    const float dim = light_of(102);
-    require(fbe_light_set_color(lamp, dim, dim, dim));
-    CHECK(near(middle(scene.drawn()), { 128, 128, 128 }, 1));
-    // A white one, 1.25 of white, is white.
-    require(fbe_light_set_color(lamp, 1.0F, 1.0F, 1.0F));
-    CHECK(near(middle(scene.drawn()), { 255, 255, 255 }, 1));
+    const std::uint64_t lamp = light(scene.world, FBE_LIGHT_POINT, 0.0F, 0.0F, -1.0F, 2.0F);
+    for (const float apart : { 0.1F, 1.0F, 2.0F, 3.0F }) {
+        INFO("the lamp " << apart << " from the wall");
+        require(fbe_entity_set_position(lamp, 0.0F, 0.0F, -1.0F + apart, FBE_SPACE_WORLD));
+        const std::uint8_t lit = vertex_lit(apart, 2.0F);
+        const rgba_t drawn = middle(scene.drawn());
+        INFO("drawn " << +drawn[0] << ", wanted " << +lit);
+        CHECK(near(drawn, { lit, lit, lit }, 1));
+    }
+    // By it, nearly all of its color; half its range away, half; at its range and past, nothing.
+    CHECK(vertex_lit(0.1F, 2.0F) > 190);
+    CHECK(vertex_lit(1.0F, 2.0F) == 127);
+    CHECK(vertex_lit(2.0F, 2.0F) == 0);
     // Clamped at the vertices, before any texture: a second lamp adds nothing past white.
+    require(fbe_entity_set_position(lamp, 0.0F, 0.0F, 0.2F, FBE_SPACE_WORLD));
+    require(fbe_light_set_range(lamp, 1000.0F));
     const std::uint64_t half = flat_texture(128, 128, 128, 255, FBE_TEXTURE_RGBA8_LINEAR);
     require(fbe_material_set_texture(material, 0, half));
-    light(scene.world, FBE_LIGHT_POINT, 0.0F, 0.0F, 0.2F, 1.5F);
+    light(scene.world, FBE_LIGHT_POINT, 0.0F, 0.0F, 0.2F, 1000.0F);
     CHECK(near(middle(scene.drawn()), { 128, 128, 128 }, 1));
     fbe_texture_release(half);
+    fbe_material_release(material);
+}
+
+TEST_CASE("a VERTEX spot light falls off as a point light does, inside its cone", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = fbe_material_create();
+    require(fbe_material_set_shading(material, FBE_SHADING_VERTEX));
+    wall(scene.world, -1.0F, 0.05F, material);
+    // Shining along its -Z, onto the wall, every corner well inside its inner cone.
+    const std::uint64_t spot = light(scene.world, FBE_LIGHT_SPOT, 0.0F, 0.0F, -1.0F, 2.0F);
+    require(fbe_light_set_cone(spot, 0.5F, 0.6F));
+    for (const float apart : { 0.25F, 1.0F, 2.0F, 3.0F }) {
+        INFO("the spot " << apart << " from the wall");
+        require(fbe_entity_set_position(spot, 0.0F, 0.0F, -1.0F + apart, FBE_SPACE_WORLD));
+        const std::uint8_t lit = vertex_lit(apart, 2.0F);
+        const rgba_t drawn = middle(scene.drawn());
+        INFO("drawn " << +drawn[0] << ", wanted " << +lit);
+        CHECK(near(drawn, { lit, lit, lit }, 1));
+    }
+    CHECK(vertex_lit(0.25F, 2.0F) > 200);
+    fbe_material_release(material);
+}
+
+TEST_CASE("a VERTEX model beside eight lights that end short of it has only the ambient",
+          "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = fbe_material_create();
+    require(fbe_material_set_shading(material, FBE_SHADING_VERTEX));
+    wall(scene.world, -3.0F, 1.0F, material);
+    // Eight bright lamps in a row 3 in front of it, each reaching 2.5.
+    for (int i = 0; i < 8; ++i) {
+        const float x = -0.7F + (0.2F * static_cast<float>(i));
+        const std::uint64_t lamp = light(scene.world, FBE_LIGHT_POINT, x, 0.5F, 0.0F, 2.5F);
+        require(fbe_light_set_intensity(lamp, 4.0F));
+    }
+    // The ambient light, 0.214 in linear light being half of what's stored.
+    require(fbe_world_set_ambient(scene.world, 0.214F, 0.214F, 0.214F));
+    const fbe::golden::frame_t frame = scene.drawn();
+    for (const rgba_t drawn : { middle(frame), pixel(frame, frame_size / 4, frame_size / 4) }) {
+        INFO("drawn " << +drawn[0] << ", " << +drawn[1] << ", " << +drawn[2]);
+        CHECK(near(drawn, { 128, 128, 128 }, 1));
+    }
     fbe_material_release(material);
 }
 

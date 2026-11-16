@@ -28,7 +28,7 @@ extern "C" {
 #define FBE_CLUSTERS_DEEP   24
 #define FBE_CLUSTERS        3456
 
-// The most lights an FBE_SHADING_VERTEX draw is lit by: the first eight in the tree's order.
+// The most lights an FBE_SHADING_VERTEX draw is lit by: eight of those that reach it.
 #define FBE_DRAW_LIGHTS 8
 
 // NOLINTBEGIN(modernize-use-using)
@@ -72,8 +72,8 @@ typedef struct fbe_draw_t {
 // ends; and the cosines of a spot light's cone, from its axis to where it starts to fade and to
 // where it's out. Per pixel, a distance d from a point or spot light has its color times glTF's
 // KHR_lights_punctual falloff, clamp(1 - (d / range)^4, 0, 1)^2 / max(d^2, 0.0001), which ends at
-// its range, as clusters need; per vertex, FBE_SHADING_VERTEX, min(range / d, 1), with no end, as
-// fixed-function hardware's: each model's range means its own.
+// its range, as clusters need; per vertex, FBE_SHADING_VERTEX, clamp(1 - d / range, 0, 1), 1 at
+// the light and 0 at its range, as a baked lightmap's lamp falls off.
 typedef struct fbe_draw_light_t {
     uint64_t light;
     int32_t type;
@@ -121,13 +121,13 @@ FBE_API bool fbe_render_lights(uint64_t camera, float target_width, float target
                                int32_t index_capacity, int32_t* index_count);
 
 // The lights of a camera's FBE_SHADING_VERTEX draws, by their indices in fbe_render_lights' lights:
-// each such draw's own, `light_count` of them from its `light_first`, in the tree's order, whatever
-// they reach. With FBE_DRAW_LIGHTS or fewer of its World's lights showing, every draw has them
-// all. With more, each has the FBE_DRAW_LIGHTS that light it most: directional ones first, then
-// those nearest its entity's bounds for how far they reach, their distance from the box over
-// their range, and of those alike, the first made, so the choice is the same from frame to frame
-// while nothing moves. Draws lit by the same ones share them. Writes up to `capacity` and gives
-// how many there are, -1 for a freed camera, or a tween outside 0 to 1.
+// each such draw's own, `light_count` of them from its `light_first`, in the tree's order, never a
+// point or spot light whose range ends short of its entity's bounds. With FBE_DRAW_LIGHTS or fewer
+// of the rest, it has them all. With more, the FBE_DRAW_LIGHTS that light it most: directional
+// ones first, then those nearest the bounds for how far they reach, their distance from the box
+// over their range, and of those alike, the first made, so the choice is the same from frame to
+// frame while nothing moves. Draws lit by the same ones share them. Writes up to `capacity` and
+// gives how many there are, -1 for a freed camera, or a tween outside 0 to 1.
 FBE_API int32_t fbe_render_draw_lights(uint64_t camera, float target_width, float target_height,
                                        float tween, uint32_t* indices, int32_t capacity);
 
