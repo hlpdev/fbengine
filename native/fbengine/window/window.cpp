@@ -4,6 +4,8 @@
 #include "fbengine.h"
 #include "gpu/gpu.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <format>
 #include <SDL3/SDL.h>
@@ -290,6 +292,33 @@ FBE_API int32_t fbe_window_pixel_height(void) {
 
 FBE_API float fbe_window_scale(void) {
     return window != nullptr ? SDL_GetWindowPixelDensity(window) : 0.0F;
+}
+
+FBE_API bool fbe_window_safe_area(int32_t* x, int32_t* y, int32_t* width, int32_t* height) {
+    if (window == nullptr) {
+        return fbe::fail("there's no window; Graphics opens one");
+    }
+    SDL_Rect safe{};
+    if (!SDL_GetWindowSafeArea(window, &safe)) {
+        return fbe::fail(std::format("the window's safe area can't be found: {}", SDL_GetError()));
+    }
+    // SDL's is in the window's units: in pixels, each edge rounded, so two areas side by side
+    // don't leave a pixel between them, and none past the window's own.
+    int pixel_width = 0;
+    int pixel_height = 0;
+    SDL_GetWindowSizeInPixels(window, &pixel_width, &pixel_height);
+    const float density = SDL_GetWindowPixelDensity(window);
+    const auto pixels = [density](int units, int most) {
+        return std::clamp(static_cast<int32_t>(std::lround(static_cast<float>(units) * density)), 0,
+                          most);
+    };
+    const int32_t left = pixels(safe.x, pixel_width);
+    const int32_t top = pixels(safe.y, pixel_height);
+    *x = left;
+    *y = top;
+    *width = pixels(safe.x + safe.w, pixel_width) - left;
+    *height = pixels(safe.y + safe.h, pixel_height) - top;
+    return true;
 }
 
 FBE_API bool fbe_window_set_mode(int32_t wanted) {

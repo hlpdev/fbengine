@@ -1,6 +1,7 @@
 // The window and the displays, offscreen, as every test's are.
 
 Import std.core
+Import std.math
 Import std.os
 Import std.test
 Import std.text
@@ -22,6 +23,21 @@ Function GraphicsOpensAWindowOfItsSizeAndTitle() Throws GraphicsError
     Expect(Window.PixelHeight() >= 480)
     Expect(Window.Scale() > 0.0)
     Expect(Window.Mode() == WindowMode.WINDOWED)
+End Function
+
+// Where nothing covers the window, as offscreen, its safe area is all of it, in pixels; and with
+// no window, nothing.
+@Test
+Function AWindowNothingCoversIsSafeAllOver() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(640, 480)
+    Expect(Window.SafeArea() ==
+           Rect(0, 0, Window.PixelWidth() As Float, Window.PixelHeight() As Float))
+    Try Graphics(320, 200)
+    Expect(Window.SafeArea() ==
+           Rect(0, 0, Window.PixelWidth() As Float, Window.PixelHeight() As Float))
+    EndGraphics()
+    Expect(Window.SafeArea() == Rect(0, 0, 0, 0))
 End Function
 
 @Test

@@ -30,6 +30,8 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_window_pixel_width(): Int32
     Function fbe_window_pixel_height(): Int32
     Function fbe_window_scale(): Float32
+    Function fbe_window_safe_area(x: Ptr<Int32>, y: Ptr<Int32>, width: Ptr<Int32>,
+                                  height: Ptr<Int32>): Bool
     Function fbe_window_set_mode(mode: Int32): Bool
     Function fbe_window_mode(): Int32
     Function fbe_window_x(): Int32

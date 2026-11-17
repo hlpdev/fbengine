@@ -53,6 +53,9 @@ FBE_API int32_t fbe_window_height(void);
 FBE_API int32_t fbe_window_pixel_width(void);
 FBE_API int32_t fbe_window_pixel_height(void);
 FBE_API float fbe_window_scale(void);
+// The part of the window nothing covers, as a display's notch or rounded corners cover the rest,
+// in pixels from its top left; the whole of it where nothing does. False without a window.
+FBE_API bool fbe_window_safe_area(int32_t* x, int32_t* y, int32_t* width, int32_t* height);
 
 // The window's mode, FBE_WINDOW_WINDOWED without a window; false if it can't take this one.
 FBE_API bool fbe_window_set_mode(int32_t mode);

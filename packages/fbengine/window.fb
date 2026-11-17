@@ -3,6 +3,7 @@
 
 Import std.core
 Import std.ffi
+Import std.math
 Import "./c/fbe_core"
 Import "./c/fbe_window"
 
@@ -94,6 +95,25 @@ Public Final Class Window
     /// How many pixels each of the desktop's units is, 2 on most high DPI displays, and 0 when
     /// the window isn't open.
     @MainThread Public Static Method Scale(): Float32 => fbe_window_scale()
+
+    /// The part of the window nothing covers, in pixels from its top left, as PixelWidth counts
+    /// them: a MacBook's notch covers the top of a window that fills its screen, and a phone's
+    /// rounded corners and cutouts cover more. It's the whole window where nothing covers it,
+    /// and empty when it isn't open. What's drawn goes on under the rest, but a game keeps its
+    /// text and what's clicked inside this.
+    @MainThread Public Static Method SafeArea(): Rect
+        Local x: Int32 = 0
+        Local y: Int32 = 0
+        Local width: Int32 = 0
+        Local height: Int32 = 0
+        Unsafe
+            If !fbe_window_safe_area(AddressOf(x), AddressOf(y), AddressOf(width),
+                                     AddressOf(height))
+                Return Rect(0, 0, 0, 0)
+            End If
+        End Unsafe
+        Return Rect(x As Float, y As Float, width As Float, height As Float)
+    End Method
 
     /// Where the window's top left is on the desktop, across, in the desktop's units, 0 when it
     /// isn't open.
