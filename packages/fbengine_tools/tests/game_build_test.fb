@@ -130,6 +130,38 @@ Function APakTakenAwayComesBackAndAStaleWriteGoes() Throws IOError
     Expect((Try File.ReadBytes(pak)) == first)
 End Function
 
+// A game running from build/ while its game's built again, as a check's or a test's build step
+// does, goes on reading the pak it mounted, and the next mount reads the new one, encrypted or not.
+@Test
+Function AGameRunningWhileItsBuiltAgainKeepsItsPak() Throws IOError
+    For keyed In [False, True]
+        Local game = Try TempDir()
+        Defer Try? game.Close()
+        Try Dir.CreateAll(game.Path / "assets")
+        Try File.WriteText(game.Path / "assets" / "a.txt", "the first a")
+        Try File.WriteText(game.Path / "assets" / "b.txt", "b")
+        Local key: UInt8[] = keyed ? TestKey() : []
+        If keyed Then Try File.WriteText(game.Path / "pak.key", Hex.Encode(key))
+        Local out = OutOf(game.Path, "release")
+        Local pak = game.Path / "build" / "game.pak"
+        Try GameBuild.Run("game", game.Path, out, "release")
+        Try Assets.MountPak("res://running-game", pak, key)
+        Defer Assets.Unmount("res://running-game")
+        Try File.WriteText(game.Path / "assets" / "a.txt", "a second a, longer than the first")
+        Try GameBuild.Run("game", game.Path, out, "release")
+        Expect((Try Assets.ReadText("res://running-game/a.txt")) == "the first a")
+        Expect((Try Assets.ReadText("res://running-game/b.txt")) == "b")
+        Try Assets.MountPak("res://built-again", pak, key)
+        Defer Assets.Unmount("res://built-again")
+        Expect((Try Assets.ReadText("res://built-again/a.txt")) ==
+               "a second a, longer than the first")
+        // Nothing's left beside it.
+        For entry In Try Dir.Entries(game.Path / "build")
+            Expect(!entry.Name().StartsWith(".fbe-"))
+        End For
+    End For
+End Function
+
 // The 32 bytes of the key the tests encrypt a game's pak with.
 Function TestKey(): UInt8[]
     Return Hex.Decode("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f") ?? []

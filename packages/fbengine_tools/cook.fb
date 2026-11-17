@@ -1055,7 +1055,7 @@ Public Final Class Cooker
     // The IOError of the cooker's call that just failed, about `path`: INVALID_DATA for what it was
     // given that isn't what it takes, and OTHER for the rest, as files that can't be read or
     // written.
-    Static Method ToolsFailed(path: String): IOError
+    Package Static Method ToolsFailed(path: String): IOError
         Local kind = IOErrorKind.OTHER
         If fbe_tools_failure() == FBE_TOOLS_INVALID_DATA Then kind = IOErrorKind.INVALID_DATA
         Return IOError(kind, ToolsError(), path)

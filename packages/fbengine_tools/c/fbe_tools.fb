@@ -10,4 +10,5 @@ Public Extern "C" Lib "fbengine_tools_native"
     Function fbe_tools_version(): CString
     Function fbe_tools_error(): CString
     Function fbe_tools_failure(): Int32
+    Function fbe_tools_replace_file(from: CString, to: CString): Bool
 End Extern

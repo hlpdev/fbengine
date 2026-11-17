@@ -41,6 +41,11 @@ FBE_TOOLS_API const char* fbe_tools_version(void);
 FBE_TOOLS_API const char* fbe_tools_error(void);
 FBE_TOOLS_API int32_t fbe_tools_failure(void);
 
+// Puts a copy of the file at `from` at `to`, whole or not at all, a chunk at a time: written beside
+// it, then renamed over it, so what has the old one open, as a game running from it has its pak,
+// goes on reading it as it was. False if it can't, leaving what was there.
+FBE_TOOLS_API bool fbe_tools_replace_file(const char* from, const char* to);
+
 #ifdef __cplusplus
 }
 #endif

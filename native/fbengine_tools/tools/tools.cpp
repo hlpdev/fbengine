@@ -8,9 +8,14 @@
 #include "tools/atomic.hpp"
 #include "vfs/disk.hpp"
 
+#include <algorithm>
+#include <cstdint>
+#include <exception>
+#include <expected>
 #include <format>
 #include <memory>
 #include <span>
+#include <string>
 
 namespace {
 
@@ -87,6 +92,46 @@ FBE_TOOLS_API const char* fbe_tools_error(void) {
 
 FBE_TOOLS_API int32_t fbe_tools_failure(void) {
     return last_failure;
+}
+
+FBE_TOOLS_API bool fbe_tools_replace_file(const char* from, const char* to) {
+    try {
+        bool missing = false;
+        const std::unique_ptr<fbe::vfs::read_file_t> source =
+            fbe::vfs::read_file_t::open(fbe::tools::disk_path(from), missing);
+        if (source == nullptr) {
+            return fbe::tools::fail(fbe::tools::error_t{
+                .failure = missing ? fbe::vfs::failure_t::NOT_FOUND : fbe::vfs::failure_t::OTHER,
+                .message =
+                    std::format("couldn't read {}{}", from, missing ? ": it isn't there" : ""),
+            });
+        }
+        fbe::tools::atomic_file_t file;
+        if (std::expected<void, std::string> opened = file.open(to); !opened) {
+            return fbe::tools::fail(opened.error());
+        }
+        constexpr std::size_t chunk = std::size_t{ 1 } << 20U;
+        fbe::tools::bytes_t bytes(
+            static_cast<std::size_t>(std::min<std::uint64_t>(source->size(), chunk)));
+        for (std::uint64_t at = 0; at < source->size();) {
+            const auto count =
+                static_cast<std::size_t>(std::min<std::uint64_t>(source->size() - at, chunk));
+            const std::span<std::uint8_t> part(bytes.data(), count);
+            if (!source->read_at(at, part)) {
+                return fbe::tools::fail(std::format("couldn't read {}", from));
+            }
+            if (!file.write_at(at, part)) {
+                return fbe::tools::fail(std::format("couldn't write {}", to));
+            }
+            at += count;
+        }
+        if (std::expected<void, std::string> committed = file.commit(); !committed) {
+            return fbe::tools::fail(committed.error());
+        }
+        return true;
+    } catch (const std::exception&) {
+        return fbe::tools::fail(std::format("there isn't the memory to copy {}", from));
+    }
 }
 
 } // extern "C"

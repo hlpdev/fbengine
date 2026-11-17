@@ -10,6 +10,7 @@ Import std.text
 Import std.text.encoding
 Import std.time
 Import fbengine
+Import "./c/fbe_tools"
 Import "./cook"
 Import "./left_out"
 Import "./references"
@@ -33,7 +34,9 @@ Const KEY_FILE: String = "pak.key"
 /// or in a macOS bundle's Resources, and mounts that, or where it was built, for `fb run --release`,
 /// whose executable is elsewhere; one built with `fb build -o` needs its pak copied beside it. Each
 /// file is cooked again only when it or its settings change, as
-/// the step keeps what it cooked.
+/// the step keeps what it cooked. A new pak is written beside the old one and renamed over it, so a
+/// game running from build/ while it's built again, as `fb check` and `fb test` build it, goes on
+/// reading the pak it mounted.
 ///
 /// A game with a `pak.key` beside its project.toml, its key as 64 hex digits, has its release's pak
 /// encrypted with it, as Cooker.CookFolder does with a key, and `Mount` mounts it with the key,
@@ -87,7 +90,10 @@ Public Final Class GameBuild
             // The pak's own place is out, so one taken from beside the executable comes back: fb
             // runs this again when it's gone, and then it's the same, or no use.
             Print("fb:rerun-if-changed={pak}")
-            If !Try SameFile(cooked, pak) Then Try File.Copy(cooked, pak)
+            // Beside it, then over it, so a game running from it goes on reading the one it has.
+            If !Try SameFile(cooked, pak) && !fbe_tools_replace_file(cooked.Text, pak.Text)
+                Throw Cooker.ToolsFailed(pak.Text)
+            End If
             Local stamped = version != "" || key.Count > 0 ? ", \"{Literal(version)}\"" : ""
             If key.Count > 0 Then stamped += ", {KeyLiteral(key)}"
             mount = "Try FbEngine.Assets.MountRelease(\"{Literal(name)}\", " +
