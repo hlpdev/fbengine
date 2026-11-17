@@ -1,6 +1,6 @@
 [project]
 name = "fbengine_tools"
-version = "1.5.1"
+version = "1.5.2"
 type = "library"
 license = "Apache-2.0"
 description = "fbengine's tools: the cooker, which makes a game's files into what its release loads fastest, in a pak."

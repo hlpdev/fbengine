@@ -1,6 +1,6 @@
 [project]
 name = "fbengine_physics"
-version = "1.5.1"
+version = "1.5.2"
 type = "library"
 license = "Apache-2.0"
 description = "fbengine's physics, on Jolt: worlds of rigid bodies, joints, characters, and casts."

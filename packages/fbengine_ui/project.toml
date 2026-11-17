@@ -1,6 +1,6 @@
 [project]
 name = "fbengine_ui"
-version = "1.5.1"
+version = "1.5.2"
 type = "library"
 license = "Apache-2.0"
 description = "fbengine's UI, in FutureBlitz: layout, themes, widgets, focus, a debug UI, a console, and localization."
