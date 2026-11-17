@@ -117,9 +117,12 @@ jobs:
             *) url="$INDEX" ;;
           esac
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' packages/fbengine/project.toml)"
+          # The page is read whole before it's searched, so grep stopping at the version can't fail
+          # curl under pipefail.
           indexed() {
-            curl -fsS -H "Cache-Control: no-cache" "$url$1" 2>/dev/null |
-              grep -qF "\"version\":\"$version\""
+            local page
+            page="$(curl -fsS -H "Cache-Control: no-cache" "$url$1" 2>/dev/null)" || return 1
+            grep -qF "\"version\":\"$version\"" <<< "$page"
           }
           for package in fbengine fbengine_audio fbengine_physics fbengine_ui fbengine_tools \
                          fbengine_video; do
@@ -128,9 +131,16 @@ jobs:
               continue
             fi
             fb publish "packages/$package" --registry "$INDEX"
+            # The loop's own answer: just after a publish, the index can show a version to one read
+            # and not to the next, as 1.5.1's did, which a second look took for it missing.
             waited=0
-            for _ in $(seq 180); do indexed "$package" && break; sleep 5; waited=$((waited + 5)); done
-            if ! indexed "$package"; then
+            shown=false
+            for _ in $(seq 180); do
+              if indexed "$package"; then shown=true; break; fi
+              sleep 5
+              waited=$((waited + 5))
+            done
+            if ! $shown; then
               echo "::error::The index doesn't show $package $version fifteen minutes after it was published"
               exit 1
             fi
