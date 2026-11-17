@@ -32,6 +32,7 @@ LINKED = {
     "meshoptimizer": ["meshoptimizer.txt"],
     "pl_mpeg": ["pl_mpeg.txt"],
     "SPIRV-Tools-static": ["spirv-tools.txt", "spirv-headers.txt"],
+    "fbengine_monocypher": ["monocypher.txt"],
 }
 # Each FetchContent folder, _deps/<name>-src, a DLL's code is compiled from or includes, and its
 # notices: header-only libraries are only these.
@@ -51,6 +52,7 @@ FOLDERS = {
     "meshoptimizer": ["meshoptimizer.txt"],
     "spirv-tools": ["spirv-tools.txt"],
     "spirv-headers": ["spirv-headers.txt"],
+    "monocypher": ["monocypher.txt"],
 }
 # A vendored file one of a DLL's own sources (the repository's, or the build's own) #includes, by
 # its name, and its notice: what's compiled in that no target or folder says.

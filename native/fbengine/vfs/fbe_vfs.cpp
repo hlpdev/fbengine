@@ -13,6 +13,7 @@
 #include <format>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -192,6 +193,16 @@ int32_t list(const char* path) {
     return static_cast<int32_t>(listed.size());
 }
 
+// The 32 bytes at `key`, a game's key, or none for null.
+std::optional<vfs::sealed::key_t> key_of(const uint8_t* key) {
+    if (key == nullptr) {
+        return std::nullopt;
+    }
+    vfs::sealed::key_t copied{};
+    std::copy_n(key, copied.size(), copied.begin());
+    return copied;
+}
+
 } // namespace
 
 extern "C" {
@@ -204,14 +215,18 @@ FBE_API bool fbe_vfs_mount_folder(const char* at, const char* folder) {
     });
 }
 
-FBE_API bool fbe_vfs_mount_pak(const char* at, const char* file) {
-    return guarded(false, [&] { return mount(at, [file] { return vfs::pak(on_disk(file)); }); });
+FBE_API bool fbe_vfs_mount_pak(const char* at, const char* file, const uint8_t* key) {
+    return guarded(false, [&] {
+        return mount(at, [file, key] { return vfs::pak(on_disk(file), key_of(key)); });
+    });
 }
 
-FBE_API bool fbe_vfs_mount_pak_bytes(const char* at, const uint8_t* bytes, int64_t size) {
+FBE_API bool fbe_vfs_mount_pak_bytes(const char* at, const uint8_t* bytes, int64_t size,
+                                     const uint8_t* key) {
     return guarded(false, [&] {
-        return mount(at, [bytes, size] {
-            return vfs::pak(size > 0 ? vfs::bytes_t(bytes, bytes + size) : vfs::bytes_t());
+        return mount(at, [bytes, size, key] {
+            return vfs::pak(size > 0 ? vfs::bytes_t(bytes, bytes + size) : vfs::bytes_t(),
+                            key_of(key));
         });
     });
 }

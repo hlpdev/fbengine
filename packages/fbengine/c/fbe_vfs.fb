@@ -13,8 +13,9 @@ Public Const FBE_VFS_OTHER: Int32 = 5
 
 Public Extern "C" Lib "fbengine_native"
     Function fbe_vfs_mount_folder(at: CString, folder: CString): Bool
-    Function fbe_vfs_mount_pak(at: CString, file: CString): Bool
-    Function fbe_vfs_mount_pak_bytes(at: CString, bytes: Ptr<UInt8>, size: Int64): Bool
+    Function fbe_vfs_mount_pak(at: CString, file: CString, key: Ptr<UInt8>): Bool
+    Function fbe_vfs_mount_pak_bytes(at: CString, bytes: Ptr<UInt8>, size: Int64,
+                                     key: Ptr<UInt8>): Bool
     Function fbe_vfs_unmount(at: CString): Bool
     Function fbe_vfs_last_mount(): UInt64
     Function fbe_vfs_unmount_id(mount: UInt64): Bool

@@ -28,11 +28,12 @@ extern "C" {
 // Mounts the folder on the disk at `folder` at `at`, a res:// path, over what's mounted; false if
 // `at` isn't a res:// path. A folder that isn't there is empty until it is.
 FBE_API bool fbe_vfs_mount_folder(const char* at, const char* folder);
-// Mounts the pak file at `file`, a zip whose files are stored, reading its index now; false if it
-// can't be read or isn't a pak.
-FBE_API bool fbe_vfs_mount_pak(const char* at, const char* file);
-// Mounts the `size` bytes at `bytes`, a pak, copying them.
-FBE_API bool fbe_vfs_mount_pak_bytes(const char* at, const uint8_t* bytes, int64_t size);
+// Mounts the pak file at `file`, a zip whose files are stored, or with `key`, its game's 32 bytes,
+// an encrypted pak, reading its index now; false if it can't be read or isn't a pak of that key.
+FBE_API bool fbe_vfs_mount_pak(const char* at, const char* file, const uint8_t* key);
+// Mounts the `size` bytes at `bytes`, a pak, copying them, as fbe_vfs_mount_pak does.
+FBE_API bool fbe_vfs_mount_pak_bytes(const char* at, const uint8_t* bytes, int64_t size,
+                                     const uint8_t* key);
 // Takes out the last mount at `at`; false if there's none there.
 FBE_API bool fbe_vfs_unmount(const char* at);
 // The number of the last mount this thread made, for fbe_vfs_unmount_id.

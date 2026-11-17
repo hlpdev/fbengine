@@ -355,6 +355,16 @@ good modern engine on its own. Every structural choice is checked against both.
   zips, a file at a time, with Zip64 where sizes or counts need it. Names starting with '.' aren't
   in a folder mount, a pak, or the references, and Thumbs.db and desktop.ini aren't in the last
   two.
+- A game with a `pak.key` has its release's pak encrypted (native/fbengine/vfs/sealed.hpp): not a
+  zip, but a header, each file sealed with XChaCha20-Poly1305, its name authenticated with it, and
+  the index of names sealed last, all by Monocypher. The key, compiled into the game by `res`,
+  makes the key that seals, the key that makes nonces, and an id, by keyed BLAKE2b. A nonce is of
+  the file's name and bytes, so an unchanged file is the same bytes in every build and a store's
+  patch stays small; the bytes are read twice as they're written, for the nonce, then to seal
+  them. A file's read whole and checked before it's given; the index is checked as it's mounted.
+  It's against unzipping a game's files, not against someone who takes the key from the
+  executable. Mods' paks and debug builds' folders aren't encrypted, and a pak mounted with a key
+  has to be encrypted with it (2026-11-16).
 - Hot reload loads a watched file's assets again only when the file's size or its write time isn't
   what their loads read: each load keeps, for every file on the disk it read, its own, its sidecar,
   and what its file names, the size and write time it had just before it was read, a model's

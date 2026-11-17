@@ -14,6 +14,6 @@ fb = ">=1.3.3"
 fbengine = { path = "../fbengine", version = "1.4" }
 
 # fbengine_tools' own DLL, native/fbengine_tools, built for each target into native/<target>/,
-# with libktx's encoder and meshoptimizer in it.
+# with libktx's encoder, meshoptimizer, and Monocypher in it.
 [native]
 fbengine_tools_native = { dynamic = "native/{target}/fbengine_tools_native" }

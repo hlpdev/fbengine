@@ -50,8 +50,22 @@ Print(Try Assets.ReadText(Res.Readme))
 A debug build's `Mount` mounts `assets/` at res://, and watches it, so what changes reloads as the
 game runs. A release build's cooks `assets/` into `build/<name>.pak`, which the game ships beside
 its executable, or in a macOS bundle's Resources, each file again only when it or its settings
-change; `fb build -o` needs that pak copied beside what it builds, each time. What's hidden, its name starting with '.', and Windows' Thumbs.db and desktop.ini, are left
-out. `Cooker` and `References` do the same for a game's own tools:
+change; `fb build -o` needs that pak copied beside what it builds, each time. What's hidden, its
+name starting with '.', and Windows' Thumbs.db and desktop.ini, are left out.
+
+A game with a `pak.key` beside its project.toml, 64 hex digits, has its release's pak encrypted
+with that key, not a zip: renamed, it opens in no archiver, its names and files are unread without
+the key, and each file is checked as it's read. `Mount` mounts it with the key, which is then in
+the executable, so it stops someone unzipping the game's files, not someone who takes the key from
+there. A file that doesn't change is the same bytes in every build, so a store's patch is only what
+changed, as long as every build has the same key: keep `pak.key` with the game's sources. Mods'
+paks and a debug build's `assets/` aren't encrypted. One way to make a key:
+
+```bash
+python -c "import secrets; print(secrets.token_hex(32))" > pak.key
+```
+
+`Cooker` and `References` do the same for a game's own tools:
 
 ```vb
 Import std.io
@@ -76,6 +90,7 @@ and needs fb 1.3.0 or later. Apache-2.0. In its DLL:
   (notices/basisu.txt), the ASTC encoder, Apache-2.0 (notices/astc-encoder.txt), and zstd,
   BSD-3-Clause (notices/zstd.txt);
 - meshoptimizer is MIT (notices/meshoptimizer.txt);
+- Monocypher, which encrypts a pak, is BSD-2-Clause or CC0 (notices/monocypher.txt);
 - fastgltf is MIT (notices/fastgltf.txt), with simdjson, Apache-2.0 or MIT (notices/simdjson.txt);
 - stb is MIT or public domain (notices/stb.txt);
 - on Windows, MinGW-w64's winpthreads is MIT and BSD-style (notices/winpthreads.txt).

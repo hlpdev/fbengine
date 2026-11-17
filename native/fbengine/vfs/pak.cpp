@@ -1,10 +1,12 @@
 // A pak file as a source: a zip whose files are stored, with Zip64 where sizes need it, as
-// std.compress's ZipWriter makes one. Its central directory is read once, a chunk at a time, into
-// a tree of its folders by folded names; a read finds the file's local header, past which its
-// bytes are. Nothing the archive says is allocated before it's checked against the pak's size,
-// and a pak on the disk is read at offsets, by every thread at once.
+// std.compress's ZipWriter makes one, or an encrypted pak, as vfs/sealed.hpp has it. A zip's
+// central directory, or an encrypted pak's index, is read once into a tree of its folders by
+// folded names; a read finds the file's local header, past which its bytes are, or its sealed
+// bytes, which it opens. Nothing the archive says is allocated before it's checked against the
+// pak's size, and a pak on the disk is read at offsets, by every thread at once.
 
 #include "vfs/disk.hpp"
+#include "vfs/sealed.hpp"
 #include "vfs/vfs.hpp"
 
 #include <algorithm>
@@ -180,13 +182,37 @@ struct directory_t {
 
 class pak_source_t final : public source_t {
 public:
-    explicit pak_source_t(std::unique_ptr<reader_t> reader) : m_reader(std::move(reader)) {
+    pak_source_t(std::unique_ptr<reader_t> reader, const std::optional<sealed::key_t>& key)
+        : m_reader(std::move(reader)) {
+        if (key) {
+            m_keys = sealed::derived(*key);
+            m_sealed = true;
+        }
         m_nodes.emplace_back();
     }
 
-    // Reads the central directory into the index.
+    pak_source_t(const pak_source_t&) = delete;
+    pak_source_t& operator=(const pak_source_t&) = delete;
+    pak_source_t(pak_source_t&&) = delete;
+    pak_source_t& operator=(pak_source_t&&) = delete;
+
+    ~pak_source_t() override {
+        crypto_wipe(&m_keys, sizeof(m_keys));
+    }
+
+    // Reads the central directory, or an encrypted pak's index, into the index.
     result_t<void> open() {
         const std::uint64_t size = m_reader->size();
+        std::array<std::uint8_t, sealed::magic.size()> start{};
+        const bool sealed_pak =
+            size >= start.size() && m_reader->read(0, start) && start == sealed::magic;
+        if (sealed_pak != m_sealed) {
+            return invalid(sealed_pak ? "it's encrypted, and opens only with its game's key"
+                                      : "it isn't encrypted, as its game's pak is");
+        }
+        if (sealed_pak) {
+            return open_sealed();
+        }
         const auto tail_size =
             static_cast<std::size_t>(std::min<std::uint64_t>(size, end_size + most_field));
         bytes_t tail(tail_size);
@@ -231,6 +257,9 @@ public:
             return std::optional<bytes_t>{};
         }
         const node_t& file = m_nodes[*found];
+        if (m_sealed) {
+            return read_sealed(file, most);
+        }
         const std::uint64_t size = m_reader->size();
         if (file.header > size || size - file.header < local_size) {
             return invalid(std::format("{}'s header is past its end", shown(file.path)));
@@ -447,16 +476,21 @@ private:
                 return invalid(std::format("{} is past its end", shown(name)));
             }
         }
+        return place(name, *path, folder, header, size);
+    }
 
+    // Adds the file or folder `name`, at `path`, to the index: a file's at `header`, of `size`.
+    result_t<void> place(const std::string& name, const path_t& path, bool folder,
+                         std::uint64_t header, std::uint64_t size) {
         // Its folders, each in the one it's in, by folded name.
         std::uint32_t at = 0;
-        const std::size_t folders = folder ? path->keys.size() : path->keys.size() - 1;
+        const std::size_t folders = folder ? path.keys.size() : path.keys.size() - 1;
         for (std::size_t i = 0; i < folders; ++i) {
-            const auto found = m_nodes[at].children.find(path->keys[i]);
+            const auto found = m_nodes[at].children.find(path.keys[i]);
             if (found == m_nodes[at].children.end()) {
                 const auto made = static_cast<std::uint32_t>(m_nodes.size());
-                m_nodes.push_back({ .name = path->names[i] });
-                m_nodes[at].children.emplace(path->keys[i], made);
+                m_nodes.push_back({ .name = path.names[i] });
+                m_nodes[at].children.emplace(path.keys[i], made);
                 at = made;
                 continue;
             }
@@ -464,15 +498,15 @@ private:
             if (!m_nodes[next].folder) {
                 return both(name);
             }
-            m_nodes[next].name = path->names[i];
+            m_nodes[next].name = path.names[i];
             at = next;
         }
         if (folder) {
             return {};
         }
-        const auto found = m_nodes[at].children.find(path->keys.back());
+        const auto found = m_nodes[at].children.find(path.keys.back());
         node_t file{
-            .name = path->names.back(),
+            .name = path.names.back(),
             .folder = false,
             .header = header,
             .size = size,
@@ -481,7 +515,7 @@ private:
         if (found == m_nodes[at].children.end()) {
             const auto made = static_cast<std::uint32_t>(m_nodes.size());
             m_nodes.push_back(std::move(file));
-            m_nodes[at].children.emplace(path->keys.back(), made);
+            m_nodes[at].children.emplace(path.keys.back(), made);
         } else if (m_nodes[found->second].folder) {
             return both(name);
         } else {
@@ -489,6 +523,103 @@ private:
             m_nodes[found->second] = std::move(file);
         }
         return {};
+    }
+
+    // Reads an encrypted pak's index into the index, which says where each file's sealed bytes
+    // are, checked against the pak's size.
+    result_t<void> open_sealed() {
+        const std::uint64_t size = m_reader->size();
+        bytes_t header(sealed::header_size);
+        if (size < header.size()) {
+            return invalid("its header is cut short");
+        }
+        if (!m_reader->read(0, header)) {
+            return unreadable();
+        }
+        if (!std::ranges::equal(std::span(header).subspan(sealed::magic.size(), sealed::id_size),
+                                m_keys.id)) {
+            return invalid("it's encrypted with another game's key");
+        }
+        m_index = u64(header, sealed::header_start);
+        const std::uint64_t index_size = u64(header, sealed::header_start + 8);
+        if (m_index < header.size() || m_index > size || index_size != size - m_index ||
+            index_size < sealed::overhead + 8) {
+            return invalid("its index isn't where it says");
+        }
+        bytes_t index(static_cast<std::size_t>(index_size - sealed::overhead));
+        sealed::nonce_t nonce{};
+        sealed::tag_t tag{};
+        if (!m_reader->read(m_index, nonce) ||
+            !m_reader->read(m_index + sealed::nonce_size, index) ||
+            !m_reader->read(m_index + sealed::nonce_size + index.size(), tag)) {
+            return unreadable();
+        }
+        if (!sealed::opened(m_keys, nonce, tag, std::span(header).first(sealed::header_start),
+                            index)) {
+            return invalid("its index isn't what was written");
+        }
+        const std::uint64_t count = u64(index, 0);
+        if (count > (index.size() - 8) / sealed::entry_size) {
+            return invalid("its index is cut short");
+        }
+        std::size_t at = 8;
+        for (std::uint64_t i = 0; i < count; ++i) {
+            if (index.size() - at < sealed::entry_size) {
+                return invalid("its index is cut short");
+            }
+            const std::size_t name_size = u32(index, at);
+            if (name_size > most_path || index.size() - at - sealed::entry_size < name_size) {
+                return invalid("its index is cut short");
+            }
+            const std::string name(reinterpret_cast<const char*>(index.data() + at + 4), name_size);
+            const std::uint64_t offset = u64(index, at + 4 + name_size);
+            const std::uint64_t file_size = u64(index, at + 12 + name_size);
+            at += sealed::entry_size + name_size;
+            const result_t<path_t> path = parse(std::format("res://{}", name));
+            if (!path || path->keys.empty() || path->keys.size() > most_names) {
+                return invalid(std::format("{} isn't a path in res://", shown(name)));
+            }
+            if (offset < header.size() || offset > m_index || m_index - offset < sealed::overhead ||
+                file_size > m_index - offset - sealed::overhead) {
+                return invalid(std::format("{} is past its end", shown(name)));
+            }
+            if (result_t<void> placed = place(name, *path, false, offset, file_size); !placed) {
+                return placed;
+            }
+        }
+        return {};
+    }
+
+    // The bytes of an encrypted pak's `file`, opened.
+    result_t<std::optional<bytes_t>> read_sealed(const node_t& file, std::uint64_t most) {
+        if (file.size > most) {
+            return std::unexpected(too_big(shown(file.path), file.size));
+        }
+        try {
+            if (faulted(fault_t::OUT_OF_MEMORY)) {
+                throw std::bad_alloc();
+            }
+            sealed::nonce_t nonce{};
+            sealed::tag_t tag{};
+            bytes_t bytes(static_cast<std::size_t>(file.size));
+            if (!m_reader->read(file.header, nonce) ||
+                !m_reader->read(file.header + sealed::nonce_size, bytes) ||
+                !m_reader->read(file.header + sealed::nonce_size + file.size, tag)) {
+                return unreadable();
+            }
+            const std::span<const std::uint8_t> name(
+                reinterpret_cast<const std::uint8_t*>(file.path.data()), file.path.size());
+            if (!sealed::opened(m_keys, nonce, tag, name, bytes)) {
+                return invalid(std::format("{} isn't what was written", shown(file.path)));
+            }
+            return std::optional<bytes_t>(std::move(bytes));
+        } catch (const std::bad_alloc&) {
+            return std::unexpected(error_t{
+                .failure = failure_t::OTHER,
+                .message = std::format("there isn't the memory to read {} from {}",
+                                       shown(file.path), m_reader->name()),
+            });
+        }
     }
 
     // The node at `keys`, if there is one.
@@ -508,14 +639,19 @@ private:
     }
 
     std::unique_ptr<reader_t> m_reader;
+    // An encrypted pak's keys, whether it's one, and where its index starts, past its files.
+    sealed::keys_t m_keys{};
+    bool m_sealed = false;
+    std::uint64_t m_index = 0;
     // The root first.
     std::vector<node_t> m_nodes;
 };
 
-result_t<std::shared_ptr<source_t>> opened(std::unique_ptr<reader_t> reader) {
+result_t<std::shared_ptr<source_t>> opened(std::unique_ptr<reader_t> reader,
+                                           const std::optional<sealed::key_t>& key) {
     const std::string name = reader->name();
     try {
-        auto source = std::make_shared<pak_source_t>(std::move(reader));
+        auto source = std::make_shared<pak_source_t>(std::move(reader), key);
         result_t<void> index = source->open();
         if (!index) {
             return std::unexpected(std::move(index.error()));
@@ -531,7 +667,8 @@ result_t<std::shared_ptr<source_t>> opened(std::unique_ptr<reader_t> reader) {
 
 } // namespace
 
-result_t<std::shared_ptr<source_t>> pak(const std::filesystem::path& file) {
+result_t<std::shared_ptr<source_t>> pak(const std::filesystem::path& file,
+                                        const std::optional<sealed::key_t>& key) {
     std::string name = utf8(file);
     bool missing = false;
     std::unique_ptr<read_file_t> opened_file = read_file_t::open(file, missing);
@@ -542,11 +679,11 @@ result_t<std::shared_ptr<source_t>> pak(const std::filesystem::path& file) {
                 std::format("couldn't open the pak {}{}", name, missing ? ": it isn't there" : ""),
         });
     }
-    return opened(std::make_unique<file_reader_t>(std::move(opened_file), std::move(name)));
+    return opened(std::make_unique<file_reader_t>(std::move(opened_file), std::move(name)), key);
 }
 
-result_t<std::shared_ptr<source_t>> pak(bytes_t bytes) {
-    return opened(std::make_unique<memory_reader_t>(std::move(bytes)));
+result_t<std::shared_ptr<source_t>> pak(bytes_t bytes, const std::optional<sealed::key_t>& key) {
+    return opened(std::make_unique<memory_reader_t>(std::move(bytes)), key);
 }
 
 } // namespace fbe::vfs

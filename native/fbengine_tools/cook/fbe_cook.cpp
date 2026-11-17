@@ -124,10 +124,17 @@ FBE_TOOLS_API bool fbe_cook_model(const char* from, const char* to, const char* 
     }
 }
 
-FBE_TOOLS_API uint64_t fbe_cook_pak_open(const char* to) {
+FBE_TOOLS_API uint64_t fbe_cook_pak_open(const char* to, const uint8_t* key) {
     try {
-        std::expected<std::unique_ptr<tools::pak_writer_t>, tools::error_t> made =
-            tools::pak_writer_t::open(to);
+        std::expected<std::unique_ptr<tools::pak_writer_t>, tools::error_t> made;
+        if (key == nullptr) {
+            made = tools::pak_writer_t::open(to);
+        } else {
+            fbe::vfs::sealed::key_t copied{};
+            std::copy_n(key, copied.size(), copied.begin());
+            made = tools::pak_writer_t::open(to, copied);
+            crypto_wipe(copied.data(), copied.size());
+        }
         if (!made) {
             tools::fail(made.error());
             return 0;

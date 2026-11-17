@@ -266,6 +266,9 @@ End Struct
 /// What Cooker.CookFolder calls the file in a pak that stamps it with its game's version.
 Public Const GAME_VERSION_FILE: String = "fbengine-game-version.txt"
 
+/// How many bytes an encrypted pak's key is, as Assets.MountPak and Cooker.CookFolder take one.
+Public Const PAK_KEY_SIZE: Int = 32
+
 /// The game's files and assets, at res:// paths: "res://", then names with '/' or '\' between
 /// them, in any case, so "res://GFX\Map\door.png" and "res://gfx/map/DOOR.png" are one file on
 /// every OS. Folders and pak files are mounted at places in res://, a later mount over an earlier
@@ -333,28 +336,47 @@ Public Final Class Assets
     /// Mounts the pak file at `file` at `at`, over what's mounted, reading its index now. A pak is
     /// a zip whose files are stored, not compressed, as ZipWriter makes one with ZipMethod.STORE,
     /// and Zip64 where its sizes need it; of two entries with a name, the last is the file, and
-    /// one whose name goes above its root, or a link, isn't in it. A file that isn't there throws
-    /// an IOError of NOT_FOUND, and a zip that isn't a pak (with a compressed or encrypted file,
-    /// or a name that's a file's and a folder's) one of INVALID_DATA. Panics when `at` isn't a
-    /// res:// path.
+    /// one whose name goes above its root, or a link, isn't in it. With a `key`, its game's 32
+    /// bytes, as the game's module `res` has them, it's an encrypted pak of that key, as
+    /// Cooker.CookFolder writes one, not a zip: its names and files can't be read without the key,
+    /// and each file is checked as it's read, so one that isn't what was written throws an IOError
+    /// of INVALID_DATA. A file that isn't there throws an IOError of NOT_FOUND, and a zip that
+    /// isn't a pak (with a compressed or encrypted file, or a name that's a file's and a folder's),
+    /// an encrypted pak without its key or with another, and a zip with a key, one of
+    /// INVALID_DATA. Panics when `at` isn't a res:// path, or `key` is neither empty nor 32 bytes.
     @MainThread @PanicsAtCaller
-    Public Static Method MountPak(at: String, file: Path) Throws IOError
-        If !fbe_vfs_mount_pak(at, file.Text) Then Throw MountFailed(file.Text)
+    Public Static Method MountPak(at: String, file: Path, key: UInt8[] = []) Throws IOError
+        If key.Count != 0 && key.Count != PAK_KEY_SIZE
+            Panic("a pak's key is {PAK_KEY_SIZE} bytes, not {key.Count}")
+        End If
+        Local mounted = False
+        Unsafe
+            If key.Count == 0
+                mounted = fbe_vfs_mount_pak(at, file.Text, Null)
+            Else
+                mounted = fbe_vfs_mount_pak(at, file.Text, AddressOf(key[0]))
+            End If
+        End Unsafe
+        If !mounted Then Throw MountFailed(file.Text)
         Mounted(at, Null)
     End Method
 
-    /// Mounts `pak`, a pak in memory, as Embed gives one, at `at`, copying it. It throws as
-    /// MountPak does.
+    /// Mounts `pak`, a pak in memory, as Embed gives one, at `at`, copying it, with its `key` if
+    /// it's encrypted. It throws and panics as MountPak does.
     @MainThread @PanicsAtCaller
-    Public Static Method MountPakBytes(at: String, pak: UInt8[]) Throws IOError
+    Public Static Method MountPakBytes(at: String, pak: UInt8[], key: UInt8[] = []) Throws IOError
+        If key.Count != 0 && key.Count != PAK_KEY_SIZE
+            Panic("a pak's key is {PAK_KEY_SIZE} bytes, not {key.Count}")
+        End If
         Local mounted = False
         Unsafe
-            If pak.Count == 0
-                // Nothing's read from it, but C takes a pointer.
-                Local none = Buffer<UInt8>(1)
-                mounted = fbe_vfs_mount_pak_bytes(at, none.Pointer(), 0)
+            // Nothing's read from an empty pak, but C takes a pointer.
+            Local none = Buffer<UInt8>(1)
+            Local bytes = pak.Count == 0 ? none.Pointer() : AddressOf(pak[0])
+            If key.Count == 0
+                mounted = fbe_vfs_mount_pak_bytes(at, bytes, pak.Count, Null)
             Else
-                mounted = fbe_vfs_mount_pak_bytes(at, AddressOf(pak[0]), pak.Count)
+                mounted = fbe_vfs_mount_pak_bytes(at, bytes, pak.Count, AddressOf(key[0]))
             End If
         End Unsafe
         If !mounted Then Throw MountFailed(Null)
@@ -413,10 +435,11 @@ Public Final Class Assets
     /// `fb build -o` needs its pak copied beside it each time, and never reads the one where it was
     /// built. None throws an IOError of NOT_FOUND that names them, and one that isn't a pak throws as
     /// MountPak does. With a `version`, the game's, a pak not stamped with it, by Cooker.CookFolder,
-    /// throws an IOError of INVALID_DATA that says both, and isn't left mounted.
-    @MainThread
-    Public Static Method MountRelease(name: String, built: String = "",
-                                      version: String = "") Throws IOError
+    /// throws an IOError of INVALID_DATA that says both, and isn't left mounted. With a `key`, the
+    /// game's, the pak is encrypted with it, as MountPak reads one.
+    @MainThread @PanicsAtCaller
+    Public Static Method MountRelease(name: String, built: String = "", version: String = "",
+                                      key: UInt8[] = []) Throws IOError
         Local executable = Folders.Executable
         If executable == Null
             Throw IOError(IOErrorKind.NOT_FOUND, "the OS doesn't say where this program is", name)
@@ -436,7 +459,7 @@ Public Final Class Assets
         End If
         For pak In paks
             If File.Exists(pak)
-                Try MountPak("res://", pak)
+                Try MountPak("res://", pak, key)
                 If version != "" Then Try CheckStamp(pak, version)
                 Return
             End If

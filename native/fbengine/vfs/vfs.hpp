@@ -5,6 +5,8 @@
 // read it; any thread can read while the main thread mounts. Paths are case-insensitive and take
 // '/' or '\' between names, so a game's paths work on every OS whatever the disk does.
 
+#include "vfs/sealed.hpp"
+
 #include <cstdint>
 #include <expected>
 #include <filesystem>
@@ -126,13 +128,17 @@ public:
 std::shared_ptr<source_t> folder(std::filesystem::path folder);
 
 /// A pak file: a zip whose files are stored, not compressed, read through its index, which this
-/// reads now. A zip with a compressed or encrypted file, or that makes one place a file and a
-/// folder too, is INVALID_DATA. Entries that go above its root, and links, aren't in it, and of
+/// reads now, or with a `key`, an encrypted pak of that key, as vfs/sealed.hpp has it. A zip with a
+/// compressed or encrypted file, or that makes one place a file and a folder too, is INVALID_DATA,
+/// and so are an encrypted pak without its key, a zip with one, and an encrypted file that isn't
+/// what was written, as it's read. Entries that go above its root, and links, aren't in it, and of
 /// two entries of one path, the last is.
-result_t<std::shared_ptr<source_t>> pak(const std::filesystem::path& file);
+result_t<std::shared_ptr<source_t>> pak(const std::filesystem::path& file,
+                                        const std::optional<sealed::key_t>& key = std::nullopt);
 
 /// A pak in memory, which it keeps.
-result_t<std::shared_ptr<source_t>> pak(bytes_t bytes);
+result_t<std::shared_ptr<source_t>> pak(bytes_t bytes,
+                                        const std::optional<sealed::key_t>& key = std::nullopt);
 
 /// The mounts there were at a moment, which what's read through it keeps, whatever's mounted
 /// since, as a load reads its file, its sidecar, and what its file names. A file is the last

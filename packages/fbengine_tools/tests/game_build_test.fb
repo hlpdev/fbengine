@@ -8,6 +8,7 @@ Import std.io
 Import std.os
 Import std.test
 Import std.text
+Import std.text.encoding
 Import fbengine
 Import fbengine_tools
 
@@ -127,4 +128,54 @@ Function APakTakenAwayComesBackAndAStaleWriteGoes() Throws IOError
     Try File.WriteText(pak, "not this")
     Try GameBuild.Run("game", game.Path, out, "release")
     Expect((Try File.ReadBytes(pak)) == first)
+End Function
+
+// The 32 bytes of the key the tests encrypt a game's pak with.
+Function TestKey(): UInt8[]
+    Return Hex.Decode("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f") ?? []
+End Function
+
+// A game with a pak.key has its release's pak encrypted with it, which Mount mounts with the key;
+// its debug build reads its folder as it is.
+@Test
+Function AGamesKeyEncryptsItsReleasesPak() Throws IOError
+    Local game = Try TempDir()
+    Defer Try? game.Close()
+    Try Dir.CreateAll(game.Path / "assets")
+    Try File.WriteText(game.Path / "assets" / "notes.txt", "the game's own words")
+    Try File.WriteText(game.Path / "pak.key", "  {Hex.Encode(TestKey())}\n")
+    Local out = OutOf(game.Path, "release")
+    Try GameBuild.Run("game", game.Path, out, "release")
+    Local pak = game.Path / "build" / "game.pak"
+    Expect((Try File.ReadText(out / "res.fb")).Contains(
+        "FbEngine.Assets.MountRelease(\"game\", \"{pak}\", \"\", [0x00, 0x01, 0x02, "))
+    Expect((Try File.ReadText(out / "res.fb")).Contains(", 0x1f] As UInt8[])"))
+    Local bytes = Hex.Encode(Try File.ReadBytes(pak))
+    Expect(bytes.StartsWith(Hex.Encode("FBEPAK".Bytes)))
+    Expect(!bytes.Contains(Hex.Encode("the game's own words".Bytes)))
+    Expect(!bytes.Contains(Hex.Encode("notes.txt".Bytes)))
+    Expect(ExpectThrows<IOError>(Assets.MountPak("res://keyed-game", pak))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+    Try Assets.MountPak("res://keyed-game", pak, TestKey())
+    Defer Assets.Unmount("res://keyed-game")
+    Expect((Try Assets.ReadText("res://keyed-game/notes.txt")) == "the game's own words")
+    Local debug = OutOf(game.Path, "debug")
+    Try GameBuild.Run("game", game.Path, debug, "debug")
+    Expect(!(Try File.ReadText(debug / "res.fb")).Contains("UInt8[]"))
+End Function
+
+@Test
+Function AKeyThatIsntOneSaysSo() Throws IOError
+    Local game = Try TempDir()
+    Defer Try? game.Close()
+    Try Dir.CreateAll(game.Path / "assets")
+    Try File.WriteText(game.Path / "assets" / "notes.txt", "words")
+    For text In ["not hex at all", Hex.Encode(TestKey()).Slice(0, 62), Hex.Encode(TestKey()) + "00"]
+        Try File.WriteText(game.Path / "pak.key", text)
+        Local failed = ExpectThrows<IOError>(GameBuild.Run("game", game.Path,
+                                                           OutOf(game.Path, "release"), "release"))
+        Expect(failed?.Kind == IOErrorKind.INVALID_DATA)
+        Expect((failed?.Message ??
+                "").Contains("pak.key isn't a pak's key, which is 64 hex digits"))
+    End For
 End Function

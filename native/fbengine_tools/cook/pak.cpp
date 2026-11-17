@@ -1,6 +1,7 @@
 // A pak written a file at a time: each file's local header, then its bytes, a chunk at a time,
 // and its CRC written into the header after them; then the central directory, and Zip64's end
-// records where its count, size, or offset needs them.
+// records where its count, size, or offset needs them. An encrypted pak's header is written first
+// and finished last, when its index is written where it says.
 
 #include "cook/pak.hpp"
 
@@ -71,14 +72,40 @@ void put(bytes_t& bytes, std::uint64_t value, std::size_t size) {
 
 std::expected<std::unique_ptr<pak_writer_t>, error_t> pak_writer_t::open(std::string_view to,
                                                                          bool zip64) {
-    std::unique_ptr<pak_writer_t> made(new pak_writer_t(std::string(to), zip64));
+    std::unique_ptr<pak_writer_t> made(new pak_writer_t(std::string(to), zip64, std::nullopt));
     if (std::expected<void, std::string> opened = made->m_file.open(to); !opened) {
         return std::unexpected(other(std::move(opened.error())));
     }
     return made;
 }
 
-pak_writer_t::pak_writer_t(std::string to, bool zip64) : m_to(std::move(to)), m_zip64(zip64) {}
+std::expected<std::unique_ptr<pak_writer_t>, error_t>
+pak_writer_t::open(std::string_view to, const vfs::sealed::key_t& key) {
+    std::unique_ptr<pak_writer_t> made(new pak_writer_t(std::string(to), false, key));
+    if (std::expected<void, std::string> opened = made->m_file.open(to); !opened) {
+        return std::unexpected(other(std::move(opened.error())));
+    }
+    // Its magic, its key's id, and where its index is, which finish writes.
+    bytes_t header(vfs::sealed::magic.begin(), vfs::sealed::magic.end());
+    header.insert(header.end(), made->m_keys.id.begin(), made->m_keys.id.end());
+    header.resize(vfs::sealed::header_size);
+    if (!made->write(header)) {
+        return std::unexpected(made->unwritable());
+    }
+    return made;
+}
+
+pak_writer_t::pak_writer_t(std::string to, bool zip64, const std::optional<vfs::sealed::key_t>& key)
+    : m_to(std::move(to)), m_zip64(zip64) {
+    if (key) {
+        m_keys = vfs::sealed::derived(*key);
+        m_sealed = true;
+    }
+}
+
+pak_writer_t::~pak_writer_t() {
+    crypto_wipe(&m_keys, sizeof(m_keys));
+}
 
 std::expected<std::string, error_t> pak_writer_t::checked(std::string_view name) {
     const auto refused = [&](std::string_view why) {
@@ -154,6 +181,9 @@ std::expected<void, error_t> pak_writer_t::copied(std::string_view name, std::st
         });
     }
     reserve(*key);
+    if (m_sealed) {
+        return add_sealed(name, from, *source);
+    }
     entry_t entry{ .name = std::string(name), .header = m_offset, .size = source->size() };
     const bool big = m_zip64 || entry.size >= wide;
     bytes_t header;
@@ -204,9 +234,95 @@ std::expected<void, error_t> pak_writer_t::copied(std::string_view name, std::st
     return {};
 }
 
+std::expected<void, error_t> pak_writer_t::add_sealed(std::string_view name, std::string_view from,
+                                                      const vfs::read_file_t& source) {
+    entry_t entry{ .name = std::string(name), .header = m_offset, .size = source.size() };
+    bytes_t bytes(static_cast<std::size_t>(std::min<std::uint64_t>(entry.size, chunk)));
+    // Read once for its nonce, and again to seal it, a chunk at a time.
+    vfs::sealed::nonce_maker_t maker(m_keys, name);
+    for (std::uint64_t at = 0; at < entry.size;) {
+        const auto count =
+            static_cast<std::size_t>(std::min<std::uint64_t>(entry.size - at, chunk));
+        const std::span<std::uint8_t> part(bytes.data(), count);
+        if (!source.read_at(at, part)) {
+            m_failed = true;
+            return std::unexpected(other(std::format("couldn't read {}", from)));
+        }
+        maker.add(part);
+        at += count;
+    }
+    const vfs::sealed::nonce_t nonce = maker.made();
+    if (!write(nonce)) {
+        return std::unexpected(unwritable());
+    }
+    vfs::sealed::sealer_t sealer(
+        m_keys, nonce, std::span(reinterpret_cast<const std::uint8_t*>(name.data()), name.size()));
+    for (std::uint64_t at = 0; at < entry.size;) {
+        const auto count =
+            static_cast<std::size_t>(std::min<std::uint64_t>(entry.size - at, chunk));
+        const std::span<std::uint8_t> part(bytes.data(), count);
+        if (!source.read_at(at, part)) {
+            m_failed = true;
+            return std::unexpected(other(std::format("couldn't read {}", from)));
+        }
+        sealer.add(part);
+        if (!write(part)) {
+            return std::unexpected(unwritable());
+        }
+        at += count;
+    }
+    if (!write(sealer.tag())) {
+        return std::unexpected(unwritable());
+    }
+    m_entries.push_back(std::move(entry));
+    return {};
+}
+
+std::expected<void, error_t> pak_writer_t::finish_sealed() {
+    // The index: the count, then each file's name, offset, and size.
+    const std::uint64_t index = m_offset;
+    bytes_t bytes;
+    put(bytes, m_entries.size(), 8);
+    for (const entry_t& entry : m_entries) {
+        put(bytes, entry.name.size(), 4);
+        bytes.insert(bytes.end(), entry.name.begin(), entry.name.end());
+        put(bytes, entry.header, 8);
+        put(bytes, entry.size, 8);
+    }
+    vfs::sealed::nonce_maker_t maker(m_keys);
+    maker.add(bytes);
+    const vfs::sealed::nonce_t nonce = maker.made();
+    bytes_t header(vfs::sealed::magic.begin(), vfs::sealed::magic.end());
+    header.insert(header.end(), m_keys.id.begin(), m_keys.id.end());
+    vfs::sealed::sealer_t sealer(m_keys, nonce, header);
+    sealer.add(bytes);
+    if (!write(nonce) || !write(bytes) || !write(sealer.tag())) {
+        return std::unexpected(unwritable());
+    }
+    bytes_t where;
+    put(where, index, 8);
+    put(where, m_offset - index, 8);
+    if (!m_file.write_at(vfs::sealed::header_start, where)) {
+        m_failed = true;
+        return std::unexpected(unwritable());
+    }
+    return {};
+}
+
 std::expected<void, error_t> pak_writer_t::finish() {
     if (m_finished || m_failed) {
         return std::unexpected(other(std::format("{} is finished, or failed", m_to)));
+    }
+    if (m_sealed) {
+        if (std::expected<void, error_t> indexed = finish_sealed(); !indexed) {
+            return indexed;
+        }
+        if (std::expected<void, std::string> committed = m_file.commit(); !committed) {
+            m_failed = true;
+            return std::unexpected(other(std::move(committed.error())));
+        }
+        m_finished = true;
+        return {};
     }
     const std::uint64_t directory = m_offset;
     bytes_t bytes;

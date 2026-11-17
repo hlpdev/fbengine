@@ -57,6 +57,7 @@ include(cmake/spirv.cmake)
 include(cmake/slang.cmake)
 include(cmake/assets.cmake)
 include(cmake/text.cmake)
+include(cmake/crypto.cmake)
 
 add_subdirectory(native/fbengine)
 add_subdirectory(native/fbengine_physics)

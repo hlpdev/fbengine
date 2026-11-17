@@ -475,11 +475,20 @@ Public Final Class Cooker
     /// more is taken out of it, so two
     /// cooks at once can't share one. A native change to the cooker at one version isn't noticed:
     /// an engine developer's is taken out by hand. With a `version`, the game's, the pak's stamped with
-    /// it, for Assets.MountRelease to refuse one of another.
-    @MainThread
+    /// it, for Assets.MountRelease to refuse one of another. With a `pakKey`, the game's 32 bytes,
+    /// the pak's encrypted with it, not a zip, for Assets.MountPak to read with that key, its names
+    /// and files unread without it; a file that doesn't change is the same bytes in each pak, so a
+    /// store's patch of it is what changed. The key's in the game, so this stops someone opening
+    /// the pak as a zip, not someone who takes the key from the executable. Panics when `pakKey`
+    /// is neither empty nor 32 bytes.
+    @MainThread @PanicsAtCaller
     Public Static Method CookFolder(source: Path, pak: Path, cache: Path? = Null,
                                     version: String = "",
-                                    timed: Func(String, Float64)? = Null) Throws IOError
+                                    timed: Func(String, Float64)? = Null,
+                                    pakKey: UInt8[] = []) Throws IOError
+        If pakKey.Count != 0 && pakKey.Count != PAK_KEY_SIZE
+            Panic("a pak's key is {PAK_KEY_SIZE} bytes, not {pakKey.Count}")
+        End If
         cooks += 1
         Local place = "res://fbengine-cooking-{cooks}"
         Assets.MountFolder(place, source)
@@ -561,7 +570,14 @@ Public Final Class Cooker
             End If
             kinds.Add(kind)
         End For
-        Local written = fbe_cook_pak_open(pak.Text)
+        Local written: UInt64 = 0
+        Unsafe
+            If pakKey.Count == 0
+                written = fbe_cook_pak_open(pak.Text, Null)
+            Else
+                written = fbe_cook_pak_open(pak.Text, AddressOf(pakKey[0]))
+            End If
+        End Unsafe
         If written == 0 Then Throw ToolsFailed(pak.Text)
         Defer fbe_cook_pak_free(written)
         // What this cook has of the cache, by file name.

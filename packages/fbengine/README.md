@@ -58,6 +58,7 @@ Its sound is `fbengine_audio`, its physics `fbengine_physics`, its UI `fbengine_
   and the Vulkan Memory Allocator MIT (notices/vma.txt);
 - SPIRV-Tools, which validates a game's shader, is Apache-2.0 (notices/spirv-tools.txt), with
   SPIRV-Headers under Khronos' MIT-style license (notices/spirv-headers.txt);
+- Monocypher, which opens an encrypted pak, is BSD-2-Clause or CC0 (notices/monocypher.txt);
 - on Windows, MinGW-w64's winpthreads is MIT and BSD-style (notices/winpthreads.txt);
 - Font.BuiltIn's font is a subset of Noto Sans, under the SIL Open Font License 1.1
   (notices/noto-sans.txt).

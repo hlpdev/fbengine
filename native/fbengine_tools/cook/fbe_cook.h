@@ -68,9 +68,10 @@ FBE_TOOLS_API const char* fbe_cook_slang_version(void);
 // A pak, its files stored as the engine's res:// reads them, written a file at a time, so it can
 // be bigger than memory: to a hidden file of its own beside `to`, making its folder, then put at
 // `to` whole by fbe_cook_pak_finish, which replaces a pak that's mounted, keeps its mode, and goes
-// through a link there. 0 if it can't be, as fbe_tools_error says, as for a folder there. A pak's
-// calls are one thread's at a time.
-FBE_TOOLS_API uint64_t fbe_cook_pak_open(const char* to);
+// through a link there. With `key`, a game's 32 bytes, it's an encrypted pak of that key. 0 if it
+// can't be, as fbe_tools_error says, as for a folder there. A pak's calls are one thread's at a
+// time.
+FBE_TOOLS_API uint64_t fbe_cook_pak_open(const char* to, const uint8_t* key);
 // Adds the file at `from` to the pak as `name`, '/' between its folders, a chunk at a time; false
 // if it can't, as fbe_tools_error and fbe_tools_failure say. So a finished pak always mounts, a
 // name that isn't the res:// path it says, as it's written, of 4096 bytes and 255 names at most,

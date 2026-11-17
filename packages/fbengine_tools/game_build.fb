@@ -14,6 +14,9 @@ Import "./cook"
 Import "./left_out"
 Import "./references"
 
+// Where a game keeps its pak's key, beside its project.toml.
+Const KEY_FILE: String = "pak.key"
+
 /// What a game's build step does, which `step/game.fb` runs, as its project.toml's `[build]` says.
 /// Its files are in `assets/`, beside its project.toml, and the step makes its module `res`, the
 /// typed references to them, with a `Mount` that mounts them at res://:
@@ -31,6 +34,12 @@ Import "./references"
 /// whose executable is elsewhere; one built with `fb build -o` needs its pak copied beside it. Each
 /// file is cooked again only when it or its settings change, as
 /// the step keeps what it cooked.
+///
+/// A game with a `pak.key` beside its project.toml, its key as 64 hex digits, has its release's pak
+/// encrypted with it, as Cooker.CookFolder does with a key, and `Mount` mounts it with the key,
+/// which is then in the executable. Every build needs the same key, so it's kept with the game's
+/// sources: another key seals every file another way, and a store's patch is all of the pak. A
+/// mod's pak and a debug build's `assets/` aren't encrypted.
 Public Final Class GameBuild
     Private New()
     End New
@@ -64,19 +73,23 @@ Public Final Class GameBuild
             Local version = Try VersionIn(folder)
             // What each file took that wasn't in the cache, and all of it, in out's cook-times.txt,
             // as fb shows a step's output only when it fails.
+            // The game's key, for an encrypted pak, or none.
+            Print("fb:rerun-if-changed={KEY_FILE}")
+            Local key = Try KeyIn(folder)
             Local began = Instant.Now()
             Local times: String[] = []
             Try Cooker.CookFolder(assets, cooked, out / "cook-cache",
                                   version, Function(file: String, seconds: Float64)
                 times.Add("{file} {seconds}")
-            End Function)
+            End Function, key)
             times.Add("all {(Instant.Now() - began).TotalSeconds}")
             Try File.WriteText(out / "cook-times.txt", "\n".Join(times) + "\n")
             // The pak's own place is out, so one taken from beside the executable comes back: fb
             // runs this again when it's gone, and then it's the same, or no use.
             Print("fb:rerun-if-changed={pak}")
             If !Try SameFile(cooked, pak) Then Try File.Copy(cooked, pak)
-            Local stamped = version != "" ? ", \"{Literal(version)}\"" : ""
+            Local stamped = version != "" || key.Count > 0 ? ", \"{Literal(version)}\"" : ""
+            If key.Count > 0 Then stamped += ", {KeyLiteral(key)}"
             mount = "Try FbEngine.Assets.MountRelease(\"{Literal(name)}\", " +
                     "\"{Literal(pak.Text)}\"{stamped})"
         End If
@@ -110,6 +123,29 @@ Public Final Class GameBuild
         Local project = toml["project"]
         If project == Null Then Return ""
         Return project["version"]?.AsString() ?? ""
+    End Method
+
+    // The key in the game's pak.key in `folder`, 64 hex digits with any space around them, or
+    // none without the file. One that isn't a key throws an IOError of INVALID_DATA.
+    Package Static Method KeyIn(folder: Path): UInt8[] Throws IOError
+        Local file = folder / KEY_FILE
+        If !File.Exists(file) Then Return []
+        Local key = Hex.Decode((Try File.ReadText(file)).Trim())
+        If key == Null || key.Count != PAK_KEY_SIZE
+            Throw IOError(IOErrorKind.INVALID_DATA,
+                          "{file} isn't a pak's key, which is {PAK_KEY_SIZE * 2} hex digits",
+                          file.Text)
+        End If
+        Return key
+    End Method
+
+    // `key` as the game's module `res` has it, a UInt8[].
+    Static Method KeyLiteral(key: UInt8[]): String
+        Local bytes: String[] = []
+        For byte In key
+            bytes.Add("0x" + Hex.Encode([byte]))
+        End For
+        Return "[" + ", ".Join(bytes) + "] As UInt8[]"
     End Method
 
     // Takes out what a cook that was ended left in `folder`, under fb's lock on a step.

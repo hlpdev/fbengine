@@ -10,6 +10,7 @@ Import std.io
 Import std.os
 Import std.test
 Import std.text
+Import std.text.encoding
 Import fbengine
 Import fbengine_tools
 
@@ -695,4 +696,46 @@ Function WhiteSpaceAloneIsAGltfTheEngineRefuses() Throws IOError
                                                        built.Path / "game.pak"))?.Kind ==
                IOErrorKind.INVALID_DATA)
     End For
+End Function
+
+// A folder cooked with a key is an encrypted pak, the same bytes each time it's cooked, which the
+// engine reads with that key and no other; one cooked without is a zip, as a mod's is.
+@Test
+Function AFolderCookedWithAKeyIsAnEncryptedPak() Throws IOError
+    Local source = Try TempDir()
+    Defer Try? source.Close()
+    Try File.WriteText(source.Path / "readme.txt", "hello")
+    Try Dir.CreateAll(source.Path / "models")
+    Try File.WriteText(source.Path / "models" / "door.txt", "a door")
+    Local built = Try TempDir()
+    Defer Try? built.Close()
+    Local key = Hex.Decode("1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100") ?? []
+    Try Cooker.CookFolder(source.Path, built.Path / "one.pak", Null, "2.0.0", Null, key)
+    Try Cooker.CookFolder(source.Path, built.Path / "two.pak", Null, "2.0.0", Null, key)
+    Expect((Try File.ReadBytes(built.Path / "one.pak")) ==
+           (Try File.ReadBytes(built.Path / "two.pak")))
+    Try Assets.MountPak("res://sealed-pak", built.Path / "one.pak", key)
+    Defer Assets.Unmount("res://sealed-pak")
+    Expect((Try Assets.ReadText("res://sealed-pak/readme.txt")) == "hello")
+    Expect((Try Assets.ReadText("res://sealed-pak/MODELS/door.txt")) == "a door")
+    Expect((Try Assets.ReadText("res://sealed-pak/{GAME_VERSION_FILE}")) == "2.0.0")
+    Expect((Try Assets.Entries("res://sealed-pak/models")).Count == 1)
+    Local other = Hex.Decode("001e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100") ??
+                  []
+    Local wrong = ExpectThrows<IOError>(Assets.MountPak("res://other-key", built.Path / "one.pak",
+                                                        other))
+    Expect(wrong?.Kind == IOErrorKind.INVALID_DATA)
+    Expect((wrong?.Message ?? "").Contains("encrypted with another game's key"))
+    // In memory too, as Embed gives one.
+    Try Assets.MountPakBytes("res://sealed-bytes", Try File.ReadBytes(built.Path / "two.pak"), key)
+    Defer Assets.Unmount("res://sealed-bytes")
+    Expect((Try Assets.ReadText("res://sealed-bytes/readme.txt")) == "hello")
+    // A mod's pak, cooked without, is a zip, which mounts with none.
+    Try Cooker.CookFolder(source.Path, built.Path / "mod.pak")
+    Expect((Try File.ReadBytes(built.Path / "mod.pak"))[0] == 0x50)
+    Try Assets.MountPak("res://mod-pak", built.Path / "mod.pak")
+    Defer Assets.Unmount("res://mod-pak")
+    Expect((Try Assets.ReadText("res://mod-pak/readme.txt")) == "hello")
+    Expect(ExpectThrows<IOError>(Assets.MountPak("res://zip-keyed", built.Path / "mod.pak",
+                                                 key))?.Kind == IOErrorKind.INVALID_DATA)
 End Function

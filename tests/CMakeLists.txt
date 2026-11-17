@@ -1865,9 +1865,10 @@ add_executable(fbengine_vfs_tests vfs/vfs_tests.cpp
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/vfs.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/folder.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/pak.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/sealed.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/disk.cpp")
 target_include_directories(fbengine_vfs_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
-target_link_libraries(fbengine_vfs_tests PRIVATE Catch2::Catch2WithMain)
+target_link_libraries(fbengine_vfs_tests PRIVATE Catch2::Catch2WithMain fbengine_monocypher)
 fbengine_set_warnings(fbengine_vfs_tests)
 catch_discover_tests(fbengine_vfs_tests TEST_PREFIX "vfs." ADD_TAGS_AS_LABELS
                      PROPERTIES TIMEOUT ${fbengine_gpu_timeout}
@@ -1893,6 +1894,7 @@ add_executable(fbengine_assets_tests assets/images_tests.cpp assets/models_tests
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/vfs.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/folder.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/pak.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/sealed.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/disk.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/jobs/jobs.cpp")
 fbengine_use_fetched_simdjson(fbengine_assets_tests)
@@ -1910,7 +1912,7 @@ if(FBENGINE_SANITIZE)
   set_source_files_properties(assets/stb_write.c PROPERTIES COMPILE_OPTIONS -fno-sanitize=shift)
 endif()
 target_link_libraries(fbengine_assets_tests PRIVATE Catch2::Catch2WithMain fbengine_stb_write ktx
-                      fastgltf::fastgltf)
+                      fastgltf::fastgltf fbengine_monocypher)
 fbengine_set_warnings(fbengine_assets_tests)
 # libktx is UCRT's here, as the DLLs are (cmake/assets.cmake).
 if(MINGW)
@@ -2263,8 +2265,10 @@ add_executable(fbengine_tools_tests tools/cook_tests.cpp tools/model_tests.cpp a
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/disk.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/folder.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/pak.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/sealed.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/vfs.cpp"
-               tools/pak_tests.cpp "${PROJECT_SOURCE_DIR}/native/fbengine_tools/cook/pak.cpp"
+               tools/pak_tests.cpp tools/sealed_pak_tests.cpp
+               "${PROJECT_SOURCE_DIR}/native/fbengine_tools/cook/pak.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine_tools/tools/atomic.cpp")
 fbengine_use_fetched_simdjson(fbengine_tools_tests)
 target_include_directories(fbengine_tools_tests PRIVATE
@@ -2276,7 +2280,7 @@ target_include_directories(fbengine_tools_tests SYSTEM PRIVATE
 target_compile_definitions(fbengine_tools_tests PRIVATE
                            FBENGINE_ASSETS_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/assets/fixtures")
 target_link_libraries(fbengine_tools_tests PRIVATE Catch2::Catch2WithMain fbengine_stb_write ktx
-                      fastgltf::fastgltf meshoptimizer)
+                      fastgltf::fastgltf meshoptimizer fbengine_monocypher)
 fbengine_set_warnings(fbengine_tools_tests)
 if(MINGW)
   target_link_options(fbengine_tools_tests PRIVATE -mcrtdll=ucrt)
