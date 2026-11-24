@@ -210,15 +210,60 @@ FetchContent_Declare(
   SYSTEM
 )
 FetchContent_MakeAvailable(rnnoise)
+# Its sources are built from a copy, patched as its repository's next commit, 372f7b4b ("Fix
+# compilation errors"), patched them: 0.2's NEON code, which arm64 builds, and its plain C code
+# include os_support.h, which the archive doesn't have, for OPUS_CLEAR, which common.h has as
+# RNN_CLEAR. Each patch's text has to be there, or configuring fails.
+set(fbengine_rnnoise_src "${CMAKE_CURRENT_BINARY_DIR}/rnnoise")
+file(COPY "${rnnoise_SOURCE_DIR}/src/" DESTINATION "${fbengine_rnnoise_src}" PATTERN "vec.h" EXCLUDE
+     PATTERN "vec_neon.h" EXCLUDE PATTERN "common.h" EXCLUDE)
+# Copies RNNoise's src/`name` beside the rest with each `from` in it, in the pairs after it, made
+# its `to`: a pair whose `from` it doesn't have fails. They're each ARGV<n>, not a list, which
+# would drop an empty `to`.
+function(fbengine_patch_rnnoise name)
+  file(READ "${rnnoise_SOURCE_DIR}/src/${name}" text)
+  math(EXPR last "${ARGC} - 2")
+  foreach(at RANGE 1 ${last} 2)
+    math(EXPR next "${at} + 1")
+    set(from "${ARGV${at}}")
+    set(to "${ARGV${next}}")
+    string(FIND "${text}" "${from}" found)
+    if(found EQUAL -1)
+      message(FATAL_ERROR "RNNoise's ${name} doesn't have what a patch expects: ${from}")
+    endif()
+    string(REPLACE "${from}" "${to}" text "${text}")
+  endforeach()
+  file(WRITE "${fbengine_rnnoise_src}/${name}.in" "${text}")
+  configure_file("${fbengine_rnnoise_src}/${name}.in" "${fbengine_rnnoise_src}/${name}" COPYONLY)
+endfunction()
+fbengine_patch_rnnoise(vec.h
+  "#include \"opus_types.h\"\n#include <math.h>"
+  "#include \"opus_types.h\"\n#include \"common.h\"\n#include <math.h>"
+  "#include \"os_support.h\"\n" ""
+  "OPUS_CLEAR(" "RNN_CLEAR(")
+fbengine_patch_rnnoise(vec_neon.h
+  "#include \"os_support.h\"\n" "#include \"opus_types.h\"\n#include \"common.h\"\n"
+  "OPUS_CLEAR(" "RNN_CLEAR(")
+fbengine_patch_rnnoise(common.h
+  "#define RNN_CLEAR(dst, n) (memset((dst), 0, (n)*sizeof(*(dst))))\n#endif\n"
+  "#define RNN_CLEAR(dst, n) (memset((dst), 0, (n)*sizeof(*(dst))))\n#endif\n
+# if !defined(OPUS_GNUC_PREREQ)
+#  if defined(__GNUC__)&&defined(__GNUC_MINOR__)
+#   define OPUS_GNUC_PREREQ(_maj,_min) ((__GNUC__<<16)+__GNUC_MINOR__>=((_maj)<<16)+(_min))
+#  else
+#   define OPUS_GNUC_PREREQ(_maj,_min) 0
+#  endif
+# endif
+")
 set(fbengine_rnnoise_sources denoise.c rnn.c pitch.c kiss_fft.c celt_lpc.c nnet.c nnet_default.c
                              parse_lpcnet_weights.c rnnoise_data.c rnnoise_tables.c)
-list(TRANSFORM fbengine_rnnoise_sources PREPEND "${rnnoise_SOURCE_DIR}/src/")
+list(TRANSFORM fbengine_rnnoise_sources PREPEND "${fbengine_rnnoise_src}/")
 add_library(fbengine_rnnoise STATIC ${fbengine_rnnoise_sources})
 target_include_directories(fbengine_rnnoise SYSTEM PUBLIC "${rnnoise_SOURCE_DIR}/include")
-target_include_directories(fbengine_rnnoise PRIVATE "${rnnoise_SOURCE_DIR}/src")
+target_include_directories(fbengine_rnnoise PRIVATE "${fbengine_rnnoise_src}")
 set_target_properties(fbengine_rnnoise PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$" AND NOT MSVC)
-  set(fbengine_rnnoise_x86 "${rnnoise_SOURCE_DIR}/src/x86")
+  set(fbengine_rnnoise_x86 "${fbengine_rnnoise_src}/x86")
   target_sources(fbengine_rnnoise PRIVATE "${fbengine_rnnoise_x86}/x86_dnn_map.c"
                  "${fbengine_rnnoise_x86}/x86cpu.c" "${fbengine_rnnoise_x86}/nnet_sse4_1.c"
                  "${fbengine_rnnoise_x86}/nnet_avx2.c")
