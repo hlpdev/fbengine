@@ -1,0 +1,240 @@
+// Voice chat's pieces between a microphone and the network, over the voice area of the C API:
+// Opus's encoder and decoder, and RNNoise's denoiser.
+
+Import std.core
+Import std.ffi
+Import "./audio"
+Import "./c/fbe_voice"
+
+/// A packet a VoiceDecoder can't decode, as one that's corrupt.
+Public Class VoiceError Extends Error
+End Class
+
+/// Compresses speech with Opus, a frame at a time, to a few kilobytes a second: at 24000 bits a
+/// second, 20 ms of it is about 60 bytes. Each frame is 2.5, 5, 10, 20, 40, or 60 ms of samples;
+/// 20 is usual. Its packets are decoded by a VoiceDecoder of the same rate and channels, in order.
+Public Final Class VoiceEncoder
+    Field handle: UInt64
+    Field channels: Int32
+    Field sampleRate: Int32
+
+    /// An encoder of speech at `sampleRate` frames a second, 8000, 12000, 16000, 24000, or 48000,
+    /// with `channels`, 1 or 2, to about `bitrate` bits a second, 6000 to 510000. Panics when a
+    /// value's out of range.
+    @MainThread Public New(sampleRate: Int32 = 48000, channels: Int32 = 1, bitrate: Int32 = 24000)
+        handle = fbe_voice_encoder_add(sampleRate, channels, bitrate)
+        If handle == 0 Then Panic(LastError())
+        Self.channels = channels
+        Self.sampleRate = sampleRate
+    End New
+
+    /// Its frames a second.
+    @MainThread Public Method SampleRate(): Int32 => sampleRate
+
+    /// Its channels.
+    @MainThread Public Method Channels(): Int32 => channels
+
+    /// Tells it what share of its packets, 0 to 100 percent, are expected to be lost: above 0, each
+    /// packet carries a rougher copy of the one before, which a VoiceDecoder's Recover decodes in
+    /// place of a lost one, at a few more bytes a packet. Panics when it's out of range.
+    @MainThread Public Method SetLoss(percent: Int32)
+        If !fbe_voice_set_loss(Live(), percent) Then Panic(LastError())
+    End Method
+
+    /// The packet of one frame of speech, `samples`, Channels() samples a frame, one after
+    /// another, from -1 to 1. Panics when they aren't 2.5, 5, 10, 20, 40, or 60 ms of frames.
+    @MainThread Public Method Encode(samples: Float32[]): UInt8[]
+        Live()
+        If samples.Count % channels != 0
+            Panic("{samples.Count} samples aren't whole frames of {channels} channels")
+        End If
+
+        Local frames = (samples.Count / channels) As Int32
+        CheckVoiceFrames(frames, sampleRate)
+
+        Local packet = Buffer<UInt8>(4000)
+        Local size: Int32 = 0
+        Unsafe
+            size = fbe_voice_encode(handle, AddressOf(samples[0]), frames, packet.Pointer(), 4000)
+        End Unsafe
+
+        If size < 0 Then Panic(LastError())
+        Return packet.Slice(0, size).ToArray()
+    End Method
+
+    /// Lets it go; using it after panics. Freeing it again does nothing. It's freed when nothing
+    /// has it any more, too.
+    @MainThread Public Method Free()
+        If handle != 0
+            fbe_voice_free(handle)
+            handle = 0
+        End If
+    End Method
+
+    Method Destroy()
+        If handle != 0 Then fbe_voice_free(handle)
+    End Method
+
+    @PanicsAtCaller
+    Method Live(): UInt64
+        If handle == 0 Then Panic("this VoiceEncoder was freed")
+        Return handle
+    End Method
+End Class
+
+/// Decodes a VoiceEncoder's packets, in order, back to speech, and makes up what a lost one had
+/// from what came before, so a gap is heard as a smudge rather than a click.
+Public Final Class VoiceDecoder
+    Field handle: UInt64
+    Field channels: Int32
+    Field sampleRate: Int32
+
+    /// A decoder of what an encoder of `sampleRate`, 8000, 12000, 16000, 24000, or 48000, and
+    /// `channels`, 1 or 2, made. Panics when a value's out of range.
+    @MainThread Public New(sampleRate: Int32 = 48000, channels: Int32 = 1)
+        handle = fbe_voice_decoder_add(sampleRate, channels)
+        If handle == 0 Then Panic(LastError())
+        Self.channels = channels
+        Self.sampleRate = sampleRate
+    End New
+
+    /// Its frames a second.
+    @MainThread Public Method SampleRate(): Int32 => sampleRate
+
+    /// Its channels.
+    @MainThread Public Method Channels(): Int32 => channels
+
+    /// The speech in `packet`, Channels() samples a frame, one after another. It throws
+    /// VoiceError when the packet's corrupt, as one from the network can be.
+    @MainThread Public Method Decode(packet: UInt8[]): Float32[] Throws VoiceError
+        Live()
+        If packet.Count == 0 Then Throw VoiceError("a voice packet has bytes")
+        Return Try Decoded(packet, False, sampleRate * 3 / 50)
+    End Method
+
+    /// What the packet before `next`, lost, had, `frames` frames of it, as many as each packet
+    /// has: from the copy `next` carries, when its encoder's SetLoss is above 0, or made up from
+    /// what came before. Decode `next` after. It throws VoiceError when `next` is corrupt.
+    @MainThread Public Method Recover(next: UInt8[], frames: Int32): Float32[] Throws VoiceError
+        Live()
+        CheckVoiceFrames(frames, sampleRate)
+        If next.Count == 0 Then Return Conceal(frames)
+        Return Try Decoded(next, True, frames)
+    End Method
+
+    /// `frames` frames in place of a packet that's lost, made up from what came before: when
+    /// there's no packet after it to Recover it from, as when its speaker's stopped talking.
+    @MainThread Public Method Conceal(frames: Int32): Float32[]
+        Live()
+        CheckVoiceFrames(frames, sampleRate)
+        Local samples = Buffer<Float32>((frames As Int64) * channels)
+        Local made: Int32 = 0
+        Unsafe
+            made = fbe_voice_decode(handle, Null, 0, False, samples.Pointer(), frames)
+        End Unsafe
+
+        If made < 0 Then Panic(LastError())
+        Return samples.Slice(0, (made As Int64) * channels).ToArray()
+    End Method
+
+    Method Decoded(packet: UInt8[], fec: Bool, frames: Int32): Float32[] Throws VoiceError
+        Local samples = Buffer<Float32>((frames As Int64) * channels)
+        Local made: Int32 = 0
+        Unsafe
+            made = fbe_voice_decode(handle, AddressOf(packet[0]), packet.Count As Int32, fec,
+                                    samples.Pointer(), frames)
+        End Unsafe
+
+        If made < 0 Then Throw VoiceError(LastError())
+        Return samples.Slice(0, (made As Int64) * channels).ToArray()
+    End Method
+
+    /// Lets it go; using it after panics. Freeing it again does nothing. It's freed when nothing
+    /// has it any more, too.
+    @MainThread Public Method Free()
+        If handle != 0
+            fbe_voice_free(handle)
+            handle = 0
+        End If
+    End Method
+
+    Method Destroy()
+        If handle != 0 Then fbe_voice_free(handle)
+    End Method
+
+    @PanicsAtCaller
+    Method Live(): UInt64
+        If handle == 0 Then Panic("this VoiceDecoder was freed")
+        Return handle
+    End Method
+End Class
+
+/// Takes the noise out from around a voice, a fan, a keyboard, hiss, with RNNoise's neural
+/// network, 10 ms of mono at 48000 Hz at a time, Frames() frames, and says how likely each is a
+/// voice, which voice activity is better told by than loudness. It keeps what it's heard, to hear
+/// the next, so each microphone has one of its own.
+Public Final Class Denoiser
+    Field handle: UInt64
+    Field voice: Float32 = 0.0
+
+    @MainThread Public New()
+        handle = fbe_voice_denoiser_add()
+        If handle == 0 Then Panic(LastError())
+    End New
+
+    /// The frames it takes at a time: 480, 10 ms at 48000 Hz.
+    Public Static Method Frames(): Int32 => FBE_VOICE_DENOISE_FRAMES
+
+    /// `samples`, Frames() of them, mono at 48000 Hz, from -1 to 1, with the noise taken out.
+    /// Panics when there aren't Frames() of them.
+    @MainThread Public Method Denoise(samples: Float32[]): Float32[]
+        Live()
+        If samples.Count != FBE_VOICE_DENOISE_FRAMES
+            Panic("a denoiser takes {FBE_VOICE_DENOISE_FRAMES} samples at a time, not {samples.Count}")
+        End If
+
+        Local cleaned = Buffer<Float32>.From(samples)
+        Unsafe
+            voice = fbe_voice_denoise(handle, cleaned.Pointer())
+        End Unsafe
+
+        If voice < 0.0 Then Panic(LastError())
+        Return cleaned.ToArray()
+    End Method
+
+    /// How likely the frames it last denoised are a voice, from 0 to 1.
+    @MainThread Public Method Voice(): Float32 => voice
+
+    /// Lets it go; using it after panics. Freeing it again does nothing. It's freed when nothing
+    /// has it any more, too.
+    @MainThread Public Method Free()
+        If handle != 0
+            fbe_voice_free(handle)
+            handle = 0
+        End If
+    End Method
+
+    Method Destroy()
+        If handle != 0 Then fbe_voice_free(handle)
+    End Method
+
+    @PanicsAtCaller
+    Method Live(): UInt64
+        If handle == 0 Then Panic("this Denoiser was freed")
+        Return handle
+    End Method
+End Class
+
+// A frame of `frames` at `sampleRate` is one Opus takes: 2.5, 5, 10, 20, 40, or 60 ms, so its
+// length in 2.5 ms is 1, 2, 4, 8, 16, or 24.
+@PanicsAtCaller
+Function CheckVoiceFrames(frames: Int32, sampleRate: Int32)
+    Local quarters = (frames As Int64) * 400
+    Local whole = quarters % sampleRate == 0
+    Local count = quarters / sampleRate
+    If !whole || !(count == 1 || count == 2 || count == 4 || count == 8 || count == 16 ||
+                   count == 24)
+        Panic(
+            "a voice frame is 2.5, 5, 10, 20, 40, or 60 ms, not {frames} frames at {sampleRate} Hz")
+    End If
+End Function

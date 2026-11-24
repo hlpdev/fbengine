@@ -238,3 +238,58 @@ TEST_CASE("ALostDeviceMadeAgainRunsOutOfMemoryWhole") {
     CHECK(!fbe_audio_lost());
     fbe_audio_stop();
 }
+
+TEST_CASE("VoicesPiecesRunOutOfMemoryWhole") {
+    REQUIRE(fbe_audio_start(manual, rate, 2, nullptr, 0.0));
+    std::uint64_t sound = 0;
+    CHECK(sweep(
+              nothing, [&] { return (sound = fbe_sound_open_feed(rate, 1, rate, 960)) != 0; },
+              [&] { fbe_sound_free(sound); })
+              .unsaid == 0);
+    sound = fbe_sound_open_feed(rate, 1, rate, 0);
+    REQUIRE(sound != 0);
+    std::uint64_t channel = 0;
+    CHECK(sweep(
+              nothing,
+              [&] {
+                  return (channel = fbe_sound_play(sound, 1.0F, 0.0F, 1.0F, false, false, 0.0, 0,
+                                                   0)) != 0;
+              },
+              [&] { fbe_channel_stop(channel); })
+              .unsaid == 0);
+    // A play that ran out of memory left its fed sound for the next.
+    channel = fbe_sound_play(sound, 1.0F, 0.0F, 1.0F, false, false, 0.0, 0, 0);
+    CHECK(channel != 0);
+    const std::vector<float> samples(480, 0.25F);
+    CHECK(fbe_sound_feed(sound, samples.data(), 480) == 480);
+    mix(1024);
+    CHECK(fbe_sound_queued(sound) == 0);
+    fbe_channel_stop(channel);
+    fbe_sound_free(sound);
+    fbe_audio_stop();
+
+    for (const std::int32_t device : { manual, silent }) {
+        CHECK(sweep(
+                  nothing, [&] { return fbe_capture_start(device, nullptr, rate, 1, 0.0); },
+                  [] { fbe_capture_stop(); })
+                  .unsaid == 0);
+        REQUIRE(fbe_capture_start(device, nullptr, rate, 1, 0.0));
+        fbe_capture_stop();
+    }
+    CHECK(sweep(nothing, [] { return fbe_capture_list_inputs(silent) >= 0; }, nothing).unsaid == 0);
+    CHECK(fbe_capture_list_inputs(silent) == 1);
+
+    std::uint64_t voice = 0;
+    const auto free_voice = [&] { fbe_voice_free(voice); };
+    CHECK(sweep(
+              nothing, [&] { return (voice = fbe_voice_encoder_add(rate, 1, 24000)) != 0; },
+              free_voice)
+              .unsaid == 0);
+    CHECK(sweep(
+              nothing, [&] { return (voice = fbe_voice_decoder_add(rate, 1)) != 0; }, free_voice)
+              .unsaid == 0);
+    CHECK(sweep(
+              nothing, [&] { return (voice = fbe_voice_denoiser_add()) != 0; }, free_voice)
+              .unsaid == 0);
+    CHECK(fbe_voice_count() == 0);
+}

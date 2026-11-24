@@ -4,6 +4,11 @@
 Public Extern "C" Lib "fbengine_audio_native"
     Function fbe_sound_load(data: Ptr<UInt8>, size: Int64): UInt64
     Function fbe_sound_stream(data: Ptr<UInt8>, size: Int64): UInt64
+    Function fbe_sound_open_feed(sample_rate: Int32, channels: Int32, room: Int32,
+                                 buffered: Int32): UInt64
+    Function fbe_sound_feed(sound: UInt64, samples: Ptr<Float32>, frames: Int32): Int32
+    Function fbe_sound_fed(sound: UInt64): Bool
+    Function fbe_sound_queued(sound: UInt64): Int32
     Function fbe_sound_streamed(sound: UInt64): Bool
     Function fbe_sound_free(sound: UInt64)
     Function fbe_sound_count(): Int32

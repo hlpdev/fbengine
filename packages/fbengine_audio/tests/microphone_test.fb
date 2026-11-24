@@ -1,0 +1,109 @@
+// The Microphone: on MANUAL, where the test gives it what it hears, and on SILENT, the null
+// backend's, which hears silence at a microphone's pace. Neither needs the mix started.
+
+Import std.core
+Import std.test
+Import std.time
+Import fbengine_audio
+
+@Test
+Function TheSilentDeviceHasOneInputAndManualNone() Throws AudioError
+    Expect((Try Microphone.Inputs(AudioDevice.SILENT)).Count == 1)
+    Expect((Try Microphone.Inputs(AudioDevice.MANUAL)).Count == 0)
+End Function
+
+// What it hears is read back in order, as much as is asked for, and once.
+@Test
+Function AManualMicrophoneReadsWhatItHeard() Throws AudioError
+    Try Microphone.Start(AudioDevice.MANUAL)
+    Defer Microphone.Stop()
+    Expect(Microphone.Started())
+    Expect(Microphone.Device() == AudioDevice.MANUAL)
+    Expect(Microphone.SampleRate() == 48000)
+    Expect(Microphone.Channels() == 1)
+    Expect(Microphone.Input() == "")
+    Microphone.Hear([0.5, -0.25, 0.125] As Float32[])
+    Expect(Microphone.Available() == 3)
+    Expect(Microphone.Read(2) == [0.5, -0.25] As Float32[])
+    Microphone.Hear([0.75] As Float32[])
+    Expect(Microphone.Read() == [0.125, 0.75] As Float32[])
+    Expect(Microphone.Read() == [] As Float32[])
+    Expect(Microphone.Available() == 0)
+End Function
+
+// It keeps what it's room for, and drops what it hears past that.
+@Test
+Function AMicrophoneDropsWhatItHasNoRoomFor() Throws AudioError
+    Try Microphone.Start(AudioDevice.MANUAL, "", 8000, 2, 0.01)
+    Defer Microphone.Stop()
+    Expect(Microphone.Channels() == 2)
+    Local samples: Float32[] = []
+    For i = 0 Until 200
+        samples.Add((i As Float32) / 1000.0)
+    End For
+    Microphone.Hear(samples)
+    Expect(Microphone.Available() == 80)
+    Expect(Microphone.Dropped() == 20)
+    Local read = Microphone.Read()
+    Expect(read.Count == 160)
+    Expect(read[159] == samples[159])
+End Function
+
+// Stopped, it says so, and a stopped one starts again from nothing.
+@Test
+Function AStoppedMicrophoneStartsAgainEmpty() Throws AudioError
+    Try Microphone.Start(AudioDevice.MANUAL)
+    Microphone.Hear([0.5] As Float32[])
+    Microphone.Stop()
+    Expect(!Microphone.Started())
+    Expect(Microphone.Available() == 0)
+    Expect(Microphone.SampleRate() == 0)
+    Microphone.Stop()
+    Try Microphone.Start(AudioDevice.MANUAL, "", 16000)
+    Defer Microphone.Stop()
+    Expect(Microphone.SampleRate() == 16000)
+    Expect(Microphone.Available() == 0)
+    Expect(Microphone.Dropped() == 0)
+End Function
+
+// The null backend's input hears silence, at a microphone's pace, converted to what it's asked.
+@Test
+Function ASilentMicrophoneHearsSilenceAsItGoes() Throws AudioError
+    Try Microphone.Start(AudioDevice.SILENT, "", 48000, 1)
+    Defer Microphone.Stop()
+    Expect(Microphone.SampleRate() == 48000)
+    Expect(Microphone.Channels() == 1)
+    Local waited = 0
+    While Microphone.Available() < 480 && waited < 200
+        Sleep(10.Milliseconds)
+        waited += 1
+    End While
+    Local heard = Microphone.Read()
+    Expect(heard.Count >= 480)
+    For sample In heard
+        Expect(sample == 0.0)
+    End For
+    Expect(!Microphone.Lost())
+End Function
+
+// An input that's unplugged stops, and says it's lost.
+@Test
+Function AnUnpluggedMicrophoneIsLost() Throws AudioError
+    Try Microphone.Start(AudioDevice.SILENT)
+    Defer Microphone.Stop()
+    Expect(!Microphone.Lost())
+    Try Microphone.SimulateUnplug()
+    Expect(Microphone.Lost())
+    Microphone.Stop()
+    Try Microphone.Start(AudioDevice.MANUAL)
+    Expect(!Microphone.Lost())
+    Expect(ExpectThrows<AudioError>(Microphone.SimulateUnplug()) != Null)
+End Function
+
+// Only the OS's device has inputs to name, and one of a name it hasn't isn't there.
+@Test
+Function AMicrophoneOfAnInputThatIsntThereThrows()
+    Expect(ExpectThrows<AudioError>(Microphone.Start(AudioDevice.DEFAULT, "no such microphone")) !=
+           Null)
+    Expect(!Microphone.Started())
+End Function

@@ -1,0 +1,135 @@
+// Opus's encoder and decoder, and RNNoise's denoiser: speech compressed and back, a lost packet
+// made up, and noise taken out.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.test
+Import fbengine_audio
+
+// `frames` frames of a mono tone at `hertz`, from frame `start`, at 48000 Hz and half volume.
+Function Tone(hertz: Float64, start: Int, frames: Int): Float32[]
+    Local samples: Float32[] = []
+    For i = start Until start + frames
+        samples.Add((Sin(2.0 * Pi * hertz * (i As Float64) / 48000.0) * 0.5) As Float32)
+    End For
+    Return samples
+End Function
+
+// The mean of the samples' squares.
+Function Power(samples: Float32[]): Float64
+    Local sum: Float64 = 0.0
+    For sample In samples
+        sum += (sample As Float64) * (sample As Float64)
+    End For
+    Return sum / (samples.Count As Float64)
+End Function
+
+// A tone compressed 20 ms at a time is small, and decoded comes back as loud as it went in.
+@Test
+Function SpeechCompressesSmallAndComesBack() Throws VoiceError
+    Local encoder = VoiceEncoder()
+    Local decoder = VoiceDecoder()
+    Expect(encoder.SampleRate() == 48000)
+    Expect(decoder.Channels() == 1)
+    Local bytes = 0
+    Local decoded: Float32[] = []
+    For packet = 0 Until 50
+        Local made = encoder.Encode(Tone(440.0, packet * 960, 960))
+        bytes += made.Count
+        Local heard = Try decoder.Decode(made)
+        Expect(heard.Count == 960)
+        If packet >= 10 Then decoded.AddAll(heard)
+    End For
+    // A second of it is about 24000 bits.
+    Expect(bytes < 4500)
+    Local power = Power(decoded)
+    Expect(power > 0.08 && power < 0.17)
+End Function
+
+// A lost packet is made up from what came before, as long as a packet, and so is one recovered
+// from the next.
+@Test
+Function ALostPacketIsMadeUp() Throws VoiceError
+    Local encoder = VoiceEncoder()
+    encoder.SetLoss(20)
+    Local decoder = VoiceDecoder()
+    Local packets: UInt8[][] = []
+    For packet = 0 Until 12
+        packets.Add(encoder.Encode(Tone(440.0, packet * 960, 960)))
+    End For
+    For packet = 0 Until 10
+        Try decoder.Decode(packets[packet])
+    End For
+    Local concealed = decoder.Conceal(960)
+    Expect(concealed.Count == 960)
+    Expect(Power(concealed) > 0.01)
+    Local recovered = Try decoder.Recover(packets[11], 960)
+    Expect(recovered.Count == 960)
+    Expect(Power(recovered) > 0.01)
+    Expect((Try decoder.Decode(packets[11])).Count == 960)
+    Expect((Try decoder.Recover([], 480)).Count == 480)
+End Function
+
+// A packet that isn't Opus is refused, and the decoder decodes on after.
+@Test
+Function ACorruptPacketThrows() Throws VoiceError
+    Local decoder = VoiceDecoder()
+    Expect(ExpectThrows<VoiceError>(decoder.Decode([])) != Null)
+    Local corrupt: UInt8[] = [0xFF, 0xFF, 0xFF]
+    Expect(ExpectThrows<VoiceError>(decoder.Decode(corrupt)) != Null)
+    Local encoder = VoiceEncoder()
+    Expect((Try decoder.Decode(encoder.Encode(Tone(440.0, 0, 960)))).Count == 960)
+End Function
+
+// Stereo, and other rates, as Opus takes them.
+@Test
+Function OtherRatesAndStereoComeBack() Throws VoiceError
+    Local encoder = VoiceEncoder(16000, 2, 32000)
+    Local decoder = VoiceDecoder(16000, 2)
+    Local frames: Float32[] = []
+    For i = 0 Until 320
+        frames.Add(0.25)
+        frames.Add(-0.25)
+    End For
+    Local heard = Try decoder.Decode(encoder.Encode(frames))
+    Expect(heard.Count == 640)
+End Function
+
+// Noise around nothing is taken out, and said not to be a voice.
+@Test
+Function NoiseIsTakenOut()
+    Local denoiser = Denoiser()
+    Expect(Denoiser.Frames() == 480)
+    Local before: Float64 = 0.0
+    Local after: Float64 = 0.0
+    Local seed: Int64 = 12345
+    For frame = 0 Until 100
+        Local noise: Float32[] = []
+        For i = 0 Until 480
+            seed = (seed * 1103515245 + 12345) % 2147483648
+            noise.Add((((seed As Float64) / 2147483648.0 - 0.5) * 0.2) As Float32)
+        End For
+        Local cleaned = denoiser.Denoise(noise)
+        Expect(cleaned.Count == 480)
+        If frame >= 50
+            before += Power(noise)
+            after += Power(cleaned)
+        End If
+    End For
+    Expect(after < before / 10.0)
+    Expect(denoiser.Voice() < 0.5)
+End Function
+
+// Each is let go by Free, and Free again is nothing.
+@Test
+Function VoicePiecesAreFreed()
+    Local encoder = VoiceEncoder()
+    Local decoder = VoiceDecoder()
+    Local denoiser = Denoiser()
+    encoder.Free()
+    encoder.Free()
+    decoder.Free()
+    denoiser.Free()
+    denoiser.Free()
+End Function

@@ -15,6 +15,9 @@ enum class kind_t : std::uint8_t {
     CHANNEL = 65,
     BUS = 66,
     EMITTER = 67,
+    ENCODER = 68,
+    DECODER = 69,
+    DENOISER = 70,
 };
 
 /// The most a generation is; a slot whose generation would go past it is retired.

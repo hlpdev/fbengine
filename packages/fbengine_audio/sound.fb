@@ -1,9 +1,10 @@
-// Sounds: Sound.Load decodes a file whole, Sound.Stream keeps it to decode as it plays, and Play
-// plays it on a Channel of its own.
+// Sounds: Sound.Load decodes a file whole, Sound.Stream keeps it to decode as it plays, Sound.Feed
+// is given its frames as they come, and Play plays it on a Channel of its own.
 
 Import std.core
 Import std.ffi
 Import std.io
+Import std.math
 Import fbengine
 Import "./audio"
 Import "./bus"
@@ -70,6 +71,38 @@ Public Final Class Sound Implements Asset
         Return Try Make(bytes, True, "")
     End Method
 
+    /// A fed sound, at `sampleRate` frames a second, 8000 to 384000, and `channels`, 1 to 8, which
+    /// is given its frames as they come, by Push, as a voice is from the network, and plays them
+    /// on one Channel at a time. It holds up to `room` seconds of them unplayed, from 1 frame's
+    /// worth to 60. Its Channel plays what it's pushed, and silence while it has none, playing
+    /// until it's stopped; whenever it runs dry it waits for `buffered` seconds of frames, 0 to
+    /// `room`, before it plays on, so frames that come unevenly, as packets do, don't stutter.
+    /// Its Channel reads ahead what the mix makes at a time, as every Channel does, so what's
+    /// pushed after it's read silence plays once that's been heard. Panics when a value's out of
+    /// range.
+    @MainThread Public Static Method Feed(sampleRate: Int32, channels: Int32, room: Float64 = 1.0,
+                                          buffered: Float64 = 0.0): Sound
+        If sampleRate < 8000 || sampleRate > 384000
+            Panic("a sound's sample rate is 8000 to 384000 Hz, not {sampleRate}")
+        End If
+
+        If channels < 1 || channels > 8 Then Panic("a sound has 1 to 8 channels, not {channels}")
+        Local frames = Round(room * (sampleRate As Float64))
+        If !(frames >= 1.0 && room <= 60.0)
+            Panic("a fed sound holds a frame to 60 seconds, not {room}")
+        End If
+
+        If !(buffered >= 0.0 && buffered <= room)
+            Panic("a fed sound buffers 0 to the {room} seconds it holds, not {buffered}")
+        End If
+
+        Local handle = fbe_sound_open_feed(sampleRate, channels, frames As Int32,
+                                           Min(Round(buffered * (sampleRate As Float64)),
+                                               frames) As Int32)
+        If handle == 0 Then Panic(LastError())
+        Return Sound(handle)
+    End Method
+
     /// Assets' kind of load for one, its file's bytes.
     Public Static Method LoadKind(): AssetKind => AssetKind.BYTES
 
@@ -130,6 +163,29 @@ Public Final Class Sound Implements Asset
     /// Whether Free let it go.
     @MainThread Public Method Freed(): Bool => handle == 0
 
+    /// Whether Feed made it.
+    @MainThread Public Method Fed(): Bool => fbe_sound_fed(Live())
+
+    /// Gives a fed sound `samples`, its frames, Channels() samples each, one after another, from
+    /// -1 to 1, after those it has, for its Channel to play: how many frames it took, fewer when
+    /// it's holding all it can. Panics unless it's fed, or when the samples aren't whole frames.
+    @MainThread Public Method Push(samples: Float32[]): Int32
+        If !fbe_sound_fed(Live()) Then Panic("only a fed sound is pushed frames; Sound.Feed makes one")
+        Local channels = fbe_sound_channels(handle)
+        If samples.Count % channels != 0
+            Panic("{samples.Count} samples aren't whole frames of {channels} channels")
+        End If
+
+        If samples.Count == 0 Then Return 0
+        Unsafe
+            Return fbe_sound_feed(handle, AddressOf(samples[0]),
+                                  (samples.Count / channels) As Int32)
+        End Unsafe
+    End Method
+
+    /// How many frames a fed sound's been pushed that haven't been played, 0 for another.
+    @MainThread Public Method Queued(): Int32 => fbe_sound_queued(Live())
+
     /// Whether it's streamed, decoded as each Channel plays it.
     @MainThread Public Method Streamed(): Bool => fbe_sound_streamed(Live())
 
@@ -139,10 +195,10 @@ Public Final Class Sound Implements Asset
     /// Its channels, 1 for mono, 2 for stereo.
     @MainThread Public Method Channels(): Int32 => fbe_sound_channels(Live())
 
-    /// How many frames long it is.
+    /// How many frames long it is, 0 for a fed sound.
     @MainThread Public Method Frames(): Int64 => fbe_sound_frames(Live())
 
-    /// How many seconds long it is.
+    /// How many seconds long it is, 0 for a fed sound.
     @MainThread Public Method Length(): Float64
         Return (fbe_sound_frames(Live()) As Float64) / fbe_sound_sample_rate(handle)
     End Method
@@ -150,7 +206,8 @@ Public Final Class Sound Implements Asset
     /// Plays it, on a Channel of its own, at its volume, pan, pitch, and looping, or paused, so
     /// it starts at Resume, and fading in from silence over `fadeIn` seconds, if they're more than
     /// 0. A crossfade is one Channel's FadeOut and the next one's Play with a fadeIn. Panics when
-    /// the audio isn't started. An Emitter's Play plays it in the world.
+    /// the audio isn't started, or it's fed and another Channel plays it. An Emitter's Play plays
+    /// it in the world.
     @MainThread Public Method Play(paused: Bool = False, fadeIn: Float64 = 0.0): Channel
         Return PlayFrom(0, paused, fadeIn)
     End Method

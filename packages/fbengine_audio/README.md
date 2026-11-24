@@ -1,7 +1,8 @@
 # fbengine_audio
 
-fbengine's sound, on miniaudio: the mix and its device, then sounds, channels, music streams, and
-3D sound that follows fbengine's entities.
+fbengine's sound, on miniaudio: the mix and its device, then sounds, channels, music streams, 3D
+sound that follows fbengine's entities, and voice chat's pieces: the microphone, a sound fed as it
+comes, Opus, and noise suppression.
 
 ```toml
 [dependencies]
@@ -41,7 +42,16 @@ where the entity is drawn between steps, so they move as smoothly as what's seen
 one play of a `Sound`; once it ends or is stopped, its methods do nothing, so a game can stop or
 ask about one whose sound ended long ago.
 
+For voice chat, the `Microphone` hears an input, apart from the mix, and `Read` gives what it's
+heard each frame. A `Denoiser` (RNNoise) takes the noise out of each 10 ms of it and says how
+likely it's a voice; a `VoiceEncoder` (Opus) compresses 20 ms at a time to a packet of about 60
+bytes, and a `VoiceDecoder` makes speech of it again, making up a packet that's lost. What's
+decoded is pushed to a `Sound.Feed`, which plays it on one channel, from an emitter where its
+speaker stands, buffering a little so packets that come unevenly don't stutter.
+
 It's released with fbengine, at the same version, and needs fb 1.3.0 or later. Apache-2.0; in its
 DLL, miniaudio is MIT-0 or public domain (notices/miniaudio.txt), with stb_vorbis, MIT or public
-domain (notices/stb_vorbis.txt), and verblib, MIT-0 or public domain (notices/verblib.txt); and on
-Windows MinGW-w64's winpthreads is MIT and BSD-style (notices/winpthreads.txt).
+domain (notices/stb_vorbis.txt), and verblib, MIT-0 or public domain (notices/verblib.txt); Opus is
+BSD-3-Clause, with royalty-free patent licenses (notices/opus.txt), and RNNoise BSD-3-Clause
+(notices/rnnoise.txt); and on Windows MinGW-w64's winpthreads is MIT and BSD-style
+(notices/winpthreads.txt).

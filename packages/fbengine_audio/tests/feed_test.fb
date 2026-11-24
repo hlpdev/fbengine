@@ -1,0 +1,139 @@
+// Fed sounds, as voice chat plays what comes from the network: mixed on no device, so each test
+// knows every sample it hears. As in sound_test.fb, each play is a frame late. A Channel reads its
+// sound 512 frames at a time, the mix's processing size on no device, so what's pushed after it's
+// read silence plays once that's been mixed.
+
+Import std.core
+Import std.math
+Import std.test
+Import fbengine_audio
+
+@Test
+Function AFedSoundSaysWhatItIs() Throws SoundError
+    Local voice = Sound.Feed(48000, 1)
+    Expect(voice.Fed())
+    Expect(!voice.Streamed())
+    Expect(voice.SampleRate() == 48000)
+    Expect(voice.Channels() == 1)
+    Expect(voice.Frames() == 0)
+    Expect(voice.Length() == 0.0)
+    Expect(voice.Queued() == 0)
+    Expect(!(Try Sound.FromBytes(Embed("data/tone.wav"))).Fed())
+End Function
+
+// What's pushed plays in order, after the frame a play's late; with nothing pushed it's silent,
+// and plays on, and what's pushed then plays after what it read.
+@Test
+Function AFedSoundPlaysWhatItsPushedThenSilence() Throws AudioError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 1)
+    Defer Audio.Stop()
+    Local voice = Sound.Feed(48000, 1)
+    Expect(voice.Push([0.5, -0.25, 0.125, 0.75] As Float32[]) == 4)
+    Expect(voice.Queued() == 4)
+    Local channel = voice.Play()
+    Expect(Audio.Mix(5) == [0.0, 0.5, -0.25, 0.125, 0.75] As Float32[])
+    Expect(Audio.Mix(3) == [0.0, 0.0, 0.0] As Float32[])
+    Expect(channel.Playing())
+    Expect(voice.Push([0.25, 0.25] As Float32[]) == 2)
+    Local mixed = Audio.Mix(1024)
+    Expect(voice.Queued() == 0)
+    Expect(Find(mixed, [0.0, 0.25, 0.25, 0.0] As Float32[]) > 0)
+    channel.Stop()
+End Function
+
+// Once it's run dry, it waits for its buffered frames before it plays on.
+@Test
+Function AFedSoundWaitsForItsBufferedFrames() Throws AudioError
+    Try Audio.Start(AudioDevice.MANUAL, 8000, 1)
+    Defer Audio.Stop()
+    Local voice = Sound.Feed(8000, 1, 1.0, 0.0005)
+    Local channel = voice.Play()
+    voice.Push([0.5, 0.5, 0.5] As Float32[])
+    Expect(Audio.Mix(3) == [0.0, 0.0, 0.0] As Float32[])
+    Expect(voice.Queued() == 3)
+    voice.Push([0.25] As Float32[])
+    Local mixed = Audio.Mix(1024)
+    Expect(voice.Queued() == 0)
+    Expect(Find(mixed, [0.0, 0.5, 0.5, 0.5, 0.25, 0.0] As Float32[]) > 0)
+    channel.Stop()
+End Function
+
+// It holds what it's room for, and takes no more.
+@Test
+Function AFedSoundTakesOnlyWhatItHasRoomFor()
+    Local voice = Sound.Feed(8000, 2, 0.0005)
+    Expect(voice.Push([0.1, 0.2, 0.3, 0.4, 0.5, 0.6] As Float32[]) == 3)
+    Expect(voice.Push([0.1, 0.2, 0.3, 0.4] As Float32[]) == 1)
+    Expect(voice.Push([0.1, 0.2] As Float32[]) == 0)
+    Expect(voice.Queued() == 4)
+    Expect(voice.Push([]) == 0)
+End Function
+
+// One Channel plays it at a time; once that's stopped, another can.
+@Test
+Function AFedSoundPlaysOnOneChannelAtATime() Throws AudioError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 1)
+    Defer Audio.Stop()
+    Local voice = Sound.Feed(48000, 1)
+    Local first = voice.Play()
+    first.Stop()
+    Local second = voice.Play()
+    Expect(second.Playing())
+    voice.Push([0.5, 0.5] As Float32[])
+    Audio.Mix(16)
+    Expect(voice.Queued() == 0)
+    second.Stop()
+End Function
+
+// From an Emitter it's heard in the world, as a voice is from where its speaker stands: quieter
+// far off.
+@Test
+Function AFedSoundFromAnEmitterIsQuieterFarOff() Throws AudioError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 2)
+    Defer Audio.Stop()
+    Local near = Sound.Feed(48000, 1)
+    Local far = Sound.Feed(48000, 1)
+    Local nearby = Emitter()
+    nearby.SetPosition(Vec3(0, 0, 1))
+    Local away = Emitter()
+    away.SetPosition(Vec3(0, 0, 20))
+    Local samples: Float32[] = []
+    For i = 0 Until 4800
+        samples.Add(0.5)
+    End For
+    near.Push(samples)
+    Local nearChannel = nearby.Play(near)
+    Local loud = Loudness(Audio.Mix(4800))
+    nearChannel.Stop()
+    Audio.Mix(480)
+    far.Push(samples)
+    Local farChannel = away.Play(far)
+    Local quiet = Loudness(Audio.Mix(4800))
+    farChannel.Stop()
+    Expect(loud > 0.1)
+    Expect(quiet < loud / 4.0)
+End Function
+
+// The sum of the samples' sizes, over how many there are.
+Function Loudness(samples: Float32[]): Float32
+    Local sum: Float32 = 0.0
+    For sample In samples
+        sum += sample < 0.0 ? -sample : sample
+    End For
+    Return sum / (samples.Count As Float32)
+End Function
+
+// Where `part` is in `samples`, or -1.
+Function Find(samples: Float32[], part: Float32[]): Int
+    For start = 0 To samples.Count - part.Count
+        Local found = True
+        For i = 0 Until part.Count
+            If samples[start + i] != part[i]
+                found = False
+                Break
+            End If
+        End For
+        If found Then Return start
+    End For
+    Return -1
+End Function

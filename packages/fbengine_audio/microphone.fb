@@ -1,0 +1,146 @@
+// The microphone: what an input hears, for voice chat, over the capture area of the C API.
+
+Import std.core
+Import std.ffi
+Import "./audio"
+Import "./c/fbe_capture"
+
+/// The microphone, which there's one of at a time: what an input hears, as samples a game reads,
+/// apart from the mix, which needn't be started. Start it on an input, and Read what it's heard
+/// each frame, oldest first; what it hears while a game doesn't read is kept, up to the seconds
+/// Start says, and the rest dropped.
+Public Final Class Microphone
+    Private New()
+    End New
+
+    /// The names of `device`'s inputs, the microphones and headsets a player picks from, for
+    /// Start: the OS's for DEFAULT, the null backend's one for SILENT, and none for MANUAL. A
+    /// second of one name is "Headset (2)". It throws AudioError when there's no audio backend to
+    /// ask.
+    @MainThread Public Static Method Inputs(device: AudioDevice): String[] Throws AudioError
+        Local count = fbe_capture_list_inputs(device As Int32)
+        If count < 0 Then Throw AudioError(LastError())
+        Local names: String[] = []
+        For i = 0 Until count
+            Unsafe
+                names.Add(fbe_capture_input_name(i).ToString())
+            End Unsafe
+        End For
+        Return names
+    End Method
+
+    /// Starts hearing `device`: DEFAULT's `input`, one of the names Inputs gives, or its default
+    /// for ""; SILENT's, which hears silence at a microphone's pace; or MANUAL, which hears only
+    /// what Hear gives it, as tests want. What it hears is converted to `sampleRate` frames a
+    /// second, 8000 to 384000, and `channels`, 1 to 8, or for either 0, the input's own (48000 and
+    /// 1 on MANUAL), and up to `seconds` of it, 0.01 to 60, is kept unread. It throws AudioError
+    /// when the device won't start or has no input of that name, and panics when it's started
+    /// already or a value's out of range.
+    @MainThread Public Static Method Start(device: AudioDevice = AudioDevice.DEFAULT,
+                                           input: String = "", sampleRate: Int32 = 48000,
+                                           channels: Int32 = 1,
+                                           seconds: Float64 = 1.0) Throws AudioError
+        If fbe_capture_started() Then Panic("the microphone is started already; Stop it first")
+        If sampleRate != 0 && (sampleRate < 8000 || sampleRate > 384000)
+            Panic("a sample rate is 0, for the input's, or 8000 to 384000 Hz, not {sampleRate}")
+        End If
+
+        If channels < 0 || channels > 8
+            Panic("the microphone has 0, for the input's, to 8 channels, not {channels}")
+        End If
+
+        If !(seconds >= 0.01 && seconds <= 60.0)
+            Panic("the microphone keeps 0.01 to 60 seconds, not {seconds}")
+        End If
+
+        If device != AudioDevice.DEFAULT && input != ""
+            Panic("only AudioDevice.DEFAULT has inputs to name")
+        End If
+
+        If !fbe_capture_start(device As Int32, input, sampleRate, channels, seconds)
+            Throw AudioError(LastError())
+        End If
+    End Method
+
+    /// Stops hearing and lets the input go, with what it heard unread. Stopped already, it does
+    /// nothing.
+    @MainThread Public Static Method Stop()
+        fbe_capture_stop()
+    End Method
+
+    /// Whether it's started.
+    @MainThread Public Static Method Started(): Bool => fbe_capture_started()
+
+    /// The device it was started on. Panics when it isn't started.
+    @MainThread Public Static Method Device(): AudioDevice
+        If !fbe_capture_started() Then Panic("the microphone isn't started")
+        Return fbe_capture_device() As AudioDevice
+    End Method
+
+    /// The name of the input it hears, as the OS has it, "" when it isn't started or has none.
+    @MainThread Public Static Method Input(): String
+        Unsafe
+            Return fbe_capture_input().ToString()
+        End Unsafe
+    End Method
+
+    /// Its frames a second, 0 when it isn't started.
+    @MainThread Public Static Method SampleRate(): Int32 => fbe_capture_sample_rate()
+
+    /// Its channels, 0 when it isn't started.
+    @MainThread Public Static Method Channels(): Int32 => fbe_capture_channels()
+
+    /// How many frames it's heard that haven't been read, 0 when it isn't started.
+    @MainThread Public Static Method Available(): Int32 => fbe_capture_available()
+
+    /// Up to `most` of the frames it's heard and not read, all of them for -1, oldest first,
+    /// Channels() samples each, one after another, from -1 to 1. Panics when it isn't started.
+    @MainThread Public Static Method Read(most: Int32 = -1): Float32[]
+        If !fbe_capture_started() Then Panic("the microphone isn't started")
+        If most < -1 Then Panic("a read is up to 0 frames or more, or -1 for all, not {most}")
+        Local frames = fbe_capture_available()
+        If most >= 0 && most < frames Then frames = most
+        If frames == 0 Then Return []
+        Local samples = Buffer<Float32>((frames As Int64) * fbe_capture_channels())
+        Local read: Int32 = 0
+        Unsafe
+            read = fbe_capture_read(samples.Pointer(), frames)
+        End Unsafe
+
+        If read < 0 Then Panic(LastError())
+        Return samples.Slice(0, (read As Int64) * fbe_capture_channels()).ToArray()
+    End Method
+
+    /// How many frames it's dropped since it started, heard while it held all it keeps.
+    @MainThread Public Static Method Dropped(): Int64 => fbe_capture_dropped()
+
+    /// Whether its input stopped on its own, as one does when it's unplugged: it hears nothing
+    /// more until it's started again, on another input or the default.
+    @MainThread Public Static Method Lost(): Bool => fbe_capture_lost()
+
+    /// On MANUAL, takes `samples`, Channels() samples a frame, as heard, as a microphone's would
+    /// be. Panics unless it's started on MANUAL, or when they aren't whole frames.
+    @MainThread Public Static Method Hear(samples: Float32[])
+        If !fbe_capture_started() || fbe_capture_device() != AudioDevice.MANUAL As Int32
+            Panic("only a microphone started on AudioDevice.MANUAL is given what it hears")
+        End If
+
+        Local channels = fbe_capture_channels()
+        If samples.Count % channels != 0
+            Panic("{samples.Count} samples aren't whole frames of {channels} channels")
+        End If
+
+        If samples.Count == 0 Then Return
+        Unsafe
+            If !fbe_capture_hear(AddressOf(samples[0]), (samples.Count / channels) As Int32)
+                Panic(LastError())
+            End If
+        End Unsafe
+    End Method
+
+    /// Unplugs its input, as the OS would, which stops it, as Lost says, for tests. It throws
+    /// AudioError unless it's started on a device.
+    @MainThread Public Static Method SimulateUnplug() Throws AudioError
+        If !fbe_capture_simulate_unplug() Then Throw AudioError(LastError())
+    End Method
+End Class

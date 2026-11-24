@@ -182,12 +182,62 @@ elseif(UNIX)
   target_link_libraries(fbengine_miniaudio PUBLIC ${CMAKE_DL_LIBS} m)
 endif()
 
+# Opus, voice's codec, from its release's archive, as its repository leaves out the files the
+# archive makes; only its library, static, without its deep-learning extras.
+set(OPUS_BUILD_SHARED_LIBRARY OFF CACHE BOOL "" FORCE)
+set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(OPUS_INSTALL_PKG_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
+set(OPUS_INSTALL_CMAKE_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+  opus
+  URL https://github.com/xiph/opus/releases/download/v1.5.2/opus-1.5.2.tar.gz
+  URL_HASH SHA256=65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1
+  SYSTEM
+)
+FetchContent_MakeAvailable(opus)
+set_target_properties(opus PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# RNNoise, voice's noise suppression, from its release's archive, which has its model's weights
+# (its repository downloads them as it builds); it ships no CMake build, so its library's sources,
+# as its Makefile.am lists them, are built here. On x86-64 it picks its SSE4.1 or AVX2 code as it
+# runs, each file compiled for its own.
+FetchContent_Declare(
+  rnnoise
+  URL https://github.com/xiph/rnnoise/releases/download/v0.2/rnnoise-0.2.tar.gz
+  URL_HASH SHA256=90fce4b00b9ff24c08dbfe31b82ffd43bae383d85c5535676d28b0a2b11c0d37
+  SOURCE_SUBDIR none
+  SYSTEM
+)
+FetchContent_MakeAvailable(rnnoise)
+set(fbengine_rnnoise_sources denoise.c rnn.c pitch.c kiss_fft.c celt_lpc.c nnet.c nnet_default.c
+                             parse_lpcnet_weights.c rnnoise_data.c rnnoise_tables.c)
+list(TRANSFORM fbengine_rnnoise_sources PREPEND "${rnnoise_SOURCE_DIR}/src/")
+add_library(fbengine_rnnoise STATIC ${fbengine_rnnoise_sources})
+target_include_directories(fbengine_rnnoise SYSTEM PUBLIC "${rnnoise_SOURCE_DIR}/include")
+target_include_directories(fbengine_rnnoise PRIVATE "${rnnoise_SOURCE_DIR}/src")
+set_target_properties(fbengine_rnnoise PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$" AND NOT MSVC)
+  set(fbengine_rnnoise_x86 "${rnnoise_SOURCE_DIR}/src/x86")
+  target_sources(fbengine_rnnoise PRIVATE "${fbengine_rnnoise_x86}/x86_dnn_map.c"
+                 "${fbengine_rnnoise_x86}/x86cpu.c" "${fbengine_rnnoise_x86}/nnet_sse4_1.c"
+                 "${fbengine_rnnoise_x86}/nnet_avx2.c")
+  target_compile_definitions(fbengine_rnnoise PRIVATE RNN_ENABLE_X86_RTCD CPU_INFO_BY_ASM)
+  set_source_files_properties("${fbengine_rnnoise_x86}/nnet_sse4_1.c" PROPERTIES
+                              COMPILE_OPTIONS "-msse4.1")
+  set_source_files_properties("${fbengine_rnnoise_x86}/nnet_avx2.c" PROPERTIES
+                              COMPILE_OPTIONS "-mavx;-mfma;-mavx2")
+endif()
+if(UNIX)
+  target_link_libraries(fbengine_rnnoise PRIVATE m)
+endif()
+
 file(GLOB fbengine_audio_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*/*.cpp")
 fbengine_add_native(fbengine_audio_native fbengine_audio fbe_ ${fbengine_audio_sources})
 target_include_directories(fbengine_audio_native PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(fbengine_audio_native PRIVATE FBE_AUDIO_BUILDING
                            FBE_VERSION="${FBENGINE_VERSION}")
-target_link_libraries(fbengine_audio_native PRIVATE fbengine_miniaudio)
+target_link_libraries(fbengine_audio_native PRIVATE fbengine_miniaudio opus fbengine_rnnoise)
 # Its float arithmetic as written, never fused: a multiply-subtract fused near the speed of sound
 # rounds once where the Doppler effect's tests of it round twice.
 if(NOT MSVC)

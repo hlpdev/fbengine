@@ -2437,7 +2437,8 @@ catch_discover_tests(fbengine_audio_tests TEST_PREFIX "audio."
 # fbengine_audio_native's C API, with a thread of the test's own mixing, as a device's does, and on
 # Windows, with OLE, on the null backend.
 add_executable(fbengine_audio_native_tests audio/native_tests.cpp audio/memory_tests.cpp
-               audio/fuzz_tests.cpp audio/race_tests.cpp audio/vorbis_tests.cpp stability.cpp)
+               audio/fuzz_tests.cpp audio/race_tests.cpp audio/vorbis_tests.cpp
+               audio/voice_tests.cpp stability.cpp)
 target_link_libraries(fbengine_audio_native_tests PRIVATE fbengine_audio_native
                       Catch2::Catch2WithMain)
 target_include_directories(fbengine_audio_native_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -2465,7 +2466,8 @@ target_include_directories(fbengine_audio_soak_tests PRIVATE
 target_compile_definitions(fbengine_audio_soak_tests PRIVATE FBE_AUDIO_BUILDING
                            FBE_VERSION="${FBENGINE_VERSION}"
                            FBE_AUDIO_TEST_CORPUS="${CMAKE_CURRENT_SOURCE_DIR}/audio/corpus")
-target_link_libraries(fbengine_audio_soak_tests PRIVATE fbengine_miniaudio Catch2::Catch2WithMain)
+target_link_libraries(fbengine_audio_soak_tests PRIVATE fbengine_miniaudio opus fbengine_rnnoise
+                      Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_audio_soak_tests)
 # MinGW's C++ library, a DLL, would allocate and free with its own operator new, which the count
 # can't see; in the test, it's what's counted, as on Linux and macOS, where the test's replaces it.
@@ -2486,7 +2488,8 @@ target_include_directories(fbengine_audio_oom_tests PRIVATE
                            "${PROJECT_SOURCE_DIR}/native/fbengine_audio" "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(fbengine_audio_oom_tests PRIVATE FBE_AUDIO_BUILDING
                            FBE_VERSION="${FBENGINE_VERSION}")
-target_link_libraries(fbengine_audio_oom_tests PRIVATE fbengine_miniaudio Catch2::Catch2WithMain)
+target_link_libraries(fbengine_audio_oom_tests PRIVATE fbengine_miniaudio opus fbengine_rnnoise
+                      Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_audio_oom_tests)
 catch_discover_tests(fbengine_audio_oom_tests TEST_PREFIX "audio."
                      DL_PATHS "${fbengine_test_dll_paths}")

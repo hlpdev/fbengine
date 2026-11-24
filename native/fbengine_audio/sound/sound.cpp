@@ -1,6 +1,7 @@
 // Sounds: fbe_sound_load decodes a whole sound with miniaudio's decoders, into 32-bit floats at
 // its own rate and channels, which the channels playing it resample to the mix's; fbe_sound_stream
-// keeps its file, which each channel playing it decodes as it plays.
+// keeps its file, which each channel playing it decodes as it plays; fbe_sound_open_feed makes a
+// ring buffer, which the game fills and its one channel plays from.
 
 #include "sound/sound.hpp"
 
@@ -34,6 +35,8 @@ constexpr ma_uint64 first_room = ma_uint64{ 1 } << 20U;
 /// The most frames a byte of a sound file decodes to, more than any format's silence does; a file
 /// that says it has more is lying, and its frames are counted instead.
 constexpr ma_uint64 most_frames_a_byte = 4096;
+/// The most seconds a fed sound holds unplayed.
+constexpr std::int64_t most_fed_seconds = 60;
 
 /// What a sound handle holds: its share of the sound.
 struct sound_t {
@@ -220,6 +223,87 @@ FBE_AUDIO_API uint64_t fbe_sound_stream(const uint8_t* data, int64_t size) try {
     return sounds().add(std::make_unique<sound_t>(std::move(streamed)));
 } catch (const std::bad_alloc&) {
     return out_of_memory();
+}
+
+FBE_AUDIO_API uint64_t fbe_sound_open_feed(int32_t sample_rate, int32_t channels, int32_t room,
+                                           int32_t buffered) try {
+    if (std::cmp_less(sample_rate, slowest) || std::cmp_greater(sample_rate, fastest)) {
+        fbe::audio::fail(std::format("a sound's sample rate is {} to {} Hz, not {}", slowest,
+                                     fastest, sample_rate));
+        return 0;
+    }
+    if (channels < 1 || std::cmp_greater(channels, most_channels)) {
+        fbe::audio::fail(
+            std::format("a sound has 1 to {} channels, not {}", most_channels, channels));
+        return 0;
+    }
+    const std::int64_t most = most_fed_seconds * sample_rate;
+    if (room < 1 || room > most) {
+        fbe::audio::fail(std::format("a fed sound holds 1 to {} frames, {} seconds, not {}", most,
+                                     most_fed_seconds, room));
+        return 0;
+    }
+    if (buffered < 0 || buffered > room) {
+        fbe::audio::fail(
+            std::format("a fed sound buffers 0 to the {} frames it holds, not {}", room, buffered));
+        return 0;
+    }
+    auto data = std::make_unique<fbe::audio::sound_data_t>();
+    data->channels = static_cast<std::uint32_t>(channels);
+    data->sample_rate = static_cast<std::uint32_t>(sample_rate);
+    data->feed = std::make_shared<fbe::audio::feed_t>();
+    const ma_result result =
+        ma_pcm_rb_init(ma_format_f32, data->channels, static_cast<ma_uint32>(room), nullptr,
+                       nullptr, &data->feed->ring);
+    if (result != MA_SUCCESS) {
+        fbe::audio::fail_ma("couldn't make a fed sound", result);
+        return 0;
+    }
+    data->feed->has_ring = true;
+    data->feed->buffered = static_cast<std::uint32_t>(buffered);
+    return sounds().add(std::make_unique<sound_t>(std::move(data)));
+} catch (const std::bad_alloc&) {
+    return out_of_memory();
+}
+
+FBE_AUDIO_API int32_t fbe_sound_feed(uint64_t sound, const float* samples, int32_t frames) {
+    const sound_t* found = sounds().find(sound);
+    if (found == nullptr || !found->data->fed()) {
+        fbe::audio::fail(found == nullptr ? "the sound was freed" : "the sound isn't a fed one");
+        return -1;
+    }
+    if (frames < 0 || (samples == nullptr && frames > 0)) {
+        fbe::audio::fail(std::format("a feed is 0 frames or more, not {}", frames));
+        return -1;
+    }
+    fbe::audio::feed_t& feed = *found->data->feed;
+    const std::size_t channels = found->data->channels;
+    std::int32_t done = 0;
+    while (done < frames) {
+        auto count = static_cast<ma_uint32>(frames - done);
+        void* room = nullptr;
+        if (ma_pcm_rb_acquire_write(&feed.ring, &count, &room) != MA_SUCCESS || count == 0) {
+            break;
+        }
+        std::copy_n(samples + (static_cast<std::size_t>(done) * channels), count * channels,
+                    static_cast<float*>(room));
+        ma_pcm_rb_commit_write(&feed.ring, count);
+        done += static_cast<std::int32_t>(count);
+    }
+    return done;
+}
+
+FBE_AUDIO_API bool fbe_sound_fed(uint64_t sound) {
+    const sound_t* found = sounds().find(sound);
+    return found != nullptr && found->data->fed();
+}
+
+FBE_AUDIO_API int32_t fbe_sound_queued(uint64_t sound) {
+    const sound_t* found = sounds().find(sound);
+    if (found == nullptr || !found->data->fed()) {
+        return 0;
+    }
+    return static_cast<int32_t>(ma_pcm_rb_available_read(&found->data->feed->ring));
 }
 
 FBE_AUDIO_API bool fbe_sound_streamed(uint64_t sound) {

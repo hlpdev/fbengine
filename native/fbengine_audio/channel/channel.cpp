@@ -1,5 +1,6 @@
-// Channels: each a miniaudio sound in the mix, over a decoded sound's frames or a decoder of a
-// streamed sound's file, then a node of fbe's that gives each side its gain, its volume and pan.
+// Channels: each a miniaudio sound in the mix, over a decoded sound's frames, a decoder of a
+// streamed sound's file, or a fed sound's feed, then a node of fbe's that gives each side its gain,
+// its volume and pan.
 // One that has ended is let go the next time it's asked about or another plays, so finished
 // channels never pile up and their handles find nothing. Around each mix, on the thread that mixes,
 // before_mix does the seeks asked for and after_mix keeps where each channel is, since miniaudio's
@@ -160,8 +161,94 @@ ma_node_vtable gains_vtable = {
     .flags = 0,
 };
 
-/// A channel: its sound's frames, read through a buffer or decoded as they play, into a miniaudio
-/// sound in the mix. miniaudio's init functions clear each of its structs first.
+/// A fed sound's frames as its channel reads them, on the mixing thread: what its feed has, and
+/// silence while it has none, or is waiting for its buffered frames, so the channel plays on, never
+/// ending, until it's stopped. miniaudio's init clears its base first.
+struct feed_source_t {
+    /// First, as miniaudio's data sources' are.
+    ma_data_source_base base;
+    fbe::audio::feed_t* feed = nullptr;
+    ma_uint32 channels = 0;
+    ma_uint32 sample_rate = 0;
+    /// The frames it has given, silence too.
+    ma_uint64 cursor = 0;
+};
+
+// miniaudio's signatures for a data source's functions.
+// NOLINTBEGIN(misc-const-correctness, readability-non-const-parameter)
+ma_result read_feed(ma_data_source* source, void* out, ma_uint64 frames, ma_uint64* read) {
+    // NOLINTEND(misc-const-correctness, readability-non-const-parameter)
+    auto* from = static_cast<feed_source_t*>(source);
+    fbe::audio::feed_t& feed = *from->feed;
+    auto* samples = static_cast<float*>(out);
+    const std::size_t channels = from->channels;
+    if (feed.waiting && ma_pcm_rb_available_read(&feed.ring) >= std::max(feed.buffered, 1U)) {
+        feed.waiting = false;
+    }
+    ma_uint64 done = 0;
+    while (!feed.waiting && done < frames) {
+        auto count = static_cast<ma_uint32>(std::min<ma_uint64>(frames - done, 1U << 16U));
+        void* chunk = nullptr;
+        if (ma_pcm_rb_acquire_read(&feed.ring, &count, &chunk) != MA_SUCCESS || count == 0) {
+            // Run dry, it waits for its buffered frames again.
+            feed.waiting = true;
+            break;
+        }
+        std::copy_n(static_cast<const float*>(chunk), count * channels,
+                    samples + (done * channels));
+        ma_pcm_rb_commit_read(&feed.ring, count);
+        done += count;
+    }
+    std::fill(samples + (done * channels), samples + (frames * channels), 0.0F);
+    from->cursor += frames;
+    if (read != nullptr) {
+        *read = frames;
+    }
+    return MA_SUCCESS;
+}
+
+// A fed sound's channel never seeks, as fbe_channel_seek refuses it; miniaudio's own seeks to its
+// start are nothing.
+ma_result seek_feed(ma_data_source* /*source*/, ma_uint64 /*frame*/) {
+    return MA_SUCCESS;
+}
+
+// NOLINTBEGIN(misc-const-correctness, readability-non-const-parameter)
+ma_result describe_feed(ma_data_source* source, ma_format* format, ma_uint32* channels,
+                        ma_uint32* sample_rate, ma_channel* map, size_t map_size) {
+    // NOLINTEND(misc-const-correctness, readability-non-const-parameter)
+    const auto* from = static_cast<const feed_source_t*>(source);
+    *format = ma_format_f32;
+    *channels = from->channels;
+    *sample_rate = from->sample_rate;
+    ma_channel_map_init_standard(ma_standard_channel_map_default, map, map_size, from->channels);
+    return MA_SUCCESS;
+}
+
+// NOLINTNEXTLINE(misc-const-correctness): miniaudio's signature.
+ma_result feed_cursor(ma_data_source* source, ma_uint64* cursor) {
+    *cursor = static_cast<const feed_source_t*>(source)->cursor;
+    return MA_SUCCESS;
+}
+
+// Its length isn't known.
+ma_result feed_length(ma_data_source* /*source*/, ma_uint64* length) {
+    *length = 0;
+    return MA_NOT_IMPLEMENTED;
+}
+
+ma_data_source_vtable feed_vtable = {
+    .onRead = read_feed,
+    .onSeek = seek_feed,
+    .onGetDataFormat = describe_feed,
+    .onGetCursor = feed_cursor,
+    .onGetLength = feed_length,
+    .onSetLooping = nullptr,
+    .flags = 0,
+};
+
+/// A channel: its sound's frames, read through a buffer, decoded as they play, or from its feed,
+/// into a miniaudio sound in the mix. miniaudio's init functions clear each of its structs first.
 struct voice_t {
     /// The main thread's, for the mixing thread: the frame to seek to.
     std::atomic<std::int64_t> seek_to = no_seek;
@@ -178,10 +265,15 @@ struct voice_t {
     std::shared_ptr<fbe::audio::bus_t> bus;
     ma_audio_buffer_ref buffer;
     ma_decoder decoder;
+    feed_source_t feed;
     ma_sound sound;
     gains_t gains;
     bool has_buffer = false;
     bool has_decoder = false;
+    bool has_feed = false;
+    /// The main thread's: whether it's the one channel its fed sound's feed is played by, until
+    /// it's stopped.
+    bool feeding = false;
     bool has_sound = false;
     bool has_gains = false;
     bool joined = false;
@@ -220,7 +312,18 @@ struct voice_t {
         if (has_decoder) {
             return &decoder;
         }
+        if (has_feed) {
+            return &feed;
+        }
         return &buffer;
+    }
+
+    /// Lets its fed sound be played by another channel; the main thread's.
+    void stop_feeding() {
+        if (feeding) {
+            data->feed->playing = false;
+            feeding = false;
+        }
     }
 
     /// Whether its sound has played to its end, or faded out.
@@ -269,9 +372,13 @@ voice_t::~voice_t() {
     if (has_decoder) {
         ma_decoder_uninit(&decoder);
     }
+    if (has_feed) {
+        ma_data_source_uninit(&feed);
+    }
     if (has_buffer) {
         ma_audio_buffer_ref_uninit(&buffer);
     }
+    stop_feeding();
 }
 
 /// The channel `handle` is for, or null for one that's finished, which goes now if it ended.
@@ -370,6 +477,8 @@ void stop(std::uint64_t handle) {
     if (stopped == nullptr || stopped->ended()) {
         return;
     }
+    // Its feed is another channel's to play from now, though what it read of it ramps out.
+    stopped->stop_feeding();
     stopped->muted = true;
     apply_pan(*stopped);
     const std::scoped_lock lock(channels().live_lock);
@@ -462,6 +571,22 @@ std::uint64_t play(std::shared_ptr<const sound_data_t> data, const play_t& how) 
         result = ma_decoder_init_memory(voice->data->encoded.data(), voice->data->encoded.size(),
                                         &config, &voice->decoder);
         voice->has_decoder = result == MA_SUCCESS;
+    } else if (voice->data->fed()) {
+        if (voice->data->feed->playing) {
+            fail("a fed sound plays on one channel at a time, and one plays it");
+            return 0;
+        }
+        ma_data_source_config config = ma_data_source_config_init();
+        config.vtable = &feed_vtable;
+        result = ma_data_source_init(&config, &voice->feed);
+        voice->has_feed = result == MA_SUCCESS;
+        voice->feed.feed = voice->data->feed.get();
+        voice->feed.channels = voice->data->channels;
+        voice->feed.sample_rate = voice->data->sample_rate;
+        if (voice->has_feed) {
+            voice->data->feed->playing = true;
+            voice->feeding = true;
+        }
     } else {
         result = ma_audio_buffer_ref_init(ma_format_f32, voice->data->channels,
                                           voice->data->samples.data(), voice->data->frames,
@@ -771,6 +896,9 @@ FBE_AUDIO_API bool fbe_channel_seek(uint64_t channel, double seconds) try {
     voice_t* voice = find(channel);
     if (voice == nullptr) {
         return true;
+    }
+    if (voice->data->fed()) {
+        return fbe::audio::fail("a fed sound's channel plays what it's fed, and can't seek");
     }
     const std::int64_t frame = voice->frame_at(seconds);
     if (frame < 0) {
